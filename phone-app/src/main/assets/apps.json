@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-06-07T00:00:00.000Z",
+
+  "brewVersion": "1.0.0",
+  "brewVersionCode": 1,
+  "brewApkUrl": "https://gitee.com/dlover1314/RokidBrew/releases/download/v1.0.0/phone-app-release.apk",
+  "brewReleaseUrl": "https://gitee.com/dlover1314/RokidBrew/releases/tag/v1.0.0",
+  "brewNotes": "首次发布 RokidBrew 眼镜文件管理",
+  "brewChanges": [
+    "支持通过 WiFi ADB 连接眼镜进行文件管理",
+    "支持文件浏览、上传、下载、删除、重命名",
+    "支持剪贴板复制/粘贴/剪切操作",
+    "支持新建文件夹",
+    "支持文件搜索和排序",
+    "支持查看文件详情",
+    "支持存储空间显示",
+    "支持多选批量操作"
+  ],
+
+  "apps": [
+    {
+      "id": "rokid-xiaozhi",
+      "name": "Rokid 小助手",
+      "type": "glasses",
+      "category": "Utility",
+      "version": "1.0.0",
+      "summary": "Rokid 眼镜语音助手控制应用",
+      "description": "为 Rokid 智能眼镜提供语音助手控制功能，支持语音唤醒、语音指令识别、智能问答等。",
+      "author": "dlover1314",
+      "sourceUrl": "https://gitee.com/dlover1314/rokid-xiaozhi",
+      "phoneRequired": false,
+      "screenshotUrls": [
+        "https://gitee.com/dlover1314/rokid-xiaozhi/raw/main/photo/xiaozhi-glasses-1.jpg",
+        "https://gitee.com/dlover1314/rokid-xiaozhi/raw/main/photo/xiaozhi-glasses-2.jpg"
+      ],
+      "featured": true,
+      "featuredRank": 1,
+      "publishedAt": "2026-05-26T00:00:00.000Z",
+      "newUntil": "2026-07-26T00:00:00.000Z",
+      "listing": {
+        "about": "Rokid 小助手是一款专为 Rokid 智能眼镜打造的语音助手应用。它让您可以通过语音命令控制眼镜的各项功能，实现真正的 hands-free 体验。\n\n主要功能：\n- 语音唤醒：说出唤醒词即可激活助手\n- 语音指令：通过语音控制眼镜应用、调节音量等\n- 智能问答：连接网络后可回答各类问题\n- 信息查询：天气、新闻、日程等信息一目了然"
+      },
+      "releases": [
+        {
+          "version": "1.0.0",
+          "date": "2026-05-26T00:00:00.000Z",
+          "sourceReleaseUrl": "https://gitee.com/dlover1314/rokid-xiaozhi/releases/tag/rokid-xiaozhi-v1.0.0",
+          "notes": "首次发布，支持基础语音助手功能",
+          "changes": [
+            "支持语音唤醒和语音指令",
+            "支持智能问答",
+            "支持信息查询（天气、新闻等）",
+            "优化眼镜端语音识别准确率"
+          ]
+        }
+      ],
+      "artifacts": [
+        {
+          "target": "glasses",
+          "url": "https://gitee.com/dlover1314/rokid-xiaozhi/releases/download/rokid-xiaozhi-v1.0.0/app-release-signed.apk",
+          "packageName": "com.rokid.xiaozhi",
+          "versionCode": 1
+        }
+      ]
+    }
+  ]
+}

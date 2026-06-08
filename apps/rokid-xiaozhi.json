@@ -1,0 +1,30 @@
+{
+  "id": "rokid-xiaozhi",
+  "name": "Rokid 小助手",
+  "category": "工具",
+  "type": "phone",
+  "version": "1.0.0",
+  "summary": "Rokid 眼镜语音助手控制应用",
+  "description": "为 Rokid 智能眼镜提供语音助手控制功能，支持语音指令、快捷操作等功能。",
+  "author": "dlover1314",
+  "sourceUrl": "https://gitee.com/dlover1314/rokid-xiaozhi",
+  "iconUrl": null,
+  "iconAsset": null,
+  "screenshotAssets": [],
+  "screenshotUrls": [],
+  "featured": false,
+  "featuredRank": null,
+  "publishedAt": "2026-05-26",
+  "newUntil": "2026-06-26",
+  "phoneRequired": true,
+  "artifacts": [
+    {
+      "target": "phone",
+      "url": "https://gitee.com/dlover1314/rokid-xiaozhi/releases/download/rokid-xiaozhi/app-release-signed.apk",
+      "sha256": null,
+      "sizeBytes": null,
+      "packageName": null,
+      "versionCode": null
+    }
+  ]
+}
