@@ -4,62 +4,52 @@
     android:layout_height="match_parent"
     android:gravity="center"
     android:orientation="vertical"
-    android:background="#000000"
-    android:padding="32dp">
+    android:background="#0A0A0F"
+    android:padding="40dp">
 
+    <!-- 状态指示灯 -->
+    <View
+        android:id="@+id/dot"
+        android:layout_width="16dp"
+        android:layout_height="16dp"
+        android:layout_marginBottom="20dp" />
+
+    <!-- 状态文字 -->
     <TextView
         android:id="@+id/statusText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:textColor="#888888"
-        android:textSize="14sp"
+        android:textColor="#AAAAAA"
+        android:textSize="16sp"
         android:textAlignment="center"
-        android:layout_marginBottom="24dp" />
+        android:layout_marginBottom="12dp" />
 
+    <!-- IP 地址 -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center"
-        android:layout_marginBottom="8dp">
+        android:orientation="vertical"
+        android:gravity="center">
 
-        <View
-            android:id="@+id/dot"
-            android:layout_width="10dp"
-            android:layout_height="10dp"
-            android:layout_marginEnd="8dp" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="IP"
+            android:textColor="#555555"
+            android:textSize="11sp"
+            android:letterSpacing="0.1"
+            android:layout_marginBottom="4dp" />
 
         <TextView
             android:id="@+id/ipText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="--"
-            android:textColor="#FFFFFF"
-            android:textSize="20sp"
+            android:textColor="#E0E0E0"
+            android:textSize="28sp"
             android:textStyle="bold"
             android:typeface="monospace"
-            android:textAlignment="center"
-            android:maxLines="1" />
+            android:textAlignment="center" />
     </LinearLayout>
-
-    <Button
-        android:id="@+id/btnReceiveMirror"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="接收手机投屏"
-        android:textColor="#FFFFFF"
-        android:background="#333333"
-        android:padding="16dp"
-        android:layout_marginTop="24dp" />
-
-    <TextView
-        android:id="@+id/mirrorStatusText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text=""
-        android:textColor="#888888"
-        android:textSize="12sp"
-        android:textAlignment="center"
-        android:layout_marginTop="16dp" />
 
 </LinearLayout>

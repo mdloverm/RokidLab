@@ -7,9 +7,12 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.Manifest
+import android.app.Activity
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.activity.compose.setContent
@@ -135,6 +138,33 @@ class MainActivity : AppCompatActivity() {
         uri?.let { installLocalApkToGlasses(it) }
     }
 
+    // 手机投屏 - MediaProjection 权限请求
+    private val phoneMirrorProjectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            log("MediaProjection 权限已授予，启动投屏服务")
+            val app = application as BrewApplication
+            phoneMirrorState = phoneMirrorState.copy(
+                isMirroring = true,
+                connectionStatus = "投屏中..."
+            )
+            PhoneMirrorService.startService(
+                this,
+                app.phoneMirrorIp,
+                app.phoneMirrorPort.toIntOrNull() ?: 7654,
+                result.resultCode,
+                result.data!!
+            )
+        } else {
+            log("MediaProjection 权限被拒绝")
+            phoneMirrorState = phoneMirrorState.copy(
+                isMirroring = false,
+                connectionStatus = "权限被拒绝"
+            )
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         preferHighRefreshRate()
@@ -239,8 +269,10 @@ class MainActivity : AppCompatActivity() {
                         onPhoneMirrorIpChange = { (application as BrewApplication).setPhoneMirrorIp(it) },
                         onPhoneMirrorPortChange = { (application as BrewApplication).setPhoneMirrorPort(it) },
                         onPhoneMirrorConnect = { startPhoneMirror() },
-                        onPhoneMirrorStart = { startPhoneMirror() },
-                        onPhoneMirrorStop = { stopScreenStreamOnGlasses() },
+                        onPhoneMirrorStart = { 
+                            if (phoneMirrorState.isMirroring) stopPhoneMirror() else startPhoneMirror()
+                        },
+                        onPhoneMirrorStop = { stopPhoneMirror() },
                         onPhoneMirrorInstallScreenStream = { installScreenStreamToGlasses() },
                         onPhoneMirrorOpenScreenStream = { openScreenStreamOnGlasses() },
                         onPhoneMirrorRetry = { },
@@ -762,15 +794,9 @@ class MainActivity : AppCompatActivity() {
     private fun checkScreenStreamInstallation() {
         val app = application as BrewApplication
         
-        // 第1关：持久化安装标记 — 只要曾经装过就直接返回 true，不再查询
-        if (app.screenStreamEverInstalled) {
-            screenMirrorState = screenMirrorState.copy(screenStreamInstalled = true)
-            phoneMirrorState = phoneMirrorState.copy(screenStreamInstalled = true)
-            fileManagerState = fileManagerState.copy(screenStreamInstalled = true)
-            return
-        }
+        // 跳过持久化缓存兜底——每次都等 SDK 查询结果，避免卸载后仍显示"已安装"
         
-        // 第2关：运行时缓存
+        // 运行时缓存：有结果直接用
         if (app.screenStreamInstalled != null) {
             screenMirrorState = screenMirrorState.copy(screenStreamInstalled = app.screenStreamInstalled)
             phoneMirrorState = phoneMirrorState.copy(screenStreamInstalled = app.screenStreamInstalled)
@@ -778,7 +804,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         
-        // 第3关：SDK 查询（仅在未授权时跳过，避免反复失败）
+        // SDK 查询
         if (!cxrL.hasAuthorization()) return
         
         if (isCheckingScreenStream) return
@@ -788,14 +814,10 @@ class MainActivity : AppCompatActivity() {
             cxrL.queryInstalledApps(
                 packageNames = listOf("com.rokidlab.screenservice"),
                 onResult = { packageName, installed ->
-                    // 仅当 SDK 明确返回 true 时才更新缓存
-                    // 忽略 false 结果以保护已有缓存不被离线查询覆盖
-                    if (installed) {
-                        app.setScreenStreamInstalled(true)
-                        screenMirrorState = screenMirrorState.copy(screenStreamInstalled = true)
-                        phoneMirrorState = phoneMirrorState.copy(screenStreamInstalled = true)
-                        fileManagerState = fileManagerState.copy(screenStreamInstalled = true)
-                    }
+                    app.setScreenStreamInstalled(installed)
+                    screenMirrorState = screenMirrorState.copy(screenStreamInstalled = installed)
+                    phoneMirrorState = phoneMirrorState.copy(screenStreamInstalled = installed)
+                    fileManagerState = fileManagerState.copy(screenStreamInstalled = installed)
                 },
                 onComplete = {
                     isCheckingScreenStream = false
@@ -961,7 +983,32 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startPhoneMirror() {
-        startActivity(PhoneMirrorActivity.createIntent(this))
+        log("启动手机投屏")
+        // 1. 通过 CXR-L 启动眼镜端投屏接收 Activity
+        phoneMirrorState = phoneMirrorState.copy(connectionStatus = "正在启动眼镜端...")
+        cxrL.launchApp("com.rokidlab.screenservice", sendCmdAfterLaunch = "phone_mirror_launch") { launched ->
+            if (launched) {
+                log("眼镜端已启动并发送投屏命令，请求屏幕录制权限")
+                // 2. 请求屏幕录制权限
+                val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                phoneMirrorProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
+            } else {
+                log("眼镜端启动失败")
+                phoneMirrorState = phoneMirrorState.copy(connectionStatus = "启动眼镜端失败")
+            }
+        }
+    }
+
+    private fun stopPhoneMirror() {
+        log("停止手机投屏")
+        // 1. 停止投屏服务
+        stopService(Intent(this, PhoneMirrorService::class.java))
+        // 2. 通过 CXR-L 关闭眼镜端投屏
+        cxrL.stopApp("com.rokidlab.screenservice")
+        phoneMirrorState = phoneMirrorState.copy(
+            isMirroring = false,
+            connectionStatus = ""
+        )
     }
 
     private fun startFileManager() {

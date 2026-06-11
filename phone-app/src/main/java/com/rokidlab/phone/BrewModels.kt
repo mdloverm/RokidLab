@@ -520,6 +520,7 @@ data class PhoneMirrorState(
     val connectionFailed: Boolean = false,
     val ipAddress: String = "192.168.1.168",
     val port: String = "7654",
+    val isMirroring: Boolean = false,
 )
 
 // ===== 文件管理状态 =====

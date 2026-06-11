@@ -10,7 +10,7 @@ class BrewApplication : Application() {
     // 运行时 ScreenStream 安装状态缓存
     var screenStreamInstalled: Boolean? = null
 
-    // 持久化安装标记：一经安装成功永不清除，防止离线查询覆盖为 false
+    // 持久化安装标记：一经安装成功永不清除
     var screenStreamEverInstalled: Boolean = false
         private set
 
@@ -36,11 +36,8 @@ class BrewApplication : Application() {
         phoneMirrorPort = prefs.getString("phone_mirror_port", "7654") ?: "7654"
         fileManagerIp = prefs.getString("file_manager_ip", "192.168.1.168") ?: "192.168.1.168"
 
-        // 恢复持久化安装标记
+        // 恢复持久化安装标记（仅保留标记，不等同于当前已安装）
         screenStreamEverInstalled = prefs.getBoolean("screenstream_ever_installed", false)
-        if (screenStreamEverInstalled) {
-            screenStreamInstalled = true
-        }
     }
 
     fun setCxrL(session: CxrLHiRokidSession) {

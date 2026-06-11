@@ -11,12 +11,10 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.view.View
-import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import com.rokid.cxr.CXRServiceBridge
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import com.rokid.cxr.Caps
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
@@ -25,8 +23,6 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var ipText: TextView
     private lateinit var dot: View
-    private lateinit var btnReceiveMirror: Button
-    private lateinit var mirrorStatusText: TextView
     private val cxrBridge = CXRServiceBridge()
 
     companion object {
@@ -41,23 +37,20 @@ class MainActivity : Activity() {
         statusText = findViewById(R.id.statusText)
         ipText = findViewById(R.id.ipText)
         dot = findViewById(R.id.dot)
-        btnReceiveMirror = findViewById(R.id.btnReceiveMirror)
-        mirrorStatusText = findViewById(R.id.mirrorStatusText)
 
-        btnReceiveMirror.setOnClickListener {
-            startActivity(Intent(this, PhoneMirrorActivity::class.java))
-        }
+        // 订阅 CXR-L 手机投屏自动启动命令
+        val subResult = cxrBridge.subscribe("phone_mirror_launch",
+            object : CXRServiceBridge.MsgCallback {
+                override fun onReceive(from: String, caps: Caps, data: ByteArray?) {
+                    Log.i(TAG, "收到手机投屏启动命令，自动跳转投屏页面")
+                    runOnUiThread {
+                        startActivity(Intent(this@MainActivity, PhoneMirrorActivity::class.java))
+                    }
+                }
+            })
+        Log.i(TAG, "订阅 phone_mirror_launch 结果: $subResult")
 
         setDotColor(0xFF555555.toInt())
-
-        // 初始化 CXR-S 桥接，让 CXR-L 能识别本应用并正确查询安装状态
-        runCatching {
-            cxrBridge
-            Log.i(TAG, "CXR-S 桥接已初始化")
-        }.onFailure { e ->
-            Log.e(TAG, "CXR-S 桥接初始化失败: ${e.message}", e)
-        }
-
         startSetup()
     }
 

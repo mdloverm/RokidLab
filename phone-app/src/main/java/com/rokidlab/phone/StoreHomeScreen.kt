@@ -348,6 +348,8 @@ private fun PhoneMirrorModule(
     actions: StoreActions,
     app: BrewApplication,
 ) {
+    val isMirroring = state.phoneMirrorState.isMirroring
+    
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -358,41 +360,68 @@ private fun PhoneMirrorModule(
         ModuleHeader(title = "手机投屏", subtitle = "手机屏幕投射到眼镜", color = BrewPurple)
         Spacer(modifier = Modifier.height(24.dp))
         
-        IpAddressInputCard(
-            label = "眼镜 IP 地址",
-            value = app.phoneMirrorIp,
-            onValueChange = actions.onPhoneMirrorIpChange,
-            color = BrewPurple,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        ScreenStreamStatusCard(
-            installed = state.phoneMirrorState.screenStreamInstalled == true,
-            installing = state.phoneMirrorState.isInstallingScreenStream,
-            running = state.phoneMirrorState.screenStreamRunning,
-            onInstall = actions.onPhoneMirrorInstallScreenStream,
-            onOpen = actions.onPhoneMirrorOpenScreenStream,
-            onStop = actions.onPhoneMirrorStop,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        BrutalButton(
-            label = "▶ 开始投屏",
-            color = BrewPurple,
-            onClick = actions.onPhoneMirrorStart,
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        UsageInstructionsCard(
-            color = BrewPurple,
-            instructions = listOf(
-                "1. 确保眼镜已连接 WiFi 并开启 ADB 网络调试",
-                "2. 在眼镜上安装并启动 ScreenStream 应用",
-                "3. 输入眼镜的 IP 地址（默认 192.168.1.168）",
-                "4. 点击「开始投屏」按钮",
-                "5. 手机屏幕将实时显示在眼镜上",
+        if (isMirroring) {
+            // 投屏中状态
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "投屏中",
+                    color = BrewGreen,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    state.phoneMirrorState.connectionStatus,
+                    color = BrewMuted,
+                    fontSize = 14.sp
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                BrutalButton(
+                    label = "■ 停止投屏",
+                    color = BrewRed,
+                    onClick = actions.onPhoneMirrorStart,
+                )
+            }
+        } else {
+            // 配置状态
+            IpAddressInputCard(
+                label = "眼镜 IP 地址",
+                value = app.phoneMirrorIp,
+                onValueChange = actions.onPhoneMirrorIpChange,
+                color = BrewPurple,
             )
-        )
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            ScreenStreamStatusCard(
+                installed = state.phoneMirrorState.screenStreamInstalled == true,
+                installing = state.phoneMirrorState.isInstallingScreenStream,
+                running = state.phoneMirrorState.screenStreamRunning,
+                onInstall = actions.onPhoneMirrorInstallScreenStream,
+                onOpen = actions.onPhoneMirrorOpenScreenStream,
+                onStop = actions.onPhoneMirrorStop,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            BrutalButton(
+                label = "▶ 开始投屏",
+                color = BrewPurple,
+                onClick = actions.onPhoneMirrorStart,
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            
+            UsageInstructionsCard(
+                color = BrewPurple,
+                instructions = listOf(
+                    "1. 确保眼镜已连接 WiFi 并开启 ADB 网络调试",
+                    "2. 输入眼镜的 IP 地址（默认 192.168.1.168）",
+                    "3. 点击「开始投屏」，眼镜端将自动启动接收",
+                    "4. 手机屏幕将实时显示在眼镜上",
+                )
+            )
+        }
     }
 }
 

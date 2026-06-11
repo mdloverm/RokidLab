@@ -13,6 +13,7 @@ import com.rokid.cxr.link.CXRLink
 import com.rokid.cxr.link.callbacks.ICXRLinkCbk
 import com.rokid.cxr.link.callbacks.IGlassAppCbk
 import com.rokid.cxr.link.utils.CxrDefs
+import com.rokid.cxr.Caps
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult
 import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper
 import java.io.File
@@ -139,7 +140,7 @@ class CxrLHiRokidSession(
         }
     }
 
-    fun launchApp(packageName: String, activityClass: String = ".MainActivity", onLaunchResult: ((Boolean) -> Unit)? = null) {
+    fun launchApp(packageName: String, activityClass: String = ".MainActivity", sendCmdAfterLaunch: String? = null, onLaunchResult: ((Boolean) -> Unit)? = null) {
         val targetHostApp = hostApp
         if (!hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
             onLaunchResult?.invoke(false)
@@ -148,7 +149,7 @@ class CxrLHiRokidSession(
         val authToken = token.orEmpty()
 
         onBusyChanged(true)
-        connectAndLaunch(authToken, targetHostApp, packageName, activityClass, onLaunchResult)
+        connectAndLaunch(authToken, targetHostApp, packageName, activityClass, sendCmdAfterLaunch, onLaunchResult)
     }
 
     fun stopApp(packageName: String, onStopResult: ((Boolean) -> Unit)? = null) {
@@ -330,6 +331,7 @@ class CxrLHiRokidSession(
         targetHostApp: RokidHostApp,
         packageName: String,
         activityClass: String,
+        sendCmdAfterLaunch: String?,
         onLaunchResult: ((Boolean) -> Unit)?,
     ) {
         connectAndRunCustomAppOperation(
@@ -351,6 +353,11 @@ class CxrLHiRokidSession(
                         override fun onInstallAppResult(success: Boolean) = Unit
                         override fun onUnInstallAppResult(success: Boolean) = Unit
                         override fun onOpenAppResult(success: Boolean) {
+                            if (success && sendCmdAfterLaunch != null) {
+                                // 眼镜端已启动，发送自定义命令触发自动操作
+                                val cmdResult = link.sendCustomCmd(sendCmdAfterLaunch, Caps())
+                                onStatus("发送命令 $sendCmdAfterLaunch 结果: $cmdResult")
+                            }
                             completeActiveOperation()
                             onStatus(if (success) "已在眼镜启动 $packageName。" else "启动 $packageName 失败。")
                             onBusyChanged(false)
