@@ -1,20 +1,26 @@
 <resources>
-    <style name="Theme.RokidBrewPhone" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <style name="Theme.RokidLabPhone" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:fontFamily">@font/jetbrains_mono</item>
         <item name="fontFamily">@font/jetbrains_mono</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:statusBarColor">@color/brew_bg</item>
         <item name="android:navigationBarColor">@color/brew_bg</item>
-        <item name="android:colorAccent">@color/brew_green</item>
+        <item name="android:colorAccent">@color/brew_cyan</item>
         <item name="android:windowBackground">@color/brew_bg</item>
-        <item name="android:textColorHighlight">#3339FF14</item>
+        <item name="android:textColorHighlight">#3300f5ff</item>
+        <item name="android:colorPrimary">@color/brew_cyan</item>
+        <item name="android:colorPrimaryDark">@color/brew_purple</item>
     </style>
 
-    <style name="Theme.RokidBrewPhone.Fullscreen" parent="Theme.RokidBrewPhone">
+    <style name="Theme.RokidLabPhone.Fullscreen" parent="Theme.RokidLabPhone">
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowContentOverlay">@null</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    </style>
+
+    <style name="Theme.RokidLabPhone.Launcher" parent="Theme.RokidLabPhone.Fullscreen">
+        <item name="android:windowBackground">@color/brew_bg</item>
     </style>
 </resources>

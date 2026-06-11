@@ -18,11 +18,11 @@ val releaseRegistryUrl = providers.gradleProperty("rokidbrewReleaseRegistryUrl")
     .get()
 
 android {
-    namespace = "com.rokidbrew.phone"
+    namespace = "com.rokidlab.phone"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.rokidbrew.phone"
+        applicationId = "com.rokidlab.phone"
         minSdk = 28
         targetSdk = 35
         versionCode = 1
@@ -64,6 +64,8 @@ android {
 
     kotlinOptions {
         jvmTarget = "11"
+        freeCompilerArgs += "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi"
+        freeCompilerArgs += "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api"
     }
 
     buildFeatures {

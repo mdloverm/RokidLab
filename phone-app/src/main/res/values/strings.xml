@@ -1,3 +1,5 @@
 <resources>
-    <string name="app_name">RokidBrew</string>
+    <string name="app_name">Rokid Lab</string>
+    <string name="app_author">DLOVER</string>
+    <string name="app_description">Rokid Glasses Companion App</string>
 </resources>

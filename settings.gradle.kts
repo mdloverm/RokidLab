@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "RokidBrew"
+rootProject.name = "RokidLab"
 include(":phone-app")
 include(":glasses-screen-service")

@@ -1,23 +1,45 @@
 <resources>
-    <!-- Backgrounds -->
-    <color name="brew_bg">#060B06</color>
-    <color name="brew_panel">#0D1A10</color>
-    <color name="brew_panel_alt">#112914</color>
-    <color name="brew_panel_hi">#173621</color>
-
-    <!-- Text -->
-    <color name="brew_text_bright">#F1F8F2</color>
-    <color name="brew_text">#D4E8D5</color>
-    <color name="brew_muted">#7DA882</color>
-    <color name="brew_dim">#3E6641</color>
-
-    <!-- Accents -->
-    <color name="brew_green">#39FF14</color>
-    <color name="brew_green_soft">#00E676</color>
-    <color name="brew_green_dim">#1F8C26</color>
-    <color name="brew_border">#1B3D1F</color>
-    <color name="brew_border_hi">#2D6638</color>
-    <color name="brew_blue">#69F0AE</color>
-    <color name="brew_warn">#FFD54F</color>
-    <color name="brew_amber">#FFB347</color>
+    <!-- ===== Sci-Fi Gradients & New Retro Color System ===== -->
+    
+    <!-- Backgrounds - Deep space & cyber aesthetic -->
+    <color name="brew_bg">#0a0a1a</color>
+    <color name="brew_bg_gradient_start">#0a0a1a</color>
+    <color name="brew_bg_gradient_end">#1a0a2e</color>
+    <color name="brew_panel">#12122a</color>
+    <color name="brew_panel_alt">#1a1a3a</color>
+    <color name="brew_panel_hi">#22224a</color>
+    
+    <!-- Text - Retro-futuristic typography -->
+    <color name="brew_text_bright">#e8e8ff</color>
+    <color name="brew_text">#c0c0e0</color>
+    <color name="brew_muted">#8080a0</color>
+    <color name="brew_dim">#505070</color>
+    
+    <!-- Accents - Neon sci-fi palette -->
+    <color name="brew_cyan">#00f5ff</color>
+    <color name="brew_cyan_soft">#00c8cc</color>
+    <color name="brew_magenta">#ff00ff</color>
+    <color name="brew_magenta_soft">#cc00cc</color>
+    <color name="brew_purple">#8b5cf6</color>
+    <color name="brew_purple_soft">#7c3aed</color>
+    <color name="brew_pink">#ec4899</color>
+    <color name="brew_yellow">#fbbf24</color>
+    <color name="brew_green">#22c55e</color>
+    
+    <!-- Status indicators -->
+    <color name="brew_status_online">#22c55e</color>
+    <color name="brew_status_offline">#6b7280</color>
+    <color name="brew_status_connecting">#fbbf24</color>
+    <color name="brew_status_error">#ef4444</color>
+    
+    <!-- Borders & Dividers -->
+    <color name="brew_border">#2a2a4a</color>
+    <color name="brew_border_hi">#3a3a6a</color>
+    <color name="brew_glow">#00f5ff20</color>
+    
+    <!-- New Retro Accents -->
+    <color name="brew_retro_orange">#fb923c</color>
+    <color name="brew_retro_pink">#f472b6</color>
+    <color name="brew_retro_teal">#2dd4bf</color>
+    <color name="brew_retro_indigo">#6366f1</color>
 </resources>

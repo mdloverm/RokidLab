@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.rokidbrew.screenservice"
+    namespace = "com.rokidlab.screenservice"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.rokidbrew.screenservice"
+        applicationId = "com.rokidlab.screenservice"
         minSdk = 28
         targetSdk = 34
         versionCode = 1

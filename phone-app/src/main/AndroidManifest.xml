@@ -37,7 +37,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:usesCleartextTraffic="${cleartextTrafficPermitted}"
         android:supportsRtl="true"
-        android:theme="@style/Theme.RokidBrewPhone">
+        android:theme="@style/Theme.RokidLabPhone">
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -50,17 +50,17 @@
         <activity
             android:name=".ScreenMirrorActivity"
             android:exported="false"
-            android:theme="@style/Theme.RokidBrewPhone.Fullscreen" />
+            android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
 
         <activity
             android:name=".PhoneMirrorActivity"
             android:exported="false"
-            android:theme="@style/Theme.RokidBrewPhone.Fullscreen" />
+            android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
 
         <activity
             android:name=".FileManagerActivity"
             android:exported="false"
-            android:theme="@style/Theme.RokidBrewPhone" />
+            android:theme="@style/Theme.RokidLabPhone" />
 
         <receiver
             android:name=".PhoneInstallResultReceiver"
