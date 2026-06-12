@@ -99,13 +99,24 @@ fun NewFolderDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                 ) {
-                    Button(onClick = { onDismiss() }, colors = ButtonDefaults.buttonColors(containerColor = BrewPanelHi)) {
+                    Button(
+                        onClick = { onDismiss() },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BrewPanelHi,
+                            contentColor = BrewTextBright
+                        )
+                    ) {
                         Text("取消")
                     }
                     Button(
                         onClick = { if (name.isNotBlank()) onConfirm(name) },
                         enabled = name.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = BrewCoral)
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BrewCoral,
+                            contentColor = BrewTextBright
+                        )
                     ) {
                         Text("确定")
                     }
@@ -143,13 +154,24 @@ fun RenameDialog(fileName: String, onConfirm: (String) -> Unit, onDismiss: () ->
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                 ) {
-                    Button(onClick = { onDismiss() }, colors = ButtonDefaults.buttonColors(containerColor = BrewPanelHi)) {
+                    Button(
+                        onClick = { onDismiss() },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BrewPanelHi,
+                            contentColor = BrewTextBright
+                        )
+                    ) {
                         Text("取消")
                     }
                     Button(
                         onClick = { if (newName.isNotBlank()) onConfirm(newName) },
                         enabled = newName.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = BrewCoral)
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BrewCoral,
+                            contentColor = BrewTextBright
+                        )
                     ) {
                         Text("确定")
                     }
@@ -177,12 +199,23 @@ fun DeleteConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                 ) {
-                    Button(onClick = { onDismiss() }, colors = ButtonDefaults.buttonColors(containerColor = BrewPanelHi)) {
+                    Button(
+                        onClick = { onDismiss() },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BrewPanelHi,
+                            contentColor = BrewTextBright
+                        )
+                    ) {
                         Text("取消")
                     }
                     Button(
                         onClick = { onConfirm() },
-                        colors = ButtonDefaults.buttonColors(containerColor = BrewRed)
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BrewRed,
+                            contentColor = BrewTextBright
+                        )
                     ) {
                         Text("删除")
                     }
@@ -215,7 +248,14 @@ fun DetailsDialog(file: FileItem, onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    Button(onClick = onDismiss, colors = ButtonDefaults.buttonColors(containerColor = BrewCoral)) {
+                    Button(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = BrewCoral,
+                            contentColor = BrewTextBright
+                        )
+                    ) {
                         Text("确定")
                     }
                 }
@@ -1051,7 +1091,7 @@ class FileManagerActivity : ComponentActivity() {
     private fun pasteFiles() {
         clipboard?.let { (action, paths) ->
             isLoading = true
-            statusMessage = "姝ｅ湪绮樿创..."
+            statusMessage = "正在粘贴..."
             
             Thread {
                 var successCount = 0
@@ -1194,10 +1234,24 @@ fun ErrorScreen(error: String, onRetry: () -> Unit, onBack: () -> Unit) {
             Text(error, color = BrewText, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             Spacer(modifier = Modifier.height(24.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Button(onClick = onRetry, colors = ButtonDefaults.buttonColors(containerColor = BrewCoral)) {
-                    Text("閲嶈瘯")
+                Button(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = BrewCoral,
+                        contentColor = BrewTextBright
+                    )
+                ) {
+                    Text("重试")
                 }
-                Button(onClick = onBack, colors = ButtonDefaults.buttonColors(containerColor = BrewPanelHi)) {
+                Button(
+                    onClick = onBack,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = BrewPanelHi,
+                        contentColor = BrewTextBright
+                    )
+                ) {
                     Text("返回")
                 }
             }

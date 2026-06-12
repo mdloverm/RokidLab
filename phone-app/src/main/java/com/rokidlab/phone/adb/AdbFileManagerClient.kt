@@ -1179,7 +1179,14 @@ class AdbFileManagerClient(
             }
 
             // 发送 RECV 命令
-            val recvCmd = "RECV".toByteArray(Charsets.UTF_8) + path.toByteArray(Charsets.UTF_8)
+            val pathBytes = path.toByteArray(Charsets.UTF_8)
+            val recvCmd = ByteArray(8 + pathBytes.size)
+            System.arraycopy("RECV".toByteArray(Charsets.UTF_8), 0, recvCmd, 0, 4)
+            recvCmd[4] = (pathBytes.size and 0xFF).toByte()
+            recvCmd[5] = ((pathBytes.size shr 8) and 0xFF).toByte()
+            recvCmd[6] = ((pathBytes.size shr 16) and 0xFF).toByte()
+            recvCmd[7] = ((pathBytes.size shr 24) and 0xFF).toByte()
+            System.arraycopy(pathBytes, 0, recvCmd, 8, pathBytes.size)
             sendPacket(CMD_WRTE, sid, remoteId, recvCmd)
 
             val output = ByteArrayOutputStream()

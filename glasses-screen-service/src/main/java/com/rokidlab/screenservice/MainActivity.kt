@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -71,16 +72,27 @@ class MainActivity : Activity() {
 
     private fun startSetup() {
         statusText.text = "检查 WiFi..."
-        if (!isWifiConnected()) {
-            statusText.text = "未连接 WiFi"
+        
+        // 1. 检查 WiFi 硬件开关是否开启
+        if (!isWifiEnabled()) {
+            statusText.text = "WiFi 未开启"
             setDotColor(DOT_ERROR)
-            ipText.text = "未连接"
+            ipText.text = "0.0.0.0"
             openWifiSettings()
             return
         }
-
+        
+        // 2. 显示 IP（无论是否已连接网络，获取真实 IP 地址）
         val ip = getIPAddress()
         ipText.text = ip
+        
+        // 3. 检查是否已连接到 WiFi 网络
+        if (!isWifiConnected()) {
+            statusText.text = "未连接 WiFi"
+            setDotColor(DOT_ERROR)
+            openWifiSettings()
+            return
+        }
 
         statusText.text = "检查 ADB 状态..."
         if (isAdbTcpListening()) {
@@ -94,6 +106,11 @@ class MainActivity : Activity() {
         enableAdbTcp()
     }
 
+    private fun isWifiEnabled(): Boolean {
+        val wifiManager = getSystemService(WIFI_SERVICE) as? WifiManager ?: return false
+        return wifiManager.isWifiEnabled
+    }
+
     private fun isWifiConnected(): Boolean {
         val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = cm.activeNetwork ?: return false
@@ -103,7 +120,7 @@ class MainActivity : Activity() {
     }
 
     private fun openWifiSettings() {
-        Toast.makeText(this, "请连接 WiFi", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "请在设置中开启并连接 WiFi", Toast.LENGTH_LONG).show()
         val intent = Intent(Settings.ACTION_WIFI_SETTINGS)
         startActivityForResult(intent, REQUEST_WIFI)
     }
@@ -184,19 +201,18 @@ class MainActivity : Activity() {
             val interfaces = NetworkInterface.getNetworkInterfaces()
             while (interfaces.hasMoreElements()) {
                 val networkInterface = interfaces.nextElement()
-                if (networkInterface.name == "wlan0" || networkInterface.name.startsWith("ap")) {
-                    val addresses = networkInterface.inetAddresses
-                    while (addresses.hasMoreElements()) {
-                        val address = addresses.nextElement()
-                        if (address.isSiteLocalAddress && !address.isLoopbackAddress) {
-                            return address.hostAddress ?: "未知"
-                        }
+                if (networkInterface.isLoopback || !networkInterface.isUp) continue
+                val addresses = networkInterface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val address = addresses.nextElement()
+                    if (!address.isLoopbackAddress && address is java.net.Inet4Address) {
+                        return address.hostAddress ?: "0.0.0.0"
                     }
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "获取 IP 失败", e)
         }
-        return "未连接"
+        return "0.0.0.0"
     }
 }

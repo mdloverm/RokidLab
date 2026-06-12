@@ -558,6 +558,8 @@ private fun IpAddressInputCard(
     onValueChange: (String) -> Unit,
     color: Color = BrewCyan,
 ) {
+    var text by remember { mutableStateOf(value) }
+
     Box(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -568,11 +570,14 @@ private fun IpAddressInputCard(
         ) {
             Text(text = label, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(bottom = 8.dp))
             OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
+                value = text,
+                onValueChange = { newVal ->
+                    text = newVal
+                    onValueChange(newVal)
+                },
                 placeholder = { Text("192.168.1.168", color = BrewMuted) },
                 textStyle = TextStyle(color = BrewTextBright),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = color, unfocusedBorderColor = BrewBorder),
@@ -1112,6 +1117,7 @@ private fun BottomNavigationBar(
         modifier = modifier
             .fillMaxWidth()
             .height(64.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(BrewPanel)
             .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp)),
         horizontalArrangement = Arrangement.SpaceAround,

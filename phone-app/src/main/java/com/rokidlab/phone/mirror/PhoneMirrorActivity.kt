@@ -192,14 +192,16 @@ class PhoneMirrorActivity : ComponentActivity() {
 
                 Button(
                     onClick = onStop,
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = BrewCoral
+                        containerColor = BrewCoral,
+                        contentColor = BrewTextBright
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp)
                 ) {
-                    Text("停止投屏", fontSize = 16.sp, color = BrewBg)
+                    Text("停止投屏", fontSize = 16.sp)
                 }
             }
         }
@@ -244,14 +246,23 @@ class PhoneMirrorActivity : ComponentActivity() {
             ) {
                 OutlinedButton(
                     onClick = onBack,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = BrewTextBright
+                    )
                 ) {
                     Text("返回")
                 }
 
                 Button(
                     onClick = onRetry,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = BrewCoral,
+                        contentColor = BrewTextBright
+                    )
                 ) {
                     Text("重试")
                 }

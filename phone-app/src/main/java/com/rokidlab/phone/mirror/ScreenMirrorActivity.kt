@@ -251,9 +251,13 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
         Button(
             onClick = onRetry,
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = BrewCoral)
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = BrewCoral,
+                contentColor = BrewTextBright
+            )
         ) {
-            Text("重试连接", color = BrewBg)
+            Text("重试连接")
         }
         TextButton(
             onClick = onBack,
