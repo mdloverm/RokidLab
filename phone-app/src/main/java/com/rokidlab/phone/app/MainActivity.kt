@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.app
+package com.rokidlab.phone.app
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -67,9 +67,6 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import java.io.File
 import java.io.FileOutputStream
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -100,7 +97,6 @@ class MainActivity : AppCompatActivity() {
     private val glassesInstallStateSources = mutableMapOf<String, InstallStateSource>()
     private var pendingAction: (() -> Unit)? = null
     private var isCheckingScreenStream = false
-    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private var selfUpdateState by mutableStateOf(
         BrewSelfUpdateState(
             currentVersion = BuildConfig.VERSION_NAME,

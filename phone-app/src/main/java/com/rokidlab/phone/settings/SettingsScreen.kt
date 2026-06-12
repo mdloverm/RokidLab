@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.settings
+package com.rokidlab.phone.settings
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 @Composable
-internal fun SettingsScreen(appVersion: String, hostApp: RokidHostApp, updateAvailable: Boolean, onSwitchMirror: () -> Unit) {
+internal fun SettingsScreen(appVersion: String) {
     Column(modifier = Modifier.fillMaxSize().background(BrewBg).statusBarsPadding().navigationBarsPadding().padding(horizontal = 18.dp).verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(24.dp))
         Text("设置", color = BrewTextBright, fontSize = 20.sp, fontWeight = FontWeight.Bold)

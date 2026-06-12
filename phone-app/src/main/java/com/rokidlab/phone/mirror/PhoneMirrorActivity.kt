@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.mirror
+package com.rokidlab.phone.mirror
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -42,7 +42,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -114,65 +113,6 @@ class PhoneMirrorActivity : ComponentActivity() {
         }
     }
     
-    @Composable
-    private fun ConfigUI(
-        ipAddress: String,
-        port: String,
-        connectionStatus: String,
-        onIpChange: (String) -> Unit,
-        onPortChange: (String) -> Unit,
-        onConnect: () -> Unit
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                "手机投屏",
-                color = BrewTextBright,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 32.dp)
-            )
-
-            OutlinedTextField(
-                value = ipAddress,
-                onValueChange = onIpChange,
-                label = { Text("眼镜 IP 地址", color = BrewText) },
-                textStyle = androidx.compose.ui.text.TextStyle(color = BrewTextBright),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            Button(
-                onClick = onConnect,
-                modifier = Modifier
-                    .fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = BrewCoral)
-            ) {
-                Text("开始投屏", color = BrewBg)
-            }
-            
-            // 显示状态消息
-            if (connectionStatus.isNotEmpty()) {
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    text = connectionStatus,
-                    color = if (connectionStatus.contains("失败") || connectionStatus.contains("未授权")) 
-                        BrewRed else BrewText,
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
-    }
-
     @Composable
     private fun ConnectingUI(status: String) {
         Column(
@@ -329,13 +269,6 @@ class PhoneMirrorActivity : ComponentActivity() {
         Log.i(TAG, "startConnection: 启动屏幕录制权限请求")
         startActivityForResult(projectionManager.createScreenCaptureIntent(), REQUEST_MEDIA_PROJECTION)
     }
-
-    private fun retryConnection() {
-        connectionFailed = false
-        startConnection()
-    }
-
-    
 
     private fun stopStreaming() {
         isStreaming = false

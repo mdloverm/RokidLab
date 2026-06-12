@@ -68,7 +68,6 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -217,15 +216,6 @@ internal fun Header(
             }
         }
     }
-}
-@Composable
-internal fun RokidLabLogo(modifier: Modifier = Modifier) {
-    Image(
-        painter = painterResource(id = R.mipmap.ic_launcher),
-        contentDescription = "RokidLab",
-        contentScale = ContentScale.Crop,
-        modifier = modifier.clip(RoundedCornerShape(9.dp)),
-    )
 }
 @Composable
 internal fun BrandTitle(fontSize: Int, modifier: Modifier = Modifier) {

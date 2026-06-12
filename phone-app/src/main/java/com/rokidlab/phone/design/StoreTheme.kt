@@ -84,14 +84,8 @@ val BrewDim = Color(0xFF5C5952)         // 深石色 — 禁/淡出
 
 // ── 强调色：油画颜料走色（饱和度克制，明度有层次）──
 val BrewCoral = Color(0xFFE85D3F)       // 朱砂红 — 温暖的强调
-val BrewCoralDim = Color(0xFFC14A2F)    // 暗朱砂
-
 // ── 边框：几乎融入背景 ──
 val BrewBorder = Color(0xFF2C2C33)
-val BrewBorderHi = Color(0xFF3F3F49)
-
-// ── 内部兼容 ──
-val BrewMint = BrewCoral
 
 // ═══════════════════════════════════════════════════
 // 五模块五色：取自油画色板
@@ -106,7 +100,7 @@ val BrewMagenta = Color(0xFF8A8780) // 设置 — 石灰色（最低调）
 val BrewRed     = Color(0xFFE85D3F) // 错误/停止 — 朱砂红
 val BrewGreenDim = Color(0xFF3A8070) // 次要 — 暗青绿
 val BrewSuccess = Color(0xFF4ADE80) // 成功 — 翡翠绿
-val BrewError   = Color(0xFFE85D3F) // 错误
+
 val BrewWarning = Color(0xFFF0A050) // 警告 — 暖琥珀
 val BrewInfo    = Color(0xFF5B8FB9) // 信息 — 静谧蓝
 val BrewOrange  = Color(0xFFF0A050) // 兼容别名

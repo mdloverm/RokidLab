@@ -836,11 +836,6 @@ private fun BrutalButton(label: String, color: Color, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ModuleActionButton(label: String, color: Color, onClick: () -> Unit) {
-    BrutalButton(label = label, color = color, onClick = onClick)
-}
-
-@Composable
 private fun SettingCard(title: String, content: String, color: Color, onClick: (() -> Unit)? = null) {
     Box(
         modifier = Modifier

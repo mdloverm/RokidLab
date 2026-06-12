@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.mirror
+package com.rokidlab.phone.mirror
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -47,8 +47,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import java.io.File
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -72,7 +70,6 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -263,81 +260,6 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
             modifier = Modifier.padding(top = 8.dp)
         ) {
             Text("返回设置", color = BrewTextBright)
-        }
-    }
-}
-
-@Composable
-private fun ConfigUI(
-    ipAddress: String,
-    isInstallingScreenStream: Boolean,
-    onIpChange: (String) -> Unit,
-    onConnect: () -> Unit,
-    onInstallScreenStream: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "连接眼镜屏幕",
-            color = BrewTextBright,
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 32.dp)
-        )
-
-        // 安装按钮（始终显示，去掉状态判断）
-        if (!isInstallingScreenStream) {
-            Button(
-                onClick = onInstallScreenStream,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = BrewCoral)
-            ) {
-                Text("安装 ScreenStream 到眼镜", color = BrewBg)
-            }
-        }
-
-        // 安装中状态
-        if (isInstallingScreenStream) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    color = BrewCoral,
-                    strokeWidth = 2.dp
-                )
-                Text(
-                    text = "正在安装 ScreenStream...",
-                    color = BrewText,
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(start = 12.dp)
-                )
-            }
-        }
-
-        OutlinedTextField(
-            value = ipAddress,
-            onValueChange = onIpChange,
-            label = { Text("眼镜 IP 地址", color = BrewText) },
-            textStyle = TextStyle(color = BrewTextBright),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Button(
-            onClick = onConnect,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 24.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = BrewCoral)
-        ) {
-            Text("连接", color = BrewBg)
         }
     }
 }

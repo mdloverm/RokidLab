@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.glasses
+package com.rokidlab.phone.glasses
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -53,9 +53,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.painterResource
@@ -259,21 +257,6 @@ internal fun HostAppBadge(hostApp: RokidHostApp, modifier: Modifier = Modifier) 
                     .padding(5.dp),
             )
         }
-    }
-}
-@Composable
-internal fun HostAppFallbackMark(hostApp: RokidHostApp, modifier: Modifier = Modifier, color: Color = BrewMuted) {
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        Text(
-            if (hostApp == RokidHostApp.GLOBAL) "AI" else "CN",
-            color = color,
-            fontSize = if (hostApp == RokidHostApp.GLOBAL) 18.sp else 13.sp,
-            lineHeight = if (hostApp == RokidHostApp.GLOBAL) 18.sp else 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            style = TextStyle(
-                platformStyle = PlatformTextStyle(includeFontPadding = false),
-            ),
-        )
     }
 }
 @Composable

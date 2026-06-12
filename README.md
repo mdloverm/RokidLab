@@ -69,7 +69,6 @@ RokidLab/
 │   │   │   ├── mirror/      投屏模块
 │   │   │   │   ├── PhoneMirrorActivity.kt     手机投屏页面
 │   │   │   │   ├── PhoneMirrorService.kt      投屏前台 Service
-│   │   │   │   ├── PhoneMirrorClient.kt       投屏 ADB 客户端
 │   │   │   │   ├── PhonePackageInstallHelper.kt APK 安装工具
 │   │   │   │   └── ScreenMirrorActivity.kt    屏幕镜像画面
 │   │   │   ├── model/       数据模型
