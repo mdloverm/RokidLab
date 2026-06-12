@@ -80,10 +80,10 @@ RokidLab/
 │   │   │   │   └── MediaLoader.kt     媒体加载（基于 HttpClient）
 │   │   │   ├── settings/    设置页
 │   │   │   │   ├── SettingsScreen.kt   设置界面
-│   │   │   │   └── SystemLogDock.kt    日志面板
+│   │   │   │   └── SystemLogPanel.kt    日志面板
 │   │   │   ├── store/       商店 UI
 │   │   │   │   ├── StoreHomeScreen.kt    主界面入口
-│   │   │   │   ├── StoreChrome.kt        通用 UI 组件
+│   │   │   │   ├── StoreComponents.kt        通用 UI 组件
 │   │   │   │   ├── StoreInstallState.kt  安装状态组件
 │   │   │   │   ├── StoreMedia.kt         媒体/图标组件
 │   │   │   │   ├── StoreTargetTags.kt    安装目标标签
