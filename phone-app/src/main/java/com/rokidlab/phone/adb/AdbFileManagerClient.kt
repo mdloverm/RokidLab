@@ -429,6 +429,13 @@ class AdbFileManagerClient(
                                             Log.d(TAG, "下载完成: $totalReceived 字节")
                                             sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                             sendPacket(CMD_CLSE, sid, remoteId, null)
+                                            // 消费服务端的 CLSE 响应包，避免残留影响下一次操作
+                                            try {
+                                                val clseMsg = readPacket()
+                                                if (clseMsg.command == CMD_CLSE) {
+                                                    // 忽略服务端的 CLSE 确认
+                                                }
+                                            } catch (_: Exception) {}
                                             return true
                                         }
                                     }
@@ -436,7 +443,7 @@ class AdbFileManagerClient(
                                 sendPacket(CMD_OKAY, sid, msg.arg0, null)
                             }
                             CMD_CLSE -> {
-                                sendPacket(CMD_OKAY, sid, remoteId, null)
+                                sendPacket(CMD_CLSE, sid, remoteId, null)
                                 break
                             }
                         }
@@ -997,6 +1004,13 @@ class AdbFileManagerClient(
                     if (msg.arg1 == sid) {
                         sendPacket(CMD_OKAY, sid, msg.arg0, null)
                         sendPacket(CMD_CLSE, sid, remoteId, null)
+                        // 消费服务端可能的 CLSE 响应包
+                        try {
+                            val clseMsg = readPacket()
+                            if (clseMsg.command == CMD_CLSE) {
+                                // 忽略服务端的 CLSE 确认
+                            }
+                        } catch (_: Exception) {}
                         break
                     } else {
                         sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
@@ -1010,7 +1024,7 @@ class AdbFileManagerClient(
     
     fun executeShellCommand(cmd: String): String {
         synchronized(lock) {
-            return executeShellCommandInternal(cmd)
+            return executeShellCommandInternal("shell:$cmd\u0000")
         }
     }
 
@@ -1155,93 +1169,121 @@ class AdbFileManagerClient(
     
     /** 读取文件内容（用于预览） */
     fun readFileContent(path: String, maxSize: Int = 1024 * 1024): String? {
-        return try {
-            val sid = localId.getAndIncrement()
-            val cmd = "sync:\u0000"
-            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+        synchronized(lock) {
+            return try {
+                readFileContentInternal(path, maxSize)
+            } catch (e: Exception) {
+                Log.e(TAG, "读取文件内容失败: ${e.message}", e)
+                null
+            }
+        }
+    }
+    
+    private fun readFileContentInternal(path: String, maxSize: Int): String {
+        val sid = localId.getAndIncrement()
+        val cmd = "sync:\u0000"
+        sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
-            var remoteId = 0
+        var remoteId = 0
 
-            while (true) {
-                val msg = readPacket()
-                when (msg.command) {
-                    CMD_OKAY -> {
-                        remoteId = msg.arg0
-                        break
-                    }
-                    CMD_CLSE -> {
-                        throw Exception("打开 sync 服务失败")
-                    }
-                    else -> {
-                        throw Exception("未知响应: ${msg.command}")
-                    }
+        while (true) {
+            val msg = readPacket()
+            when (msg.command) {
+                CMD_OKAY -> {
+                    remoteId = msg.arg0
+                    break
+                }
+                CMD_CLSE -> {
+                    throw Exception("打开 sync 服务失败")
+                }
+                else -> {
+                    throw Exception("未知响应: ${msg.command}")
                 }
             }
+        }
 
-            // 发送 RECV 命令
-            val pathBytes = path.toByteArray(Charsets.UTF_8)
-            val recvCmd = ByteArray(8 + pathBytes.size)
-            System.arraycopy("RECV".toByteArray(Charsets.UTF_8), 0, recvCmd, 0, 4)
-            recvCmd[4] = (pathBytes.size and 0xFF).toByte()
-            recvCmd[5] = ((pathBytes.size shr 8) and 0xFF).toByte()
-            recvCmd[6] = ((pathBytes.size shr 16) and 0xFF).toByte()
-            recvCmd[7] = ((pathBytes.size shr 24) and 0xFF).toByte()
-            System.arraycopy(pathBytes, 0, recvCmd, 8, pathBytes.size)
-            sendPacket(CMD_WRTE, sid, remoteId, recvCmd)
+        // 发送 RECV 命令
+        val pathBytes = path.toByteArray(Charsets.UTF_8)
+        val recvCmd = ByteArray(8 + pathBytes.size)
+        System.arraycopy("RECV".toByteArray(Charsets.UTF_8), 0, recvCmd, 0, 4)
+        recvCmd[4] = (pathBytes.size and 0xFF).toByte()
+        recvCmd[5] = ((pathBytes.size shr 8) and 0xFF).toByte()
+        recvCmd[6] = ((pathBytes.size shr 16) and 0xFF).toByte()
+        recvCmd[7] = ((pathBytes.size shr 24) and 0xFF).toByte()
+        System.arraycopy(pathBytes, 0, recvCmd, 8, pathBytes.size)
+        sendPacket(CMD_WRTE, sid, remoteId, recvCmd)
 
-            val output = ByteArrayOutputStream()
-            var totalRead = 0
+        // 等待 RECV 被确认
+        var waitForOkay = true
+        while (waitForOkay) {
+            val msg = readPacket()
+            when (msg.command) {
+                CMD_OKAY -> waitForOkay = false
+                CMD_CLSE -> throw Exception("RECV 命令被拒绝")
+            }
+        }
 
-            while (true) {
-                val msg = readPacket()
-                when (msg.command) {
-                    CMD_OKAY -> {
-                        // 继续等待数据
-                    }
-                    CMD_WRTE -> {
-                        // 检查是否是 DATA 命令
-                        if (msg.payload.size >= 4) {
-                            val cmdStr = String(msg.payload, 0, 4, Charsets.UTF_8)
-                            if (cmdStr == "DATA") {
-                                val size = ((msg.payload[4].toInt() and 0xFF)) or
-                                          ((msg.payload[5].toInt() and 0xFF) shl 8) or
-                                          ((msg.payload[6].toInt() and 0xFF) shl 16) or
-                                          ((msg.payload[7].toInt() and 0xFF) shl 24)
-                                if (msg.payload.size >= 8 + size) {
-                                    output.write(msg.payload, 8, size)
+        val output = ByteArrayOutputStream()
+        var totalRead = 0
+
+        while (true) {
+            val msg = readPacket()
+            when (msg.command) {
+                CMD_OKAY -> {
+                    // 继续等待数据
+                }
+                CMD_WRTE -> {
+                    val payload = msg.payload
+                    if (payload != null && payload.size >= 8) {
+                        val cmdStr = String(payload, 0, 4, Charsets.UTF_8)
+                        when (cmdStr) {
+                            "DATA" -> {
+                                val size = ((payload[4].toInt() and 0xFF)) or
+                                          ((payload[5].toInt() and 0xFF) shl 8) or
+                                          ((payload[6].toInt() and 0xFF) shl 16) or
+                                          ((payload[7].toInt() and 0xFF) shl 24)
+                                if (payload.size >= 8 + size) {
+                                    output.write(payload, 8, size)
                                     totalRead += size
-                                    if (totalRead >= maxSize) {
-                                        // 超过最大大小，停止读取
-                                        break
+                                }
+                            }
+                            "DONE" -> {
+                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                                sendPacket(CMD_CLSE, sid, remoteId, null)
+                                // 消费服务端的 CLSE 响应包
+                                try {
+                                    val clseMsg = readPacket()
+                                    if (clseMsg.command == CMD_CLSE) {
+                                        // 忽略服务端的 CLSE 确认
                                     }
-                                }
-                            } else if (cmdStr == "DONE") {
-                                break
-                            } else if (cmdStr == "FAIL") {
-                                val errorSize = ((msg.payload[4].toInt() and 0xFF)) or
-                                              ((msg.payload[5].toInt() and 0xFF) shl 8) or
-                                              ((msg.payload[6].toInt() and 0xFF) shl 16) or
-                                              ((msg.payload[7].toInt() and 0xFF) shl 24)
-                                if (msg.payload.size >= 8 + errorSize) {
-                                    val error = String(msg.payload, 8, errorSize, Charsets.UTF_8)
-                                    Log.e(TAG, "读取文件失败: $error")
-                                }
-                                break
+                                } catch (_: Exception) {}
+                                return output.toString(Charsets.UTF_8.name())
+                            }
+                            "FAIL" -> {
+                                val errorSize = ((payload[4].toInt() and 0xFF)) or
+                                              ((payload[5].toInt() and 0xFF) shl 8) or
+                                              ((payload[6].toInt() and 0xFF) shl 16) or
+                                              ((payload[7].toInt() and 0xFF) shl 24)
+                                val error = if (payload.size >= 8 + errorSize)
+                                    String(payload, 8, errorSize, Charsets.UTF_8)
+                                else "未知错误"
+                                Log.e(TAG, "读取文件失败: $error")
+                                throw Exception("读取文件失败: $error")
                             }
                         }
-                        sendPacket(CMD_OKAY, sid, msg.arg0, null)
                     }
-                    CMD_CLSE -> {
-                        sendPacket(CMD_OKAY, sid, remoteId, null)
-                        break
-                    }
+                    sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                }
+                CMD_CLSE -> {
+                    sendPacket(CMD_CLSE, sid, remoteId, null)
+                    return output.toString(Charsets.UTF_8.name())
                 }
             }
 
-            output.toString(Charsets.UTF_8.name())
-        } catch (e: Exception) {
-            Log.e(TAG, "读取文件内容失败: ${e.message}", e)
-            null
+            if (totalRead >= maxSize) {
+                sendPacket(CMD_CLSE, sid, remoteId, null)
+                return output.toString(Charsets.UTF_8.name())
+            }
         }
     }
 

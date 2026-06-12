@@ -933,9 +933,17 @@ class FileManagerActivity : ComponentActivity() {
                         }
                     }
                 } else if (textExtensions.contains(extension)) {
-                    // 文本文件可以预览
-                    val content = adbClient?.executeShellCommand("cat \"${file.path}\"")
-                    Log.i(TAG, "文本内容预览成功, 长度: ${content?.length}")
+                    // 文本文件可以预览 - 使用 shell cat 命令读取（sync 协议不支持此设备）
+                    Log.i(TAG, "文本文件，开始读取内容")
+                    val content = if (adbClient != null) {
+                        try {
+                            adbClient!!.executeShellCommand("cat \"${file.path}\"")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "shell cat 失败: ${e.message}")
+                            null
+                        }
+                    } else null
+                    Log.i(TAG, "文本内容预览结果: ${if (content != null && content.isNotEmpty()) "成功, 长度: ${content.length}" else "失败"}")
                     
                     runOnUiThread {
                         previewLoading = false
@@ -980,21 +988,21 @@ class FileManagerActivity : ComponentActivity() {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "澶嶅埗鏂囦欢澶辫触: ${e.message}")
+                    Log.e(TAG, "复制文件失败: ${e.message}")
                 }
                 File(localPath).delete()
             }
             
             runOnUiThread {
                 isLoading = false
-                statusMessage = if (success) "涓嬭浇鎴愬姛" else "涓嬭浇澶辫触"
+                statusMessage = if (success) "下载成功" else "下载失败"
             }
         }.start()
     }
 
     private fun uploadFile(uri: Uri) {
         isLoading = true
-        statusMessage = "姝ｅ湪涓婁紶..."
+        statusMessage = "正在上传..."
         
         Thread {
             val fileName = uri.getFileName() ?: "unknown"
@@ -1008,7 +1016,7 @@ class FileManagerActivity : ComponentActivity() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "澶嶅埗鏂囦欢澶辫触: ${e.message}")
+                Log.e(TAG, "复制文件失败: ${e.message}")
             }
             
             val success = adbClient?.uploadFile(localPath, targetPath) ?: false
@@ -1017,10 +1025,10 @@ class FileManagerActivity : ComponentActivity() {
             runOnUiThread {
                 isLoading = false
                 if (success) {
-                    statusMessage = "涓婁紶鎴愬姛"
+                    statusMessage = "上传成功"
                     loadFiles()
                 } else {
-                    statusMessage = "涓婁紶澶辫触"
+                    statusMessage = "上传失败"
                 }
             }
         }.start()
@@ -1184,21 +1192,23 @@ class FileManagerActivity : ComponentActivity() {
             result = result.filter { !it.name.startsWith('.') }
         }
         
-        result = result.sortedWith(compareBy(
-            { !it.isDirectory },
-            { 
-                when (sortOrder) {
-                    SortOrder.NAME_ASC -> it.name.lowercase()
-                    SortOrder.NAME_DESC -> it.name.lowercase().reversed()
-                    SortOrder.SIZE_ASC -> it.size
-                    SortOrder.SIZE_DESC -> -it.size
-                    SortOrder.DATE_ASC -> it.lastModified
-                    SortOrder.DATE_DESC -> -it.lastModified
-                    SortOrder.TYPE_ASC -> it.name.substringAfterLast('.', "").lowercase()
-                    SortOrder.TYPE_DESC -> it.name.substringAfterLast('.', "").lowercase().reversed()
+        result = result.sortedWith(Comparator<FileItem> { a, b ->
+            when {
+                a.isDirectory != b.isDirectory -> if (a.isDirectory) -1 else 1
+                else -> when (sortOrder) {
+                    SortOrder.NAME_ASC -> a.name.lowercase().compareTo(b.name.lowercase())
+                    SortOrder.NAME_DESC -> b.name.lowercase().compareTo(a.name.lowercase())
+                    SortOrder.SIZE_ASC -> a.size.compareTo(b.size)
+                    SortOrder.SIZE_DESC -> b.size.compareTo(a.size)
+                    SortOrder.DATE_ASC -> a.lastModified.compareTo(b.lastModified)
+                    SortOrder.DATE_DESC -> b.lastModified.compareTo(a.lastModified)
+                    SortOrder.TYPE_ASC -> a.name.substringAfterLast('.', "").lowercase()
+                        .compareTo(b.name.substringAfterLast('.', "").lowercase())
+                    SortOrder.TYPE_DESC -> b.name.substringAfterLast('.', "").lowercase()
+                        .compareTo(a.name.substringAfterLast('.', "").lowercase())
                 }
             }
-        ))
+        })
         
         return result
     }
