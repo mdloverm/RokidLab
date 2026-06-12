@@ -269,6 +269,7 @@ internal fun BrewPhoneApp(
                     modifier = Modifier
                         .height(44.dp)
                         .width(120.dp)
+                        .clip(RoundedCornerShape(12.dp))
                         .background(BrewBg)
                         .border(width = 1.dp, color = BrewRed, shape = RoundedCornerShape(12.dp))
                         .clickable {
@@ -285,6 +286,7 @@ internal fun BrewPhoneApp(
                     modifier = Modifier
                         .height(44.dp)
                         .width(120.dp)
+                        .clip(RoundedCornerShape(12.dp))
                         .background(BrewBg)
                         .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                         .clickable { showExitDialog = false },
@@ -806,6 +808,7 @@ private fun LazyListScope.appListItems(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(BrewPanel)
                     .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                     .clickable { onExpandedChange(!expanded) },
@@ -850,6 +853,7 @@ private fun AppListItem(
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
             .background(BrewPanel)
             .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
             .clickable { onOpen() },
@@ -886,6 +890,7 @@ private fun AppListItem(
                         Box(
                             modifier = Modifier
                                 .height(32.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(BrewPanelAlt)
                                 .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                                 .padding(horizontal = 12.dp)
@@ -924,6 +929,7 @@ private fun AppListItem(
                         Box(
                             modifier = Modifier
                                 .height(32.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(BrewPanelAlt)
                                 .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                                 .padding(horizontal = 12.dp)
@@ -1211,6 +1217,7 @@ private fun StoreModule(
                             modifier = Modifier
                                 .width(40.dp)
                                 .height(40.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(BrewPanel)
                                 .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                                 .clickable { onHideFeaturedList() },
@@ -1320,6 +1327,7 @@ private fun StoreModule(
                         Box(
                             modifier = Modifier
                                 .height(32.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(BrewPanel)
                                 .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                                 .padding(horizontal = 16.dp)
@@ -1346,6 +1354,7 @@ private fun StoreModule(
                                 modifier = Modifier
                                     .weight(1f)
                                     .aspectRatio(1f)
+                                    .clip(RoundedCornerShape(12.dp))
                                     .background(BrewPanel)
                                     .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                                     .clickable { onSelectApp(app) },
