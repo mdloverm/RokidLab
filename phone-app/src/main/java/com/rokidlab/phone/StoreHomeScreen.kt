@@ -1,9 +1,20 @@
-package com.rokidlab.phone
+﻿package com.rokidlab.phone
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,6 +30,9 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
@@ -29,7 +43,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
@@ -39,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.toArgb
+import kotlinx.coroutines.launch
 import java.util.Locale
 import com.rokidlab.phone.AppIcon
 
@@ -127,6 +151,8 @@ internal data class StoreActions(
     val onFileManagerRenameFile: (String, String) -> Unit,
     val onExitApp: () -> Unit,
     val onCancelDownload: (String) -> Unit,
+    // 设置页 — 眼镜端服务
+    val onSettingsReinstallScreenStream: () -> Unit,
 )
 
 // ===== 应用入口 =====
@@ -141,7 +167,6 @@ internal fun BrewPhoneApp(
     var currentPage by rememberSaveable { mutableStateOf(NavPage.STORE) }
     var selectedApp by remember { mutableStateOf<BrewApp?>(null) }
     var query by remember { mutableStateOf("") }
-    var searchVisible by remember { mutableStateOf(false) }
     var categoryFilter by remember { mutableStateOf<String?>(null) }
     var showingFeaturedList by remember { mutableStateOf(false) }
     var appListExpanded by remember { mutableStateOf(false) }
@@ -171,8 +196,6 @@ internal fun BrewPhoneApp(
                 onSelectedAppChange = { selectedApp = it },
                 query = query,
                 onQueryChange = { query = it },
-                searchVisible = searchVisible,
-                onSearchVisibleChange = { searchVisible = it },
                 categoryFilter = categoryFilter,
                 onCategoryFilterChange = { categoryFilter = it },
                 showingFeaturedList = showingFeaturedList,
@@ -194,7 +217,7 @@ internal fun BrewPhoneApp(
             containerColor = BrewPanel,
             titleContentColor = BrewTextBright,
             textContentColor = BrewText,
-            shape = RoundedCornerShape(0.dp),
+            shape = RoundedCornerShape(12.dp),
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -236,7 +259,7 @@ internal fun BrewPhoneApp(
                         .height(44.dp)
                         .width(120.dp)
                         .background(BrewBg)
-                        .border(width = 3.dp, color = BrewRed, shape = RoundedCornerShape(0.dp))
+                        .border(width = 1.dp, color = BrewRed, shape = RoundedCornerShape(12.dp))
                         .clickable {
                             showExitDialog = false
                             actions.onExitApp()
@@ -252,7 +275,7 @@ internal fun BrewPhoneApp(
                         .height(44.dp)
                         .width(120.dp)
                         .background(BrewBg)
-                        .border(width = 3.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+                        .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                         .clickable { showExitDialog = false },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -264,12 +287,11 @@ internal fun BrewPhoneApp(
     
     if (!showGuide) {
         BackHandler(enabled = true) {
-            if (currentPage != NavPage.STORE || selectedApp != null || showingFeaturedList || updateSheetVisible || searchVisible) {
+            if (currentPage != NavPage.STORE || selectedApp != null || showingFeaturedList || updateSheetVisible) {
                 currentPage = NavPage.STORE
                 selectedApp = null
                 showingFeaturedList = false
                 updateSheetVisible = false
-                searchVisible = false
             } else {
                 showExitDialog = true
             }
@@ -519,14 +541,40 @@ private fun SettingsModule(
             SettingCard(title = "更新状态", content = "暂无更新", color = BrewMuted)
         }
         Spacer(modifier = Modifier.height(16.dp))
-        BrutalButton(label = "切换商店源", color = BrewMagenta, onClick = actions.onSwitchMirror)
+        BrutalButton(label = "切换商店源", color = BrewCyan, onClick = actions.onSwitchMirror)
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        // ── 眼镜端服务 ──
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
+        ) {
+            Text(text = "眼镜端服务", color = BrewMagenta.copy(alpha = 0.8f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+            Spacer(modifier = Modifier.height(12.dp))
+            SettingCard(
+                title = "ScreenStream",
+                content = if (state.screenMirrorState.screenStreamInstalled == true) "已安装" else "未安装",
+                color = if (state.screenMirrorState.screenStreamInstalled == true) BrewGreen else BrewWarning,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            BrutalButton(
+                label = "重装眼镜端",
+                color = BrewWarning,
+                onClick = actions.onSettingsReinstallScreenStream,
+            )
+            if (state.screenMirrorState.isInstallingScreenStream) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("正在安装中...", color = BrewCyan, fontSize = 12.sp)
+            }
+        }
         Spacer(modifier = Modifier.height(24.dp))
         
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(BrewPanel)
-                .border(width = 3.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+                .background(BrewPanel, RoundedCornerShape(12.dp))
+                .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                 .padding(16.dp),
         ) {
             Column {
@@ -548,7 +596,7 @@ private fun SettingsModule(
 @Composable
 private fun ModuleHeader(title: String, subtitle: String, color: Color) {
     Column {
-        Text(text = title, color = color, fontSize = 32.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
+        Text(text = title, color = color, fontSize = 32.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp)
         Spacer(modifier = Modifier.height(8.dp))
         Text(text = subtitle, color = BrewMuted, fontSize = 14.sp)
     }
@@ -573,25 +621,26 @@ private fun IpAddressInputCard(
     onValueChange: (String) -> Unit,
     color: Color = BrewCyan,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(BrewPanel)
-            .border(width = 3.dp, color = color, shape = RoundedCornerShape(0.dp))
-            .padding(16.dp),
-    ) {
-        Text(text = label, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(bottom = 8.dp))
-        
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            placeholder = { Text("192.168.1.168", color = BrewMuted) },
-            textStyle = TextStyle(color = BrewTextBright),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = color, unfocusedBorderColor = BrewBorder),
-        )
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(BrewPanel, RoundedCornerShape(12.dp))
+                .border(width = 1.dp, color = color, shape = RoundedCornerShape(12.dp))
+                .padding(16.dp),
+        ) {
+            Text(text = label, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(bottom = 8.dp))
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                placeholder = { Text("192.168.1.168", color = BrewMuted) },
+                textStyle = TextStyle(color = BrewTextBright),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = color, unfocusedBorderColor = BrewBorder),
+            )
+        }
     }
 }
 
@@ -603,8 +652,8 @@ private fun UsageInstructionsCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(BrewPanel)
-            .border(width = 2.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+            .background(BrewPanel, RoundedCornerShape(12.dp))
+            .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
             .padding(16.dp),
     ) {
         Column {
@@ -621,13 +670,13 @@ private fun UsageInstructionsCard(
 @Composable
 private fun ScreenStreamStatusCard(installed: Boolean, installing: Boolean, running: Boolean = false, onInstall: () -> Unit, onOpen: () -> Unit, onStop: (() -> Unit)? = null) {
     val statusColor = when {
-        running -> BrewMagenta
+        running -> BrewWarning
         installing -> BrewCyan
         installed -> BrewSuccess
         else -> BrewRed
     }
     val statusBg = when {
-        running -> BrewMagenta
+        running -> BrewWarning
         installing -> BrewCyan
         installed -> BrewSuccess
         else -> BrewRed
@@ -645,12 +694,23 @@ private fun ScreenStreamStatusCard(installed: Boolean, installing: Boolean, runn
         else -> "✘"
     }
     
+    // 安装中脉冲动画 — 偏移装饰线呼吸效果
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseOffset by infiniteTransition.animateFloat(
+        initialValue = 0f, targetValue = 8f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "pulse-offset",
+    )
+    
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
             .background(BrewPanel)
-            .border(width = 4.dp, color = statusColor, shape = RoundedCornerShape(0.dp))
-            .padding(0.dp),
+            .border(width = 1.dp, color = statusColor.copy(alpha = 0.3f), shape = RoundedCornerShape(12.dp)),
     ) {
         // 顶部状态条
         Box(
@@ -686,13 +746,13 @@ private fun ScreenStreamStatusCard(installed: Boolean, installing: Boolean, runn
             }
         }
         
-        // 偏移装饰线
+        // 偏移装饰线（安装中呼吸脉冲）
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(4.dp)
                 .background(BrewBorderHi)
-                .offset(x = 8.dp),
+                .offset(x = if (installing) pulseOffset.dp else 8.dp),
         )
         
         // 底部操作区
@@ -702,8 +762,8 @@ private fun ScreenStreamStatusCard(installed: Boolean, installing: Boolean, runn
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
-                        .background(BrewPanelAlt)
-                        .border(width = 3.dp, color = BrewCyan, shape = RoundedCornerShape(0.dp)),
+                        .background(BrewPanelAlt, RoundedCornerShape(12.dp))
+                        .border(width = 1.dp, color = BrewCyan.copy(alpha = 0.3f), shape = RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -714,7 +774,7 @@ private fun ScreenStreamStatusCard(installed: Boolean, installing: Boolean, runn
             } else if (running) {
                 BrutalButton(
                     label = "● 停止 ScreenStream",
-                    color = BrewMagenta,
+                    color = BrewRed,
                     onClick = onStop ?: {},
                 )
             } else if (!installed) {
@@ -736,31 +796,31 @@ private fun ScreenStreamStatusCard(installed: Boolean, installing: Boolean, runn
 
 @Composable
 private fun BrutalButton(label: String, color: Color, onClick: () -> Unit) {
-    // Neo Brutalist 特征：粗边框 + 颜色块 + 偏移阴影
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.98f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "btn-press",
+    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp)
-            .background(BrewBg)
-            .border(width = 4.dp, color = color, shape = RoundedCornerShape(0.dp))
-            .clickable(onClick = onClick),
+            .height(52.dp)
+            .graphicsLayer { scaleX = pressScale; scaleY = pressScale; alpha = if (isPressed) 0.85f else 1f }
+            .clip(RoundedCornerShape(12.dp))
+            .background(color.copy(alpha = 0.12f))
+            .border(width = 1.dp, color = color.copy(alpha = 0.5f), shape = RoundedCornerShape(12.dp))
+            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(color.copy(alpha = 0.15f))
-                .padding(horizontal = 4.dp, vertical = 4.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = label,
-                color = color,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 2.sp,
-            )
-        }
+        Text(
+            text = label,
+            color = color,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.sp,
+        )
     }
 }
 
@@ -774,13 +834,12 @@ private fun SettingCard(title: String, content: String, color: Color, onClick: (
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(BrewPanel)
-            .border(width = 3.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+            .background(BrewPanel, RoundedCornerShape(12.dp))
+            .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
             .padding(16.dp)
             .clickable(enabled = onClick != null) { onClick?.invoke() },
     ) {
         Column {
-            // Neo Brutalist: 标签用粗体小字 + 下划线装饰
             Text(
                 text = title.uppercase(),
                 color = BrewMuted,
@@ -796,7 +855,7 @@ private fun SettingCard(title: String, content: String, color: Color, onClick: (
                     .background(color)
                     .padding(bottom = 8.dp),
             )
-            Text(text = content, color = color, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Text(text = content, color = color, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, style = TabularNumbersStyle)
         }
     }
 }
@@ -842,7 +901,7 @@ private fun LazyListScope.appListItems(
                     .fillMaxWidth()
                     .height(48.dp)
                     .background(BrewPanel)
-                    .border(width = 2.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+                    .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                     .clickable { onExpandedChange(!expanded) },
                 contentAlignment = Alignment.Center,
             ) {
@@ -871,13 +930,32 @@ private fun AppListItem(
     onInstall: (String) -> Unit,
     onCancelDownload: (String) -> Unit,
 ) {
+    val flashAlpha = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    // 检测安装完成，触发绿色闪动
+    LaunchedEffect(phoneInstallState, glassesInstallState) {
+        val justInstalled = phoneInstallState == MainActivity.InstallState.INSTALLED ||
+            glassesInstallState == MainActivity.InstallState.INSTALLED
+        if (justInstalled) {
+            flashAlpha.snapTo(0.25f)
+            flashAlpha.animateTo(0f, animationSpec = tween(600))
+        }
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(BrewPanel)
-            .border(width = 2.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+            .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
             .clickable { onOpen() },
     ) {
+        // 安装完成闪动层
+        if (flashAlpha.value > 0.01f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(BrewSuccess.copy(alpha = flashAlpha.value)),
+            )
+        }
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             AppIcon(
                 app = app,
@@ -903,7 +981,7 @@ private fun AppListItem(
                             modifier = Modifier
                                 .height(32.dp)
                                 .background(BrewPanelAlt)
-                                .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+                                .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                                 .padding(horizontal = 12.dp)
                                 .clickable { if (!busy) onInstall("phone") },
                             contentAlignment = Alignment.Center,
@@ -923,7 +1001,7 @@ private fun AppListItem(
                                     },
                                     color = when (phoneInstallState) {
                                         MainActivity.InstallState.INSTALLED -> BrewGreen
-                                        MainActivity.InstallState.UPDATE_AVAILABLE -> BrewAmber
+                                        MainActivity.InstallState.UPDATE_AVAILABLE -> BrewWarning
                                         else -> BrewText
                                     },
                                     fontSize = 10.sp,
@@ -941,7 +1019,7 @@ private fun AppListItem(
                             modifier = Modifier
                                 .height(32.dp)
                                 .background(BrewPanelAlt)
-                                .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+                                .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                                 .padding(horizontal = 12.dp)
                                 .clickable { if (!busy) onInstall("glasses") },
                             contentAlignment = Alignment.Center,
@@ -961,7 +1039,7 @@ private fun AppListItem(
                                     },
                                     color = when (glassesInstallState) {
                                         MainActivity.InstallState.INSTALLED -> BrewGreen
-                                        MainActivity.InstallState.UPDATE_AVAILABLE -> BrewAmber
+                                        MainActivity.InstallState.UPDATE_AVAILABLE -> BrewWarning
                                         else -> BrewText
                                     },
                                     fontSize = 10.sp,
@@ -989,8 +1067,6 @@ private fun MainInterface(
     onSelectedAppChange: (BrewApp?) -> Unit,
     query: String,
     onQueryChange: (String) -> Unit,
-    searchVisible: Boolean,
-    onSearchVisibleChange: (Boolean) -> Unit,
     categoryFilter: String?,
     onCategoryFilterChange: (String?) -> Unit,
     showingFeaturedList: Boolean,
@@ -1026,13 +1102,20 @@ private fun MainInterface(
                 .fillMaxSize()
                 .padding(bottom = 64.dp),
         ) {
-            when (currentPage) {
-                NavPage.STORE -> StoreModule(
+            AnimatedContent(
+                targetState = currentPage,
+                transitionSpec = {
+                    (fadeIn(animationSpec = tween(200)) + slideInHorizontally(animationSpec = tween(200)) { it / 4 }) togetherWith
+                    (fadeOut(animationSpec = tween(200)) + slideOutHorizontally(animationSpec = tween(200)) { -it / 4 })
+                },
+                label = "page-transition",
+            ) { page ->
+                when (page) {
+                    NavPage.STORE -> StoreModule(
                     listState = listState,
                     state = state,
                     actions = actions,
                     query = query,
-                    searchVisible = searchVisible,
                     categoryFilter = categoryFilter,
                     showingFeaturedList = showingFeaturedList,
                     appListExpanded = appListExpanded,
@@ -1040,7 +1123,6 @@ private fun MainInterface(
                     iconLoader = iconLoader,
                     mediaLoader = mediaLoader,
                     onQueryChange = onQueryChange,
-                    onSearchToggle = { onSearchVisibleChange(!searchVisible) },
                     onCategoryFilter = { onCategoryFilterChange(it); onAppListExpandedChange(false) },
                     onShowFeaturedList = { onShowingFeaturedListChange(true) },
                     onHideFeaturedList = { onShowingFeaturedListChange(false) },
@@ -1067,6 +1149,7 @@ private fun MainInterface(
                     state = state,
                     actions = actions,
                 )
+                }
             }
         }
         
@@ -1129,7 +1212,7 @@ private fun BottomNavigationBar(
             .fillMaxWidth()
             .height(64.dp)
             .background(BrewPanel)
-            .border(width = 2.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp)),
+            .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp)),
         horizontalArrangement = Arrangement.SpaceAround,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1161,7 +1244,9 @@ private fun BottomNavigationBar(
             ) {
                 Text(
                     text = label,
-                    color = if (isSelected) BrewBg else BrewMuted,
+                    color = if (isSelected) {
+                        if (color == BrewAmber) BrewBg else BrewTextBright
+                    } else BrewMuted,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp,
@@ -1178,7 +1263,6 @@ private fun StoreModule(
     state: StoreUiState,
     actions: StoreActions,
     query: String,
-    searchVisible: Boolean,
     categoryFilter: String?,
     showingFeaturedList: Boolean,
     appListExpanded: Boolean,
@@ -1186,7 +1270,6 @@ private fun StoreModule(
     iconLoader: IconLoader,
     mediaLoader: MediaLoader,
     onQueryChange: (String) -> Unit,
-    onSearchToggle: () -> Unit,
     onCategoryFilter: (String?) -> Unit,
     onShowFeaturedList: () -> Unit,
     onHideFeaturedList: () -> Unit,
@@ -1222,7 +1305,7 @@ private fun StoreModule(
                                 .width(40.dp)
                                 .height(40.dp)
                                 .background(BrewPanel)
-                                .border(width = 2.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+                                .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                                 .clickable { onHideFeaturedList() },
                             contentAlignment = Alignment.Center,
                         ) {
@@ -1274,46 +1357,41 @@ private fun StoreModule(
             }
             
             item(key = "search") {
-                AnimatedVisibility(
-                    visible = searchVisible || query.isNotBlank(),
-                    enter = fadeIn(),
-                    exit = fadeOut(),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .background(BrewPanel)
-                            .border(width = 2.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
-                            .padding(horizontal = 16.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        Text(
-                            text = query.ifBlank { "搜索应用..." },
-                            color = if (query.isBlank()) BrewDim else BrewText,
-                            fontSize = 14.sp,
-                        )
-                    }
-                }
-            }
-            
-            item(key = "search-toggle") {
-                Box(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
-                        .background(BrewPanel)
-                        .border(width = 2.dp, color = if (searchVisible) BrewGreen else BrewBorder, shape = RoundedCornerShape(0.dp))
-                        .clickable { onSearchToggle() },
-                    contentAlignment = Alignment.Center,
+                        .height(46.dp)
+                        .background(BrewPanel, RoundedCornerShape(12.dp))
+                        .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = if (searchVisible) "隐藏搜索" else "搜索应用",
-                        color = if (searchVisible) BrewGreen else BrewText,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 2.sp,
+                    Icon(Icons.Outlined.Search, null, tint = BrewMuted, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(10.dp))
+                    BasicTextField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        singleLine = true,
+                        textStyle = TextStyle(color = BrewTextBright, fontSize = 14.sp),
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { inner ->
+                            if (query.isBlank()) {
+                                Text("搜索应用...", color = BrewDim, fontSize = 14.sp)
+                            }
+                            inner()
+                        },
                     )
+                    if (query.isNotBlank()) {
+                        Text(
+                            "×",
+                            color = BrewMuted,
+                            fontSize = 18.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onQueryChange("") }
+                                .padding(8.dp),
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }
@@ -1327,7 +1405,7 @@ private fun StoreModule(
                     ) {
                         Text(
                             text = "精选",
-                            color = BrewMagenta,
+                            color = BrewTextBright,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 2.sp,
@@ -1336,7 +1414,7 @@ private fun StoreModule(
                             modifier = Modifier
                                 .height(32.dp)
                                 .background(BrewPanel)
-                                .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+                                .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                                 .padding(horizontal = 16.dp)
                                 .clickable { onShowFeaturedList() },
                             contentAlignment = Alignment.Center,
@@ -1362,7 +1440,7 @@ private fun StoreModule(
                                     .weight(1f)
                                     .aspectRatio(1f)
                                     .background(BrewPanel)
-                                    .border(width = 2.dp, color = BrewBorder, shape = RoundedCornerShape(0.dp))
+                                    .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
                                     .clickable { onSelectApp(app) },
                             ) {
                                 FeaturedAppItem(app = app, iconLoader = iconLoader, mediaLoader = mediaLoader)
@@ -1376,7 +1454,7 @@ private fun StoreModule(
                 item(key = "categories-header") {
                     Text(
                         text = "分类",
-                        color = BrewAmber,
+                        color = BrewMuted,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 2.sp,
@@ -1393,7 +1471,7 @@ private fun StoreModule(
                             modifier = Modifier
                                 .height(36.dp)
                                 .background(if (categoryFilter == null) BrewGreen else BrewPanel)
-                                .border(width = 2.dp, color = if (categoryFilter == null) BrewGreen else BrewBorder, shape = RoundedCornerShape(0.dp))
+                                .border(width = 2.dp, color = if (categoryFilter == null) BrewGreen else BrewBorder, shape = RoundedCornerShape(12.dp))
                                 .padding(horizontal = 16.dp)
                                 .clickable { onCategoryFilter(null) },
                             contentAlignment = Alignment.Center,
@@ -1411,7 +1489,7 @@ private fun StoreModule(
                                 modifier = Modifier
                                     .height(36.dp)
                                     .background(if (isSelected) BrewGreen else BrewPanel)
-                                    .border(width = 2.dp, color = if (isSelected) BrewGreen else BrewBorder, shape = RoundedCornerShape(0.dp))
+                                    .border(width = 2.dp, color = if (isSelected) BrewGreen else BrewBorder, shape = RoundedCornerShape(12.dp))
                                     .padding(horizontal = 16.dp)
                                     .clickable { onCategoryFilter(category) },
                                 contentAlignment = Alignment.Center,

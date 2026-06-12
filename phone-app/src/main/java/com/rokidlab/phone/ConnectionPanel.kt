@@ -3,6 +3,8 @@ package com.rokidlab.phone
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.Build
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
@@ -35,6 +37,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -60,11 +63,17 @@ internal fun ConnectionPanel(
 ) {
     val hostVersion = rememberHostAppVersion(selectedHostApp)
     val connectionStatus = connectionStatus(hostAppInstalled, cxrConnection, busy)
+    // 已连接庆祝脉冲
+    val celebrateScale by animateFloatAsState(
+        targetValue = if (cxrConnection.connected) 1.6f else 1f,
+        animationSpec = tween(400),
+        label = "celebrate-pulse",
+    )
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 12.dp),
-        shape = RoundedCornerShape(15.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = BrewPanel.copy(alpha = 0.78f)),
         border = BorderStroke(1.dp, BrewBorderHi.copy(alpha = 0.46f)),
     ) {
@@ -77,6 +86,7 @@ internal fun ConnectionPanel(
                 Box(
                     modifier = Modifier
                         .size(6.dp)
+                        .graphicsLayer { scaleX = celebrateScale; scaleY = celebrateScale; alpha = if (cxrConnection.connected) 0.7f + (celebrateScale - 1f) * 0.5f else 1f }
                         .clip(RoundedCornerShape(4.dp))
                         .background(connectionStatus.color),
                 )
@@ -127,13 +137,13 @@ internal fun ConnectionPanel(
                         Icon(
                             Icons.Outlined.CheckCircle,
                             null,
-                            tint = if (hostAppInstalled) BrewGreen else BrewAmber,
+                            tint = if (hostAppInstalled) BrewGreen else BrewWarning,
                             modifier = Modifier.size(15.dp),
                         )
                         Spacer(Modifier.width(5.dp))
                         Text(
                             if (hostAppInstalled) "已安装" else "未安装",
-                            color = if (hostAppInstalled) BrewGreen else BrewAmber,
+                            color = if (hostAppInstalled) BrewGreen else BrewWarning,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                         )
@@ -162,10 +172,10 @@ internal fun connectionStatus(
     connection: CxrConnectionState,
     busy: Boolean,
 ): ConnectionStatus = when {
-    !hostAppInstalled -> ConnectionStatus("未安装", BrewAmber)
+    !hostAppInstalled -> ConnectionStatus("未安装", BrewWarning)
     connection.connected -> ConnectionStatus("已连接", BrewCyan)
-    busy && connection.authorized -> ConnectionStatus("连接中", BrewAmber)
-    connection.connecting -> ConnectionStatus("连接中", BrewAmber)
+    busy && connection.authorized -> ConnectionStatus("连接中", BrewCyan)
+    connection.connecting -> ConnectionStatus("连接中", BrewCyan)
     connection.authorized -> ConnectionStatus("已授权", BrewGreen)
     else -> ConnectionStatus("需要授权", BrewMuted)
 }

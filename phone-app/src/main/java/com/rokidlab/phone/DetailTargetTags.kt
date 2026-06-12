@@ -59,7 +59,7 @@ internal fun TargetTags(app: BrewApp, modifier: Modifier = Modifier) {
             .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (app.isNew) TargetTag("NEW", color = BrewAmber)
+        if (app.isNew) TargetTag("NEW", color = BrewWarning)
         if (app.hasTarget("phone")) TargetTag("PHONE", "phone")
         if (app.hasTarget("glasses")) TargetTag("GLASSES", "glasses")
         if (app.phoneRequired && !app.hasTarget("phone")) TargetTag("PHONE REQ")
@@ -92,8 +92,8 @@ internal fun TargetTag(label: String, icon: String? = null, color: Color = BrewG
         Text(
             label,
             color = color,
-            fontSize = 8.4f.sp,
-            lineHeight = 8.4f.sp,
+            fontSize = 10f.sp,
+            lineHeight = 12f.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Clip,

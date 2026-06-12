@@ -200,12 +200,12 @@ private fun SelectHostAppStep(
                     .height(56.dp)
                     .background(
                         color = if (isSelected) BrewGreen else BrewPanel,
-                        shape = RoundedCornerShape(0.dp),
+                        shape = RoundedCornerShape(12.dp),
                     )
                     .border(
-                        width = 2.dp,
+                        width = 1.dp,
                         color = if (isSelected) BrewGreen else BrewBorder,
-                        shape = RoundedCornerShape(0.dp),
+                        shape = RoundedCornerShape(12.dp),
                     )
                     .clickable { onSelectHostApp(hostApp) },
                 contentAlignment = Alignment.Center,
@@ -250,7 +250,7 @@ private fun SelectMirrorSourceStep(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp)
-                .background(BrewGreen, shape = RoundedCornerShape(0.dp))
+                .background(BrewGreen, shape = RoundedCornerShape(12.dp))
                 .clickable { onSelectMirrorSource() },
             contentAlignment = Alignment.Center,
         ) {
@@ -294,7 +294,7 @@ private fun AuthorizeStep(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
-                    .background(BrewSuccess, shape = RoundedCornerShape(0.dp)),
+                    .background(BrewSuccess, shape = RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -309,7 +309,7 @@ private fun AuthorizeStep(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
-                    .background(BrewGreen, shape = RoundedCornerShape(0.dp))
+                    .background(BrewGreen, shape = RoundedCornerShape(12.dp))
                     .clickable { onAuthorize() },
                 contentAlignment = Alignment.Center,
             ) {
@@ -338,11 +338,11 @@ private fun StepInstructions(currentStep: GuideStep) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(BrewPanel, shape = RoundedCornerShape(0.dp))
+            .background(BrewPanel, shape = RoundedCornerShape(12.dp))
             .border(
-                width = 2.dp,
+                width = 1.dp,
                 color = BrewBorder,
-                shape = RoundedCornerShape(0.dp),
+                shape = RoundedCornerShape(12.dp),
             )
             .padding(16.dp),
     ) {

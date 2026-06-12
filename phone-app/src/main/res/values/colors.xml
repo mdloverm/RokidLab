@@ -1,45 +1,45 @@
 <resources>
-    <!-- ===== Sci-Fi Gradients & New Retro Color System ===== -->
-    
-    <!-- Backgrounds - Deep space & cyber aesthetic -->
-    <color name="brew_bg">#0a0a1a</color>
-    <color name="brew_bg_gradient_start">#0a0a1a</color>
-    <color name="brew_bg_gradient_end">#1a0a2e</color>
-    <color name="brew_panel">#12122a</color>
-    <color name="brew_panel_alt">#1a1a3a</color>
-    <color name="brew_panel_hi">#22224a</color>
-    
-    <!-- Text - Retro-futuristic typography -->
-    <color name="brew_text_bright">#e8e8ff</color>
-    <color name="brew_text">#c0c0e0</color>
-    <color name="brew_muted">#8080a0</color>
-    <color name="brew_dim">#505070</color>
-    
-    <!-- Accents - Neon sci-fi palette -->
-    <color name="brew_cyan">#00f5ff</color>
-    <color name="brew_cyan_soft">#00c8cc</color>
-    <color name="brew_magenta">#ff00ff</color>
-    <color name="brew_magenta_soft">#cc00cc</color>
-    <color name="brew_purple">#8b5cf6</color>
-    <color name="brew_purple_soft">#7c3aed</color>
-    <color name="brew_pink">#ec4899</color>
-    <color name="brew_yellow">#fbbf24</color>
-    <color name="brew_green">#22c55e</color>
-    
-    <!-- Status indicators -->
-    <color name="brew_status_online">#22c55e</color>
-    <color name="brew_status_offline">#6b7280</color>
-    <color name="brew_status_connecting">#fbbf24</color>
-    <color name="brew_status_error">#ef4444</color>
-    
-    <!-- Borders & Dividers -->
-    <color name="brew_border">#2a2a4a</color>
-    <color name="brew_border_hi">#3a3a6a</color>
-    <color name="brew_glow">#00f5ff20</color>
-    
-    <!-- New Retro Accents -->
-    <color name="brew_retro_orange">#fb923c</color>
-    <color name="brew_retro_pink">#f472b6</color>
-    <color name="brew_retro_teal">#2dd4bf</color>
-    <color name="brew_retro_indigo">#6366f1</color>
+    <!-- ===== Velvet Dark 配色系统 (与 Compose StoreTheme.kt 同步) ===== -->
+
+    <!-- 底色系统：丝绒暗调 -->
+    <color name="brew_bg">#0B0B0E</color>
+    <color name="brew_panel">#151518</color>
+    <color name="brew_panel_alt">#1C1C21</color>
+    <color name="brew_panel_hi">#24242A</color>
+
+    <!-- 文字系统：暖白至冷灰 -->
+    <color name="brew_text_bright">#F2EFEA</color>
+    <color name="brew_text">#D4D0CA</color>
+    <color name="brew_muted">#8A8780</color>
+    <color name="brew_dim">#5C5952</color>
+
+    <!-- 强调色：油画颜料 -->
+    <color name="brew_coral">#E85D3F</color>
+    <color name="brew_coral_dim">#C14A2F</color>
+
+    <!-- 边框 -->
+    <color name="brew_border">#2C2C33</color>
+    <color name="brew_border_hi">#3F3F49</color>
+
+    <!-- 五模块五色 -->
+    <color name="brew_green">#E85D3F</color>
+    <color name="brew_cyan">#5B8FB9</color>
+    <color name="brew_purple">#D4A85C</color>
+    <color name="brew_amber">#A78BFA</color>
+    <color name="brew_magenta">#8A8780</color>
+    <color name="brew_mint">@color/brew_coral</color>
+    <color name="brew_green_dim">#3A8070</color>
+
+    <!-- 状态色 -->
+    <color name="brew_status_online">#4ADE80</color>
+    <color name="brew_status_offline">#5C5952</color>
+    <color name="brew_status_connecting">@color/brew_coral</color>
+    <color name="brew_status_error">#E85D3F</color>
+    <color name="brew_warning">#F0A050</color>
+    <color name="brew_info">#5B8FB9</color>
+
+    <!-- 兼容旧颜色名 -->
+    <color name="brew_cyan_soft">#5B8FB9</color>
+    <color name="brew_magenta_soft">#8A8780</color>
+    <color name="brew_purple_soft">#D4A85C</color>
 </resources>

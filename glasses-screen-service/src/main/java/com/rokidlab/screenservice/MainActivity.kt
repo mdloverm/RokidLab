@@ -28,6 +28,12 @@ class MainActivity : Activity() {
     companion object {
         private const val TAG = "GlassesScreenService"
         private const val REQUEST_WIFI = 100
+
+        // 状态灯颜色（Mondrian Noir）
+        private const val DOT_IDLE    = 0xFF666666.toInt()  // 灰 — 初始
+        private const val DOT_CHECKING= 0xFFFFD200.toInt()  // 黄 — 检查中
+        private const val DOT_READY   = 0xFF00CC66.toInt()  // 绿 — 已就绪
+        private const val DOT_ERROR   = 0xFFFF3333.toInt()  // 红 — 异常
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,7 +56,7 @@ class MainActivity : Activity() {
             })
         Log.i(TAG, "订阅 phone_mirror_launch 结果: $subResult")
 
-        setDotColor(0xFF555555.toInt())
+        setDotColor(DOT_IDLE)
         startSetup()
     }
 
@@ -67,7 +73,7 @@ class MainActivity : Activity() {
         statusText.text = "检查 WiFi..."
         if (!isWifiConnected()) {
             statusText.text = "未连接 WiFi"
-            setDotColor(0xFFFF5722.toInt())
+            setDotColor(DOT_ERROR)
             ipText.text = "未连接"
             openWifiSettings()
             return
@@ -78,13 +84,13 @@ class MainActivity : Activity() {
 
         statusText.text = "检查 ADB 状态..."
         if (isAdbTcpListening()) {
-            setDotColor(0xFF4CAF50.toInt())
+            setDotColor(DOT_READY)
             statusText.text = "已就绪"
             return
         }
 
         statusText.text = "正在开启 ADB..."
-        setDotColor(0xFFFFA500.toInt())
+        setDotColor(DOT_CHECKING)
         enableAdbTcp()
     }
 

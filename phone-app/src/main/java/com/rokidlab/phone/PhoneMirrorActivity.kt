@@ -24,6 +24,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -56,7 +59,6 @@ class PhoneMirrorActivity : ComponentActivity() {
     private var isStreaming by mutableStateOf(false)
     private var connectionStatus by mutableStateOf("")
     private var connectionFailed by mutableStateOf(false)
-    private var mirrorClient: PhoneMirrorClient? = null
     private var mediaProjection: MediaProjection? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -151,7 +153,7 @@ class PhoneMirrorActivity : ComponentActivity() {
                 Text(
                     text = connectionStatus,
                     color = if (connectionStatus.contains("失败") || connectionStatus.contains("未授权")) 
-                        Color(0xFFFF5722) else BrewText,
+                        BrewRed else BrewText,
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth()
@@ -192,41 +194,62 @@ class PhoneMirrorActivity : ComponentActivity() {
         status: String,
         onStop: () -> Unit
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+                .drawBehind {
+                    // 蒙德里安品牌边框 — 四角色块
+                    val barW = 6.dp.toPx()
+                    // 左上红
+                    drawRect(BrewCoral.copy(alpha = 0.6f), topLeft = Offset(0f, 0f), size = Size(barW, 48.dp.toPx()))
+                    drawRect(BrewCoral.copy(alpha = 0.6f), topLeft = Offset(0f, 0f), size = Size(48.dp.toPx(), barW))
+                    // 右上蓝
+                    drawRect(BrewCyan.copy(alpha = 0.5f), topLeft = Offset(size.width - barW, 0f), size = Size(barW, 36.dp.toPx()))
+                    drawRect(BrewCyan.copy(alpha = 0.5f), topLeft = Offset(size.width - 36.dp.toPx(), 0f), size = Size(36.dp.toPx(), barW))
+                    // 左下黄
+                    drawRect(BrewPurple.copy(alpha = 0.5f), topLeft = Offset(0f, size.height - 36.dp.toPx()), size = Size(36.dp.toPx(), barW))
+                    drawRect(BrewPurple.copy(alpha = 0.5f), topLeft = Offset(0f, size.height - 48.dp.toPx()), size = Size(barW, 48.dp.toPx()))
+                    // 右下白
+                    drawRect(BrewTextBright.copy(alpha = 0.3f), topLeft = Offset(size.width - barW, size.height - 48.dp.toPx()), size = Size(barW, 48.dp.toPx()))
+                    drawRect(BrewTextBright.copy(alpha = 0.3f), topLeft = Offset(size.width - 48.dp.toPx(), size.height - barW), size = Size(48.dp.toPx(), barW))
+                },
         ) {
-            Text(
-                "投屏中",
-                color = BrewGreen,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(Modifier.height(16.dp))
-
-            Text(
-                status,
-                color = BrewTextBright,
-                fontSize = 16.sp,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(Modifier.height(32.dp))
-
-            Button(
-                onClick = onStop,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = BrewCoral
-                ),
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                Text("停止投屏", fontSize = 16.sp, color = BrewBg)
+                Text(
+                    "投屏中",
+                    color = BrewGreen,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(Modifier.height(16.dp))
+
+                Text(
+                    status,
+                    color = BrewTextBright,
+                    fontSize = 16.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(Modifier.height(32.dp))
+
+                Button(
+                    onClick = onStop,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = BrewCoral
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                ) {
+                    Text("停止投屏", fontSize = 16.sp, color = BrewBg)
+                }
             }
         }
     }
@@ -248,7 +271,7 @@ class PhoneMirrorActivity : ComponentActivity() {
         ) {
             Text(
                 "连接失败",
-                color = Color(0xFFFF5722),
+                color = BrewRed,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -305,7 +328,6 @@ class PhoneMirrorActivity : ComponentActivity() {
 
     private fun stopStreaming() {
         isStreaming = false
-        mirrorClient?.stop()
         mediaProjection?.stop()
         mediaProjection = null
         finish()

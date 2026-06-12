@@ -4,6 +4,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -50,6 +52,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -114,7 +118,7 @@ internal fun Header(
             Icon(
                 Icons.Outlined.SystemUpdateAlt,
                 null,
-                tint = if (updateAvailable) BrewAmber else BrewTextBright,
+                tint = if (updateAvailable) BrewWarning else BrewTextBright,
                 modifier = Modifier.size(24.dp),
             )
             if (updateAvailable) {
@@ -125,7 +129,7 @@ internal fun Header(
                         .size(10.dp)
                         .clip(RoundedCornerShape(5.dp))
                         .background(BrewRed)
-                        .border(1.dp, BrewAmber, RoundedCornerShape(5.dp)),
+                        .border(1.dp, BrewWarning, RoundedCornerShape(5.dp)),
                 )
             }
         }
@@ -287,13 +291,19 @@ internal fun CategoryChip(
 ) {
     val fontScale = LocalDensity.current.fontScale
     fun fixedSp(value: Float) = (value / fontScale.coerceAtLeast(1f)).sp
+    val chipScale by animateFloatAsState(
+        targetValue = if (selected) 1.04f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "chip-scale",
+    )
     Box(
         modifier = modifier
             .height(34.dp)
             .widthIn(min = 64.dp)
-            .clip(RoundedCornerShape(17.dp))
+            .graphicsLayer { scaleX = chipScale; scaleY = chipScale }
+            .clip(RoundedCornerShape(12.dp))
             .background(if (selected) BrewGreen else BrewPanelAlt.copy(alpha = 0.86f))
-            .border(1.dp, if (selected) BrewGreen else BrewBorderHi.copy(alpha = 0.44f), RoundedCornerShape(17.dp))
+            .border(1.dp, if (selected) BrewGreen else BrewBorderHi.copy(alpha = 0.44f), RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 13.dp),
         contentAlignment = Alignment.Center,
@@ -391,9 +401,9 @@ internal fun EmptyState(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .height(132.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(BrewPanel)
-            .border(1.dp, BrewBorder, RoundedCornerShape(14.dp)),
+            .border(1.dp, BrewBorder, RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center,
     ) {
         Text("未找到应用", color = BrewMuted, fontSize = 14.sp, fontWeight = FontWeight.Bold)

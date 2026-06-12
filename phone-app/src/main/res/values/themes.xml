@@ -5,11 +5,11 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:statusBarColor">@color/brew_bg</item>
         <item name="android:navigationBarColor">@color/brew_bg</item>
-        <item name="android:colorAccent">@color/brew_cyan</item>
+        <item name="android:colorAccent">@color/brew_coral</item>
         <item name="android:windowBackground">@color/brew_bg</item>
-        <item name="android:textColorHighlight">#3300f5ff</item>
-        <item name="android:colorPrimary">@color/brew_cyan</item>
-        <item name="android:colorPrimaryDark">@color/brew_purple</item>
+        <item name="android:textColorHighlight">#33D40000</item>
+        <item name="android:colorPrimary">@color/brew_coral</item>
+        <item name="android:colorPrimaryDark">@color/brew_coral_dim</item>
     </style>
 
     <style name="Theme.RokidLabPhone.Fullscreen" parent="Theme.RokidLabPhone">

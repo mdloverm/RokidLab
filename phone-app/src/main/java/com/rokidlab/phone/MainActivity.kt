@@ -294,6 +294,7 @@ class MainActivity : AppCompatActivity() {
                         onFileManagerRenameFile = { _, _ -> },
                         onCancelDownload = { key -> cancelDownload(key) },
                         onExitApp = { finishAndRemoveTask() },
+                        onSettingsReinstallScreenStream = { reinstallScreenStreamOnGlasses() },
                     ),
                     iconLoader = iconLoader,
                     mediaLoader = mediaLoader,
@@ -910,6 +911,28 @@ class MainActivity : AppCompatActivity() {
                     fileManagerState = fileManagerState.copy(screenStreamRunning = false)
                 }
             )
+        }
+    }
+
+    private fun reinstallScreenStreamOnGlasses() {
+        runWithPrerequisites {
+            lifecycleScope.launch {
+                // 先停止运行中的 ScreenStream
+                log("正在关闭眼镜上的 ScreenStream...")
+                cxrL.stopApp(
+                    packageName = "com.rokidlab.screenservice",
+                    onStopResult = { success ->
+                        log(if (success) "ScreenStream 已关闭" else "ScreenStream 关闭失败")
+                        screenMirrorState = screenMirrorState.copy(screenStreamRunning = false)
+                        phoneMirrorState = phoneMirrorState.copy(screenStreamRunning = false)
+                        fileManagerState = fileManagerState.copy(screenStreamRunning = false)
+                    },
+                )
+                // 等待停止生效
+                delay(800)
+                // 重新安装
+                installScreenStreamToGlasses()
+            }
         }
     }
 

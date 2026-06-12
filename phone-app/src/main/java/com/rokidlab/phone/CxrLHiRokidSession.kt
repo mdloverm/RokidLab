@@ -470,6 +470,7 @@ class CxrLHiRokidSession(
             operationStarted = false
             onStatus(operation.configureFailureMessage)
             operation.onFailure()
+            cleanup()
             return
         }
 
@@ -479,6 +480,7 @@ class CxrLHiRokidSession(
             operationStarted = false
             onStatus(operation.bindFailureMessage)
             operation.onBindFailure()
+            cleanup()
         }
     }
 

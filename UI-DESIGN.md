@@ -4,425 +4,431 @@
 
 ### 1.1 设计风格
 
-**Neo Brutalism（新粗野主义）** — 粗边框、高对比度、无圆角、偏移阴影、装饰性色块
+**Velvet Dark（丝绒暗调）** — 画廊暗室 × 油画颜料
 
-### 1.2 配色方案（60-30-9-1 法则）
+- 底画布：温暖的丝绒暗色（`#0B0B0E`），绝非纯黑
+- 配色理念：每个颜色都从油画色板取色，带温度和深度
+- 克制而有质感的对比，不使用纯三原色
+- 全站统一 12dp 圆角，柔和而不失几何感
+- 统一 1dp 边框宽度
+- 无硬阴影、无装饰性底纹线条
+- 以留白和色彩本身构成画面
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  60% — 深邃午夜蓝（背景色系）                                  │
-├───────────┬─────────────────────────────────────────────────┤
-│  BrewBg        │  #0A1420   主背景色                        │
-│  BrewPanel     │  #101D2D   面板/卡片背景                    │
-│  BrewPanelAlt  │  #162536   替代面板（分类标签未选中）         │
-│  BrewPanelHi   │  #1C3048   高亮面板（按钮禁用态）            │
-├───────────┼─────────────────────────────────────────────────┤
-│  30% — 柔和燕麦白（文字/内容色系）                             │
-├───────────┼─────────────────────────────────────────────────┤
-│  BrewTextBright│  #F5F0E8   亮白文字                        │
-│  BrewText      │  #E8E0D3   正文文字                        │
-│  BrewMuted     │  #B5AD9E   次要/灰色文字                    │
-│  BrewDim       │  #7A7366   禁用/最淡文字                    │
-├───────────┼─────────────────────────────────────────────────┤
-│  9% — 跃动珊瑚橘（强调色）                                    │
-├───────────┼─────────────────────────────────────────────────┤
-│  BrewCoral     │  #FF6B5B   主强调色（按钮/标题/模块色）       │
-│  BrewCoralDim  │  #D95A4C   次要强调                         │
-├───────────┼─────────────────────────────────────────────────┤
-│  1% — 一抹薄荷绿（点缀色）                                    │
-├───────────┼─────────────────────────────────────────────────┤
-│  BrewMint      │  #7BECB8   成功/积极状态/Logo              │
-├───────────┼─────────────────────────────────────────────────┤
-│  边框                                                     │
-├───────────┼─────────────────────────────────────────────────┤
-│  BrewBorder    │  #1E3048   默认边框                        │
-│  BrewBorderHi  │  #2A4260   高亮边框（搜索栏/选中态）         │
-├───────────┼─────────────────────────────────────────────────┤
-│  语义别名                                                   │
-├───────────┼─────────────────────────────────────────────────┤
-│  BrewGreen     │  #7BECB8 → BrewMint     成功/运行中        │
-│  BrewCyan      │  #FF6B5B → BrewCoral    屏幕镜像模块        │
-│  BrewPurple    │  #FF6B5B → BrewCoral    手机投屏模块        │
-│  BrewAmber     │  #FF6B5B → BrewCoral    文件管理/警告       │
-│  BrewMagenta   │  #FF6B5B → BrewCoral    设置/运行中         │
-│  BrewRed       │  #FF4444              错误/危险/停止       │
-│  BrewSuccess   │  #7BECB8 → BrewMint     已安装             │
-│  BrewError     │  #FF4444              错误                 │
-│  BrewWarning   │  #FFB347              橙色警告             │
-│  BrewInfo      │  #64B5F6              信息提示（安装APK按钮）│
-│  BrewOrange    │  #FFB347              橙色警告             │
-└───────────┴─────────────────────────────────────────────────┘
-```
-
-### 1.3 字体
-
-| 用途 | 字体 | 说明 |
-|------|------|------|
-| 全局 | JetBrains Mono | 等宽字体，Regular/Medium/Bold |
-| 默认字号 | 13-14sp | 正文 |
-| 标题 | 32sp Bold | 模块标题 |
-| 小标签 | 10-12sp Bold | 字母间距 1-3sp |
-| 状态数字 | 18-28sp Bold | 设置/眼镜IP |
-
-### 1.4 通用组件样式
-
-**BrutalButton（主按钮）**
-- 高 56dp、填满宽度
-- 背景: BrewBg
-- 边框: 4dp, 颜色跟随语义色
-- 内层: 语义色 15% 透明度底色
-- 文字: 14sp Bold, letterSpacing 2sp
-
-**SettingCard（设置卡片）**
-- 背景: BrewPanel
-- 边框: 3dp BrewBorder
-- 标签: 10sp 大写, BrewMuted, letterSpacing 3sp
-- 内容: 18sp Bold, 语义色
-- 标签下: 32x3dp 语义色装饰线
-
-**IpAddressInputCard（IP 输入卡片）**
-- 背景: BrewPanel
-- 边框: 3dp 语义色
-- 标签: 12sp Bold, letterSpacing 1sp
-- 输入框: OutlinedTextField, focusBorderColor=语义色
-
-**UsageInstructionsCard（使用说明卡片）**
-- 背景: BrewPanel
-- 边框: 2dp BrewBorder
-- 标题: 12sp Bold, 语义色, letterSpacing 1sp
-- 说明: 12sp BrewMuted, 行高 20sp
-
-**ModuleHeader（模块标题）**
-- 标题: 32sp Bold, 语义色, letterSpacing 4sp
-- 副标题: 14sp BrewMuted
-
----
-
-## 二、眼镜端（glasses-screen-service）
-
-### 2.1 MainActivity — 状态面板
-
-**布局** (`activity_main.xml`)
+### 1.2 配色方案
 
 ```
-┌──────────────────────────┐
-│                          │
-│           ●              │  ← 状态灯 16x16dp
-│                          │
-│        已就绪             │  ← 状态文字 16sp #AAAAAA
-│                          │
-│          IP              │  ← 标签 11sp #555555
-│    192.168.1.168         │  ← IP 地址 28sp Bold #E0E0E0
-│                          │
-└──────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  底色系统 — 丝绒暗调（温暖暗底）                                      │
+├────────────┬──────────────────────────────────────────────────────┤
+│  BrewBg        │  #0B0B0E   丝绒炭黑（微微偏暖）                      │
+│  BrewPanel     │  #151518   暗灰板                                  │
+│  BrewPanelAlt  │  #1C1C21   亮灰板                                  │
+│  BrewPanelHi   │  #24242A   高亮面板                                │
+├────────────┼──────────────────────────────────────────────────────┤
+│  文字系统 — 暖白至冷灰（画廊标牌）                                     │
+├────────────┼──────────────────────────────────────────────────────┤
+│  BrewTextBright│  #F2EFEA   暖羊皮白 — 主正文                       │
+│  BrewText      │  #D4D0CA   沙石灰 — 次要文字                       │
+│  BrewMuted     │  #8A8780   风化石 — 辅助文字                        │
+│  BrewDim       │  #5C5952   深石色 — 禁用/淡出                      │
+├────────────┼──────────────────────────────────────────────────────┤
+│  五模块五色 — 取自油画色板                                            │
+├────────────┼──────────────────────────────────────────────────────┤
+│  BrewGreen     │  #E85D3F   商店 — 朱砂红（温暖主导）                  │
+│  BrewCyan      │  #5B8FB9   屏幕镜像 — 静谧蓝（冷调克制）              │
+│  BrewPurple    │  #D4A85C   手机投屏 — 画廊金（暖而有质感）             │
+│  BrewAmber     │  #A78BFA   文件管理 — 雾紫（柔和区分）                │
+│  BrewMagenta   │  #8A8780   设置 — 石灰色（最低调）                   │
+├────────────┼──────────────────────────────────────────────────────┤
+│  功能色                                                             │
+├────────────┼──────────────────────────────────────────────────────┤
+│  BrewSuccess   │  #4ADE80   成功 — 翡翠绿                            │
+│  BrewWarning   │  #F0A050   警告 — 暖琥珀                            │
+│  BrewInfo      │  #5B8FB9   信息 — 静谧蓝                            │
+│  BrewError     │  #E85D3F   错误 — 朱砂红                            │
+│  BrewCoral     │  #E85D3F   主强调色（与 Green 同值）                 │
+├────────────┼──────────────────────────────────────────────────────┤
+│  边框（几乎融入背景）                                                  │
+├────────────┼──────────────────────────────────────────────────────┤
+│  BrewBorder    │  #2C2C33                                          │
+│  BrewBorderHi  │  #3F3F49                                          │
+└────────────┴──────────────────────────────────────────────────────┘
 ```
+
+### 1.3 字体系统
+
+| 层级 | 字体 | 字重 | 大小 | 颜色 | 用途 |
+|------|------|------|------|------|------|
+| H0 | JetBrains Mono | Bold(700) | 36sp | BrewGreen+Cyan | Store 页面大标题 "Rokid Lab" |
+| H1 | JetBrains Mono | Black(900) | 32sp | 模块色 | 模块标题 (ModuleHeader) |
+| H2 | JetBrains Mono | Bold(700) | 24sp | 模块色 | 精选标题 / 开发者名 |
+| H3 | JetBrains Mono | Bold(700) | 20sp | 状态色 | 退出对话框标题 |
+| Body | JetBrains Mono | Regular(400) | 14sp | BrewText | 正文 |
+| Body-S | JetBrains Mono | Regular(400) | 12sp | BrewMuted | 副文本 / 使用说明 |
+| Caption | JetBrains Mono | Bold(700) | 10sp | BrewMuted | 标签/大写 (letterSpacing 3sp) |
+| Meta | JetBrains Mono | SemiBold(600) | 13sp | 模块色 | 分类标签 / 按钮 (letterSpacing 1sp) |
+| Button | JetBrains Mono | SemiBold(600) | 14sp | 模块色 | BrutalButton |
+
+- **JetBrains Mono** 等宽字体，全站唯一字体
+- **TabularNumbersStyle**：`fontFeatureSettings = "tnum"`，版本号等数字列对齐
+- 全局 `fontScale` 最大 **1.0x**（`coerceAtMost(1.0f)`）
+
+### 1.4 统一规范
 
 | 属性 | 值 |
 |------|-----|
-| 背景色 | `#0A0A0F`（深蓝黑） |
-| 布局 | LinearLayout vertical, gravity center |
-| 内边距 | 40dp |
-| 状态灯变化色 | 灰 `#555555` → 橙 `#FFA500` → 绿 `#4CAF50` → 红 `#FF5722` |
-
-### 2.2 PhoneMirrorActivity — 投屏画面
-
-**纯代码创建，无 XML 布局**
-
-```
-┌──────────────────────────┐
-│                          │
-│    [投屏画面 全屏]         │
-│    FIT_CENTER            │
-│    背景 #000000           │
-│                          │
-└──────────────────────────┘
-```
-
-| 属性 | 值 |
-|------|-----|
-| 背景色 | `#000000`（纯黑） |
-| 内容 | 单一 ImageView, scaleType FIT_CENTER |
-| 交互 | 点击 → Toast 提示双击退出 |
-| 断开连接 | 自动 finish() |
-| 屏幕方向 | portrait（竖屏锁定） |
-| 无标题 | 无任何文字/状态显示 |
-
----
-
-## 三、手机端（phone-app）— Jetpack Compose
-
-### 3.1 MainActivity — 主界面（包含导航）
-
-**背景**: BrewBg `#0A1420`
-
-#### 导航结构
-```
-┌──────────────────────────────────┐
-│  Header (搜索/刷新/更多)           │
-│  搜索栏 (可选)                     │
-│  分类标签栏 (横向滚动)             │
-│  眼镜连接面板                     │
-├──────────────────────────────────┤
-│  功能模块 (底部导航切换)            │
-│  ┌────┬────┬────┬────┐          │
-│  │商店│镜像│投屏│文件│          │
-│  └────┴────┴────┴────┘          │
-└──────────────────────────────────┘
-```
-
-#### Header 区域
-| 元素 | 样式 |
-|------|------|
-| Logo 文字 | "Rokid" BrewGreen + "Lab" BrewCyan, 24sp SemiBold |
-| 搜索图标 | 38x38dp, RoundedCornerShape(12dp), 选中变 BrewGreen |
-| 更新图标 | 38x38dp, 有更新时琥珀色+红点指示 |
-| 刷新图标 | 38x38dp, 旋转动画 800ms |
-| 更多菜单 | 38x38dp, DropdownMenu: "切换源"/"安装 APK 到眼镜" |
-
-#### SearchBar
-| 属性 | 值 |
-|------|------|
-| 背景 | BrewPanel alpha 0.88 |
-| 边框 | 1dp BrewBorderHi alpha 0.42, RoundedCornerShape(14dp) |
-| 文字色 | BrewTextBright 15sp |
-| 占位符 | "搜索" BrewMuted alpha 0.75 |
-
-#### CategoryChip（分类标签）
-| 属性 | 值 |
-|------|------|
-| 高度 | 34dp |
-| 圆角 | 17dp（完全圆角） |
-| 选中态 | 背景 BrewGreen, 文字 BrewBg |
-| 未选中态 | 背景 BrewPanelAlt alpha 0.86, 边框 BrewBorderHi alpha 0.44 |
-| 文字 | 13sp SemiBold |
-
-#### ConnectionPanel（眼镜连接面板）
-| 属性 | 值 |
-|------|------|
-| 卡片背景 | BrewPanel alpha 0.78 |
-| 边框 | 1dp BrewBorderHi alpha 0.46 |
-| 圆角 | 15dp |
-| 标题 | "眼镜连接" 15sp SemiBold, 图标 BrewGreen |
-| 状态指示 | 6x6dp 圆点 + "CXR-L链路" 11sp |
-| 状态颜色 | 已连接→BrewCyan, 已授权→BrewGreen, 未安装→BrewAmber |
-| 主机应用卡片 | 45x45dp 图标, RoundedCornerShape(13dp) |
-| 授权按钮 | StoreActionButton, 文字 BrewGreen 13sp |
-
-#### SectionHeader（分段标题）
-| 属性 | 值 |
-|------|------|
-| 标题 | 18sp SemiBold BrewTextBright |
-| 操作按钮 | 13sp SemiBold BrewGreen, 箭头 18dp |
-
----
-
-### 3.2 Store 页面（应用商店）
-
-**AppListItem（应用列表项）**
-| 属性 | 值 |
-|------|------|
-| 背景 | BrewPanel |
-| 边框 | 2dp BrewBorder |
-| 图标 | 56x56dp, RoundedCornerShape(14dp) |
-| 名称 | BrewTextBright 16sp Bold |
-| 描述 | BrewMuted 13sp, 最多2行 |
-| 安装按钮 | StoreActionButton, 高28dp |
-
-**StoreActionButton**
-| 属性 | 值 |
-|------|------|
-| 圆角 | 8dp |
-| 主按钮 | 背景 语义色, 文字 BrewBg |
-| 次按钮 | 背景透明, 文字/边框 语义色 |
-| 危险按钮 | 颜色 BrewRed |
-| 禁用态 | 背景 BrewPanelHi alpha 0.45 |
-| 文字 | 13sp SemiBold |
-
-**EmptyState（空状态）**
-| 属性 | 值 |
-|------|------|
-| 高度 | 132dp |
-| 背景 | BrewPanel, 边框 BrewBorder, 圆角 14dp |
-| 文字 | "未找到应用" BrewMuted 14sp Bold |
-
-**BrandTitle** — "Rokid" BrewGreen + " Lab" BrewCyan, 可变字号 SemiBold
-
----
-
-### 3.3 ScreenMirror 页面（屏幕镜像模块）
-
-页面构成：
-```
-ModuleHeader "屏幕镜像" / "眼镜屏幕实时同步到手机"  [BrewCyan]
-→ IpAddressInputCard (IP 地址)
-→ ScreenStreamStatusCard (安装状态)
-→ BrutalButton "▶ 开始镜像" [BrewCyan]
-→ UsageInstructionsCard (5步说明)
-```
-
-### 3.4 PhoneMirror 页面（手机投屏模块）
-
-页面构成：
-```
-ModuleHeader "手机投屏" / "手机屏幕投射到眼镜"  [BrewPurple]
-
-未投屏状态:
-→ IpAddressInputCard (IP 地址)
-→ ScreenStreamStatusCard (安装状态)
-→ BrutalButton "▶ 开始投屏" [BrewPurple]
-→ UsageInstructionsCard (4步说明)
-
-投屏中状态:
-→ 居中 "投屏中" 20sp Bold [BrewGreen]
-→ 状态文字 14sp [BrewMuted]
-→ BrutalButton "■ 停止投屏" [BrewRed]
-```
-
-### 3.5 FileManager 页面（文件管理模块）
-
-页面构成：
-```
-ModuleHeader "文件管理" / "管理眼镜中的文件"  [BrewAmber]
-→ IpAddressInputCard (IP 地址)
-→ ScreenStreamStatusCard (安装状态)
-→ BrutalButton "▶ 打开文件管理器" [BrewAmber]
-→ BrutalButton "安装本地 APK" [BrewInfo]
-→ UsageInstructionsCard (5步说明)
-```
-
-### 3.6 Settings 页面（设置模块）
-
-页面构成：
-```
-ModuleHeader "设置" / "应用配置"  [BrewMagenta]
-
-→ SettingCard "应用版本" [BrewGreen]
-→ SettingCard "主机应用" [BrewCyan] 可点击跳引导
-→ BrutalButton "有更新可用" / SettingCard "暂无更新" [BrewMuted]
-→ BrutalButton "切换商店源" [BrewMagenta]
-→ 开发者卡片: "DLOVER" 24sp [BrewGreen]
-```
-
-### 3.7 退出确认对话框
-
-| 属性 | 值 |
-|------|------|
-| 容器色 | BrewPanel |
-| 标题色 | BrewTextBright |
-| 文字色 | BrewText |
-| 确认按钮 | 120x44dp, 边框 3dp BrewRed, 背景 BrewBg |
-| 取消按钮 | 120x44dp, 边框 3dp BrewBorder, 背景 BrewBg |
-| 按钮文字 | 14sp Bold, letterSpacing 2sp |
-
----
-
-### 3.8 ScreenStreamStatusCard（ScreenStream 安装状态卡片）
-
-Neo Brutalist 风格，状态驱动的分段布局：
-
-```
-┌──────────────────────────────────────┐
-│  ✘ SCREENSTREAM 未安装    [红色背景]  │
-│    投屏和文件管理功能必需   [11sp半透] │
-├──────────────────────────────────────┤
-│  ──── 偏移装饰线 4dp ────             │
-├──────────────────────────────────────┤
-│  ● 安装 ScreenStream  [按钮 56dp高]   │
-└──────────────────────────────────────┘
-```
-
-**状态对应色**:
-| 状态 | 颜色 | 图标 |
-|------|------|------|
-| 未安装 | BrewRed `#FF4444` | ✘ |
-| 安装中 | BrewCyan `#FF6B5B` | ► |
-| 已安装 | BrewSuccess `#7BECB8` | ✔ |
-| 运行中 | BrewMagenta `#FF6B5B` | ▶ |
-
-**背景**: BrewPanel, 边框 4dp 跟随状态色
-
----
-
-## 四、独立 Activity
-
-### 4.1 ScreenMirrorActivity（屏幕镜像画面）
-
-| 属性 | 值 |
-|------|------|
-| 主题 | RokidLabTheme（BrewBg 背景） |
-| 画面 | BitmapImage, ContentScale.Fit, 可缩放 0.5x-4x |
-| 缩放 | 双指手势缩放+平移, 复位按钮 |
-| 状态文字 | 14sp [BrewText], 含分辨率信息 |
-| 返回按钮 | 左上角 ArrowBack 图标 |
-| 连接失败 | "重新连接" / "返回" 按钮（2dp圆角） |
-
-### 4.2 PhoneMirrorActivity（手机投屏-旧版配置页）
-
-| 属性 | 值 |
-|------|------|
-| 主题 | RokidLabTheme |
-| 连接中 | 居中文字 "正在连接眼镜..." + 连接状态 |
-| 连接失败 | 失败原因 + "重试"按钮 + "返回"按钮 |
-| 投屏中 | StreamingUI（全屏画面） |
-| 配置UI | IP输入 + 端口输入 + "开始投屏"按钮 BrewCoral |
-
-### 4.3 FileManagerActivity（文件管理器）
-
-| 属性 | 值 |
-|------|------|
-| 主题 | RokidLabTheme |
-| 顶部栏 | ArrowBack 返回 + 当前路径（等宽字体 14sp BrewText） |
-| 路径面包屑 | 可点击各部分快速跳转 |
-| 排序按钮 | Sort 图标, 弹出菜单: 名称/大小/日期 |
-| 快捷按钮 | 下载/重命名/删除/新建文件夹 |
-| 文件列表 | 图标 + 名称(13sp BrewTextBright) + 大小/日期(BrewMuted) |
-| 功能菜单 | 每行"..."按钮 → PopupMenu: 打开/预览/重命名/删除/属性/复制/剪切/粘贴 |
-| 对话框 | NewFolderDialog / RenameDialog → BrewPanel背景, BrewCoral确认按钮 |
-
----
-
-## 五、通用弹窗/组件
-
-### 5.1 GuideScreen（引导界面）
-
-| 属性 | 值 |
-|------|------|
-| 背景 | BrewBg |
-| 标题 | "欢迎使用 Rokid Lab" 32sp Bold BrewGreen |
-| 副标题 | "by DLOVER" 14sp BrewMuted |
-| 步骤进度 | 3步圆点指示器 |
-| 步骤1 | 选择主机应用（Rokid AI CN / Rokid AI Global 卡片） |
-| 步骤2 | 选择商店源 |
-| 步骤3 | 授权页面 |
-
-### 5.2 SystemLogDock（系统日志面板）
-
-| 属性 | 值 |
-|------|------|
-| 背景 | 半透明 BrewPanel, 圆角 12dp |
-| 折叠态 | 显示最后一条日志 + 展开箭头 |
-| 展开态 | 可滚动日志列表, 自动滚动到底部 |
-| 文字 | 12sp BrewMuted, 可滚动到 160dp 高度 |
-
-### 5.3 NewFolderDialog / RenameDialog
-
-| 属性 | 值 |
-|------|------|
-| 背景 | BrewPanel, 圆角 16dp |
-| 输入框 | OutlinedTextField, focusBorderColor=BrewCoral |
-| 取消按钮 | Button, containerColor=BrewPanelHi |
-| 确认按钮 | Button, containerColor=BrewCoral |
+| 圆角 | **12dp**（全站统一） |
+| 边框宽度 | **1dp**（全站统一） |
+| 模块间距 | 24dp |
+| 组件间距 | 16dp |
+| 小间距 | 8dp / 12dp |
 | 内边距 | 16dp |
+| 页面水平 padding | 16dp |
 
 ---
 
-## 六、连接状态指示
+## 二、全局组件
 
-| 状态 | 显示文字 | 颜色 |
+### 2.1 BrutalButton（主按钮）
+
+定义：[StoreHomeScreen.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/StoreHomeScreen.kt) `BrutalButton`
+
+| 属性 | 值 |
+|------|-----|
+| 高度 | 52dp |
+| 宽度 | fillMaxWidth |
+| 圆角 | 12dp |
+| 边框 | 1dp, 颜色=模块色 alpha 0.5 |
+| 背景 | 模块色 alpha 0.12 |
+| 文字 | 14sp SemiBold, letterSpacing 1sp, 颜色=模块色 |
+| 按下交互 | 缩放至 98% + 透明度 85% |
+| 动画 | `spring(dampingRatio = MediumBouncy, stiffness = Medium)` |
+
+### 2.2 ModuleHeader（模块标题）
+
+| 属性 | 值 |
+|------|-----|
+| 标题 | 32sp Black(900), 模块色, letterSpacing 4sp |
+| 副标题 | 14sp BrewMuted |
+| 标题与副标题间距 | 8dp |
+
+### 2.3 SettingCard（设置卡片）
+
+| 属性 | 值 |
+|------|-----|
+| 背景 | BrewPanel, 圆角 12dp |
+| 边框 | 1dp BrewBorder, 圆角 12dp |
+| 内边距 | 16dp |
+| 标签 | 10sp Bold uppercase, BrewMuted, letterSpacing 3sp |
+| 标签下装饰线 | 32×3dp 模块色色块 |
+| 内容文字 | 18sp Bold, 模块色, letterSpacing 1sp, TabularNumbersStyle |
+| 可点击 | 有 onClick 传入时可交互 |
+
+### 2.4 IpAddressInputCard（IP 输入卡片）
+
+| 属性 | 值 |
+|------|-----|
+| 背景 | BrewPanel, 圆角 12dp |
+| 边框 | 1dp 模块色, 圆角 12dp |
+| 内边距 | 16dp |
+| 标签 | 12sp Bold, 模块色, letterSpacing 1sp |
+| 输入框 | OutlinedTextField, placeholder "192.168.1.168" BrewMuted |
+| 输入框样式 | TextStyle color=BrewTextBright |
+| 键盘类型 | KeyboardType.Number |
+| focusBorderColor | 模块色 |
+| unfocusedBorderColor | BrewBorder |
+
+### 2.5 ScreenStreamStatusCard（安装状态卡片）
+
+| 属性 | 值 |
+|------|-----|
+| 容器 | clip(RoundedCornerShape(12dp)), background(BrewPanel) |
+| 边框 | 1dp, statusColor alpha 0.3, 圆角 12dp |
+| 顶部状态条 | 填满宽度, 背景=statusBg, padding 20dp×14dp |
+| 状态图标 | 20sp Bold, color=BrewBg |
+| 状态文字 | "SCREENSTREAM {状态}" 16sp Bold, BrewBg, letterSpacing 2sp |
+| 副文字 | "投屏和文件管理功能必需" 11sp Medium, BrewBg alpha 0.7 |
+| 偏移装饰线 | 高 4dp, BrewBorderHi 背景, 安装中时 0↔8dp 脉冲动画 |
+| 安装中容器 | 高 52dp, BrewPanelAlt 背景 12dp, 1dp 边框 BrewCyan alpha 0.3 |
+| 安装中文字 | "⟳ 安装中..." 14sp Bold BrewCyan letterSpacing 3sp |
+| 脉冲动画 | `infiniteRepeatable(tween 800ms, LinearEasing, Reverse)` |
+
+**四种状态：**
+
+| 状态 | statusColor | statusBg | statusText | statusIcon |
+|------|------------|----------|------------|------------|
+| 运行中 | BrewWarning | BrewWarning | "运行中" | "▶" |
+| 安装中 | BrewCyan | BrewCyan | "安装中" | "►" |
+| 已安装 | BrewSuccess | BrewSuccess | "已安装" | "✔" |
+| 未安装 | BrewRed | BrewRed | "未安装" | "✘" |
+
+**四种操作按钮（BrutalButton）：**
+
+| 状态 | 按钮文字 | 颜色 |
 |------|---------|------|
-| 已连接 | 已连接 | BrewCyan `#FF6B5B` |
-| 已授权 | 已授权 | BrewGreen `#7BECB8` |
-| 未安装 | 未安装 | BrewAmber `#FF6B5B` |
-| 连接中 | 连接中 | BrewAmber `#FF6B5B` |
-| 需要授权 | 需要授权 | BrewMuted `#B5AD9E` |
-| 错误/危险 | — | BrewRed `#FF4444` |
+| 运行中 | "● 停止 ScreenStream" | BrewRed |
+| 未安装 | "● 安装 ScreenStream" | BrewAmber |
+| 已安装 | "▶ 启动 ScreenStream" | BrewSuccess |
+
+### 2.6 UsageInstructionsCard（使用说明卡片）
+
+| 属性 | 值 |
+|------|-----|
+| 背景 | BrewPanel, 圆角 12dp |
+| 边框 | 1dp BrewBorder, 圆角 12dp |
+| 内边距 | 16dp |
+| 标题 | "使用说明" 12sp Bold, 颜色=参数 color, letterSpacing 1sp |
+| 步骤文字 | 12sp BrewMuted, lineHeight 20sp, 条目间距 4dp |
+
+### 2.7 搜索栏
+
+| 属性 | 值 |
+|------|-----|
+| 高度 | 46dp |
+| 背景 | BrewPanel, 圆角 12dp |
+| 边框 | 1dp BrewBorder, 圆角 12dp |
+| 水平内边距 | 14dp |
+| 搜索图标 | Icons.Outlined.Search, 20dp, BrewMuted |
+| 输入框 | BasicTextField, 14sp, BrewTextBright |
+| 占位文字 | "搜索应用..." 14sp BrewDim |
+| 清除按钮 | "×" 18sp BrewMuted, 圆角 8dp |
+
+### 2.8 CategoryChip（分类标签）
+
+| 属性 | 值 |
+|------|-----|
+| 高度 | 34dp |
+| 最小宽度 | 64dp |
+| 圆角 | 12dp |
+| 选中态 | 背景 BrewGreen, 文字 BrewBg, 边框 1dp BrewGreen |
+| 未选中态 | 背景 BrewPanelAlt alpha 0.86, 文字 BrewTextBright, 边框 1dp BrewBorderHi alpha 0.44 |
+| 文字 | 13sp SemiBold (fixedSp) |
+| 选中动画 | spring 弹性放大至 1.04x (MediumBouncy + Low stiffness) |
+| 水平内边距 | 13dp |
+
+### 2.9 EmptyState（空状态）
+
+| 属性 | 值 |
+|------|-----|
+| 高度 | 132dp |
+| 宽度 | fillMaxWidth |
+| 圆角 | 12dp |
+| 背景 | BrewPanel |
+| 边框 | 1dp BrewBorder, 圆角 12dp |
+| 文字 | "未找到应用" 14sp Bold BrewMuted |
+
+### 2.10 AppListItem（应用列表项）
+
+| 属性 | 值 |
+|------|-----|
+| 圆角 | 12dp |
+| 边框 | 1dp BrewBorder |
+| 内边距 | 12dp |
+| 应用图标 | 64×64dp AppIcon |
+| 应用名 | 14sp Bold BrewTextBright |
+| 描述 | 12sp BrewMuted, maxLines=2 |
+| 安装目标标签 | 10sp Bold, INSTALLED→BrewGreen / UPDATE→BrewWarning / else→BrewText |
+| 进度条 | LinearProgressIndicator, 4dp 高, BrewCoral, track=BrewBorder |
+| 取消下载 | "✕" BrewCoral 14sp Bold |
+| 展开/收起按钮 | 高 48dp, "SHOW ALL (N)" / "SHOW LESS", 12sp Bold, letterSpacing 2sp |
+| 安装完成闪动 | `Animatable` alpha 0.25→0, 600ms tween |
+
+### 2.11 底部导航栏
+
+| 属性 | 值 |
+|------|-----|
+| 高度 | 64dp |
+| 背景 | BrewPanel, 圆角 12dp |
+| 边框 | 1dp BrewBorder |
+| 五个按钮等宽 | weight(1f) |
+| 选中态 | 背景=模块色, 文字=BrewTextBright（文件管理 BrewAmber 用 BrewBg 反色） |
+| 未选中态 | 背景=BrewPanel, 文字=BrewMuted |
+| 文字 | 10sp Bold, letterSpacing 1sp |
+
+**五模块映射：**
+
+| 页面 | label | color |
+|------|-------|-------|
+| STORE | "应用商店" | BrewGreen |
+| SCREEN_MIRROR | "屏幕镜像" | BrewCyan |
+| PHONE_MIRROR | "手机投屏" | BrewPurple |
+| FILE_MANAGER | "文件管理" | BrewAmber |
+| SETTINGS | "设置" | BrewMagenta |
+
+**页面切换动画：** `AnimatedContent` fadeIn(200ms) + slideInHorizontally(1/4) ⨯ fadeOut + slideOutHorizontally
+
+### 2.12 ConnectionPanel（眼镜连接面板）
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | Card RoundedCornerShape(12dp) |
+| 背景 | BrewPanel alpha 0.78 |
+| 边框 | BorderStroke 1dp BrewBorderHi alpha 0.46 |
+| 内边距 | horizontal 12dp, vertical 11dp |
+| 标题行 | 图标 Icons.Outlined.Visibility 20dp BrewGreen + "眼镜连接" 15sp SemiBold |
+| 状态圆点 | 6×6dp, clip 4dp, 已连接时脉冲缩放至 1.6x + alpha 混合, 400ms tween |
+| 链路信息 | "CXR-L 链路 / {status}" 11sp Medium BrewMuted/状态色 |
+| HostApp 图标 | 45×45dp, RoundedCornerShape(13dp) |
+| HostApp 名称 | 14sp SemiBold BrewTextBright |
+| HostApp 版本 | 11sp Medium BrewMuted |
+| HostApp 选择器 | 水平滚动 Row, 选中色 BrewGreen |
+
+### 2.13 退出确认对话框
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | AlertDialog RoundedCornerShape(12dp) |
+| 容器色 | BrewPanel |
+| 标题 | "退出应用" 20sp Bold BrewRed, letterSpacing 2sp |
+| 内容 | 装饰线 48×4dp BrewRed + "确定要退出吗？" 14sp BrewText + "退出后所有投屏连接将断开。" 12sp BrewMuted |
+| 退出按钮 | 120×44dp, 背景 BrewBg, 边框 1dp BrewRed 12dp, 文字 "退出" 14sp Bold BrewRed |
+| 取消按钮 | 120×44dp, 背景 BrewBg, 边框 1dp BrewBorder 12dp, 文字 "取消" 14sp Bold BrewText |
+
+---
+
+## 三、页面构成
+
+### 3.1 Store 页面（应用商店）
+
+```
+Rokid Lab（36sp Bold BrewGreen） + Lab（36sp Bold BrewCyan）
+by DLOVER（12sp BrewMuted）
+
+→ [搜索栏 直接输入 BasicTextField]
+→ 精选应用 "精选" 列表 [可关✕]
+→ 分类标签水平滚动行 CategoryChip [红选中/灰未选中, 12dp 圆角]
+→ 应用列表 AppListItem [安装/进度/闪动]
+→ SHOW ALL / SHOW LESS 展开按钮 [12dp]
+```
+
+### 3.2 ScreenMirror 页面（屏幕镜像）
+
+```
+ModuleHeader "屏幕镜像" / "眼镜屏幕实时同步到手机" [BrewCyan #5B8FB9]
+→ IpAddressInputCard IP地址 [BrewCyan]
+→ ScreenStreamStatusCard 安装状态
+→ BrutalButton "▶ 开始镜像" [BrewCyan]
+→ UsageInstructionsCard [BrewCyan]
+```
+
+### 3.3 PhoneMirror 页面（手机投屏）
+
+```
+ModuleHeader "手机投屏" / "手机屏幕投射到眼镜" [BrewPurple #D4A85C]
+
+投屏中时:
+  "投屏中" 20sp Bold BrewGreen
+  连接状态 14sp BrewMuted
+  BrutalButton "■ 停止投屏" [BrewRed]
+
+未投屏时:
+  → IpAddressInputCard IP地址 [BrewPurple]
+  → ScreenStreamStatusCard 安装状态
+  → BrutalButton "▶ 开始投屏" [BrewPurple]
+  → UsageInstructionsCard [BrewPurple]
+```
+
+### 3.4 FileManager 页面（文件管理）
+
+```
+ModuleHeader "文件管理" / "管理眼镜中的文件" [BrewAmber #A78BFA]
+→ IpAddressInputCard IP地址 [BrewAmber]
+→ ScreenStreamStatusCard 安装状态
+→ BrutalButton "▶ 打开文件管理器" [BrewAmber]
+→ BrutalButton "安装本地 APK" [BrewInfo #5B8FB9]
+→ UsageInstructionsCard [BrewAmber]
+```
+
+### 3.5 Settings 页面（设置）
+
+```
+ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
+
+→ SettingCard "应用版本" [BrewGreen #E85D3F]
+→ SettingCard "主机应用" [BrewCyan #5B8FB9] 可点击跳引导
+→ SettingCard "更新状态" / BrutalButton "有更新可用" [BrewGreen]
+→ BrutalButton "切换商店源" [BrewCyan]
+
+→ ── 眼镜端服务 ──
+  → SettingCard "ScreenStream" 已安装(绿)/未安装(黄)
+  → BrutalButton "重装眼镜端" [BrewWarning #F0A050] 停止→等待800ms→推送安装
+  → "正在安装中..." BrewCyan 12sp（安装中时显示）
+
+→ 开发者卡片: BrewPanel + 1dp BrewBorder 12dp 内 16dp padding
+  标签 "开发者" 10sp Bold BrewDim letterSpacing 2sp
+  装饰线 32×3dp BrewGreen
+  文字 "DLOVER" 24sp Bold BrewGreen
+```
+
+---
+
+## 四、辅助页面
+
+### 4.1 GuideScreen（引导页）
+
+| 组件 | 规格 |
+|------|------|
+| 主标题 | "欢迎使用 Rokid Lab" 32sp Black(900) BrewGreen letterSpacing 2sp |
+| 副标题 | "by DLOVER" 14sp BrewMuted |
+| 进度指示器 | 水平 Row, 四个圆点 12dp, 已完成→BrewSuccess/当前→BrewGreen/未完成→BrewDim |
+| HostApp 选择卡片 | 56dp 高, 12dp 圆角, 选中→BrewGreen 背景 文字 BrewBg, 未选中→BrewPanel 文字 BrewText, 边框 1dp |
+| 商店源按钮 | 56dp 高, BrewGreen 背景 12dp 圆角, "选择商店源" 16sp Bold BrewBg |
+| 授权按钮 | 56dp 高, BrewGreen/BrewSuccess 背景 12dp 圆角, "点击授权"/"已授权 ✓" 16sp Bold BrewBg |
+| 步骤说明 | BrewPanel 背景 12dp 圆角, 1dp BrewBorder, 16dp padding, 提示文字 14sp BrewMuted |
+
+### 4.2 UpdateDialog（更新对话框）
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | Card RoundedCornerShape(20dp) |
+| 容器色 | BrewPanelAlt |
+| 边框 | BorderStroke 1dp BrewBorderHi |
+| 标题 | "有可用更新" / "下载中..." titleLarge, BrewGreen |
+| 内容 | "RokidLab {version} 已准备好安装。" / "RokidLab {version}（{percent}%）", bodyMedium, BrewText |
+| 进度条 | LinearProgressIndicator, BrewCoral, track=BrewPanel |
+| 取消按钮 | TextButton "取消" BrewCoral 12sp |
+| 稍后按钮 | TextButton "稍后" BrewDim |
+| 更新按钮 | Button containerColor=BrewGreen, 文字 "更新" BrewBg |
+
+### 4.3 DetailInfoPanel（应用详情面板）
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | Card RoundedCornerShape(12dp) |
+| 背景 | BrewPanel alpha 0.76 |
+| 边框 | BorderStroke 1dp BrewBorderHi alpha 0.46 |
+| 内边距 | 14dp |
+
+### 4.4 PhoneMirrorActivity（投屏画面）
+
+| 属性 | 值 |
+|------|-----|
+| 主题 | RokidLabTheme |
+| 连接中 | CircularProgressIndicator BrewCoral + 状态文字 16sp BrewTextBright |
+| 连接失败 | "连接失败" 20sp Bold BrewRed + 状态 14sp BrewMuted + 重试/返回按钮 |
+| 投屏中 | "投屏中" 24sp Bold BrewGreen + 状态 16sp BrewTextBright + "停止投屏" Button BrewCoral |
+
+### 4.5 StoreChrome Header（商店页顶栏）
+
+| 属性 | 值 |
+|------|-----|
+| Logo | BrandTitle 24sp（点击回首页） |
+| 搜索按钮 | 38×38dp, 圆角 12dp, Search icon 24dp |
+| 更新按钮 | 38×38dp, 圆角 12dp, SystemUpdateAlt icon 24dp, 红点角标 (有更新时) |
+| 刷新按钮 | 38×38dp, 圆角 12dp, Refresh icon 25dp, 旋转动画 (refreshing 时) |
+| 菜单按钮 | 38×38dp, 圆角 12dp, MoreVert icon 24dp |
+| 下拉菜单 | "切换源" / "安装 APK 到眼镜" |
+
+---
+
+## 五、动画体系
+
+| 动画 | 触发条件 | 实现 | 参数 |
+|------|---------|------|------|
+| 按钮按压缩放 | BrutalButton 按下 | spring scale 1→0.98 + alpha 1→0.85 | MediumBouncy + Medium |
+| 分类标签弹性 | CategoryChip 选中 | spring scale 1→1.04 | MediumBouncy + Low |
+| 页面切换 | 底部导航切换 | AnimatedContent fadeIn+slideIn ⨯ fadeOut+slideOut | 200ms, 1/4 offset |
+| 安装中脉冲 | ScreenStreamStatusCard 安装中 | 偏移线 0↔8dp | infiniteRepeatable 800ms |
+| 安装完成闪动 | AppListItem 安装完毕 | alpha 0.25→0 | tween 600ms |
+| 连接庆祝脉冲 | 眼镜已连接 | 状态点 scale 1→1.6 + alpha 混合 | tween 400ms |
+| 刷新旋转 | Header 刷新按钮 | rotationZ 0→360 | infiniteRepeatable 800ms |

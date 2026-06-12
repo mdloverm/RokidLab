@@ -222,7 +222,7 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
     ) {
         Text(
             text = "连接失败",
-            color = Color(0xFFFF5722),
+            color = BrewRed,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(bottom = 16.dp)

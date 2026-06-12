@@ -39,7 +39,7 @@ import androidx.compose.ui.unit.sp
 internal fun DetailInfoPanel(app: BrewApp, modifier: Modifier = Modifier) {
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(15.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = BrewPanel.copy(alpha = 0.76f)),
         border = BorderStroke(1.dp, BrewBorderHi.copy(alpha = 0.46f)),
     ) {

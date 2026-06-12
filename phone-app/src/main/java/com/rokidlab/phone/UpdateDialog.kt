@@ -40,9 +40,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -132,14 +129,7 @@ internal fun UpdateSheet(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(BrewBg)
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(BrewAmber.copy(alpha = 0.16f), Color.Transparent),
-                    center = Offset(360f, 70f),
-                    radius = 440f,
-                ),
-            ),
+            .background(BrewBg),
     ) {
         Column(
             modifier = Modifier
