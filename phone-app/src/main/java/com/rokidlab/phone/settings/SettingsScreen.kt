@@ -44,7 +44,5 @@ internal fun SettingsScreen(appVersion: String) {
         Text("设置", color = BrewTextBright, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(16.dp))
         Text("应用版本: $appVersion", color = BrewText, fontSize = 14.sp)
-        Spacer(Modifier.height(12.dp))
-        Text("APK 源: ${hostApp.displayName}", color = BrewText, fontSize = 14.sp)
     }
 }
