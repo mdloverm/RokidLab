@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.glasses
+package com.rokidlab.phone.glasses
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -17,7 +17,7 @@ import com.rokid.cxr.link.callbacks.ICXRLinkCbk
  * 完整的 CXR-L 回调接口实现类
  * 实现了 SDK 1.0.3 中所有必需的回调方法
  */
-class FullCXRLinkCbk(
+class FullCXRLinkCallback(
     private val onConnected: (Boolean) -> Unit,
     private val onBtConnected: (Boolean) -> Unit,
     private val onDeviceInfo: (com.rokid.cxr.link.utils.GlassInfo) -> Unit = {},

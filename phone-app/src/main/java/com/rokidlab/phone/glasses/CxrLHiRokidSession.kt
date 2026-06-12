@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.glasses
+package com.rokidlab.phone.glasses
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -437,7 +437,7 @@ class CxrLHiRokidSession(
     ) {
         cleanup()
         val link = CXRLink(activity.applicationContext).also { newLink ->
-            newLink.setCXRLinkCbk(FullCXRLinkCbk(
+            newLink.setCXRLinkCbk(FullCXRLinkCallback(
                 onConnected = { connected ->
                     activity.runOnUiThread {
                         cxrlConnected = connected

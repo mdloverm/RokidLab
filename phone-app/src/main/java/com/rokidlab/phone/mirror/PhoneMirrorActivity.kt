@@ -74,8 +74,8 @@ class PhoneMirrorActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
-        // 从 BrewApplication 读取 IP 和端口
-        val app = application as BrewApplication
+        // 从 LabApplication 读取 IP 和端口
+        val app = application as LabApplication
         ipAddress = app.phoneMirrorIp
         port = app.phoneMirrorPort
         

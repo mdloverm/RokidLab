@@ -51,7 +51,7 @@ RokidLab/
 │   │   ├── java/com/rokidlab/phone/
 │   │   │   ├── app/         主入口
 │   │   │   │   ├── MainActivity.kt        主入口、投屏控制、状态管理
-│   │   │   │   └── BrewApplication.kt     全局 Application 状态
+│   │   │   │   └── LabApplication.kt     全局 Application 状态
 │   │   │   ├── adb/         ADB 协议
 │   │   │   │   ├── AdbFileManagerClient.kt   文件管理/Shell ADB 客户端
 │   │   │   │   └── AdbScreenMirrorClient.kt  屏幕镜像 ADB 客户端
@@ -64,7 +64,7 @@ RokidLab/
 │   │   │   │   ├── CxrLHiRokidSession.kt        CXR-L 会话封装
 │   │   │   │   ├── ConnectionPanel.kt           连接状态面板
 │   │   │   │   ├── GuideScreen.kt               引导界面
-│   │   │   │   ├── FullCXRLinkCbk.kt            CXR-L 连接回调
+│   │   │   │   ├── FullCXRLinkCallback.kt            CXR-L 连接回调
 │   │   │   │   └── PhoneInstallResultReceiver.kt 安装结果接收器
 │   │   │   ├── mirror/      投屏模块
 │   │   │   │   ├── PhoneMirrorActivity.kt     手机投屏页面
@@ -72,7 +72,7 @@ RokidLab/
 │   │   │   │   ├── PhonePackageInstallHelper.kt APK 安装工具
 │   │   │   │   └── ScreenMirrorActivity.kt    屏幕镜像画面
 │   │   │   ├── model/       数据模型
-│   │   │   │   ├── BrewModels.kt     应用/商店/更新数据模型
+│   │   │   │   ├── Models.kt     应用/商店/更新数据模型
 │   │   │   │   └── UserInstallCache.kt 安装记录缓存
 │   │   │   ├── network/     网络层
 │   │   │   │   ├── ApkDownloader.kt   APK 下载（基于 HttpClient）
@@ -94,7 +94,7 @@ RokidLab/
 │   │   │   │   └── UpdateDialog.kt       更新对话框
 │   │   │   └── util/        工具
 │   │   │       ├── HttpClient.kt      统一 HTTP 请求工具
-│   │   │       └── ImageDecode.kt     图片解码工具
+│   │   │       └── ImageDecoder.kt     图片解码工具
 │   │   ├── res/             资源文件
 │   │   └── assets/          内置眼镜端 APK
 │   └── build.gradle.kts

@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.filemanager
+package com.rokidlab.phone.filemanager
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -576,7 +576,7 @@ class FileManagerActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("rokidlab", MODE_PRIVATE)
         
-        val app = application as BrewApplication
+        val app = application as LabApplication
         ipAddress = app.fileManagerIp
         
         isConnecting = true

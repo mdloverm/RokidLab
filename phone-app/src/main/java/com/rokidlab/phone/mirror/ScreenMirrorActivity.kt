@@ -100,8 +100,8 @@ class ScreenMirrorActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 从 BrewApplication 读取 IP 地址
-        val app = application as BrewApplication
+        // 从 LabApplication 读取 IP 地址
+        val app = application as LabApplication
         ipAddress = app.screenMirrorIp
         
         // 启动时自动开始连接

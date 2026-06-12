@@ -173,7 +173,7 @@ internal fun BrewPhoneApp(
     actions: StoreActions,
     iconLoader: IconLoader,
     mediaLoader: MediaLoader,
-    app: BrewApplication,
+    app: LabApplication,
 ) {
     var currentPage by rememberSaveable { mutableStateOf(NavPage.STORE) }
     var selectedApp by remember { mutableStateOf<BrewApp?>(null) }
@@ -324,7 +324,7 @@ internal fun BrewPhoneApp(
 private fun ScreenMirrorModule(
     state: StoreUiState,
     actions: StoreActions,
-    app: BrewApplication,
+    app: LabApplication,
 ) {
     Column(
         modifier = Modifier
@@ -379,7 +379,7 @@ private fun ScreenMirrorModule(
 private fun PhoneMirrorModule(
     state: StoreUiState,
     actions: StoreActions,
-    app: BrewApplication,
+    app: LabApplication,
 ) {
     val isMirroring = state.phoneMirrorState.isMirroring
     
@@ -463,7 +463,7 @@ private fun PhoneMirrorModule(
 private fun FileManagerModule(
     state: StoreUiState,
     actions: StoreActions,
-    app: BrewApplication,
+    app: LabApplication,
 ) {
     Column(
         modifier = Modifier
@@ -976,7 +976,7 @@ private fun MainInterface(
     onAppListExpandedChange: (Boolean) -> Unit,
     updateSheetVisible: Boolean,
     onUpdateSheetVisibleChange: (Boolean) -> Unit,
-    app: BrewApplication,
+    app: LabApplication,
 ) {
     val lists = remember(state.apps, query, categoryFilter) {
         val visibleApps = state.apps.filter { a ->

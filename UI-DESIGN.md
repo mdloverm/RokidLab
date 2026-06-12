@@ -408,7 +408,7 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 | 连接失败 | "连接失败" 20sp Bold BrewRed + 状态 14sp BrewMuted + 重试/返回按钮 |
 | 投屏中 | "投屏中" 24sp Bold BrewGreen + 状态 16sp BrewTextBright + "停止投屏" Button BrewCoral |
 
-### 4.5 StoreChrome Header（商店页顶栏）
+### 4.5 StoreComponents Header（商店页顶栏）
 
 | 属性 | 值 |
 |------|-----|

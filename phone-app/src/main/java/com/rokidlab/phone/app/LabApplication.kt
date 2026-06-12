@@ -14,7 +14,7 @@ import com.rokidlab.phone.util.*
 import android.app.Application
 import android.content.SharedPreferences
 
-class BrewApplication : Application() {
+class LabApplication : Application() {
     lateinit var cxrL: CxrLHiRokidSession
         private set
 

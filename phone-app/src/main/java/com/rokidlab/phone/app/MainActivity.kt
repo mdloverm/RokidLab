@@ -160,7 +160,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (result.resultCode == Activity.RESULT_OK) {
             log("MediaProjection 权限已授予，启动投屏服务")
-            val app = application as BrewApplication
+            val app = application as LabApplication
             phoneMirrorState = phoneMirrorState.copy(
                 isMirroring = true,
                 connectionStatus = "投屏中..."
@@ -211,7 +211,7 @@ class MainActivity : AppCompatActivity() {
             },
             initialHostApp = selectedHostApp,
         )
-        (application as BrewApplication).setCxrL(cxrL)
+        (application as LabApplication).setCxrL(cxrL)
         // 如果之前已授权，同步前置条件状态
         if (cxrL.hasAuthorization()) {
             prerequisitesState = prerequisitesState.copy(authorized = true)
@@ -274,7 +274,7 @@ class MainActivity : AppCompatActivity() {
                             showMirrorDialog = false
                         },
                         onDismissMirrorDialog = { showMirrorDialog = false },
-                        onScreenMirrorIpChange = { (application as BrewApplication).setScreenMirrorIp(it) },
+                        onScreenMirrorIpChange = { (application as LabApplication).setScreenMirrorIp(it) },
                         onScreenMirrorConnect = { startScreenMirror() },
                         onScreenMirrorStart = { startScreenMirror() },
                         onScreenMirrorStop = { stopScreenStreamOnGlasses() },
@@ -282,8 +282,8 @@ class MainActivity : AppCompatActivity() {
                         onScreenMirrorOpenScreenStream = { openScreenStreamOnGlasses() },
                         onScreenMirrorRetry = { },
                         onScreenMirrorBack = { },
-                        onPhoneMirrorIpChange = { (application as BrewApplication).setPhoneMirrorIp(it) },
-                        onPhoneMirrorPortChange = { (application as BrewApplication).setPhoneMirrorPort(it) },
+                        onPhoneMirrorIpChange = { (application as LabApplication).setPhoneMirrorIp(it) },
+                        onPhoneMirrorPortChange = { (application as LabApplication).setPhoneMirrorPort(it) },
                         onPhoneMirrorConnect = { startPhoneMirror() },
                         onPhoneMirrorStart = { 
                             if (phoneMirrorState.isMirroring) stopPhoneMirror() else startPhoneMirror()
@@ -293,7 +293,7 @@ class MainActivity : AppCompatActivity() {
                         onPhoneMirrorOpenScreenStream = { openScreenStreamOnGlasses() },
                         onPhoneMirrorRetry = { },
                         onPhoneMirrorBack = { },
-                        onFileManagerIpChange = { (application as BrewApplication).setFileManagerIp(it) },
+                        onFileManagerIpChange = { (application as LabApplication).setFileManagerIp(it) },
                         onFileManagerConnect = { startFileManager() },
                         onFileManagerDisconnect = { },
                         onFileManagerStop = { stopScreenStreamOnGlasses() },
@@ -314,7 +314,7 @@ class MainActivity : AppCompatActivity() {
                     ),
                     iconLoader = iconLoader,
                     mediaLoader = mediaLoader,
-                    app = application as BrewApplication,
+                    app = application as LabApplication,
                 )
                 if (showUpdatePrompt && selfUpdateState.available) {
                     UpdateDialog(
@@ -809,8 +809,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkScreenStreamInstallation() {
-        val app = application as BrewApplication
-        
+        val app = application as LabApplication
         // 跳过持久化缓存兜底——每次都等 SDK 查询结果，避免卸载后仍显示"已安装"
         
         // 运行时缓存：有结果直接用
@@ -874,7 +873,7 @@ class MainActivity : AppCompatActivity() {
                                 screenStreamInstalled = installed,
                                 isInstallingScreenStream = false
                             )
-                            (application as BrewApplication).setScreenStreamInstalled(installed)
+                            (application as LabApplication).setScreenStreamInstalled(installed)
                             updateBusy(false)
                             log(if (installed) "ScreenStream 安装成功" else "ScreenStream 安装失败")
                         }
