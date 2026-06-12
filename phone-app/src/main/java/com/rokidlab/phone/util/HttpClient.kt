@@ -1,0 +1,125 @@
+﻿package com.rokidlab.phone.util
+
+import com.rokidlab.phone.app.*
+import com.rokidlab.phone.adb.*
+import com.rokidlab.phone.design.*
+import com.rokidlab.phone.filemanager.*
+import com.rokidlab.phone.glasses.*
+import com.rokidlab.phone.mirror.*
+import com.rokidlab.phone.model.*
+import com.rokidlab.phone.network.*
+import com.rokidlab.phone.settings.*
+import com.rokidlab.phone.store.*
+import com.rokidlab.phone.util.*
+import java.io.File
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
+
+/** 统一 HTTP 网络请求工具，封装 HttpURLConnection 的常见操作 */
+object HttpClient {
+
+    fun getString(
+        url: String,
+        connectTimeout: Int = 6000,
+        readTimeout: Int = 9000,
+        headers: Map<String, String> = emptyMap(),
+    ): String {
+        val connection = openConnection(url, connectTimeout, readTimeout, headers)
+        try {
+            connection.connect()
+            checkResponse(connection)
+            return connection.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun download(url: String, output: File, connectTimeout: Int = 10000, readTimeout: Int = 30000) {
+        val temp = File(output.parentFile, "${output.name}.tmp")
+        val connection = openConnection(url, connectTimeout, readTimeout)
+        try {
+            connection.connect()
+            checkResponse(connection)
+            connection.inputStream.use { input ->
+                temp.outputStream().use { out -> input.copyTo(out) }
+            }
+            if (!temp.renameTo(output)) {
+                temp.copyTo(output, overwrite = true)
+                temp.delete()
+            }
+        } finally {
+            connection.disconnect()
+            if (temp.exists() && !output.exists()) temp.delete()
+        }
+    }
+
+    fun downloadWithPercent(
+        url: String,
+        output: File,
+        connectTimeout: Int = 20000,
+        readTimeout: Int = 120000,
+        onPercent: (Int) -> Unit,
+    ) {
+        val connection = openConnection(url, connectTimeout, readTimeout).apply {
+            setRequestProperty("User-Agent", "RokidLab/1.0")
+        }
+        try {
+            connection.connect()
+            checkResponse(connection)
+            val total = connection.contentLengthLong.takeIf { it > 0L } ?: -1L
+            connection.inputStream.use { input ->
+                output.outputStream().use { out ->
+                    val buffer = ByteArray(8192)
+                    var copied = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        out.write(buffer, 0, read)
+                        copied += read
+                        if (total > 0L) onPercent(((copied * 100L) / total).toInt())
+                    }
+                }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun openStream(
+        url: String,
+        connectTimeout: Int = 10000,
+        readTimeout: Int = 30000,
+        headers: Map<String, String> = emptyMap(),
+    ): InputStream {
+        val connection = openConnection(url, connectTimeout, readTimeout, headers)
+        connection.connect()
+        checkResponse(connection)
+        return connection.inputStream
+    }
+
+    // -- private helpers --
+
+    private fun openConnection(
+        url: String,
+        connectTimeout: Int,
+        readTimeout: Int,
+        headers: Map<String, String> = emptyMap(),
+    ): HttpURLConnection {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            this.connectTimeout = connectTimeout
+            this.readTimeout = readTimeout
+            requestMethod = "GET"
+            instanceFollowRedirects = true
+            headers.forEach { (k, v) -> setRequestProperty(k, v) }
+        }
+        return connection
+    }
+
+    private fun checkResponse(connection: HttpURLConnection) {
+        val code = connection.responseCode
+        if (code != HttpURLConnection.HTTP_OK) {
+            throw java.io.IOException("HTTP $code: ${connection.responseMessage}")
+        }
+    }
+}

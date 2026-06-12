@@ -1,0 +1,76 @@
+﻿package com.rokidlab.phone.network
+
+import com.rokidlab.phone.app.*
+import com.rokidlab.phone.adb.*
+import com.rokidlab.phone.design.*
+import com.rokidlab.phone.filemanager.*
+import com.rokidlab.phone.glasses.*
+import com.rokidlab.phone.mirror.*
+import com.rokidlab.phone.model.*
+import com.rokidlab.phone.network.*
+import com.rokidlab.phone.settings.*
+import com.rokidlab.phone.store.*
+import com.rokidlab.phone.util.*
+import android.content.Context
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import java.io.File
+
+import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+
+private const val ICON_MAX_DIMENSION_PX = 256
+
+class IconLoader(private val context: Context) {
+    private val cache = ConcurrentHashMap<String, Drawable>()
+    private val missing = ConcurrentHashMap.newKeySet<String>()
+
+    fun load(appId: String, iconUrl: String? = null): Drawable? {
+        return loadLocal(appId) ?: loadRemote(iconUrl)
+    }
+
+    private fun loadLocal(appId: String): Drawable? {
+        val key = "asset:$appId"
+        cache[key]?.let { return it }
+        if (missing.contains(key)) return null
+        return runCatching {
+            context.assets.open("icons/$appId.png").use { input ->
+                decodeSampledBitmap(input.readBytes(), ICON_MAX_DIMENSION_PX)?.let { bitmap ->
+                    BitmapDrawable(context.resources, bitmap)
+                }
+            }
+        }.getOrNull().also { drawable ->
+            if (drawable == null) missing.add(key) else cache[key] = drawable
+        }
+    }
+
+    private fun loadRemote(url: String?): Drawable? {
+        if (url.isNullOrBlank()) return null
+        val key = "remote:$url"
+        cache[key]?.let { return it }
+        if (missing.contains(key)) return null
+        return runCatching {
+            val file = cachedImageFile(url)
+            if (!file.exists()) download(url, file)
+            decodeSampledBitmap(file, ICON_MAX_DIMENSION_PX)?.let { bitmap ->
+                BitmapDrawable(context.resources, bitmap)
+            }
+        }.getOrNull().also { drawable ->
+            if (drawable == null) missing.add(key) else cache[key] = drawable
+        }
+    }
+
+    private fun cachedImageFile(url: String): File {
+        val dir = File(context.cacheDir, "registry-icons").apply { mkdirs() }
+        return File(dir, url.sha256())
+    }
+
+    private fun download(url: String, output: File) {
+        HttpClient.download(url, output, connectTimeout = 6000, readTimeout = 10000)
+    }
+
+    private fun String.sha256(): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+}

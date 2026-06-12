@@ -91,7 +91,7 @@
 
 ### 2.1 BrutalButton（主按钮）
 
-定义：[StoreHomeScreen.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/StoreHomeScreen.kt) `BrutalButton`
+定义：[store/StoreHomeScreen.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/StoreHomeScreen.kt) `BrutalButton`
 
 | 属性 | 值 |
 |------|-----|
