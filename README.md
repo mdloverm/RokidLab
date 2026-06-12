@@ -79,6 +79,7 @@ RokidLab/
 │   │   │   │   ├── IconLoader.kt      图标加载（基于 HttpClient）
 │   │   │   │   └── MediaLoader.kt     媒体加载（基于 HttpClient）
 │   │   │   ├── settings/    设置页
+│   │   │   │   ├── SettingsScreen.kt   设置界面
 │   │   │   │   └── SystemLogDock.kt    日志面板
 │   │   │   ├── store/       商店 UI
 │   │   │   │   ├── StoreHomeScreen.kt    主界面入口

@@ -526,81 +526,7 @@ private fun SettingsModule(
     state: StoreUiState,
     actions: StoreActions,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-    ) {
-        ModuleHeader(title = "设置", subtitle = "应用配置", color = BrewMagenta)
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        SettingCard(title = "应用版本", content = state.selfUpdateState.currentVersion, color = BrewGreen)
-        Spacer(modifier = Modifier.height(16.dp))
-        SettingCard(
-            title = "主机应用",
-            content = state.selectedHostApp.displayName,
-            color = BrewCyan,
-            onClick = { actions.onGoToGuideStep1() },
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        if (state.selfUpdateState.available) {
-            BrutalButton(label = "有更新可用", color = BrewGreen, onClick = actions.onSelfUpdate)
-        } else {
-            SettingCard(title = "更新状态", content = "暂无更新", color = BrewMuted)
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-        BrutalButton(label = "切换商店源", color = BrewCyan, onClick = actions.onSwitchMirror)
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        // ── 眼镜端服务 ──
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp),
-        ) {
-            Text(text = "眼镜端服务", color = BrewMagenta.copy(alpha = 0.8f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-            Spacer(modifier = Modifier.height(12.dp))
-            SettingCard(
-                title = "ScreenStream",
-                content = if (state.screenMirrorState.screenStreamInstalled == true) "已安装" else "未安装",
-                color = if (state.screenMirrorState.screenStreamInstalled == true) BrewGreen else BrewWarning,
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            BrutalButton(
-                label = "重装眼镜端",
-                color = BrewWarning,
-                onClick = actions.onSettingsReinstallScreenStream,
-            )
-            if (state.screenMirrorState.isInstallingScreenStream) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("正在安装中...", color = BrewCyan, fontSize = 12.sp)
-            }
-        }
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(BrewPanel, RoundedCornerShape(12.dp))
-                .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
-                .padding(16.dp),
-        ) {
-            Column {
-                Text(text = "开发者", color = BrewDim, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                Box(
-                    modifier = Modifier
-                        .width(32.dp)
-                        .height(3.dp)
-                        .background(BrewGreen)
-                        .padding(bottom = 8.dp),
-                )
-                Text(text = "DLOVER", color = BrewGreen, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
+    SettingsScreen(state = state, actions = actions)
 }
 
 // ===== 模块通用组件 =====
@@ -832,37 +758,6 @@ private fun BrutalButton(label: String, color: Color, onClick: () -> Unit) {
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 1.sp,
         )
-    }
-}
-
-@Composable
-private fun SettingCard(title: String, content: String, color: Color, onClick: (() -> Unit)? = null) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(BrewPanel, RoundedCornerShape(12.dp))
-            .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
-            .padding(16.dp)
-            .clickable(enabled = onClick != null) { onClick?.invoke() },
-    ) {
-        Column {
-            Text(
-                text = title.uppercase(),
-                color = BrewMuted,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 3.sp,
-                modifier = Modifier.padding(bottom = 4.dp),
-            )
-            Box(
-                modifier = Modifier
-                    .width(32.dp)
-                    .height(3.dp)
-                    .background(color)
-                    .padding(bottom = 8.dp),
-            )
-            Text(text = content, color = color, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, style = TabularNumbersStyle)
-        }
     }
 }
 
