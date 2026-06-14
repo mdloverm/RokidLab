@@ -65,6 +65,7 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
   - 蓝牙 HID Device 协议（手机模拟键盘/鼠标/游戏手柄）
 - **投屏**: MediaProjection API + Socket 传输
 - **统一 HTTP 工具**: `HttpClient` 对象封装（替代裸 `HttpURLConnection`）
+- **全局错误提示**: `BrewErrorCard`/`BrewWarningCard`/`BrewLoadingCard`/`BrewResultCard`
 - **最低版本**: Android 9 (API 28)
 
 ## ADB 自实现协议
@@ -103,8 +104,9 @@ RokidLab/
 │   │   │   │   ├── AdbFileManagerClient.kt   文件管理 ADB 客户端
 │   │   │   │   └── AdbScreenMirrorClient.kt  屏幕镜像 ADB 客户端
 │   │   │   ├── design/      设计系统
-│   │   │   │   ├── StoreTheme.kt      配色/字体/主题（Velvet Dark）
-│   │   │   │   └── RokidHostApp.kt    HostApp 枚举
+│   │   │   ├── StoreTheme.kt      配色/字体/主题（Velvet Dark）
+│   │   │   ├── DesignComponents.kt 全局 UI 组件（错误/警告/加载/结果卡片）
+│   │   │   └── RokidHostApp.kt    HostApp 枚举
 │   │   │   ├── filemanager/  文件管理
 │   │   │   │   └── FileManagerActivity.kt  文件管理器界面/组件
 │   │   │   ├── glasses/     眼镜通信/UI

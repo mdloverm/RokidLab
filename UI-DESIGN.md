@@ -316,6 +316,61 @@ ADB 工具页面的眼镜连接信息卡片。
 | 行高 | 约 44dp，多行自动折叠 |
 | 列表最大高度 | 420dp，超出可滚动 |
 
+### 2.13 全局错误提示组件
+
+定义：[design/DesignComponents.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/design/DesignComponents.kt)
+
+**BrewErrorCard — 错误提示卡片**
+
+| 属性 | 值 |
+|------|-----|
+| 背景 | BrewRed alpha 0.08, 圆角 8dp |
+| 边框 | 1dp BrewRed alpha 0.3, 圆角 8dp |
+| 内边距 | 12dp |
+| 标签 | "错误" 10sp Bold BrewRed |
+| 消息 | 12sp BrewRed alpha 0.9 |
+| 重试按钮 | BrewRed alpha 0.15 背景, "重试" 11sp Bold BrewRed, 圆角 6dp |
+
+| 使用场景 | 显示位置 |
+|---------|---------|
+| 屏幕镜像连接失败 | 按钮上方 inline |
+| 手机投屏启动失败 | 按钮上方 inline |
+| 文件管理连接失败 | 按钮上方 inline |
+| 商店刷新失败 | 搜索栏下方 inline |
+| 设置重装 ScreenStream 失败 | 按钮下方 inline |
+| 蓝牙重连失败 | 连接状态卡片 |
+
+**BrewWarningCard — 警告提示卡片**
+
+| 属性 | 值 |
+|------|-----|
+| 背景 | BrewWarning alpha 0.08, 圆角 8dp |
+| 边框 | 1dp BrewWarning alpha 0.3, 圆角 8dp |
+| 内边距 | 12dp |
+| 标签 | "注意" 10sp Bold BrewWarning |
+| 消息 | 12sp BrewWarning alpha 0.9 |
+| 操作按钮 | 可选, 同色系 |
+
+**BrewLoadingCard — 加载中卡片**
+
+| 属性 | 值 |
+|------|-----|
+| 背景 | BrewPanel, 圆角 8dp |
+| 边框 | 1dp BrewBorder, 圆角 8dp |
+| 内边距 | 24dp |
+| 文字 | 13sp BrewMuted, 居中 |
+
+**BrewResultCard — 操作结果卡片（成功/失败）**
+
+| 属性 | 值 |
+|------|-----|
+| 背景 | BrewSuccess/BrewRed alpha 0.08, 圆角 8dp |
+| 边框 | 1dp 对应色 alpha 0.3, 圆角 8dp |
+| 内边距 | 12dp |
+| 标签 | "成功"/"失败" 10sp Bold |
+| 消息 | 12sp 对应色 alpha 0.9 |
+| 详情 | 可选, 10sp BrewMuted |
+
 ---
 
 ## 三、页面构成
