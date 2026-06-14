@@ -420,6 +420,12 @@ ModuleHeader "蓝牙手柄" / "通过蓝牙控制眼镜光标和按键" [BrewSuc
 → BrutalButton "🔍 扫描设备" [BrewCyan]  / "■ 停止扫描" [BrewRed]
 → 已配对设备列表 [可点击连接]
 
+连接状态指示:
+  "已连接" → BrewSuccess 绿色
+  "连接中..." → BrewWarning 橙色
+  "未连接" → BrewMuted 灰色
+  "重连失败，请重启眼镜蓝牙" → BrewRed 红色（智能重试 5 次失败后显示）
+
 连接成功后:
 → [鼠标模式] / [游戏手柄] 切换按钮
   选中: BrewSuccess 背景 + 白色文字
