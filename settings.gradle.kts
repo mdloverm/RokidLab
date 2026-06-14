@@ -24,4 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "RokidLab"
 include(":phone-app")
-include(":glasses-screen-service")
+include(":RokidLink")

@@ -29,7 +29,8 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - 浏览和搜索 Rokid 眼镜应用
 - 安装应用到手机或眼镜端
 - 应用更新管理
-- 多商店源切换
+- 多商店源切换（Gitee / GitHub，含对应图标标识）
+- 应用详情页来源行动态显示 Gitee 或 GitHub 图标及域名
 
 ### 屏幕镜像
 - 将眼镜屏幕实时显示在手机上（ADB over TCP 自定义实现）
@@ -40,6 +41,8 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - 将手机屏幕投射到眼镜上（基于 CXR-L + MediaProjection）
 - 一键启动/停止，眼镜端自动接收
 - 投屏后眼镜端全屏显示画面，无 UI 干扰
+- Socket 传屏协议：`[1B方向][2B宽LE][2B高LE][N*1B灰度]`，3 秒连接超时
+- 眼镜端 RokidLink APK 自动随手机端构建（build.gradle.kts 集成），始终保持同步
 
 ### 文件管理
 - 通过 ADB 浏览和管理眼镜上的文件
@@ -49,7 +52,7 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - APK 安装功能
 
 ### 设置
-- 眼镜端 ScreenStream 服务管理（安装/重装/启动/停止）
+- 眼镜端 RokidLink 服务管理（安装/重装/启动/停止）
 - 商店源切换
 - 主机应用切换
 - 应用版本和更新
@@ -97,7 +100,7 @@ RokidLab/
 │   ├── src/main/
 │   │   ├── java/com/rokidlab/phone/
 │   │   │   ├── app/         主入口
-│   │   │   │   ├── MainActivity.kt        主入口、投屏控制、状态管理、权限请求
+│   │   │   │   ├── MainActivity.kt        主入口、投屏控制、状态管理、权限请求、镜像源对话框
 │   │   │   │   └── LabApplication.kt     全局 Application 状态、HID Manager
 │   │   │   ├── adb/         ADB 协议实现
 │   │   │   │   ├── AdbShellClient.kt      Shell 命令/应用管理/定时功能
@@ -121,7 +124,7 @@ RokidLab/
 │   │   │   │   └── GamepadActivity.kt       游戏手柄 Activity
 │   │   │   ├── mirror/      投屏模块
 │   │   │   │   ├── PhoneMirrorActivity.kt     手机投屏页面
-│   │   │   │   ├── PhoneMirrorService.kt      投屏前台 Service
+│   │   │   │   ├── PhoneMirrorService.kt      投屏前台 Service（3秒 Socket 超时、方向防抖、重连限制）
 │   │   │   │   ├── PhonePackageInstallHelper.kt APK 安装工具
 │   │   │   │   └── ScreenMirrorActivity.kt    屏幕镜像画面
 │   │   │   ├── model/       数据模型
@@ -152,12 +155,12 @@ RokidLab/
 │   │   └── assets/          内置眼镜端 APK
 │   └── build.gradle.kts
 │
-├── glasses-screen-service/                眼镜端屏幕服务
+├── RokidLink/                            眼镜端配套应用（RokidLink，自动打包到 phone-app assets）
 │   ├── src/main/
-│   │   ├── java/com/rokidlab/screenservice/
+│   │   ├── java/com/rokidlab/rokidlink/
 │   │   │   ├── MainActivity.kt              WiFi/ADB 状态面板
 │   │   │   ├── PhoneMirrorActivity.kt       投屏接收画面
-│   │   │   └── PhoneMirrorServer.kt         Socket 服务端
+│   │   │   └── PhoneMirrorServer.kt         Socket 服务端（灰度图接收 + Bitmap 显示）
 │   │   ├── res/layout/activity_main.xml     状态面板布局
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts
@@ -169,11 +172,14 @@ RokidLab/
 ## 构建
 
 ```powershell
-# 构建手机应用
+# 构建手机应用（自动同步最新 RokidLink APK 到 assets）
 .\gradlew :phone-app:assembleDebug
 
-# 构建眼镜端服务
-.\gradlew :glasses-screen-service:assembleDebug
+# 仅构建眼镜端服务
+.\gradlew :RokidLink:assembleDebug
+
+# 仅同步 RokidLink APK 到 phone-app assets（不重新构建手机端）
+.\gradlew :phone-app:buildRokidLinkDebug
 ```
 
 ## 安装
@@ -186,7 +192,7 @@ adb install phone-app/build/outputs/apk/debug/phone-app-debug.apk
 ### 眼镜端服务
 通过手机应用中的安装功能自动推送到眼镜，或手动安装：
 ```powershell
-adb install glasses-screen-service/build/outputs/apk/debug/glasses-screen-service-debug.apk
+adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 ```
 
 ## 使用指南

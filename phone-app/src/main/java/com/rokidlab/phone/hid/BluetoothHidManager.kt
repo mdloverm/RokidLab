@@ -46,6 +46,9 @@ class BluetoothHidManager(private val appContext: Context) {
         const val STATE_DISCONNECTED = 0
         const val STATE_CONNECTING   = 1
         const val STATE_CONNECTED    = 2
+        const val STATE_RETRY_FAILED = 3  // 智能重试超过最大次数，需手动重置蓝牙
+
+        const val MAX_QUICK_DISCONNECT_RETRIES = 5
 
         const val MODE_UI   = 0  // 菜单导航模式 — Consumer Control 方向键 + 键盘按钮
         const val MODE_GAME = 1  // 游戏模式 — 全部用键盘
@@ -323,17 +326,24 @@ class BluetoothHidManager(private val appContext: Context) {
                     // 快速断连检测：连接后 2 秒内断开 → 眼镜 HID Host 状态异常
                     if (lastConnectTime > 0 && lastDisconnectTime - lastConnectTime < 2000) {
                         quickDisconnectCount++
-                        val waitMs = minOf(quickDisconnectCount * 3000L, 15000L)  // 3s, 6s, 9s...
-                        Log.w(TAG, "快速断连 #$quickDisconnectCount，等待 ${waitMs}ms 后重试")
-                        val dev = device
-                        retryRunnable?.let { mainHandler.removeCallbacks(it) }
-                        retryRunnable = Runnable {
-                            if (dev != null) {
-                                Log.i(TAG, "智能重试: 连接 $dev")
-                                connect(dev)
+                        if (quickDisconnectCount >= MAX_QUICK_DISCONNECT_RETRIES) {
+                            Log.w(TAG, "快速断连已达 $quickDisconnectCount 次，停止重试，请重启眼镜蓝牙")
+                            quickDisconnectCount = 0
+                            retryRunnable?.let { mainHandler.removeCallbacks(it); retryRunnable = null }
+                            updateConnectionState(STATE_RETRY_FAILED, null)
+                        } else {
+                            val waitMs = minOf(quickDisconnectCount * 3000L, 15000L)
+                            Log.w(TAG, "快速断连 #$quickDisconnectCount，等待 ${waitMs}ms 后重试")
+                            val dev = device
+                            retryRunnable?.let { mainHandler.removeCallbacks(it) }
+                            retryRunnable = Runnable {
+                                if (dev != null) {
+                                    Log.i(TAG, "智能重试: 连接 $dev")
+                                    connect(dev)
+                                }
                             }
+                            mainHandler.postDelayed(retryRunnable!!, waitMs)
                         }
-                        mainHandler.postDelayed(retryRunnable!!, waitMs)
                     }
                     updateConnectionState(STATE_DISCONNECTED, null)
                 }
@@ -395,6 +405,8 @@ class BluetoothHidManager(private val appContext: Context) {
 
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
+        // 用户手动重连时，重置快速断连计数
+        quickDisconnectCount = 0
         if (hidDevice == null) {
             Log.w(TAG, "HID not ready, re-initializing...")
             pendingConnectDevice = device

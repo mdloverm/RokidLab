@@ -1,4 +1,4 @@
-package com.rokidlab.phone.settings
+﻿package com.rokidlab.phone.settings
 
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.store.*
@@ -79,17 +79,17 @@ internal fun SettingsScreen(
             Text(text = "眼镜端服务", color = BrewMagenta.copy(alpha = 0.8f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
             Spacer(modifier = Modifier.height(12.dp))
             SettingCard(
-                title = "ScreenStream",
-                content = if (state.screenMirrorState.screenStreamInstalled == true) "已安装" else "未安装",
-                color = if (state.screenMirrorState.screenStreamInstalled == true) BrewGreen else BrewWarning,
+                title = "RokidLink",
+                content = if (state.screenMirrorState.rokidLinkInstalled == true) "已安装" else "未安装",
+                color = if (state.screenMirrorState.rokidLinkInstalled == true) BrewGreen else BrewWarning,
             )
             Spacer(modifier = Modifier.height(12.dp))
             BrutalButton(
                 label = "重装眼镜端",
                 color = BrewWarning,
-                onClick = actions.onSettingsReinstallScreenStream,
+                onClick = actions.onSettingsReinstallRokidLink,
             )
-            if (state.screenMirrorState.isInstallingScreenStream) {
+            if (state.screenMirrorState.isInstallingRokidLink) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("正在安装中...", color = BrewCyan, fontSize = 12.sp)
             }

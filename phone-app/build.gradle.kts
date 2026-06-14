@@ -78,6 +78,45 @@ android {
     }
 }
 
+// ── 眼镜端 RokidLink APK 自动构建集成 ──
+// 构建 phone-app 时, 先构建 RokidLink 模块, 将输出的 APK 拷贝到 assets
+// 这样 installRokidLinkToGlasses() 读取的总是最新版 RokidLink
+val rokidLinkProject by lazy { rootProject.project(":RokidLink") }
+
+val buildRokidLinkDebug by tasks.registering {
+    description = "构建 RokidLink (debug) 并拷贝到 phone-app assets"
+    group = "build"
+    dependsOn(":RokidLink:assembleDebug")
+    doLast {
+        val sourceApk = rokidLinkProject.buildDir.resolve("outputs/apk/debug/RokidLink-debug.apk")
+        val targetFile = file("src/main/assets/RokidLink.apk")
+        sourceApk.copyTo(targetFile, overwrite = true)
+        logger.lifecycle("RokidLink APK (debug) 已同步 -> $targetFile")
+    }
+}
+
+val buildRokidLinkRelease by tasks.registering {
+    description = "构建 RokidLink (release) 并拷贝到 phone-app assets"
+    group = "build"
+    dependsOn(":RokidLink:assembleRelease")
+    doLast {
+        val sourceApk = rokidLinkProject.buildDir.resolve("outputs/apk/release/RokidLink-release.apk")
+        val targetFile = file("src/main/assets/RokidLink.apk")
+        sourceApk.copyTo(targetFile, overwrite = true)
+        logger.lifecycle("RokidLink APK (release) 已同步 -> $targetFile")
+    }
+}
+
+// 在合并 assets 前先同步 RokidLink APK
+tasks.matching { it.name.startsWith("mergeDebug") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(buildRokidLinkDebug)
+}
+tasks.matching { it.name.startsWith("mergeRelease") && it.name.endsWith("Assets") }.configureEach {
+    dependsOn(buildRokidLinkRelease)
+}
+
+// ── 依赖 ──
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)

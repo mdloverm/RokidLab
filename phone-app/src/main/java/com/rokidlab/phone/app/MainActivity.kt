@@ -34,6 +34,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -61,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
@@ -96,7 +98,7 @@ class MainActivity : AppCompatActivity() {
     private val glassesInstallStates = mutableStateMapOf<String, InstallState>()
     private val glassesInstallStateSources = mutableMapOf<String, InstallStateSource>()
     private var pendingAction: (() -> Unit)? = null
-    private var isCheckingScreenStream = false
+    private var isCheckingRokidLink = false
     private var selfUpdateState by mutableStateOf(
         BrewSelfUpdateState(
             currentVersion = BuildConfig.VERSION_NAME,
@@ -114,6 +116,7 @@ class MainActivity : AppCompatActivity() {
     private var phoneMirrorState by mutableStateOf(PhoneMirrorState())
     private var fileManagerState by mutableStateOf(FileManagerState())
     private var currentMirrorIndex by mutableStateOf(0)
+    private var settingsReinstallError: String? = null
 
     private val permissions: Array<String>
         get() = buildList {
@@ -225,7 +228,7 @@ class MainActivity : AppCompatActivity() {
             onConnectionChanged = { conn ->
                 cxrConnection = conn
                 if (conn.authorized) {
-                    checkScreenStreamInstallation()
+                    checkRokidLinkInstallation()
                 }
             },
             initialHostApp = selectedHostApp,
@@ -296,9 +299,9 @@ class MainActivity : AppCompatActivity() {
                         onScreenMirrorIpChange = { (application as LabApplication).setScreenMirrorIp(it) },
                         onScreenMirrorConnect = { startScreenMirror() },
                         onScreenMirrorStart = { startScreenMirror() },
-                        onScreenMirrorStop = { stopScreenStreamOnGlasses() },
-                        onScreenMirrorInstallScreenStream = { installScreenStreamToGlasses() },
-                        onScreenMirrorOpenScreenStream = { openScreenStreamOnGlasses() },
+                        onScreenMirrorStop = { stopRokidLinkOnGlasses() },
+                        onScreenMirrorInstallRokidLink = { installRokidLinkToGlasses() },
+                        onScreenMirrorOpenRokidLink = { openRokidLinkOnGlasses() },
                         onScreenMirrorRetry = { },
                         onScreenMirrorBack = { },
                         onPhoneMirrorIpChange = { (application as LabApplication).setPhoneMirrorIp(it) },
@@ -308,16 +311,16 @@ class MainActivity : AppCompatActivity() {
                             if (phoneMirrorState.isMirroring) stopPhoneMirror() else startPhoneMirror()
                         },
                         onPhoneMirrorStop = { stopPhoneMirror() },
-                        onPhoneMirrorInstallScreenStream = { installScreenStreamToGlasses() },
-                        onPhoneMirrorOpenScreenStream = { openScreenStreamOnGlasses() },
+                        onPhoneMirrorInstallRokidLink = { installRokidLinkToGlasses() },
+                        onPhoneMirrorOpenRokidLink = { openRokidLinkOnGlasses() },
                         onPhoneMirrorRetry = { },
                         onPhoneMirrorBack = { },
                         onFileManagerIpChange = { (application as LabApplication).setFileManagerIp(it) },
                         onFileManagerConnect = { startFileManager() },
                         onFileManagerDisconnect = { },
-                        onFileManagerStop = { stopScreenStreamOnGlasses() },
-                        onFileManagerInstallScreenStream = { installScreenStreamToGlasses() },
-                        onFileManagerOpenScreenStream = { openScreenStreamOnGlasses() },
+                        onFileManagerStop = { stopRokidLinkOnGlasses() },
+                        onFileManagerInstallRokidLink = { installRokidLinkToGlasses() },
+                        onFileManagerOpenRokidLink = { openRokidLinkOnGlasses() },
                         onFileManagerRetry = { },
                         onFileManagerBack = { },
                         onFileManagerNavigateTo = { },
@@ -329,7 +332,7 @@ class MainActivity : AppCompatActivity() {
                         onFileManagerRenameFile = { _, _ -> },
                         onCancelDownload = { key -> cancelDownload(key) },
                         onExitApp = { finishAndRemoveTask() },
-                        onSettingsReinstallScreenStream = { reinstallScreenStreamOnGlasses() },
+                        onSettingsReinstallRokidLink = { reinstallRokidLinkOnGlasses() },
                     ),
                     iconLoader = iconLoader,
                     mediaLoader = mediaLoader,
@@ -412,11 +415,11 @@ class MainActivity : AppCompatActivity() {
         preferHighRefreshRate()
         installCheckTick += 1
         refreshPhoneInstallStates()
-        // 重置 ScreenStream 运行状态，让用户重新点击开始按钮
+        // 重置 RokidLink 运行状态，让用户重新点击开始按钮
         // 这样可以确保每次进入时按钮文字正确
-        screenMirrorState = screenMirrorState.copy(screenStreamRunning = false)
-        phoneMirrorState = phoneMirrorState.copy(screenStreamRunning = false)
-        fileManagerState = fileManagerState.copy(screenStreamRunning = false)
+        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
+        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
+        fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
     }
 
     private fun preferHighRefreshRate() {
@@ -860,52 +863,52 @@ class MainActivity : AppCompatActivity() {
         log("已取消下载：$key")
     }
 
-    private fun checkScreenStreamInstallation() {
+    private fun checkRokidLinkInstallation() {
         val app = application as LabApplication
         // 跳过持久化缓存兜底——每次都等 SDK 查询结果，避免卸载后仍显示"已安装"
         
         // 运行时缓存：有结果直接用
-        if (app.screenStreamInstalled != null) {
-            screenMirrorState = screenMirrorState.copy(screenStreamInstalled = app.screenStreamInstalled)
-            phoneMirrorState = phoneMirrorState.copy(screenStreamInstalled = app.screenStreamInstalled)
-            fileManagerState = fileManagerState.copy(screenStreamInstalled = app.screenStreamInstalled)
+        if (app.rokidLinkInstalled != null) {
+            screenMirrorState = screenMirrorState.copy(rokidLinkInstalled = app.rokidLinkInstalled)
+            phoneMirrorState = phoneMirrorState.copy(rokidLinkInstalled = app.rokidLinkInstalled)
+            fileManagerState = fileManagerState.copy(rokidLinkInstalled = app.rokidLinkInstalled)
             return
         }
         
         // SDK 查询
         if (!cxrL.hasAuthorization()) return
         
-        if (isCheckingScreenStream) return
-        isCheckingScreenStream = true
+        if (isCheckingRokidLink) return
+        isCheckingRokidLink = true
         
         lifecycleScope.launch {
             cxrL.queryInstalledApps(
-                packageNames = listOf("com.rokidlab.screenservice"),
+                packageNames = listOf("com.rokidlab.rokidlink"),
                 onResult = { packageName, installed ->
-                    app.setScreenStreamInstalled(installed)
-                    screenMirrorState = screenMirrorState.copy(screenStreamInstalled = installed)
-                    phoneMirrorState = phoneMirrorState.copy(screenStreamInstalled = installed)
-                    fileManagerState = fileManagerState.copy(screenStreamInstalled = installed)
+                    app.setRokidLinkInstalled(installed)
+                    screenMirrorState = screenMirrorState.copy(rokidLinkInstalled = installed)
+                    phoneMirrorState = phoneMirrorState.copy(rokidLinkInstalled = installed)
+                    fileManagerState = fileManagerState.copy(rokidLinkInstalled = installed)
                 },
                 onComplete = {
-                    isCheckingScreenStream = false
+                    isCheckingRokidLink = false
                 }
             )
         }
     }
 
-    private fun installScreenStreamToGlasses() {
+    private fun installRokidLinkToGlasses() {
         runWithPrerequisites {
             lifecycleScope.launch {
                 updateBusy(true)
-                log("正在安装 ScreenStream 到眼镜...")
-                screenMirrorState = screenMirrorState.copy(isInstallingScreenStream = true)
-                phoneMirrorState = phoneMirrorState.copy(isInstallingScreenStream = true)
-                fileManagerState = fileManagerState.copy(isInstallingScreenStream = true)
+                log("正在安装 RokidLink 到眼镜...")
+                screenMirrorState = screenMirrorState.copy(isInstallingRokidLink = true)
+                phoneMirrorState = phoneMirrorState.copy(isInstallingRokidLink = true)
+                fileManagerState = fileManagerState.copy(isInstallingRokidLink = true)
                 
                 runCatching {
-                    val apkInputStream = assets.open("glasses-screen-service.apk")
-                    val tempFile = File(cacheDir, "glasses-screen-service.apk")
+                    val apkInputStream = assets.open("RokidLink.apk")
+                    val tempFile = File(cacheDir, "RokidLink.apk")
                     apkInputStream.use { input ->
                         tempFile.outputStream().use { output ->
                             input.copyTo(output)
@@ -914,91 +917,99 @@ class MainActivity : AppCompatActivity() {
                     cxrL.installApk(tempFile) { installed ->
                         runOnUiThread {
                             screenMirrorState = screenMirrorState.copy(
-                                screenStreamInstalled = installed,
-                                isInstallingScreenStream = false
+                                rokidLinkInstalled = installed,
+                                isInstallingRokidLink = false
                             )
                             phoneMirrorState = phoneMirrorState.copy(
-                                screenStreamInstalled = installed,
-                                isInstallingScreenStream = false
+                                rokidLinkInstalled = installed,
+                                isInstallingRokidLink = false
                             )
                             fileManagerState = fileManagerState.copy(
-                                screenStreamInstalled = installed,
-                                isInstallingScreenStream = false
+                                rokidLinkInstalled = installed,
+                                isInstallingRokidLink = false
                             )
-                            (application as LabApplication).setScreenStreamInstalled(installed)
+                            (application as LabApplication).setRokidLinkInstalled(installed)
                             updateBusy(false)
-                            log(if (installed) "ScreenStream 安装成功" else "ScreenStream 安装失败")
+                            if (installed) {
+                                settingsReinstallError = null
+                                log("RokidLink 安装成功")
+                            } else {
+                                settingsReinstallError = "RokidLink 安装失败，请检查眼镜连接后重试"
+                                log(settingsReinstallError!!)
+                            }
                         }
                         tempFile.delete()
                     }
                 }.onFailure { e ->
-                    log("安装 ScreenStream 失败: ${e.message}")
-                    screenMirrorState = screenMirrorState.copy(isInstallingScreenStream = false)
-                    phoneMirrorState = phoneMirrorState.copy(isInstallingScreenStream = false)
-                    fileManagerState = fileManagerState.copy(isInstallingScreenStream = false)
+                    settingsReinstallError = "安装 RokidLink 失败: ${e.message}"
+                    log(settingsReinstallError!!)
+                    screenMirrorState = screenMirrorState.copy(isInstallingRokidLink = false)
+                    phoneMirrorState = phoneMirrorState.copy(isInstallingRokidLink = false)
+                    fileManagerState = fileManagerState.copy(isInstallingRokidLink = false)
                     updateBusy(false)
                 }
             }
         }
     }
 
-    private fun openScreenStreamOnGlasses() {
+    private fun openRokidLinkOnGlasses() {
         runWithPrerequisites {
-            log("正在打开眼镜上的 ScreenStream...")
+            log("正在打开眼镜上的 RokidLink...")
             cxrL.launchApp(
-                packageName = "com.rokidlab.screenservice",
+                packageName = "com.rokidlab.rokidlink",
                 activityClass = ".MainActivity",
                 onLaunchResult = { success ->
                     if (success) {
-                        log("ScreenStream 启动成功")
-                        screenMirrorState = screenMirrorState.copy(screenStreamRunning = true)
-                        phoneMirrorState = phoneMirrorState.copy(screenStreamRunning = true)
-                        fileManagerState = fileManagerState.copy(screenStreamRunning = true)
+                        log("RokidLink 启动成功")
+                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = true)
+                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
+                        fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
                     } else {
-                        log("ScreenStream 启动失败")
+                        log("RokidLink 启动失败")
                     }
                 }
             )
         }
     }
 
-    private fun stopScreenStreamOnGlasses() {
+    private fun stopRokidLinkOnGlasses() {
         runWithPrerequisites {
-            log("正在关闭眼镜上的 ScreenStream...")
+            log("正在关闭眼镜上的 RokidLink...")
             cxrL.stopApp(
-                packageName = "com.rokidlab.screenservice",
+                packageName = "com.rokidlab.rokidlink",
                 onStopResult = { success ->
                     if (success) {
-                        log("ScreenStream 已关闭")
+                        log("RokidLink 已关闭")
                     } else {
-                        log("ScreenStream 关闭失败")
+                        log("RokidLink 关闭失败")
                     }
-                    screenMirrorState = screenMirrorState.copy(screenStreamRunning = false)
-                    phoneMirrorState = phoneMirrorState.copy(screenStreamRunning = false)
-                    fileManagerState = fileManagerState.copy(screenStreamRunning = false)
+                    screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
+                    phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
+                    fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
                 }
             )
         }
     }
 
-    private fun reinstallScreenStreamOnGlasses() {
+    private fun reinstallRokidLinkOnGlasses() {
+        settingsReinstallError = null
         runWithPrerequisites {
             lifecycleScope.launch {
-                // 先停止运行中的 ScreenStream
-                log("正在关闭眼镜上的 ScreenStream...")
+                // 先停止运行中的 RokidLink
+                log("正在关闭眼镜上的 RokidLink...")
                 cxrL.stopApp(
-                    packageName = "com.rokidlab.screenservice",
+                    packageName = "com.rokidlab.rokidlink",
                     onStopResult = { success ->
-                        log(if (success) "ScreenStream 已关闭" else "ScreenStream 关闭失败")
-                        screenMirrorState = screenMirrorState.copy(screenStreamRunning = false)
-                        phoneMirrorState = phoneMirrorState.copy(screenStreamRunning = false)
-                        fileManagerState = fileManagerState.copy(screenStreamRunning = false)
+                        log(if (success) "RokidLink 已关闭" else "RokidLink 关闭失败")
+                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
+                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
+                        fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
                     },
                 )
                 // 等待停止生效
                 delay(800)
                 // 重新安装
-                installScreenStreamToGlasses()
+                installRokidLinkToGlasses()
             }
         }
     }
@@ -1080,7 +1091,7 @@ class MainActivity : AppCompatActivity() {
         log("启动手机投屏")
         // 1. 通过 CXR-L 启动眼镜端投屏接收 Activity
         phoneMirrorState = phoneMirrorState.copy(connectionStatus = "正在启动眼镜端...")
-        cxrL.launchApp("com.rokidlab.screenservice", sendCmdAfterLaunch = "phone_mirror_launch") { launched ->
+        cxrL.launchApp("com.rokidlab.rokidlink", sendCmdAfterLaunch = "phone_mirror_launch") { launched ->
             if (launched) {
                 log("眼镜端已启动并发送投屏命令，请求屏幕录制权限")
                 // 2. 请求屏幕录制权限
@@ -1098,7 +1109,7 @@ class MainActivity : AppCompatActivity() {
         // 1. 停止投屏服务
         stopService(Intent(this, PhoneMirrorService::class.java))
         // 2. 通过 CXR-L 关闭眼镜端投屏
-        cxrL.stopApp("com.rokidlab.screenservice")
+        cxrL.stopApp("com.rokidlab.rokidlink")
         phoneMirrorState = phoneMirrorState.copy(
             isMirroring = false,
             connectionStatus = ""
@@ -1150,6 +1161,24 @@ internal fun MirrorSourceDialog(
                         .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // 源图标
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(BrewTextBright.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (mirror.iconRes != null) {
+                            Icon(
+                                painter = painterResource(mirror.iconRes),
+                                contentDescription = mirror.name,
+                                tint = Color.Unspecified,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             mirror.name,

@@ -316,7 +316,50 @@ ADB 工具页面的眼镜连接信息卡片。
 | 行高 | 约 44dp，多行自动折叠 |
 | 列表最大高度 | 420dp，超出可滚动 |
 
-### 2.13 全局错误提示组件
+### 2.13 SourceLine（来源行 — 应用详情页）
+
+定义：[store/DetailInfoSections.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/DetailInfoSections.kt) `SourceLine`
+
+| 属性 | 值 |
+|------|-----|
+| 高度 | 50dp |
+| 宽度 | fillMaxWidth |
+| 圆角 | 12dp |
+| 背景 | BrewPanelAlt alpha 0.88 |
+| 边框 | 1dp BrewBorder alpha 0.52, 圆角 12dp |
+| 图标容器 | 30×30dp, RoundedCornerShape(17dp), background=BrewPanel |
+| 图标 | 19dp, 根据 sourceUrl 动态选择 Gitee（ic_gitee_mark）或 GitHub（ic_github_mark） |
+| 来源名称 | "Gitee" / "GitHub", 15sp SemiBold BrewTextBright |
+| 作者 | 12sp BrewMuted, maxLines=1 |
+| 域名 | 11sp BrewGreen, maxLines=1, 仅显示域名部分（移除 https://） |
+| 箭头 | Icons.Outlined.KeyboardArrowRight, 21dp BrewMuted |
+
+**动态判断逻辑**：当 `app.sourceUrl` 包含 `gitee.com` 时显示 Gitee 图标 + 文字，否则显示 GitHub 图标 + 文字。
+
+### 2.14 MirrorSourceDialog（商店源切换对话框）
+
+定义：[app/MainActivity.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/app/MainActivity.kt) `MirrorSourceDialog`
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | Dialog RoundedCornerShape(20dp) |
+| 容器色 | BrewBg |
+| 内边距 | 24dp |
+| 标题 | "切换源" 20sp Bold BrewTextBright |
+| 源列表项 | 每项高约 60dp, RoundedCornerShape(12dp) |
+| 选中态 | 背景 BrewGreen alpha 0.12, 边框 1dp BrewGreenDim, 附加 ✓ 图标 |
+| 未选中态 | 背景透明 |
+| 源图标 | 28×28dp 圆角 6dp, 半透明白色背景 |
+| 源名称 | 16sp SemiBold, 选中=BrewGreen / 未选中=BrewTextBright |
+| 源描述 | 13sp BrewMuted |
+
+**源列表**：
+| 源 | 图标资源 | 图标内容 |
+|:---|:--------:|:--------|
+| Gitee | `ic_gitee_mark` | 红色圆形背景 + 白色 G 字 |
+| GitHub | `ic_github_mark` | 白色 GitHub Octocat |
+
+### 2.15 全局错误提示组件
 
 定义：[design/DesignComponents.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/design/DesignComponents.kt)
 

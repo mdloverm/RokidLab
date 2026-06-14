@@ -40,6 +40,9 @@ internal fun HidGamepadModule(
             if (state == BluetoothHidManager.STATE_DISCONNECTED && isConnecting) {
                 isConnecting = false
             }
+            if (state == BluetoothHidManager.STATE_RETRY_FAILED) {
+                isConnecting = false
+            }
             if (state == BluetoothHidManager.STATE_CONNECTED) {
                 isConnecting = false
                 bondedDevices = hidManager.getPairedDevices()
@@ -125,6 +128,7 @@ private fun DeviceConnectionCard(state: Int, device: BluetoothDevice?, connectin
         connecting -> "正在连接..." to BrewWarning
         state == BluetoothHidManager.STATE_CONNECTED -> "已连接" to BrewSuccess
         state == BluetoothHidManager.STATE_CONNECTING -> "连接中..." to BrewWarning
+        state == BluetoothHidManager.STATE_RETRY_FAILED -> "重连失败，请重启眼镜蓝牙" to BrewRed
         else -> "未连接" to BrewMuted
     }
     val devName = device?.name ?: device?.address ?: "—"

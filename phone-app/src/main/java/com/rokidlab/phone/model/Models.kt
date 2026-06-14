@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.model
+package com.rokidlab.phone.model
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import com.rokidlab.phone.R
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -145,6 +146,8 @@ data class MirrorSource(
     val name: String,
     val url: String,
     val description: String,
+    val iconRes: Int? = null,
+    val iconUrl: String? = null,
 )
 
 object BrewIndex {
@@ -157,12 +160,15 @@ object BrewIndex {
             name = "Gitee",
             url = "https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/dist/apps.v1.json",
             description = "Gitee 镜像源（国内访问更快）",
+            iconRes = R.drawable.ic_gitee_mark,
+            iconUrl = "https://gitee.com/static/images/logo.svg",
         ),
         MirrorSource(
             id = "github",
             name = "GitHub",
             url = "https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/dist/apps.v1.json",
             description = "官方 GitHub 镜像源",
+            iconRes = R.drawable.ic_github_mark,
         ),
     )
 
@@ -483,7 +489,7 @@ data class PrerequisitesState(
     val hostApp: RokidHostApp? = null,
     val mirrorSourceSelected: Boolean = false,
     val authorized: Boolean = false,
-    val screenStreamInstalled: Boolean = false,
+    val rokidLinkInstalled: Boolean = false,
 ) {
     val currentGuideStep: GuideStep
         get() = when {
@@ -499,9 +505,9 @@ data class PrerequisitesState(
 
 // ===== 屏幕镜像状态 =====
 data class ScreenMirrorState(
-    val screenStreamInstalled: Boolean? = null,
-    val isInstallingScreenStream: Boolean = false,
-    val screenStreamRunning: Boolean = false,
+    val rokidLinkInstalled: Boolean? = null,
+    val isInstallingRokidLink: Boolean = false,
+    val rokidLinkRunning: Boolean = false,
     val isConnecting: Boolean = false,
     val isStreaming: Boolean = false,
     val connectionStatus: String = "",
@@ -511,9 +517,9 @@ data class ScreenMirrorState(
 
 // ===== 手机投屏状态 =====
 data class PhoneMirrorState(
-    val screenStreamInstalled: Boolean? = null,
-    val isInstallingScreenStream: Boolean = false,
-    val screenStreamRunning: Boolean = false,
+    val rokidLinkInstalled: Boolean? = null,
+    val isInstallingRokidLink: Boolean = false,
+    val rokidLinkRunning: Boolean = false,
     val isConnecting: Boolean = false,
     val isStreaming: Boolean = false,
     val connectionStatus: String = "",
@@ -525,9 +531,9 @@ data class PhoneMirrorState(
 
 // ===== 文件管理状态 =====
 data class FileManagerState(
-    val screenStreamInstalled: Boolean? = null,
-    val isInstallingScreenStream: Boolean = false,
-    val screenStreamRunning: Boolean = false,
+    val rokidLinkInstalled: Boolean? = null,
+    val isInstallingRokidLink: Boolean = false,
+    val rokidLinkRunning: Boolean = false,
     val isConnecting: Boolean = false,
     val isConnected: Boolean = false,
     val connectionError: String? = null,

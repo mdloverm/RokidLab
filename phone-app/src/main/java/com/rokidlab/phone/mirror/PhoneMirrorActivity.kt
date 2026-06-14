@@ -15,7 +15,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.util.Log
@@ -69,7 +68,6 @@ class PhoneMirrorActivity : ComponentActivity() {
     private var isStreaming by mutableStateOf(false)
     private var connectionStatus by mutableStateOf("")
     private var connectionFailed by mutableStateOf(false)
-    private var mediaProjection: MediaProjection? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -283,8 +281,6 @@ class PhoneMirrorActivity : ComponentActivity() {
 
     private fun stopStreaming() {
         isStreaming = false
-        mediaProjection?.stop()
-        mediaProjection = null
         finish()
     }
 

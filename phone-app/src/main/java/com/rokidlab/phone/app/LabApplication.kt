@@ -24,11 +24,11 @@ class LabApplication : Application() {
     lateinit var hidManager: BluetoothHidManager
         private set
 
-    // 运行时 ScreenStream 安装状态缓存
-    var screenStreamInstalled: Boolean? = null
+    // 运行时 RokidLink 安装状态缓存
+    var rokidLinkInstalled: Boolean? = null
 
     // 持久化安装标记：一经安装成功永不清除
-    var screenStreamEverInstalled: Boolean = false
+    var rokidLinkEverInstalled: Boolean = false
         private set
 
     // ===== 全局 IP 地址管理 =====
@@ -57,7 +57,7 @@ class LabApplication : Application() {
         fileManagerIp = prefs.getString("file_manager_ip", "192.168.1.168") ?: "192.168.1.168"
 
         // 恢复持久化安装标记（仅保留标记，不等同于当前已安装）
-        screenStreamEverInstalled = prefs.getBoolean("screenstream_ever_installed", false)
+        rokidLinkEverInstalled = prefs.getBoolean("rokidlink_ever_installed", false)
 
         // 创建通知渠道（必须提前创建，否则手机系统设置中通知开关不可用）
         createNotificationChannels()
@@ -100,13 +100,13 @@ class LabApplication : Application() {
         prefs.edit().putString("file_manager_ip", ip).apply()
     }
 
-    fun setScreenStreamInstalled(installed: Boolean) {
-        screenStreamInstalled = installed
-        prefs.edit().putBoolean("screenstream_installed", installed).apply()
+    fun setRokidLinkInstalled(installed: Boolean) {
+        rokidLinkInstalled = installed
+        prefs.edit().putBoolean("rokidlink_installed", installed).apply()
         // 持久化标记只增不减：安装成功则永久记录
-        if (installed && !screenStreamEverInstalled) {
-            screenStreamEverInstalled = true
-            prefs.edit().putBoolean("screenstream_ever_installed", true).apply()
+        if (installed && !rokidLinkEverInstalled) {
+            rokidLinkEverInstalled = true
+            prefs.edit().putBoolean("rokidlink_ever_installed", true).apply()
         }
     }
 }

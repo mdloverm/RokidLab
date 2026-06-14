@@ -147,8 +147,8 @@ internal data class StoreActions(
     val onScreenMirrorConnect: () -> Unit,
     val onScreenMirrorStart: () -> Unit,
     val onScreenMirrorStop: () -> Unit,
-    val onScreenMirrorInstallScreenStream: () -> Unit,
-    val onScreenMirrorOpenScreenStream: () -> Unit,
+    val onScreenMirrorInstallRokidLink: () -> Unit,
+    val onScreenMirrorOpenRokidLink: () -> Unit,
     val onScreenMirrorRetry: () -> Unit,
     val onScreenMirrorBack: () -> Unit,
     // 手机投屏
@@ -157,8 +157,8 @@ internal data class StoreActions(
     val onPhoneMirrorConnect: () -> Unit,
     val onPhoneMirrorStart: () -> Unit,
     val onPhoneMirrorStop: () -> Unit,
-    val onPhoneMirrorInstallScreenStream: () -> Unit,
-    val onPhoneMirrorOpenScreenStream: () -> Unit,
+    val onPhoneMirrorInstallRokidLink: () -> Unit,
+    val onPhoneMirrorOpenRokidLink: () -> Unit,
     val onPhoneMirrorRetry: () -> Unit,
     val onPhoneMirrorBack: () -> Unit,
     // 文件管理
@@ -166,8 +166,8 @@ internal data class StoreActions(
     val onFileManagerConnect: () -> Unit,
     val onFileManagerDisconnect: () -> Unit,
     val onFileManagerStop: () -> Unit,
-    val onFileManagerInstallScreenStream: () -> Unit,
-    val onFileManagerOpenScreenStream: () -> Unit,
+    val onFileManagerInstallRokidLink: () -> Unit,
+    val onFileManagerOpenRokidLink: () -> Unit,
     val onFileManagerRetry: () -> Unit,
     val onFileManagerBack: () -> Unit,
     val onFileManagerNavigateTo: (String) -> Unit,
@@ -180,7 +180,7 @@ internal data class StoreActions(
     val onExitApp: () -> Unit,
     val onCancelDownload: (String) -> Unit,
     // 设置页 — 眼镜端服务
-    val onSettingsReinstallScreenStream: () -> Unit,
+    val onSettingsReinstallRokidLink: () -> Unit,
 )
 
 // ===== 应用入口 =====
@@ -355,12 +355,12 @@ private fun ScreenMirrorModule(
         ModuleHeader(title = "屏幕镜像", subtitle = "眼镜屏幕实时同步到手机", color = BrewCyan)
         Spacer(modifier = Modifier.height(24.dp))
         
-        ScreenStreamStatusCard(
-            installed = state.screenMirrorState.screenStreamInstalled == true,
-            installing = state.screenMirrorState.isInstallingScreenStream,
-            running = state.screenMirrorState.screenStreamRunning,
-            onInstall = actions.onScreenMirrorInstallScreenStream,
-            onOpen = actions.onScreenMirrorOpenScreenStream,
+        RokidLinkStatusCard(
+            installed = state.screenMirrorState.rokidLinkInstalled == true,
+            installing = state.screenMirrorState.isInstallingRokidLink,
+            running = state.screenMirrorState.rokidLinkRunning,
+            onInstall = actions.onScreenMirrorInstallRokidLink,
+            onOpen = actions.onScreenMirrorOpenRokidLink,
             onStop = actions.onScreenMirrorStop,
         )
         Spacer(modifier = Modifier.height(16.dp))
@@ -384,7 +384,7 @@ private fun ScreenMirrorModule(
             color = BrewCyan,
             instructions = listOf(
                 "1. 确保眼镜已连接 WiFi 并开启 ADB 网络调试（端口 5555）",
-                "2. 在眼镜上安装并启动 ScreenStream 应用",
+                "2. 在眼镜上安装并启动 RokidLink 应用",
                 "3. 输入眼镜的 IP 地址（默认 192.168.1.168）",
                 "4. 点击「开始镜像」按钮",
                 "5. 眼镜屏幕将实时显示在手机上",
@@ -439,12 +439,12 @@ private fun PhoneMirrorModule(
             }
         } else {
             // 配置状态
-            ScreenStreamStatusCard(
-                installed = state.phoneMirrorState.screenStreamInstalled == true,
-                installing = state.phoneMirrorState.isInstallingScreenStream,
-                running = state.phoneMirrorState.screenStreamRunning,
-                onInstall = actions.onPhoneMirrorInstallScreenStream,
-                onOpen = actions.onPhoneMirrorOpenScreenStream,
+            RokidLinkStatusCard(
+                installed = state.phoneMirrorState.rokidLinkInstalled == true,
+                installing = state.phoneMirrorState.isInstallingRokidLink,
+                running = state.phoneMirrorState.rokidLinkRunning,
+                onInstall = actions.onPhoneMirrorInstallRokidLink,
+                onOpen = actions.onPhoneMirrorOpenRokidLink,
                 onStop = actions.onPhoneMirrorStop,
             )
             Spacer(modifier = Modifier.height(16.dp))
@@ -494,12 +494,12 @@ private fun FileManagerModule(
         ModuleHeader(title = "文件管理", subtitle = "管理眼镜中的文件", color = BrewAmber)
         Spacer(modifier = Modifier.height(24.dp))
         
-        ScreenStreamStatusCard(
-            installed = state.fileManagerState.screenStreamInstalled == true,
-            installing = state.fileManagerState.isInstallingScreenStream,
-            running = state.fileManagerState.screenStreamRunning,
-            onInstall = actions.onFileManagerInstallScreenStream,
-            onOpen = actions.onFileManagerOpenScreenStream,
+        RokidLinkStatusCard(
+            installed = state.fileManagerState.rokidLinkInstalled == true,
+            installing = state.fileManagerState.isInstallingRokidLink,
+            running = state.fileManagerState.rokidLinkRunning,
+            onInstall = actions.onFileManagerInstallRokidLink,
+            onOpen = actions.onFileManagerOpenRokidLink,
             onStop = actions.onFileManagerStop,
         )
         Spacer(modifier = Modifier.height(16.dp))
@@ -530,7 +530,7 @@ private fun FileManagerModule(
             color = BrewAmber,
             instructions = listOf(
                 "1. 确保眼镜已连接 WiFi 并开启 ADB 网络调试（端口 5555）",
-                "2. 在眼镜上安装并启动 ScreenStream 应用",
+                "2. 在眼镜上安装并启动 RokidLink 应用",
                 "3. 输入眼镜的 IP 地址（默认 192.168.1.168）",
                 "4. 点击「打开文件管理器」按钮",
                 "5. 即可浏览和管理眼镜中的文件",
@@ -607,12 +607,12 @@ private fun AdbToolsModule(
         ModuleHeader(title = "ADB 工具", subtitle = "通过 ADB 管理眼镜/手机", color = BrewInfo)
         Spacer(modifier = Modifier.height(24.dp))
         
-        ScreenStreamStatusCard(
-            installed = state.fileManagerState.screenStreamInstalled == true,
-            installing = state.fileManagerState.isInstallingScreenStream,
-            running = state.fileManagerState.screenStreamRunning,
-            onInstall = actions.onFileManagerInstallScreenStream,
-            onOpen = actions.onFileManagerOpenScreenStream,
+        RokidLinkStatusCard(
+            installed = state.fileManagerState.rokidLinkInstalled == true,
+            installing = state.fileManagerState.isInstallingRokidLink,
+            running = state.fileManagerState.rokidLinkRunning,
+            onInstall = actions.onFileManagerInstallRokidLink,
+            onOpen = actions.onFileManagerOpenRokidLink,
             onStop = actions.onFileManagerStop,
         )
         Spacer(modifier = Modifier.height(16.dp))
@@ -1552,7 +1552,7 @@ private fun UsageInstructionsCard(
 // ===== Neo Brutalist 组件 =====
 
 @Composable
-private fun ScreenStreamStatusCard(installed: Boolean, installing: Boolean, running: Boolean = false, onInstall: () -> Unit, onOpen: () -> Unit, onStop: (() -> Unit)? = null) {
+private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running: Boolean = false, onInstall: () -> Unit, onOpen: () -> Unit, onStop: (() -> Unit)? = null) {
     val statusColor = when {
         running -> BrewWarning
         installing -> BrewCyan
@@ -1613,14 +1613,14 @@ private fun ScreenStreamStatusCard(installed: Boolean, installing: Boolean, runn
                 )
                 Column {
                     Text(
-                        text = "SCREENSTREAM $statusText",
+                        text = "ROKIDLINK $statusText",
                         color = BrewBg,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 2.sp,
                     )
                     Text(
-                        text = "投屏和文件管理功能必需",
+                        text = "投屏、文件管理和 ADB 功能必需",
                         color = BrewBg.copy(alpha = 0.7f),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
@@ -1657,19 +1657,19 @@ private fun ScreenStreamStatusCard(installed: Boolean, installing: Boolean, runn
                 }
             } else if (running) {
                 BrutalButton(
-                    label = "● 停止 ScreenStream",
+                    label = "● 停止 RokidLink",
                     color = BrewRed,
                     onClick = onStop ?: {},
                 )
             } else if (!installed) {
                 BrutalButton(
-                    label = "● 安装 ScreenStream",
+                    label = "● 安装 RokidLink",
                     color = BrewAmber,
                     onClick = onInstall,
                 )
             } else {
                 BrutalButton(
-                    label = "▶ 启动 ScreenStream",
+                    label = "▶ 启动 RokidLink",
                     color = BrewSuccess,
                     onClick = onOpen,
                 )

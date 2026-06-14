@@ -290,6 +290,14 @@ internal fun WhatsNewSection(app: BrewApp, modifier: Modifier = Modifier) {
 @Composable
 internal fun SourceLine(app: BrewApp, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val isGitee = app.sourceUrl?.contains("gitee.com") == true
+    val sourceIcon = if (isGitee) R.drawable.ic_gitee_mark else R.drawable.ic_github_mark
+    val sourceName = if (isGitee) "Gitee" else "GitHub"
+    val sourceHost = app.sourceUrl
+        ?.removePrefix("https://")
+        ?.removePrefix("http://")
+        ?.substringBefore("/")
+        ?: ""
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -313,17 +321,17 @@ internal fun SourceLine(app: BrewApp, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .size(30.dp)
                 .clip(RoundedCornerShape(17.dp))
-                .background(BrewTextBright),
+                .background(BrewPanel),
             contentAlignment = Alignment.Center,
         ) {
             Image(
-                painter = painterResource(R.drawable.ic_github_mark),
-                contentDescription = "GitHub",
+                painter = painterResource(sourceIcon),
+                contentDescription = sourceName,
                 modifier = Modifier.size(19.dp),
             )
         }
         Spacer(Modifier.width(12.dp))
-        Text("GitHub", color = BrewTextBright, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(sourceName, color = BrewTextBright, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.width(10.dp))
         Text(
             app.author,
@@ -336,7 +344,7 @@ internal fun SourceLine(app: BrewApp, modifier: Modifier = Modifier) {
         app.sourceUrl?.let { sourceUrl ->
             Spacer(Modifier.width(8.dp))
             Text(
-                sourceUrl.removePrefix("https://"),
+                sourceHost,
                 color = BrewGreen,
                 fontSize = 11.sp,
                 maxLines = 1,

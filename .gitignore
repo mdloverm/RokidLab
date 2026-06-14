@@ -25,3 +25,5 @@ local.properties
 *.bak
 gradle_error.txt
 test-kotlin-string.kt
+sembleDebug
+*debug.apk
