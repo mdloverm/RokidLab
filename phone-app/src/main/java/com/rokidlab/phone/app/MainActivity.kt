@@ -127,6 +127,20 @@ class MainActivity : AppCompatActivity() {
             if (permissions.all(::hasPermission)) consumePendingAction() else log("蓝牙权限被拒绝。")
         }
 
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            if (it) {
+                log("通知权限已授予")
+                // 授予后强制设置 appops 为 allow
+                runCatching {
+                    val pm = packageManager
+                    // Nothing extra needed - system handles it
+                }
+            } else {
+                log("通知权限被拒绝，可在系统设置中手动开启")
+            }
+        }
+
     private val enableBluetoothLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
             if (isBluetoothEnabled()) consumePendingAction() else log("蓝牙仍未启用。")
@@ -186,6 +200,11 @@ class MainActivity : AppCompatActivity() {
         preferHighRefreshRate()
 
         BrewIndex.initMirror(this)
+        try {
+            (application as LabApplication).hidManager.initialize()
+        } catch (_: Exception) {
+            // 设备不支持蓝牙 HID 时忽略
+        }
         downloader = ApkDownloader(this)
         iconLoader = IconLoader(this)
         mediaLoader = MediaLoader(this)
@@ -340,6 +359,36 @@ class MainActivity : AppCompatActivity() {
         }
         refreshStoreIndex(manual = false)
         log("就绪。安装眼镜 APK 前请先授权 ${selectedHostApp.displayName}。")
+        
+        // Android 13+ 请求通知权限（用于定时消息推送到眼镜）
+        requestNotificationPermission()
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (hasPermission(Manifest.permission.POST_NOTIFICATIONS)) return
+        log("请求通知权限...")
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        // MIUI 可能静默拒绝，启动后再次尝试打开设置页引导用户
+        lifecycleScope.launch {
+            delay(2000)
+            if (!hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+                log("通知权限未授予，引导用户手动开启")
+                openAppNotificationSettings()
+            }
+        }
+    }
+
+    private fun openAppNotificationSettings() {
+        try {
+            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = android.net.Uri.fromParts("package", packageName, null)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            log("无法打开通知设置: ${e.message}")
+        }
     }
 
     override fun onStart() {
@@ -536,6 +585,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         cxrL.cleanup()
+        (application as LabApplication).hidManager.destroy()
         super.onDestroy()
     }
 
@@ -1008,6 +1058,10 @@ class MainActivity : AppCompatActivity() {
         val action = pendingAction ?: return
         pendingAction = null
         action()
+        // 蓝牙权限就绪后重试 HID 注册
+        try {
+            (application as LabApplication).hidManager.retryRegisterApp()
+        } catch (_: Exception) { }
     }
 
     private fun hasPermission(permission: String): Boolean =

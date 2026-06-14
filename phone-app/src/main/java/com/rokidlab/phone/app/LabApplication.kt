@@ -1,10 +1,11 @@
-﻿package com.rokidlab.phone.app
+package com.rokidlab.phone.app
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.filemanager.*
 import com.rokidlab.phone.glasses.*
+import com.rokidlab.phone.hid.*
 import com.rokidlab.phone.mirror.*
 import com.rokidlab.phone.model.*
 import com.rokidlab.phone.network.*
@@ -12,10 +13,15 @@ import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
 import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.SharedPreferences
 
 class LabApplication : Application() {
     lateinit var cxrL: CxrLHiRokidSession
+        private set
+
+    lateinit var hidManager: BluetoothHidManager
         private set
 
     // 运行时 ScreenStream 安装状态缓存
@@ -39,6 +45,9 @@ class LabApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        hidManager = BluetoothHidManager(this)
+
         prefs = getSharedPreferences("rokidbrew", MODE_PRIVATE)
         
         // 从 SharedPreferences 恢复 IP 地址
@@ -49,6 +58,22 @@ class LabApplication : Application() {
 
         // 恢复持久化安装标记（仅保留标记，不等同于当前已安装）
         screenStreamEverInstalled = prefs.getBoolean("screenstream_ever_installed", false)
+
+        // 创建通知渠道（必须提前创建，否则手机系统设置中通知开关不可用）
+        createNotificationChannels()
+    }
+
+    private fun createNotificationChannels() {
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            val channel = NotificationChannel(
+                "timer_notify", "定时消息",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "来自 ADB 工具的定时消息"
+            }
+            nm.createNotificationChannel(channel)
+        } catch (_: Exception) { }
     }
 
     fun setCxrL(session: CxrLHiRokidSession) {

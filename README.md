@@ -1,13 +1,33 @@
 # RokidLab
 
-Rokid 眼镜配套手机应用，提供应用商店、屏幕镜像、手机投屏、文件管理等功能。
+Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具、屏幕镜像、手机投屏、文件管理等功能。
 
-[![Android](https://img.shields.io/badge/Android-3DDC84?logo=android)](https://github.com)
+[![Android](https://img.shields.io/badge/Android-9%2B-3DDC84?logo=android)](https://github.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7F52FF?logo=kotlin)](https://kotlinlang.org/)
 [![Compose](https://img.shields.io/badge/Jetpack_Compose-Material_3-4285F4?logo=jetpackcompose)](https://developer.android.com/compose)
 [![Gitee](https://img.shields.io/badge/Gitee-dlover1314-C71D23?logo=gitee)](https://gitee.com/dlover1314/RokidLab)
 
 ## 主要功能
+
+### 蓝牙手柄
+- 通过蓝牙 HID 协议将手机模拟为键盘/鼠标/游戏手柄
+- **鼠标模式**：手机屏幕作为触控板，控制眼镜光标
+- **游戏手柄模式**：多点触控模拟摇杆 + ABXY 按键
+- 智能重连：检测到快速断连时自动等待重试（3s→6s→9s→...→15s 封顶）
+- RFCOMM SPP 连接（兼容 RetroArch 蓝牙手柄）
+- 自动扫描并列出已配对的蓝牙设备
+
+### ADB 工具
+- 通过 WiFi 直接连接眼镜 ADB（无需 adb.exe），自实现完整 ADB TCP 协议
+- **应用管理**：
+  - 查看第三方/全部应用列表（可搜索过滤）
+  - 启动应用、卸载应用、冻结/解冻应用
+  - 提取应用 APK 到手机
+- **定时功能**：
+  - 定时消息：设定间隔和次数，通过 ADB 推送通知到眼镜（`cmd notification post` + 文件写入）
+  - 定时打开应用：周期性在眼镜上启动指定应用
+- **系统信息**：查看眼镜设备属性、电量信息
+- **输入模拟**：发送文本、按键、点击、滑动事件
 
 ### 应用商店
 - 浏览和搜索 Rokid 眼镜应用
@@ -32,14 +52,21 @@ Rokid 眼镜配套手机应用，提供应用商店、屏幕镜像、手机投�
 - 支持图片预览和文本查看（shell cat / 本地缓存）
 - APK 安装功能
 
+### 设置
+- 眼镜端 ScreenStream 服务管理（安装/重装/启动/停止）
+- 商店源切换
+- 主机应用切换
+- 应用版本和更新
+
 ## 技术栈
 
 - **语言**: Kotlin
 - **UI**: Jetpack Compose (Material 3)
 - **设计风格**: Velvet Dark — 丝绒暗调 × 油画色板（详见 [UI-DESIGN.md](./UI-DESIGN.md)）
-- **通信**: 
+- **通信**:
   - CXR-L SDK（手机-眼镜通信，用于安装/启动/卸载应用）
-  - ADB over TCP（自定义协议实现，无需 adb.exe，用于文件管理和屏幕镜像）
+  - ADB over TCP（自定义协议实现，无需 adb.exe，用于文件管理、ADB工具和屏幕镜像）
+  - 蓝牙 HID Device 协议（手机模拟键盘/鼠标/游戏手柄）
 - **投屏**: MediaProjection API + Socket 传输
 - **统一 HTTP 工具**: `HttpClient` 对象封装（替代裸 `HttpURLConnection`）
 - **最低版本**: Android 9 (API 28)
@@ -53,6 +80,16 @@ Rokid 眼镜配套手机应用，提供应用商店、屏幕镜像、手机投�
 - **shell service**: 通过 `"shell:<command>\u0000"` 格式执行远程 shell 命令
 - **sync 协议**: RECV/SEND/DATA/DONE/FAIL 命令实现文件上传下载
 - **流关闭处理**: 所有命令都正确消费服务端的 CLSE 响应，避免协议状态不同步
+- **ReentrantLock 保护**: 多协程并发执行 shell 命令时串行化，避免 socket 冲突
+
+## 蓝牙 HID 自实现协议
+
+项目使用 Android `BluetoothHidDevice` API 将手机模拟为蓝牙 HID 设备：
+
+- **HID 描述符**: 自定义报表描述符，支持键盘、鼠标、游戏手柄多模式
+- **自动重连**: 检测到 HID 连接秒断时，智能等待递增间隔后自动重试
+- **RGB 报表**: 鼠标模式使用增强 RGB 报表（模拟 16 位鼠标 + 滚轮 + 多媒体按键）
+- **游戏手柄**: 多点触控映射为摇杆值，触摸区域划分 ABXY 按键
 
 ## 项目结构
 
@@ -62,10 +99,11 @@ RokidLab/
 │   ├── src/main/
 │   │   ├── java/com/rokidlab/phone/
 │   │   │   ├── app/         主入口
-│   │   │   │   ├── MainActivity.kt        主入口、投屏控制、状态管理
-│   │   │   │   └── LabApplication.kt     全局 Application 状态
+│   │   │   │   ├── MainActivity.kt        主入口、投屏控制、状态管理、权限请求
+│   │   │   │   └── LabApplication.kt     全局 Application 状态、HID Manager
 │   │   │   ├── adb/         ADB 协议实现
-│   │   │   │   ├── AdbFileManagerClient.kt   文件管理/Shell ADB 客户端
+│   │   │   │   ├── AdbShellClient.kt      Shell 命令/应用管理/定时功能
+│   │   │   │   ├── AdbFileManagerClient.kt   文件管理 ADB 客户端
 │   │   │   │   └── AdbScreenMirrorClient.kt  屏幕镜像 ADB 客户端
 │   │   │   ├── design/      设计系统
 │   │   │   │   ├── StoreTheme.kt      配色/字体/主题（Velvet Dark）
@@ -78,6 +116,10 @@ RokidLab/
 │   │   │   │   ├── GuideScreen.kt               引导界面
 │   │   │   │   ├── FullCXRLinkCallback.kt       CXR-L 连接回调
 │   │   │   │   └── PhoneInstallResultReceiver.kt 安装结果接收器
+│   │   │   ├── hid/         蓝牙 HID
+│   │   │   │   ├── BluetoothHidManager.kt   HID 设备管理（注册/连接/报表发送）
+│   │   │   │   ├── HidGamepadScreen.kt      手柄/鼠标模式 UI
+│   │   │   │   └── GamepadActivity.kt       游戏手柄 Activity
 │   │   │   ├── mirror/      投屏模块
 │   │   │   │   ├── PhoneMirrorActivity.kt     手机投屏页面
 │   │   │   │   ├── PhoneMirrorService.kt      投屏前台 Service
@@ -94,7 +136,7 @@ RokidLab/
 │   │   │   │   ├── SettingsScreen.kt   设置界面
 │   │   │   │   └── SystemLogPanel.kt   日志面板
 │   │   │   ├── store/       商店 UI
-│   │   │   │   ├── StoreHomeScreen.kt    主界面入口
+│   │   │   │   ├── StoreHomeScreen.kt    主界面入口（含 ADB工具/底栏等全部页面）
 │   │   │   │   ├── StoreComponents.kt    通用 UI 组件
 │   │   │   │   ├── StoreInstallState.kt  安装状态组件
 │   │   │   │   ├── StoreMedia.kt         媒体/图标组件
@@ -151,19 +193,22 @@ adb install glasses-screen-service/build/outputs/apk/debug/glasses-screen-servic
 ## 使用指南
 
 1. 确保眼镜已连接到与手机相同的 WiFi 网络
-2. 在眼镜上启动 ScreenStream 应用（显示 IP 地址和 ADB 状态）
-3. 在手机端输入眼镜的 IP 地址（默认 `192.168.1.168`）
-4. 可选功能：
-   - **屏幕镜像**：点击「开始镜像」查看眼镜屏幕
-   - **手机投屏**：点击「开始投屏」将手机画面投射到眼镜
-   - **文件管理**：点击「打开文件管理器」浏览和管理眼镜文件
+2. 在手机端打开 RokidLab，按照引导授权并连接眼镜
+3. 导航栏分为七个模块：
    - **应用商店**：浏览并安装应用到手机或眼镜
+   - **屏幕镜像**：查看眼镜屏幕画面
+   - **手机投屏**：将手机画面投射到眼镜
+   - **文件管理**：浏览和管理眼镜文件
+   - **ADB 工具**：应用管理、定时消息/启动、系统信息
+   - **蓝牙手柄**：鼠标/游戏手柄模式控制眼镜
+   - **设置**：应用配置、服务管理
 
 ## 依赖
 
 - **CXR-L SDK** (`client-l-1.0.3.aar`) — 手机端与眼镜通信
 - **CXR-S SDK** (`cxr-service-bridge-1.0.aar`) — 眼镜端桥接服务
 - Jetpack Compose (Material 3) — 现代 UI 框架
+- 蓝牙 HID Device Profile — 系统 API（Android 9+）
 
 ## UI 设计
 
@@ -173,7 +218,7 @@ adb install glasses-screen-service/build/outputs/apk/debug/glasses-screen-servic
 - 暗色画布温暖不刺眼（`#0B0B0E` 底色）
 - 全站 JetBrains Mono 等宽字体
 - 统一 12dp 圆角、1dp 边框
-- 五模块五色取自油画色板
+- 七模块七色取自油画色板
 
 ## 许可
 

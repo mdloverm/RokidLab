@@ -32,12 +32,14 @@
 │  BrewMuted     │  #8A8780   风化石 — 辅助文字                        │
 │  BrewDim       │  #5C5952   深石色 — 禁用/淡出                      │
 ├────────────┼──────────────────────────────────────────────────────┤
-│  五模块五色 — 取自油画色板                                            │
+│  七模块七色 — 取自油画色板                                             │
 ├────────────┼──────────────────────────────────────────────────────┤
 │  BrewGreen     │  #E85D3F   商店 — 朱砂红（温暖主导）                  │
 │  BrewCyan      │  #5B8FB9   屏幕镜像 — 静谧蓝（冷调克制）              │
 │  BrewPurple    │  #D4A85C   手机投屏 — 画廊金（暖而有质感）             │
 │  BrewAmber     │  #A78BFA   文件管理 — 雾紫（柔和区分）                │
+│  BrewInfo      │  #5B8FB9   ADB工具 — 静谧蓝（与Cyan同值）            │
+│  BrewSuccess   │  #4ADE80   蓝牙手柄 — 翡翠绿                        │
 │  BrewMagenta   │  #8A8780   设置 — 石灰色（最低调）                   │
 ├────────────┼──────────────────────────────────────────────────────┤
 │  功能色                                                             │
@@ -240,12 +242,12 @@
 | 高度 | 64dp |
 | 背景 | BrewPanel, 圆角 12dp |
 | 边框 | 1dp BrewBorder |
-| 五个按钮等宽 | weight(1f) |
-| 选中态 | 背景=模块色, 文字=BrewTextBright（文件管理 BrewAmber 用 BrewBg 反色） |
+| 七个按钮等宽 | weight(1f) |
+| 选中态 | 背景=模块色, 文字=BrewTextBright |
 | 未选中态 | 背景=BrewPanel, 文字=BrewMuted |
 | 文字 | 10sp Bold, letterSpacing 1sp |
 
-**五模块映射：**
+**七模块映射（水平排列，超出可左右滑动）：**
 
 | 页面 | label | color |
 |------|-------|-------|
@@ -253,6 +255,8 @@
 | SCREEN_MIRROR | "屏幕镜像" | BrewCyan |
 | PHONE_MIRROR | "手机投屏" | BrewPurple |
 | FILE_MANAGER | "文件管理" | BrewAmber |
+| ADB_TOOLS | "ADB工具" | BrewInfo |
+| HID_GAMEPAD | "蓝牙手柄" | BrewSuccess |
 | SETTINGS | "设置" | BrewMagenta |
 
 **页面切换动画：** `AnimatedContent` fadeIn(200ms) + slideInHorizontally(1/4) ⨯ fadeOut + slideOutHorizontally
@@ -283,6 +287,34 @@
 | 内容 | 装饰线 48×4dp BrewRed + "确定要退出吗？" 14sp BrewText + "退出后所有投屏连接将断开。" 12sp BrewMuted |
 | 退出按钮 | 120×44dp, 背景 BrewBg, 边框 1dp BrewRed 12dp, 文字 "退出" 14sp Bold BrewRed |
 | 取消按钮 | 120×44dp, 背景 BrewBg, 边框 1dp BrewBorder 12dp, 文字 "取消" 14sp Bold BrewText |
+
+### 2.14 ConnectionInfoCard（设备信息卡片）
+
+ADB 工具页面的眼镜连接信息卡片。
+
+| 属性 | 值 |
+|------|-----|
+| 背景 | BrewPanel, 圆角 12dp |
+| 边框 | 1dp BrewBorder, 圆角 12dp |
+| 内边距 | 16dp |
+| 标签 | "ADB 连接" 10sp Bold uppercase, BrewMuted, letterSpacing 3sp |
+| 标签下线 | 32×3dp 模块色色块 |
+| 设备 IP | 18sp Bold, BrewInfo, letterSpacing 1sp |
+| 状态 | 14sp, 已连接→BrewSuccess "已连接" / 未连接→BrewError "未连接" |
+| 连接按钮 | BrutalButton "🔗 连接眼镜" / "断开" |
+
+### 2.15 AppMgrListItem（ADB 应用列表项）
+
+| 属性 | 值 |
+|------|-----|
+| 圆角 | 12dp |
+| 边框 | 1dp BrewBorder |
+| 内边距 | 12dp |
+| 包名 | 14sp Bold BrewTextBright, fontFamily=JetBrains Mono |
+| 选中标记 | 左侧 ✓ 图标 14sp Bold BrewGreen 或选中背景色 |
+| 冻结标记 | ❄️ 14sp 尾缀 |
+| 行高 | 约 44dp，多行自动折叠 |
+| 列表最大高度 | 420dp，超出可滚动 |
 
 ---
 
@@ -339,7 +371,73 @@ ModuleHeader "文件管理" / "管理眼镜中的文件" [BrewAmber #A78BFA]
 → UsageInstructionsCard [BrewAmber]
 ```
 
-### 3.5 Settings 页面（设置）
+### 3.5 ADB 工具页面
+
+```
+ModuleHeader "ADB 工具" / "眼镜应用管理与系统工具" [BrewInfo #5B8FB9]
+
+→ ConnectionInfoCard [BrewInfo]
+  IP 地址 | 状态 | 连接/断开按钮
+
+→ BrutalButton "📱 应用管理" [BrewCyan]
+    弹出 AppMgrDialog:
+    ┌─────────────────────────────────────┐
+    │ [第三方/全部]  [搜索...]       [↻]   │
+    ├─────────────────────────────────────┤
+    │ ✓ com.xxx.app                      │
+    │   com.yyy.service                  │
+    │   com.zzz.game  ❄️                 │
+    │ ...（最多显示 10 项，超出可下滑）     │
+    ├─────────────────────────────────────┤
+    │ 选中后: [▶启动] [🗑卸载] [❄冻结] [📦提取] │
+    └─────────────────────────────────────┘
+
+→ BrutalButton "⏱ 定时功能" [BrewPurple]
+    弹出 TimerDialog（窗口占 80%，可上下滑动）:
+    ┌──────────────────────────────────────┐
+    │ ── 定时消息 ──                       │
+    │ [输入消息内容...]                     │
+    │ 间隔(秒) [5] × 次数 [10]             │
+    │ [▶ 启动] 已发送: 0/10                │
+    │ ── 定时打开应用 ──                   │
+    │ [选择应用...] → 展开列表包名选择      │
+    │ 间隔(秒) [30] × 次数 [5]             │
+    │ [▶ 启动] 已执行: 0/5                 │
+    └──────────────────────────────────────┘
+
+→ BrutalButton "ℹ 设备信息" [BrewInfo]
+→ BrutalButton "🔌 系统属性" [BrewAmber]
+→ BrutalButton "🔋 电量信息" [BrewSuccess]
+→ UsageInstructionsCard [BrewInfo]
+```
+
+### 3.6 蓝牙手柄页面
+
+```
+ModuleHeader "蓝牙手柄" / "通过蓝牙控制眼镜光标和按键" [BrewSuccess #4ADE80]
+
+未连接时:
+→ BrutalButton "🔍 扫描设备" [BrewCyan]  / "■ 停止扫描" [BrewRed]
+→ 已配对设备列表 [可点击连接]
+
+连接成功后:
+→ [鼠标模式] / [游戏手柄] 切换按钮
+  选中: BrewSuccess 背景 + 白色文字
+  未选中: BrewPanel 背景 + BrewMuted 文字
+
+鼠标模式:
+  触控板区域: 320×240dp, BrewPanel 背景
+  → 触摸移动 = 鼠标移动
+  → 点击 = 左键
+  → 双指 = 右键
+  → 返回按钮/Home 按钮
+
+游戏手柄模式:
+  左半边: 摇杆区（触摸 = 方向）
+  右半边: ABXY 按键区（网格划分）
+```
+
+### 3.7 Settings 页面（设置）
 
 ```
 ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
@@ -419,6 +517,44 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 | 菜单按钮 | 38×38dp, 圆角 12dp, MoreVert icon 24dp |
 | 下拉菜单 | "切换源" / "安装 APK 到眼镜" |
 
+### 4.6 AppMgrDialog（应用管理对话框）
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | Dialog RoundedCornerShape(12dp) |
+| 容器色 | BrewPanel |
+| 宽度 | fillMaxWidth, padding horizontal 16dp |
+| 模式切换 | TextButton "第三方" / "全部", 选中态 BrewCyan Bold, 未选中 BrewMuted |
+| 搜索栏 | BasicTextField, 14sp BrewTextBright, placeholder "搜索包名..." |
+| 刷新按钮 | 点击 → 图标旋转动画 |
+| 列表 | Column + verticalScroll, maxHeight 420dp |
+| 列表项 | 包名 14sp Bold + 选中标记 ✓ / 冻结标记 ❄️ |
+| 选中操作栏 | Row, 四个按钮: ▶启动/🗑卸载/❄冻结/📦提取, text 11sp Bold |
+| 间距 | 组件间 12dp, 列表项 8dp |
+
+### 4.7 TimerDialog（定时功能对话框）
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | Dialog, 占屏幕约 80% 高度 |
+| 容器色 | BrewPanel |
+| 可滑动 | verticalScroll(rememberScrollState()) |
+| 内边距 | 24dp |
+
+**模块1 — 定时消息：**
+- 标签 "定时消息" 16sp Bold BrewPurple, letterSpacing 1sp
+- 输入框: OutlinedTextField, 消息内容, placeholder color=BrewDim
+- 行: "间隔(秒)" + OutlinedTextField 60dp 宽 + "×" + "次数" + OutlinedTextField 60dp 宽
+- BrutalButton "▶ 启动" [BrewPurple] / "■ 停止" [BrewRed]
+- 已发送计数: "已发送: {n}/{total}" 12sp BrewMuted
+
+**模块2 — 定时打开应用：**
+- 标签 "定时打开应用" 16sp Bold BrewCyan, letterSpacing 1sp
+- 应用选择器: 点击展开完整可滚动列表（显示包名）
+- 间隔/次数行同上
+- BrutalButton "▶ 启动" [BrewCyan] / "■ 停止" [BrewRed]
+- 已执行计数: "已执行: {n}/{total}" 12sp BrewMuted
+
 ---
 
 ## 五、动画体系
@@ -431,4 +567,4 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 | 安装中脉冲 | ScreenStreamStatusCard 安装中 | 偏移线 0↔8dp | infiniteRepeatable 800ms |
 | 安装完成闪动 | AppListItem 安装完毕 | alpha 0.25→0 | tween 600ms |
 | 连接庆祝脉冲 | 眼镜已连接 | 状态点 scale 1→1.6 + alpha 混合 | tween 400ms |
-| 刷新旋转 | Header 刷新按钮 | rotationZ 0→360 | infiniteRepeatable 800ms |
+| 刷新旋转 | Header/ADB 刷新按钮 | rotationZ 0→360 | infiniteRepeatable 800ms |

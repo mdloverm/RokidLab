@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.BLUETOOTH_HID_DEVICE" />
     
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
@@ -17,6 +18,7 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
         <package android:name="com.rokid.sprite.global.aiapp" />
@@ -61,6 +63,13 @@
             android:name=".filemanager.FileManagerActivity"
             android:exported="false"
             android:theme="@style/Theme.RokidLabPhone" />
+
+        <activity
+            android:name=".hid.GamepadActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize"
+            android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
 
         <receiver
             android:name=".glasses.PhoneInstallResultReceiver"
