@@ -14,6 +14,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rokidlab.phone.R
+import androidx.compose.ui.platform.LocalContext
 
 /**
  * 全局错误卡片 — 统一错误提示样式
@@ -25,6 +27,7 @@ internal fun BrewErrorCard(
     onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    val ctx = LocalContext.current
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -38,7 +41,7 @@ internal fun BrewErrorCard(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("错误", color = BrewRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(ctx.getString(R.string.error_label), color = BrewRed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(2.dp))
                 Text(message, color = BrewRed.copy(alpha = 0.9f), fontSize = 12.sp)
             }
@@ -50,7 +53,7 @@ internal fun BrewErrorCard(
                         .clickable { onRetry() }
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                 ) {
-                    Text("重试", color = BrewRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(ctx.getString(R.string.retry), color = BrewRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -67,6 +70,7 @@ fun BrewWarningCard(
     onAction: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    val ctx = LocalContext.current
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -80,7 +84,7 @@ fun BrewWarningCard(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("注意", color = BrewWarning, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text(ctx.getString(R.string.caution), color = BrewWarning, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(2.dp))
                 Text(message, color = BrewWarning.copy(alpha = 0.9f), fontSize = 12.sp)
             }
@@ -104,9 +108,11 @@ fun BrewWarningCard(
  */
 @Composable
 internal fun BrewLoadingCard(
-    message: String = "加载中...",
+    message: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val ctx = LocalContext.current
+    val text = message ?: ctx.getString(R.string.loading)
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -116,7 +122,7 @@ internal fun BrewLoadingCard(
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(message, color = BrewMuted, fontSize = 13.sp)
+        Text(text, color = BrewMuted, fontSize = 13.sp)
     }
 }
 
@@ -130,6 +136,7 @@ fun BrewResultCard(
     detail: String = "",
     modifier: Modifier = Modifier,
 ) {
+    val ctx = LocalContext.current
     val color = if (success) BrewSuccess else BrewRed
     Box(
         modifier = modifier
@@ -141,7 +148,7 @@ fun BrewResultCard(
     ) {
         Column {
             Text(
-                if (success) "成功" else "失败",
+                if (success) ctx.getString(R.string.success) else ctx.getString(R.string.failure),
                 color = color,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,

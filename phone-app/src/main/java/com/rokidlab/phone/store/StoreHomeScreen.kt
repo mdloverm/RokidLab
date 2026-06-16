@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import com.rokidlab.phone.R
 import android.util.Log
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.BackHandler
@@ -202,6 +203,7 @@ internal fun BrewPhoneApp(
     var showingFeaturedList by remember { mutableStateOf(false) }
     var appListExpanded by remember { mutableStateOf(false) }
     var updateSheetVisible by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
     
     val showGuide = !state.prerequisites.canInstallApps
 
@@ -252,7 +254,7 @@ internal fun BrewPhoneApp(
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "退出应用",
+                        text = ctx.getString(R.string.exit_app),
                         color = BrewRed,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
@@ -271,14 +273,14 @@ internal fun BrewPhoneApp(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "确定要退出吗？",
+                        text = ctx.getString(R.string.exit_confirm),
                         color = BrewText,
                         fontSize = 14.sp,
                         letterSpacing = 1.sp,
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "退出后所有投屏连接将断开。",
+                        text = ctx.getString(R.string.exit_confirm_desc),
                         color = BrewMuted,
                         fontSize = 12.sp,
                     )
@@ -298,7 +300,7 @@ internal fun BrewPhoneApp(
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(text = "退出", color = BrewRed, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                    Text(text = ctx.getString(R.string.exit), color = BrewRed, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 }
             },
             dismissButton = {
@@ -312,7 +314,7 @@ internal fun BrewPhoneApp(
                         .clickable { showExitDialog = false },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(text = "取消", color = BrewText, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                    Text(text = ctx.getString(R.string.cancel), color = BrewText, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 }
             },
         )
@@ -348,6 +350,7 @@ private fun ScreenMirrorModule(
     actions: StoreActions,
     app: LabApplication,
 ) {
+    val ctx = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -355,7 +358,7 @@ private fun ScreenMirrorModule(
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
-        ModuleHeader(title = "屏幕镜像", subtitle = "眼镜屏幕实时同步到手机", color = BrewCyan)
+        ModuleHeader(title = ctx.getString(R.string.screen_mirror_title), subtitle = ctx.getString(R.string.screen_mirror_subtitle), color = BrewCyan)
         Spacer(modifier = Modifier.height(24.dp))
         
         RokidLinkStatusCard(
@@ -365,11 +368,12 @@ private fun ScreenMirrorModule(
             onInstall = actions.onScreenMirrorInstallRokidLink,
             onOpen = actions.onScreenMirrorOpenRokidLink,
             onStop = actions.onScreenMirrorStop,
+            ctx = ctx,
         )
         Spacer(modifier = Modifier.height(16.dp))
         
         IpAddressInputCard(
-            label = "眼镜 IP 地址",
+            label = ctx.getString(R.string.ip_address_label),
             value = app.screenMirrorIp,
             onValueChange = actions.onScreenMirrorIpChange,
             color = BrewCyan,
@@ -377,7 +381,7 @@ private fun ScreenMirrorModule(
         Spacer(modifier = Modifier.height(16.dp))
         
         BrutalButton(
-            label = "▶ 开始镜像",
+            label = "▶ ${ctx.getString(R.string.start_mirror)}",
             color = BrewCyan,
             onClick = actions.onScreenMirrorStart,
         )
@@ -386,12 +390,13 @@ private fun ScreenMirrorModule(
         UsageInstructionsCard(
             color = BrewCyan,
             instructions = listOf(
-                "1. 确保眼镜已连接 WiFi 并开启 ADB 网络调试（端口 5555）",
-                "2. 在眼镜上安装并启动 RokidLink 应用",
-                "3. 输入眼镜的 IP 地址（默认 192.168.1.168）",
-                "4. 点击「开始镜像」按钮",
-                "5. 眼镜屏幕将实时显示在手机上",
-            )
+                "1. ${ctx.getString(R.string.connecting_adb_hint)}",
+                "2. ${String.format(ctx.getString(R.string.notification_content_hint), "RokidLink")}",
+                "3. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
+                "4. ▶ ${ctx.getString(R.string.start_mirror)}",
+                "5. ${ctx.getString(R.string.screen_mirror_subtitle)}",
+            ),
+            ctx = ctx,
         )
     }
 }
@@ -403,6 +408,7 @@ private fun PhoneMirrorModule(
     actions: StoreActions,
     app: LabApplication,
 ) {
+    val ctx = LocalContext.current
     val isMirroring = state.phoneMirrorState.isMirroring
     
     Column(
@@ -412,7 +418,7 @@ private fun PhoneMirrorModule(
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
-        ModuleHeader(title = "手机投屏", subtitle = "手机屏幕投射到眼镜", color = BrewPurple)
+        ModuleHeader(title = ctx.getString(R.string.phone_mirror_title), subtitle = ctx.getString(R.string.phone_mirror_subtitle), color = BrewPurple)
         Spacer(modifier = Modifier.height(24.dp))
         
         if (isMirroring) {
@@ -422,7 +428,7 @@ private fun PhoneMirrorModule(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    "投屏中",
+                    ctx.getString(R.string.mirroring),
                     color = BrewGreen,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
@@ -435,13 +441,12 @@ private fun PhoneMirrorModule(
                 )
                 Spacer(modifier = Modifier.height(24.dp))
                 BrutalButton(
-                    label = "■ 停止投屏",
+                    label = "■ ${ctx.getString(R.string.stop_mirror)}",
                     color = BrewRed,
                     onClick = actions.onPhoneMirrorStart,
                 )
             }
         } else {
-            // 配置状态
             RokidLinkStatusCard(
                 installed = state.phoneMirrorState.rokidLinkInstalled == true,
                 installing = state.phoneMirrorState.isInstallingRokidLink,
@@ -449,11 +454,12 @@ private fun PhoneMirrorModule(
                 onInstall = actions.onPhoneMirrorInstallRokidLink,
                 onOpen = actions.onPhoneMirrorOpenRokidLink,
                 onStop = actions.onPhoneMirrorStop,
+                ctx = ctx,
             )
             Spacer(modifier = Modifier.height(16.dp))
             
             IpAddressInputCard(
-                label = "眼镜 IP 地址",
+                label = ctx.getString(R.string.ip_address_label),
                 value = app.phoneMirrorIp,
                 onValueChange = actions.onPhoneMirrorIpChange,
                 color = BrewPurple,
@@ -461,7 +467,7 @@ private fun PhoneMirrorModule(
             Spacer(modifier = Modifier.height(16.dp))
             
             BrutalButton(
-                label = "▶ 开始投屏",
+                label = "▶ ${ctx.getString(R.string.start_cast)}",
                 color = BrewPurple,
                 onClick = actions.onPhoneMirrorStart,
             )
@@ -470,11 +476,12 @@ private fun PhoneMirrorModule(
             UsageInstructionsCard(
                 color = BrewPurple,
                 instructions = listOf(
-                    "1. 确保眼镜已连接 WiFi 并开启 ADB 网络调试",
-                    "2. 输入眼镜的 IP 地址（默认 192.168.1.168）",
-                    "3. 点击「开始投屏」，眼镜端将自动启动接收",
-                    "4. 手机屏幕将实时显示在眼镜上",
-                )
+                    "1. ${ctx.getString(R.string.connecting_adb_hint)}",
+                    "2. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
+                    "3. ▶ ${ctx.getString(R.string.start_cast)}",
+                    "4. ${ctx.getString(R.string.phone_mirror_subtitle)}",
+                ),
+                ctx = ctx,
             )
         }
     }
@@ -487,6 +494,7 @@ private fun FileManagerModule(
     actions: StoreActions,
     app: LabApplication,
 ) {
+    val ctx = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -494,7 +502,7 @@ private fun FileManagerModule(
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
-        ModuleHeader(title = "文件管理", subtitle = "管理眼镜中的文件", color = BrewAmber)
+        ModuleHeader(title = ctx.getString(R.string.file_manager_title), subtitle = ctx.getString(R.string.file_manager_subtitle), color = BrewAmber)
         Spacer(modifier = Modifier.height(24.dp))
         
         RokidLinkStatusCard(
@@ -504,11 +512,12 @@ private fun FileManagerModule(
             onInstall = actions.onFileManagerInstallRokidLink,
             onOpen = actions.onFileManagerOpenRokidLink,
             onStop = actions.onFileManagerStop,
+            ctx = ctx,
         )
         Spacer(modifier = Modifier.height(16.dp))
         
         IpAddressInputCard(
-            label = "眼镜 IP 地址",
+            label = ctx.getString(R.string.ip_address_label),
             value = app.fileManagerIp,
             onValueChange = actions.onFileManagerIpChange,
             color = BrewAmber,
@@ -516,14 +525,14 @@ private fun FileManagerModule(
         Spacer(modifier = Modifier.height(16.dp))
         
         BrutalButton(
-            label = "▶ 打开文件管理器",
+            label = "▶ ${ctx.getString(R.string.open_file_manager)}",
             color = BrewAmber,
             onClick = actions.onFileManagerConnect,
         )
         Spacer(modifier = Modifier.height(12.dp))
         
         BrutalButton(
-            label = "安装本地 APK",
+            label = ctx.getString(R.string.install_local_apk),
             color = BrewInfo,
             onClick = actions.onInstallApk,
         )
@@ -532,12 +541,13 @@ private fun FileManagerModule(
         UsageInstructionsCard(
             color = BrewAmber,
             instructions = listOf(
-                "1. 确保眼镜已连接 WiFi 并开启 ADB 网络调试（端口 5555）",
-                "2. 在眼镜上安装并启动 RokidLink 应用",
-                "3. 输入眼镜的 IP 地址（默认 192.168.1.168）",
-                "4. 点击「打开文件管理器」按钮",
-                "5. 即可浏览和管理眼镜中的文件",
-            )
+                "1. ${ctx.getString(R.string.connecting_adb_hint)}（5555）",
+                "2. RokidLink ${ctx.getString(R.string.install)}",
+                "3. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
+                "4. ▶ ${ctx.getString(R.string.open_file_manager)}",
+                "5. ${ctx.getString(R.string.file_manager_subtitle)}",
+            ),
+            ctx = ctx,
         )
     }
 }
@@ -558,6 +568,7 @@ private fun AdbToolsModule(
     actions: StoreActions,
     app: LabApplication,
 ) {
+    val ctx = LocalContext.current
     var connected by remember { mutableStateOf(false) }
     var client by remember { mutableStateOf<AdbShellClient?>(null) }
     val scope = rememberCoroutineScope()
@@ -607,7 +618,7 @@ private fun AdbToolsModule(
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
-        ModuleHeader(title = "ADB 工具", subtitle = "通过 ADB 管理眼镜/手机", color = BrewInfo)
+        ModuleHeader(title = ctx.getString(R.string.adb_tools_title), subtitle = ctx.getString(R.string.adb_tools_subtitle), color = BrewInfo)
         Spacer(modifier = Modifier.height(24.dp))
         
         RokidLinkStatusCard(
@@ -617,11 +628,12 @@ private fun AdbToolsModule(
             onInstall = actions.onFileManagerInstallRokidLink,
             onOpen = actions.onFileManagerOpenRokidLink,
             onStop = actions.onFileManagerStop,
+            ctx = ctx,
         )
         Spacer(modifier = Modifier.height(16.dp))
         
         IpAddressInputCard(
-            label = "眼镜 IP 地址",
+            label = ctx.getString(R.string.ip_address_label),
             value = app.fileManagerIp,
             onValueChange = actions.onFileManagerIpChange,
             color = BrewInfo,
@@ -629,23 +641,24 @@ private fun AdbToolsModule(
         Spacer(modifier = Modifier.height(24.dp))
         
         // 功能按钮
-        BrutalButton(label = "系统信息", color = BrewInfo, onClick = { showSysInfo = true })
+        BrutalButton(label = ctx.getString(R.string.system_info), color = BrewInfo, onClick = { showSysInfo = true })
         Spacer(modifier = Modifier.height(12.dp))
-        BrutalButton(label = "应用管理", color = BrewGreen, onClick = { showAppMgr = true })
+        BrutalButton(label = ctx.getString(R.string.app_manager), color = BrewGreen, onClick = { showAppMgr = true })
         Spacer(modifier = Modifier.height(12.dp))
-        BrutalButton(label = "定时功能", color = BrewWarning, onClick = { showTimer = true })
+        BrutalButton(label = ctx.getString(R.string.timer_func), color = BrewWarning, onClick = { showTimer = true })
         Spacer(modifier = Modifier.height(12.dp))
-        BrutalButton(label = "Shell命令", color = BrewMagenta, onClick = { showShell = true })
+        BrutalButton(label = "Shell", color = BrewMagenta, onClick = { showShell = true })
         Spacer(modifier = Modifier.height(24.dp))
         
         UsageInstructionsCard(
             color = BrewInfo,
             instructions = listOf(
-                "1. 确保眼镜已连接 WiFi 并开启 ADB 网络调试（端口 5555）",
-                "2. 输入眼镜 IP 地址后点击下方功能按钮",
-                "3. 将自动通过 ADB 连接到眼镜并打开对应工具",
-                "4. 可在弹窗中查看系统信息、管理应用等",
-            )
+                "1. ${ctx.getString(R.string.connecting_adb_hint)}（5555）",
+                "2. ${ctx.getString(R.string.ip_address_label)}",
+                "3. ${ctx.getString(R.string.system_info)}/${ctx.getString(R.string.app_manager)}/${ctx.getString(R.string.timer_func)}",
+                "4. ${ctx.getString(R.string.adb_tools_subtitle)}",
+            ),
+            ctx = ctx,
         )
     }
     
@@ -670,6 +683,7 @@ private fun AdbDialogContent(
     titleContent: (@Composable () -> Unit)? = null,
     content: @Composable (AdbShellClient) -> Unit,
 ) {
+    val ctx = LocalContext.current
     var status by remember { mutableStateOf(if (connected && client != null) "ready" else "connecting") }
     var errorMsg by remember { mutableStateOf("") }
     
@@ -684,7 +698,7 @@ private fun AdbDialogContent(
                     status = "ready"
                 } else {
                     status = "error"
-                    errorMsg = "无法连接到 ADB，请检查 IP 地址和网络"
+                    errorMsg = ctx.getString(R.string.connection_failed_adb)
                 }
             }
         }
@@ -707,7 +721,7 @@ private fun AdbDialogContent(
                     } else {
                         Text(title, color = color, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     }
-                    TextButton(onClick = onDismiss) { Text("关闭", color = BrewMuted) }
+                    TextButton(onClick = onDismiss) { Text(ctx.getString(R.string.close), color = BrewMuted) }
                 }
                 Spacer(Modifier.height(8.dp))
                 
@@ -715,24 +729,24 @@ private fun AdbDialogContent(
                     "connecting" -> {
                         Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("正在连接 ADB...", color = color, fontSize = 14.sp)
+                                Text(ctx.getString(R.string.connecting_adb), color = color, fontSize = 14.sp)
                                 Spacer(Modifier.height(8.dp))
-                                Text("请确保眼镜已开启 ADB 网络调试", color = BrewMuted, fontSize = 11.sp)
+                                Text(ctx.getString(R.string.connecting_adb_hint), color = BrewMuted, fontSize = 11.sp)
                             }
                         }
                     }
                     "error" -> {
                         Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("连接失败", color = BrewRed, fontSize = 14.sp)
+                                Text(ctx.getString(R.string.connection_failed_adb), color = BrewRed, fontSize = 14.sp)
                                 Spacer(Modifier.height(4.dp))
                                 Text(errorMsg, color = BrewMuted, fontSize = 11.sp)
                                 Spacer(Modifier.height(12.dp))
-                                BrutalButton(label = "重试", color = color, onClick = {
+                                BrutalButton(label = ctx.getString(R.string.retry), color = color, onClick = {
                                      status = "connecting"
                                      getOrConnect { c ->
-                                         if (c != null) status = "ready"
-                                         else { status = "error"; errorMsg = "连接失败，请检查 IP 和网络" }
+                                         if (c != null) { status = "ready" }
+                                         else { status = "error"; errorMsg = ctx.getString(R.string.connection_failed_adb) }
                                      }
                                  }, compact = true)
                             }
@@ -743,6 +757,7 @@ private fun AdbDialogContent(
                         content(c)
                     }
                 }
+            
             }
         }
     }
@@ -1535,6 +1550,7 @@ private fun IpAddressInputCard(
 private fun UsageInstructionsCard(
     color: Color = BrewAmber,
     instructions: List<String>,
+    ctx: android.content.Context,
 ) {
     Box(
         modifier = Modifier
@@ -1544,7 +1560,7 @@ private fun UsageInstructionsCard(
             .padding(16.dp),
     ) {
         Column {
-            Text(text = "使用说明", color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(bottom = 12.dp))
+            Text(text = ctx.getString(R.string.usage_instructions), color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(bottom = 12.dp))
             instructions.forEach { instruction ->
                 Text(text = instruction, color = BrewMuted, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(bottom = 4.dp))
             }
@@ -1555,7 +1571,7 @@ private fun UsageInstructionsCard(
 // ===== Neo Brutalist 组件 =====
 
 @Composable
-private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running: Boolean = false, onInstall: () -> Unit, onOpen: () -> Unit, onStop: (() -> Unit)? = null) {
+private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running: Boolean = false, onInstall: () -> Unit, onOpen: () -> Unit, onStop: (() -> Unit)? = null, ctx: android.content.Context) {
     val statusColor = when {
         running -> BrewWarning
         installing -> BrewCyan
@@ -1569,10 +1585,10 @@ private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running
         else -> BrewRed
     }
     val statusText = when {
-        running -> "运行中"
-        installing -> "安装中"
-        installed -> "已安装"
-        else -> "未安装"
+        running -> ctx.getString(R.string.running)
+        installing -> ctx.getString(R.string.installing)
+        installed -> ctx.getString(R.string.installed)
+        else -> ctx.getString(R.string.not_installed)
     }
     val statusIcon = when {
         running -> "▶"
@@ -1623,7 +1639,7 @@ private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running
                         letterSpacing = 2.sp,
                     )
                     Text(
-                        text = "投屏、文件管理和 ADB 功能必需",
+                        text = ctx.getString(R.string.glasses_services),
                         color = BrewBg.copy(alpha = 0.7f),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
@@ -1655,24 +1671,24 @@ private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(text = "⟳", color = BrewCyan, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 12.dp))
-                        Text(text = "安装中...", color = BrewCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+                        Text(text = ctx.getString(R.string.installing), color = BrewCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
                     }
                 }
             } else if (running) {
                 BrutalButton(
-                    label = "● 停止 RokidLink",
+                    label = "● ${ctx.getString(R.string.stop_mirror)} RokidLink",
                     color = BrewRed,
                     onClick = onStop ?: {},
                 )
             } else if (!installed) {
                 BrutalButton(
-                    label = "● 安装 RokidLink",
+                    label = "● ${ctx.getString(R.string.install)} RokidLink",
                     color = BrewAmber,
                     onClick = onInstall,
                 )
             } else {
                 BrutalButton(
-                    label = "▶ 启动 RokidLink",
+                    label = "▶ ${ctx.getString(R.string.launch)} RokidLink",
                     color = BrewSuccess,
                     onClick = onOpen,
                 )

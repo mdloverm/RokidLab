@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import com.rokidlab.phone.R
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.Build
@@ -57,7 +58,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.painterResource
-import com.rokidlab.phone.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -71,7 +71,8 @@ internal fun ConnectionPanel(
     onAuthorize: () -> Unit,
 ) {
     val hostVersion = rememberHostAppVersion(selectedHostApp)
-    val connectionStatus = connectionStatus(hostAppInstalled, cxrConnection, busy)
+    val ctx = LocalContext.current
+    val connectionStatus = connectionStatus(hostAppInstalled, cxrConnection, busy, ctx)
     // 已连接庆祝脉冲
     val celebrateScale by animateFloatAsState(
         targetValue = if (cxrConnection.connected) 1.6f else 1f,
@@ -90,7 +91,7 @@ internal fun ConnectionPanel(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Visibility, null, tint = BrewGreen, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
-                Text("眼镜连接", color = BrewTextBright, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(ctx.getString(R.string.glasses_connection), color = BrewTextBright, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
                 Box(
                     modifier = Modifier
@@ -100,7 +101,7 @@ internal fun ConnectionPanel(
                         .background(connectionStatus.color),
                 )
                 Spacer(Modifier.width(6.dp))
-                Text("CXR-L 链路", color = BrewMuted, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                Text(ctx.getString(R.string.cxr_link), color = BrewMuted, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                 Text(" / ", color = BrewMuted, fontSize = 11.sp)
                 Text(
                     connectionStatus.label,
@@ -151,7 +152,7 @@ internal fun ConnectionPanel(
                         )
                         Spacer(Modifier.width(5.dp))
                         Text(
-                            if (hostAppInstalled) "已安装" else "未安装",
+                            if (hostAppInstalled) ctx.getString(R.string.installed) else ctx.getString(R.string.not_installed),
                             color = if (hostAppInstalled) BrewGreen else BrewWarning,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
@@ -162,7 +163,7 @@ internal fun ConnectionPanel(
                     }
                 }
                 StoreActionButton(
-                    label = "授权",
+                    label = ctx.getString(R.string.authorize_btn),
                     primary = false,
                     enabled = !busy,
                     icon = { Icon(Icons.Outlined.Lock, null, modifier = Modifier.size(16.dp)) },
@@ -180,13 +181,14 @@ internal fun connectionStatus(
     hostAppInstalled: Boolean,
     connection: CxrConnectionState,
     busy: Boolean,
+    ctx: android.content.Context?,
 ): ConnectionStatus = when {
-    !hostAppInstalled -> ConnectionStatus("未安装", BrewWarning)
-    connection.connected -> ConnectionStatus("已连接", BrewCyan)
-    busy && connection.authorized -> ConnectionStatus("连接中", BrewCyan)
-    connection.connecting -> ConnectionStatus("连接中", BrewCyan)
-    connection.authorized -> ConnectionStatus("已授权", BrewGreen)
-    else -> ConnectionStatus("需要授权", BrewMuted)
+    !hostAppInstalled -> ConnectionStatus(ctx?.getString(R.string.not_installed) ?: "Not installed", BrewWarning)
+    connection.connected -> ConnectionStatus(ctx?.getString(R.string.connected) ?: "Connected", BrewCyan)
+    busy && connection.authorized -> ConnectionStatus(ctx?.getString(R.string.connecting) ?: "Connecting", BrewCyan)
+    connection.connecting -> ConnectionStatus(ctx?.getString(R.string.connecting) ?: "Connecting", BrewCyan)
+    connection.authorized -> ConnectionStatus(ctx?.getString(R.string.authorized) ?: "Authorized", BrewGreen)
+    else -> ConnectionStatus(ctx?.getString(R.string.need_authorize) ?: "Needs authorization", BrewMuted)
 }
 @Composable
 internal fun rememberHostAppVersion(hostApp: RokidHostApp): String? {

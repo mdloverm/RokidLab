@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import com.rokidlab.phone.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -38,6 +40,7 @@ internal fun GuideScreen(
     onSelectMirrorSource: () -> Unit,
     onAuthorize: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -46,9 +49,8 @@ internal fun GuideScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        // 标题
         Text(
-            text = "欢迎使用 Rokid Lab",
+            text = ctx.getString(R.string.guide_welcome),
             color = BrewGreen,
             fontSize = 32.sp,
             fontWeight = FontWeight.Bold,
@@ -65,38 +67,36 @@ internal fun GuideScreen(
         
         Spacer(modifier = Modifier.height(48.dp))
         
-        // 进度指示器
-        GuideProgressIndicator(currentStep = currentStep)
+        GuideProgressIndicator(currentStep = currentStep, ctx = ctx)
         
         Spacer(modifier = Modifier.height(48.dp))
         
-        // 根据当前步骤显示不同的引导内容
         when (currentStep) {
             GuideStep.SELECT_HOST_APP -> SelectHostAppStep(
                 selectedHostApp = selectedHostApp,
                 onSelectHostApp = onSelectHostApp,
+                ctx = ctx,
             )
             GuideStep.SELECT_MIRROR_SOURCE -> SelectMirrorSourceStep(
                 onSelectMirrorSource = onSelectMirrorSource,
+                ctx = ctx,
             )
             GuideStep.AUTHORIZE -> AuthorizeStep(
                 authorized = authorized,
                 onAuthorize = onAuthorize,
+                ctx = ctx,
             )
-            GuideStep.READY -> {
-                // 已完成所有步骤，不应该显示此界面
-            }
+            GuideStep.READY -> { }
         }
         
         Spacer(modifier = Modifier.height(32.dp))
         
-        // 步骤说明
-        StepInstructions(currentStep = currentStep)
+        StepInstructions(currentStep = currentStep, ctx = ctx)
     }
 }
 
 @Composable
-private fun GuideProgressIndicator(currentStep: GuideStep) {
+private fun GuideProgressIndicator(currentStep: GuideStep, ctx: android.content.Context) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -166,10 +166,10 @@ private fun GuideProgressIndicator(currentStep: GuideStep) {
             GuideStep.values().forEach { step ->
                 Text(
                     text = when (step) {
-                        GuideStep.SELECT_HOST_APP -> "选择版本"
-                        GuideStep.SELECT_MIRROR_SOURCE -> "选择源"
-                        GuideStep.AUTHORIZE -> "授权"
-                        GuideStep.READY -> "完成"
+                        GuideStep.SELECT_HOST_APP -> ctx.getString(R.string.guide_select_version_step)
+                        GuideStep.SELECT_MIRROR_SOURCE -> ctx.getString(R.string.guide_select_source_step)
+                        GuideStep.AUTHORIZE -> ctx.getString(R.string.guide_authorize_step)
+                        GuideStep.READY -> ctx.getString(R.string.guide_ready_step)
                     },
                     color = BrewMuted,
                     fontSize = 12.sp,
@@ -183,12 +183,13 @@ private fun GuideProgressIndicator(currentStep: GuideStep) {
 private fun SelectHostAppStep(
     selectedHostApp: RokidHostApp?,
     onSelectHostApp: (RokidHostApp) -> Unit,
+    ctx: android.content.Context,
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "第一步：选择 Rokid AI 版本",
+            text = ctx.getString(R.string.guide_step1_title_local),
             color = BrewText,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
@@ -197,7 +198,7 @@ private fun SelectHostAppStep(
         Spacer(modifier = Modifier.height(8.dp))
         
         Text(
-            text = "请选择您使用的 Rokid 眼镜型号",
+            text = ctx.getString(R.string.guide_step1_desc),
             color = BrewMuted,
             fontSize = 14.sp,
         )
@@ -238,12 +239,13 @@ private fun SelectHostAppStep(
 @Composable
 private fun SelectMirrorSourceStep(
     onSelectMirrorSource: () -> Unit,
+    ctx: android.content.Context,
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "第二步：选择商店源",
+            text = ctx.getString(R.string.guide_step2_title_local),
             color = BrewText,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
@@ -252,7 +254,7 @@ private fun SelectMirrorSourceStep(
         Spacer(modifier = Modifier.height(8.dp))
         
         Text(
-            text = "选择应用商店的镜像源",
+            text = ctx.getString(R.string.guide_step2_desc),
             color = BrewMuted,
             fontSize = 14.sp,
         )
@@ -269,7 +271,7 @@ private fun SelectMirrorSourceStep(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = "选择商店源",
+                text = ctx.getString(R.string.select_mirror_source),
                 color = BrewBg,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
@@ -282,12 +284,13 @@ private fun SelectMirrorSourceStep(
 private fun AuthorizeStep(
     authorized: Boolean,
     onAuthorize: () -> Unit,
+    ctx: android.content.Context,
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "第三步：授权眼镜",
+            text = ctx.getString(R.string.guide_step3_title_local),
             color = BrewText,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
@@ -296,7 +299,7 @@ private fun AuthorizeStep(
         Spacer(modifier = Modifier.height(8.dp))
         
         Text(
-            text = "需要在眼镜端授权此应用",
+            text = ctx.getString(R.string.guide_step3_desc),
             color = BrewMuted,
             fontSize = 14.sp,
         )
@@ -312,7 +315,7 @@ private fun AuthorizeStep(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "已授权 ✓",
+                    text = ctx.getString(R.string.authorized) + " ✓",
                     color = BrewBg,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
@@ -329,7 +332,7 @@ private fun AuthorizeStep(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "点击授权",
+                    text = ctx.getString(R.string.authorize_btn),
                     color = BrewBg,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
@@ -340,7 +343,7 @@ private fun AuthorizeStep(
         Spacer(modifier = Modifier.height(16.dp))
         
         Text(
-            text = "请确保眼镜已开启并运行 Rokid Space/Vision",
+            text = ctx.getString(R.string.guide_step3_desc),
             color = BrewMuted,
             fontSize = 12.sp,
             textAlign = TextAlign.Center,
@@ -349,28 +352,22 @@ private fun AuthorizeStep(
 }
 
 @Composable
-private fun StepInstructions(currentStep: GuideStep) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(BrewPanel, shape = RoundedCornerShape(12.dp))
-            .border(
-                width = 1.dp,
-                color = BrewBorder,
-                shape = RoundedCornerShape(12.dp),
-            )
-            .padding(16.dp),
+private fun StepInstructions(currentStep: GuideStep, ctx: android.content.Context) {
+    val instructions = when (currentStep) {
+        GuideStep.SELECT_HOST_APP -> ctx.getString(R.string.guide_step1_desc)
+        GuideStep.SELECT_MIRROR_SOURCE -> ctx.getString(R.string.guide_step2_desc)
+        GuideStep.AUTHORIZE -> ctx.getString(R.string.guide_step3_desc)
+        GuideStep.READY -> ""
+    }
+    
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = when (currentStep) {
-                GuideStep.SELECT_HOST_APP -> "提示：选择正确的眼镜型号可以确保应用兼容性"
-                GuideStep.SELECT_MIRROR_SOURCE -> "提示：如果默认源加载缓慢，可以尝试切换其他源"
-                GuideStep.AUTHORIZE -> "提示：授权后，应用将能够管理眼镜上的应用安装"
-                GuideStep.READY -> ""
-            },
+            text = instructions,
             color = BrewMuted,
-            fontSize = 12.sp,
-            lineHeight = 20.sp,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
         )
     }
 }

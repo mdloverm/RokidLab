@@ -14,6 +14,8 @@
     <string name="phone_mirror_subtitle">Cast phone screen to glasses</string>
     <string name="file_manager_title">File Manager</string>
     <string name="file_manager_subtitle">Manage files on glasses</string>
+    <string name="adb_tools_title">ADB Tools</string>
+    <string name="adb_tools_subtitle">Manage glasses/phone via ADB</string>
     <string name="system_info">System Info</string>
     <string name="app_manager">App Manager</string>
     <string name="timer_func">Timer</string>
@@ -49,6 +51,7 @@
     <string name="running">Running</string>
     <string name="update_available">Update available</string>
     <string name="no_update">Up to date</string>
+    <string name="app_count_format">%d apps</string>
 
     <!-- Settings -->
     <string name="settings">Settings</string>
@@ -79,6 +82,15 @@
     <string name="recording_started">Recording started</string>
     <string name="recording_saved">Recording saved to gallery</string>
     <string name="recording_failed">Recording failed</string>
+    <string name="start_mirror">Start Mirror</string>
+    <string name="start_cast">Start Cast</string>
+    <string name="open_file_manager">Open File Manager</string>
+    <string name="install_local_apk">Install Local APK</string>
+    <string name="mirroring">Casting</string>
+    <string name="starting">Starting…</string>
+    <string name="start_mirror_failed">Failed to start glasses service</string>
+    <string name="stop_mirror">Stop Casting</string>
+    <string name="ip_address_label">Glasses IP Address</string>
     <string name="phone_mirror_notification_title">Phone Cast</string>
     <string name="phone_mirror_notification_text">Casting screen to glasses</string>
     <string name="phone_mirror_notification_channel">Phone Cast</string>
@@ -94,11 +106,30 @@
     <string name="media_projection_required">Screen recording permission is required to cast phone screen to glasses.</string>
     <string name="media_projection_denied">Permission denied</string>
 
-    <!-- Status -->
-    <string name="mirroring">Casting</string>
-    <string name="starting">Starting…</string>
-    <string name="start_mirror_failed">Failed to start glasses service</string>
-    <string name="stop_mirror">Stop Casting</string>
+    <!-- ADB Dialog -->
+    <string name="connecting_adb">Connecting to ADB…</string>
+    <string name="connecting_adb_hint">Make sure glasses have ADB over TCP enabled</string>
+    <string name="connection_failed_adb">Connection failed</string>
+    <string name="fetching_sysinfo">Fetching system info…</string>
+    <string name="search_apps">Search apps…</string>
+    <string name="loading">Loading…</string>
+    <string name="updating">Updating…</string>
+    <string name="done_label">Done</string>
+    <string name="error_label">Error</string>
+    <string name="select_app_prompt">Tap to select app…</string>
+    <string name="loading_apps">Loading apps…</string>
+    <string name="shell_ready">Shell ready. Type a command and press Enter</string>
+    <string name="enter_command">Enter command…</string>
+    <string name="shell_prompt">Shell&gt;</string>
+    <string name="record_count_format">%d records</string>
+    <string name="executing">…</string>
+    <string name="seconds_x">sec ×</string>
+    <string name="stop_label_format">■ Stop (%d)</string>
+    <string name="start_label">▶ Start</string>
+    <string name="start_timer_launch">▶ Start Scheduled Launch</string>
+
+    <!-- Usage Instructions -->
+    <string name="usage_instructions">Usage Instructions</string>
 
     <!-- Timer -->
     <string name="timer_title">Timer Message</string>
@@ -109,6 +140,9 @@
     <string name="timer_select_app">Select App</string>
     <string name="timer_command">Command</string>
     <string name="timer_execute">Execute</string>
+    <string name="notification_content_hint">Enter message to display on glasses…</string>
+    <string name="timer_connected_status">Connected</string>
+    <string name="timer_disconnected_status">Disconnected</string>
 
     <!-- File Manager -->
     <string name="file_upload_success">Upload successful</string>
@@ -128,6 +162,34 @@
     <string name="notification_sent">Notification sent</string>
     <string name="glasses_install_success">Glasses installation successful.</string>
     <string name="glasses_install_failed">Glasses installation failed.</string>
-    <string name="glasses_uninstall_success">Glasses uninstallation successful.</string>
-    <string name="glasses_uninstall_failed">Glasses uninstallation failed.</string>
+
+    <!-- Mirror source dialog -->
+    <string name="select_mirror_source">Select Mirror Source</string>
+    <string name="mirror_github">GitHub</string>
+    <string name="mirror_gitee">Gitee</string>
+
+    <!-- Guide -->
+    <string name="guide_welcome">Welcome to Rokid Lab</string>
+    <string name="guide_select_version_step">Select Version</string>
+    <string name="guide_select_source_step">Select Source</string>
+    <string name="guide_authorize_step">Authorize</string>
+    <string name="guide_ready_step">Done</string>
+    <string name="guide_step1_title_local">Step 1: Select Rokid AI Version</string>
+    <string name="guide_step1_desc">Please select your Rokid glasses model</string>
+    <string name="guide_step2_title_local">Step 2: Select Mirror Source</string>
+    <string name="guide_step2_desc">Select app store mirror source</string>
+    <string name="guide_step3_title_local">Step 3: Authorize Glasses</string>
+    <string name="guide_step3_desc">Authorization is required on the glasses</string>
+
+    <!-- Connection -->
+    <string name="glasses_connection">Glasses Connection</string>
+    <string name="cxr_link">CXR-L Link</string>
+    <string name="authorized">Authorized</string>
+    <string name="need_authorize">Needs Authorization</string>
+    <string name="authorize_btn">Authorize</string>
+
+    <!-- Design Components -->
+    <string name="caution">Caution</string>
+    <string name="success">Success</string>
+    <string name="failure">Failed</string>
 </resources>

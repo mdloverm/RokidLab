@@ -14,6 +14,8 @@
     <string name="phone_mirror_subtitle">手机屏幕投射到眼镜</string>
     <string name="file_manager_title">文件管理</string>
     <string name="file_manager_subtitle">管理眼镜中的文件</string>
+    <string name="adb_tools_title">ADB 工具</string>
+    <string name="adb_tools_subtitle">通过 ADB 管理眼镜/手机</string>
     <string name="system_info">系统信息</string>
     <string name="app_manager">应用管理</string>
     <string name="timer_func">定时功能</string>
@@ -49,6 +51,7 @@
     <string name="running">运行中</string>
     <string name="update_available">有更新可用</string>
     <string name="no_update">暂无更新</string>
+    <string name="app_count_format">共 %d 个应用</string>
 
     <!-- Settings -->
     <string name="settings">设置</string>
@@ -79,6 +82,15 @@
     <string name="recording_started">录屏已开始</string>
     <string name="recording_saved">录屏已保存到相册</string>
     <string name="recording_failed">录屏保存失败</string>
+    <string name="start_mirror">开始镜像</string>
+    <string name="start_cast">开始投屏</string>
+    <string name="open_file_manager">打开文件管理器</string>
+    <string name="install_local_apk">安装本地 APK</string>
+    <string name="mirroring">投屏中</string>
+    <string name="starting">启动中…</string>
+    <string name="start_mirror_failed">启动眼镜端失败</string>
+    <string name="stop_mirror">停止投屏</string>
+    <string name="ip_address_label">眼镜 IP 地址</string>
     <string name="phone_mirror_notification_title">手机投屏</string>
     <string name="phone_mirror_notification_text">正在投射屏幕到眼镜</string>
     <string name="phone_mirror_notification_channel">手机投屏</string>
@@ -94,11 +106,30 @@
     <string name="media_projection_required">需要"屏幕录制"权限才能将手机画面投到眼镜</string>
     <string name="media_projection_denied">权限被拒绝</string>
 
-    <!-- Status -->
-    <string name="mirroring">投屏中</string>
-    <string name="starting">启动中…</string>
-    <string name="start_mirror_failed">启动眼镜端失败</string>
-    <string name="stop_mirror">停止投屏</string>
+    <!-- ADB Dialog -->
+    <string name="connecting_adb">正在连接 ADB…</string>
+    <string name="connecting_adb_hint">请确保眼镜已开启 ADB 网络调试</string>
+    <string name="connection_failed_adb">连接失败</string>
+    <string name="fetching_sysinfo">正在获取系统信息…</string>
+    <string name="search_apps">搜索应用…</string>
+    <string name="loading">加载中…</string>
+    <string name="updating">更新中…</string>
+    <string name="done_label">完成</string>
+    <string name="error_label">错误</string>
+    <string name="select_app_prompt">点击选择应用…</string>
+    <string name="loading_apps">加载应用中…</string>
+    <string name="shell_ready">Shell 已就绪，输入命令后按 Enter 执行</string>
+    <string name="enter_command">输入命令…</string>
+    <string name="shell_prompt">Shell&gt;</string>
+    <string name="record_count_format">%d 条记录</string>
+    <string name="executing">…</string>
+    <string name="seconds_x">秒 ×</string>
+    <string name="stop_label_format">■ 停止 (%d)</string>
+    <string name="start_label">▶ 开始</string>
+    <string name="start_timer_launch">▶ 开始定时启动</string>
+
+    <!-- Usage Instructions -->
+    <string name="usage_instructions">使用说明</string>
 
     <!-- Timer -->
     <string name="timer_title">定时消息</string>
@@ -109,6 +140,9 @@
     <string name="timer_select_app">选择应用</string>
     <string name="timer_command">命令</string>
     <string name="timer_execute">执行</string>
+    <string name="notification_content_hint">输入要在眼镜上显示的消息…</string>
+    <string name="timer_connected_status">已连接</string>
+    <string name="timer_disconnected_status">未连接</string>
 
     <!-- File Manager -->
     <string name="file_upload_success">上传成功</string>
@@ -128,6 +162,34 @@
     <string name="notification_sent">通知已发送</string>
     <string name="glasses_install_success">眼镜安装成功。</string>
     <string name="glasses_install_failed">眼镜安装失败。</string>
-    <string name="glasses_uninstall_success">眼镜卸载成功。</string>
-    <string name="glasses_uninstall_failed">眼镜卸载失败。</string>
+
+    <!-- Mirror source dialog -->
+    <string name="select_mirror_source">选择商店源</string>
+    <string name="mirror_github">GitHub 源</string>
+    <string name="mirror_gitee">Gitee 源</string>
+
+    <!-- Guide -->
+    <string name="guide_welcome">欢迎使用 Rokid Lab</string>
+    <string name="guide_select_version_step">选择版本</string>
+    <string name="guide_select_source_step">选择源</string>
+    <string name="guide_authorize_step">授权</string>
+    <string name="guide_ready_step">完成</string>
+    <string name="guide_step1_title_local">第一步：选择 Rokid AI 版本</string>
+    <string name="guide_step1_desc">请选择您使用的 Rokid 眼镜型号</string>
+    <string name="guide_step2_title_local">第二步：选择商店源</string>
+    <string name="guide_step2_desc">选择应用商店的镜像源</string>
+    <string name="guide_step3_title_local">第三步：授权眼镜</string>
+    <string name="guide_step3_desc">需要在眼镜端授权此应用</string>
+
+    <!-- Connection -->
+    <string name="glasses_connection">眼镜连接</string>
+    <string name="cxr_link">CXR-L 链路</string>
+    <string name="authorized">已授权</string>
+    <string name="need_authorize">需要授权</string>
+    <string name="authorize_btn">授权</string>
+
+    <!-- Design Components -->
+    <string name="caution">注意</string>
+    <string name="success">成功</string>
+    <string name="failure">失败</string>
 </resources>
