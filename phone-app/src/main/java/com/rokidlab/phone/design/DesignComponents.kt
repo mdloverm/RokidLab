@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.sp
  * 用于所有模块的 inline 错误展示，带重试按钮
  */
 @Composable
-fun BrewErrorCard(
+internal fun BrewErrorCard(
     message: String,
     onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -103,7 +103,7 @@ fun BrewWarningCard(
  * 全局加载卡片
  */
 @Composable
-fun BrewLoadingCard(
+internal fun BrewLoadingCard(
     message: String = "加载中...",
     modifier: Modifier = Modifier,
 ) {

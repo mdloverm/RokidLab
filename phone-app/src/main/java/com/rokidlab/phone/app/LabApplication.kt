@@ -1,17 +1,7 @@
 package com.rokidlab.phone.app
 
-import com.rokidlab.phone.app.*
-import com.rokidlab.phone.adb.*
-import com.rokidlab.phone.design.*
-import com.rokidlab.phone.filemanager.*
-import com.rokidlab.phone.glasses.*
-import com.rokidlab.phone.hid.*
-import com.rokidlab.phone.mirror.*
-import com.rokidlab.phone.model.*
-import com.rokidlab.phone.network.*
-import com.rokidlab.phone.settings.*
-import com.rokidlab.phone.store.*
-import com.rokidlab.phone.util.*
+import com.rokidlab.phone.glasses.CxrLHiRokidSession
+import com.rokidlab.phone.hid.BluetoothHidManager
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -102,11 +92,17 @@ class LabApplication : Application() {
 
     fun setRokidLinkInstalled(installed: Boolean) {
         rokidLinkInstalled = installed
-        prefs.edit().putBoolean("rokidlink_installed", installed).apply()
         // 持久化标记只增不减：安装成功则永久记录
         if (installed && !rokidLinkEverInstalled) {
             rokidLinkEverInstalled = true
             prefs.edit().putBoolean("rokidlink_ever_installed", true).apply()
+        }
+    }
+
+    fun cleanup() {
+        hidManager.destroy()
+        if (::cxrL.isInitialized) {
+            cxrL.cleanup()
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.settings
+package com.rokidlab.phone.settings
 
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.store.*
@@ -85,14 +85,11 @@ internal fun SettingsScreen(
             )
             Spacer(modifier = Modifier.height(12.dp))
             BrutalButton(
-                label = "重装眼镜端",
+                label = if (state.screenMirrorState.isInstallingRokidLink) "正在安装中..." else "重装眼镜端",
                 color = BrewWarning,
+                enabled = !state.screenMirrorState.isInstallingRokidLink,
                 onClick = actions.onSettingsReinstallRokidLink,
             )
-            if (state.screenMirrorState.isInstallingRokidLink) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("正在安装中...", color = BrewCyan, fontSize = 12.sp)
-            }
         }
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -128,7 +125,7 @@ private fun ModuleHeader(title: String, subtitle: String, color: Color) {
 }
 
 @Composable
-private fun BrutalButton(label: String, color: Color, onClick: () -> Unit) {
+private fun BrutalButton(label: String, color: Color, enabled: Boolean = true, onClick: () -> Unit) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
@@ -136,20 +133,21 @@ private fun BrutalButton(label: String, color: Color, onClick: () -> Unit) {
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
         label = "btn-press",
     )
+    val dimAlpha = if (enabled) 1f else 0.45f
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp)
-            .graphicsLayer { scaleX = pressScale; scaleY = pressScale; alpha = if (isPressed) 0.85f else 1f }
+            .graphicsLayer { scaleX = pressScale; scaleY = pressScale; alpha = dimAlpha * if (isPressed) 0.85f else 1f }
             .clip(RoundedCornerShape(12.dp))
-            .background(color.copy(alpha = 0.12f))
-            .border(width = 1.dp, color = color.copy(alpha = 0.5f), shape = RoundedCornerShape(12.dp))
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
+            .background(color.copy(alpha = if (enabled) 0.12f else 0.05f))
+            .border(width = 1.dp, color = color.copy(alpha = if (enabled) 0.5f else 0.15f), shape = RoundedCornerShape(12.dp))
+            .clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
-            color = color,
+            color = color.copy(alpha = dimAlpha),
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             letterSpacing = 1.sp,
@@ -162,6 +160,7 @@ private fun SettingCard(title: String, content: String, color: Color, onClick: (
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
             .background(BrewPanel, RoundedCornerShape(12.dp))
             .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
             .padding(16.dp)

@@ -25,7 +25,7 @@ from io import BytesIO
 # 配置
 GLASSES_IP = "192.168.49.1"
 STREAM_PORT = 6555
-FPS = 15  # 每秒帧数
+FPS = 24  # 每秒帧数
 
 def log(msg):
     print(f"[Mirror] {msg}", flush=True)

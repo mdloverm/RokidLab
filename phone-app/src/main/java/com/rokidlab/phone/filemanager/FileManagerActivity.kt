@@ -71,7 +71,7 @@ enum class SortType { NAME, SIZE, DATE }
 enum class ClipboardAction { COPY, CUT }
 
 @Composable
-fun NewFolderDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun NewFolderDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
     
     Dialog(onDismissRequest = onDismiss) {
@@ -226,7 +226,7 @@ fun DeleteConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit
 }
 
 @Composable
-fun DetailsDialog(file: FileItem, onDismiss: () -> Unit) {
+internal fun DetailsDialog(file: FileItem, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.padding(16.dp),
@@ -320,7 +320,7 @@ fun PreviewDialog(fileName: String, content: String?, isLoading: Boolean, onDism
 }
 
 @Composable
-fun ImagePreview(imagePath: String) {
+internal fun ImagePreview(imagePath: String) {
     val bitmap = remember {
         BitmapFactory.decodeFile(imagePath)
     }
@@ -359,7 +359,7 @@ fun ScrollableColumn(content: String) {
 }
 
 @Composable
-fun FileManagerScreen(
+internal fun FileManagerScreen(
     currentPath: String,
     files: List<FileItem>,
     isLoading: Boolean,
@@ -769,7 +769,7 @@ class FileManagerActivity : ComponentActivity() {
         Thread {
             try {
                 Log.i(TAG, "创建 AdbFileManagerClient")
-                val client = AdbFileManagerClient(ipAddress, ADB_PORT)
+                val client = AdbFileManagerClient(this@FileManagerActivity, ipAddress, ADB_PORT)
                 Log.i(TAG, "调用 connect 方法")
                 val success = client.connect { status ->
                     Log.i(TAG, "连接状态: $status")

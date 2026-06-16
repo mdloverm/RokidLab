@@ -1,16 +1,6 @@
-﻿package com.rokidlab.phone.network
+package com.rokidlab.phone.network
 
-import com.rokidlab.phone.app.*
-import com.rokidlab.phone.adb.*
-import com.rokidlab.phone.design.*
-import com.rokidlab.phone.filemanager.*
-import com.rokidlab.phone.glasses.*
-import com.rokidlab.phone.mirror.*
-import com.rokidlab.phone.model.*
-import com.rokidlab.phone.network.*
-import com.rokidlab.phone.settings.*
-import com.rokidlab.phone.store.*
-import com.rokidlab.phone.util.*
+import com.rokidlab.phone.util.HttpClient
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -18,7 +8,6 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import java.io.File
 import java.io.IOException
-
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 

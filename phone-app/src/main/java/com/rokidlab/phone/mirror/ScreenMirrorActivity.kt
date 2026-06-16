@@ -3,53 +3,32 @@ package com.rokidlab.phone.mirror
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
 import com.rokidlab.phone.design.*
-import com.rokidlab.phone.filemanager.*
-import com.rokidlab.phone.glasses.*
-import com.rokidlab.phone.mirror.*
-import com.rokidlab.phone.model.*
-import com.rokidlab.phone.network.*
-import com.rokidlab.phone.settings.*
-import com.rokidlab.phone.store.*
-import com.rokidlab.phone.util.*
-import android.content.SharedPreferences
-import android.graphics.Bitmap
+import android.graphics.SurfaceTexture
 import android.os.Bundle
 import android.util.Log
+import android.view.Surface
+import android.view.TextureView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.PhoneAndroid
-import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -64,17 +43,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 
 class ScreenMirrorActivity : ComponentActivity() {
     companion object {
@@ -86,136 +65,163 @@ class ScreenMirrorActivity : ComponentActivity() {
     }
 
     private var ipAddress by mutableStateOf("192.168.1.168")
-    private var isConfigured by mutableStateOf(false)
     private var isStreaming by mutableStateOf(false)
     private var connectionStatus by mutableStateOf("")
-    private var currentBitmap by mutableStateOf<Bitmap?>(null)
     private var connectionFailed by mutableStateOf(false)
     private var scale by mutableStateOf(1f)
     private var offsetX by mutableStateOf(0f)
     private var offsetY by mutableStateOf(0f)
-    private var adbClient: AdbScreenMirrorClient? = null
-    private var adbConnected by mutableStateOf(false)
+    private var adbClient by mutableStateOf<AdbScreenMirrorClient?>(null)
+    private var streamDecoder: ScreenStreamDecoder? = null
+    private var surface: Surface? = null
+    private var glassesWidth by mutableIntStateOf(480)
+    private var glassesHeight by mutableIntStateOf(640)
+    @Volatile
+    private var isDestroyed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 从 LabApplication 读取 IP 地址
         val app = application as LabApplication
         ipAddress = app.screenMirrorIp
-        
-        // 启动时自动开始连接
+
         isStreaming = true
         connectionStatus = "正在连接眼镜..."
-        connectToGlasses()
 
         setContent {
             RokidLabTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                if (connectionFailed) {
-                    ConnectionFailedUI(
-                        status = connectionStatus,
-                        onRetry = {
-                            connectionFailed = false
-                            connectionStatus = "正在连接眼镜..."
-                            isStreaming = true
-                            connectToGlasses()
-                        },
-                        onBack = {
-                            disconnectAndFinish()
-                        }
-                    )
-                } else {
-                    val bmp = currentBitmap
-                    val displayInfo = if (bmp != null) {
-                        "${bmp.width}x${bmp.height}"
+                    if (connectionFailed) {
+                        ConnectionFailedUI(
+                            status = connectionStatus,
+                            onRetry = {
+                                connectionFailed = false
+                                connectionStatus = "正在连接眼镜..."
+                                isStreaming = true
+                                connectToGlasses()
+                            },
+                            onBack = { disconnectAndFinish() }
+                        )
                     } else {
-                        "无画面"
+                        ScreenMirrorUI(
+                            status = connectionStatus,
+                            isStreaming = isStreaming,
+                            scale = scale,
+                            offsetX = offsetX,
+                            offsetY = offsetY,
+                            adbClient = adbClient,
+                            glassesWidth = glassesWidth,
+                            glassesHeight = glassesHeight,
+                            onBack = { disconnectAndFinish() },
+                            onScaleChange = { s, x, y ->
+                                scale = s.coerceIn(0.5f, 4f)
+                                offsetX = x
+                                offsetY = y
+                            },
+                            onSurfaceReady = { s ->
+                                surface = s
+                                connectToGlasses(s)
+                            }
+                        )
                     }
-                    val fullStatus = "$connectionStatus [$displayInfo]"
-
-                    ScreenMirrorUI(
-                        bitmap = bmp,
-                        status = fullStatus,
-                        isStreaming = isStreaming,
-                        scale = scale,
-                        offsetX = offsetX,
-                        offsetY = offsetY,
-                        adbClient = adbClient,
-                        glassesWidth = bmp?.width ?: 480,
-                        glassesHeight = bmp?.height ?: 640,
-                        onBack = { disconnectAndFinish() },
-                        onScaleChange = { s, x, y ->
-                            scale = s.coerceIn(0.5f, 4f)
-                            offsetX = x
-                            offsetY = y
-                        },
-                        onResetScale = {
-                            scale = 1f
-                            offsetX = 0f
-                            offsetY = 0f
-                        }
-                    )
-                }
                 }
             }
         }
     }
 
-    private fun connectToGlasses() {
+    private fun connectToGlasses(surfaceOverride: Surface? = null) {
+        val useSurface = surfaceOverride ?: surface
         connectionStatus = "正在连接眼镜..."
         isStreaming = true
 
         Thread {
             val client = AdbScreenMirrorClient(this, ipAddress, GLASSES_ADB_PORT)
             adbClient = client
+            if (isDestroyed) return@Thread
 
             val connected = client.connect { status ->
                 runOnUiThread { connectionStatus = status }
             }
-
-            if (connected) {
-                runOnUiThread {
-                    adbConnected = true
-                    connectionStatus = "已连接，接收画面中..."
+            if (isDestroyed || !connected) {
+                if (!connected) {
+                    runOnUiThread {
+                        connectionStatus = "连接失败"
+                        connectionFailed = true
+                        isStreaming = false
+                    }
                 }
+                return@Thread
+            }
 
+            runOnUiThread { connectionStatus = "已连接，接收画面中..." }
+
+            if (useSurface != null) {
+                // H.264 硬件解码模式 - 使用 scrcpy-server
+                val decoder = ScreenStreamDecoder(useSurface).also {
+                    it.onVideoSizeChanged = { w, h ->
+                        runOnUiThread {
+                            glassesWidth = w
+                            glassesHeight = h
+                            Log.i(TAG, "视频尺寸: ${w}x${h}")
+                        }
+                    }
+                }
+                streamDecoder = decoder
+                decoder.start()
+                Log.i(TAG, "H.264 解码器已创建并启动")
+
+                // 连接后的 ADB 端 shell 命令错误等重置
+                connectionStatus = "等待 H.264 流..."
+
+                client.startH264Streaming(decoder) { status ->
+                    runOnUiThread {
+                        connectionStatus = status
+                        if (status.contains("失败") || status.contains("中断")) {
+                            connectionFailed = true
+                            isStreaming = false
+                        }
+                    }
+                }
+            } else {
+                // 降级：screencap 原始像素模式
                 client.startStreaming(
                     onFrame = { bitmap ->
-                        runOnUiThread {
-                            currentBitmap = bitmap
-                        }
+                        runOnUiThread { /* bitmap 被忽略 - TextureView 直接显示 */ }
                     },
                     onStatus = { status ->
-                        runOnUiThread { connectionStatus = status }
+                        runOnUiThread {
+                            connectionStatus = status
+                            if (status.contains("失败") || status.contains("中断")) {
+                                connectionFailed = true
+                                isStreaming = false
+                            }
+                        }
                     }
                 )
-            } else {
-                runOnUiThread {
-                    if (!connectionStatus.contains("失败")) {
-                        connectionStatus = "连接失败"
-                    }
-                    connectionFailed = true
-                    isStreaming = false
-                }
             }
-        }.start()
+        }.apply {
+            name = "mirror-connector"
+            start()
+        }
     }
 
-    override fun onResume() {
-        super.onResume()
+    override fun onDestroy() {
+        isDestroyed = true
+        isStreaming = false
+        streamDecoder?.stop()
+        streamDecoder = null
+        adbClient?.disconnect()
+        adbClient = null
+        super.onDestroy()
     }
 
     private fun disconnectAndFinish() {
         isStreaming = false
+        streamDecoder?.stop()
+        streamDecoder = null
         adbClient?.disconnect()
         adbClient = null
         finish()
-    }
-
-    override fun onDestroy() {
-        disconnectAndFinish()
-        super.onDestroy()
     }
 }
 
@@ -243,7 +249,7 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
             modifier = Modifier.padding(bottom = 16.dp)
         )
         Text(
-            text = "请检查：\n1. 眼镜已连接到同一 WiFi\n2. 眼镜 ADB 网络调试已开启（指示灯绿色）\n3. IP 地址输入正确",
+            text = "请检查：\n1. 眼镜已连接到同一 WiFi\n2. 眼镜 ADB 网络调试已开启（指示灯绿色）\n3. IP 地址输入正确\n4. 在眼镜上已同意屏幕录制权限",
             color = BrewText,
             fontSize = 14.sp,
             modifier = Modifier.padding(bottom = 32.dp)
@@ -270,7 +276,6 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
 
 @Composable
 private fun ScreenMirrorUI(
-    bitmap: Bitmap?,
     status: String,
     isStreaming: Boolean,
     scale: Float,
@@ -281,11 +286,12 @@ private fun ScreenMirrorUI(
     glassesHeight: Int,
     onBack: () -> Unit,
     onScaleChange: (Float, Float, Float) -> Unit,
-    onResetScale: () -> Unit
+    onSurfaceReady: (Surface) -> Unit,
 ) {
     var containerWidth by remember { mutableIntStateOf(0) }
     var containerHeight by remember { mutableIntStateOf(0) }
     var lastTapTime by remember { mutableLongStateOf(0L) }
+    var surfaceReady by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -295,119 +301,48 @@ private fun ScreenMirrorUI(
                 containerHeight = size.height
             }
     ) {
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = "眼镜屏幕",
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer(
-                        scaleX = scale,
-                        scaleY = scale,
-                        translationX = offsetX,
-                        translationY = offsetY
-                    ),
-                contentScale = ContentScale.Fit
-            )
-
-            Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(glassesWidth, glassesHeight, containerWidth, containerHeight, scale, offsetX, offsetY) {
-                            awaitEachGesture {
-                                val down = awaitFirstDown(requireUnconsumed = false)
-                                val pointerId = down.id
-                                val startPos = down.position
-                                val thresholdPx = 24f * density
-                                val doubleTapMs = 350L
-                                var lastPos = startPos
-                                var dragged = false
-                                var multiFinger = false
-
-                                while (true) {
-                                    val event = awaitPointerEvent(PointerEventPass.Main)
-                                    val changes = event.changes
-                                    val anyPressed = changes.any { it.pressed }
-
-                                    if (changes.size >= 2 && !multiFinger) {
-                                        multiFinger = true
-                                    }
-
-                                    if (multiFinger) {
-                                        if (changes.size >= 2) {
-                                            val c0 = changes[0]
-                                            val c1 = changes[1]
-                                            val prevCentroid = changes.fold(Offset.Zero) { acc, c -> acc + c.previousPosition } / changes.size.toFloat()
-                                            val centroid = changes.fold(Offset.Zero) { acc, c -> acc + c.position } / changes.size.toFloat()
-                                            var zoom = 1f
-                                            if (prevCentroid != Offset.Zero) {
-                                                val prevDist = (c0.previousPosition - c1.previousPosition).getDistance()
-                                                val curDist = (c0.position - c1.position).getDistance()
-                                                if (prevDist > 0f) zoom = curDist / prevDist
-                                            }
-                                            val pan = centroid - prevCentroid
-                                            val newScale = (scale * zoom).coerceIn(0.5f, 4f)
-                                            onScaleChange(newScale, offsetX + pan.x, offsetY + pan.y)
-                                            changes.forEach { it.consume() }
-                                        } else if (!anyPressed) {
-                                            break
-                                        } else {
-                                            changes.forEach { it.consume() }
-                                        }
-                                        continue
-                                    }
-
-                                    if (!anyPressed) {
-                                        val upPos = changes.firstOrNull()?.position ?: lastPos
-                                        if (!dragged) {
-                                            val now = System.nanoTime()
-                                            val sinceLast = if (lastTapTime > 0) (now - lastTapTime) / 1_000_000 else Long.MAX_VALUE
-                                            if (sinceLast < doubleTapMs) {
-                                                lastTapTime = 0L
-                                                adbClient?.sendKeyEvent("KEYCODE_BACK")
-                                            } else {
-                                                lastTapTime = now
-                                                val gx = mapToGlassesX(upPos.x, containerWidth, containerHeight, glassesWidth, glassesHeight, scale, offsetX, offsetY)
-                                                val gy = mapToGlassesY(upPos.y, containerWidth, containerHeight, glassesWidth, glassesHeight, scale, offsetX, offsetY)
-                                                if (gx in 0 until glassesWidth && gy in 0 until glassesHeight) {
-                                                    adbClient?.sendTap(gx, gy)
-                                                }
-                                            }
-                                        } else {
-                                            val phoneDx = upPos.x - startPos.x
-                                            val phoneDy = upPos.y - startPos.y
-                                            if (kotlin.math.abs(phoneDx) > kotlin.math.abs(phoneDy) * 1.5f) {
-                                                if (phoneDx > 0) {
-                                                    adbClient?.sendKeyEvent("KEYCODE_DPAD_RIGHT")
-                                                } else {
-                                                    adbClient?.sendKeyEvent("KEYCODE_DPAD_LEFT")
-                                                }
-                                            } else if (kotlin.math.abs(phoneDy) > kotlin.math.abs(phoneDx) * 1.5f) {
-                                                if (phoneDy > 0) {
-                                                    adbClient?.sendKeyEvent("KEYCODE_DPAD_DOWN")
-                                                } else {
-                                                    adbClient?.sendKeyEvent("KEYCODE_DPAD_UP")
-                                                }
-                                            }
-                                        }
-                                        break
-                                    }
-
-                                    if (changes.size == 1) {
-                                        val c = changes.first()
-                                        if (c.id == pointerId) {
-                                            lastPos = c.position
-                                            if ((lastPos - startPos).getDistance() > thresholdPx) {
-                                                dragged = true
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+        // TextureView 用于 MediaCodec 零拷贝渲染
+        AndroidView(
+            factory = { ctx ->
+                TextureView(ctx).apply {
+                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(
+                            surfaceTexture: SurfaceTexture,
+                            width: Int,
+                            height: Int
+                        ) {
+                            val surface = Surface(surfaceTexture)
+                            surfaceReady = true
+                            onSurfaceReady(surface)
                         }
-                )
 
-        } else {
+                        override fun onSurfaceTextureSizeChanged(
+                            st: SurfaceTexture,
+                            w: Int,
+                            h: Int
+                        ) = Unit
+
+                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                            surfaceReady = false
+                            return true
+                        }
+
+                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) = Unit
+                    }
+                }
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer(
+                    scaleX = scale,
+                    scaleY = scale,
+                    translationX = offsetX,
+                    translationY = offsetY
+                )
+        )
+
+        // 加载中或画面未就绪时显示状态文字
+        if (!surfaceReady || status.contains("连接")) {
             Text(
                 text = status,
                 color = BrewTextBright,
@@ -415,37 +350,120 @@ private fun ScreenMirrorUI(
             )
         }
 
-        Column(
+        // 触摸事件
+        if (surfaceReady) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(glassesWidth, glassesHeight, containerWidth, containerHeight, scale, offsetX, offsetY) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val startPos = down.position
+                            val thresholdPx = 24f * density
+                            val doubleTapMs = 350L
+                            var lastPos = startPos
+                            var dragged = false
+                            var multiFinger = false
+
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Main)
+                                val changes = event.changes
+                                val anyPressed = changes.any { it.pressed }
+
+                                if (changes.size >= 2 && !multiFinger) {
+                                    multiFinger = true
+                                }
+                                if (multiFinger) {
+                                    if (changes.size >= 2) {
+                                        val c0 = changes[0]
+                                        val c1 = changes[1]
+                                        val prevCentroid = changes.fold(Offset.Zero) { acc, c -> acc + c.previousPosition } / changes.size.toFloat()
+                                        val centroid = changes.fold(Offset.Zero) { acc, c -> acc + c.position } / changes.size.toFloat()
+                                        var zoom = 1f
+                                        if (prevCentroid != Offset.Zero) {
+                                            val prevDist = (c0.previousPosition - c1.previousPosition).getDistance()
+                                            val curDist = (c0.position - c1.position).getDistance()
+                                            if (prevDist > 0f) zoom = curDist / prevDist
+                                        }
+                                        val pan = centroid - prevCentroid
+                                        val newScale = (scale * zoom).coerceIn(0.5f, 4f)
+                                        onScaleChange(newScale, offsetX + pan.x, offsetY + pan.y)
+                                        changes.forEach { it.consume() }
+                                    } else if (!anyPressed) {
+                                        break
+                                    } else {
+                                        changes.forEach { it.consume() }
+                                    }
+                                    continue
+                                }
+                                if (!anyPressed) {
+                                    val upPos = changes.firstOrNull()?.position ?: lastPos
+                                    if (!dragged) {
+                                        val now = System.nanoTime()
+                                        val sinceLast = if (lastTapTime > 0) (now - lastTapTime) / 1_000_000 else Long.MAX_VALUE
+                                        if (sinceLast < doubleTapMs) {
+                                            lastTapTime = 0L
+                                            Log.i("ScreenMirror", "双击返回")
+                                            adbClient?.sendKeyEvent("KEYCODE_BACK")
+                                        } else {
+                                            lastTapTime = now
+                                            val gx = mapToGlassesX(upPos.x, containerWidth, containerHeight, glassesWidth, glassesHeight, scale, offsetX, offsetY)
+                                            val gy = mapToGlassesY(upPos.y, containerWidth, containerHeight, glassesWidth, glassesHeight, scale, offsetX, offsetY)
+                                            Log.i("ScreenMirror", "手指抬起: pos=${upPos.x.toInt()},${upPos.y.toInt()} -> glasses=$gx,$gy")
+                                            if (gx in 0 until glassesWidth && gy in 0 until glassesHeight) {
+                                                adbClient?.sendTap(gx, gy)
+                                            }
+                                        }
+                                    } else {
+                                        val phoneDx = upPos.x - startPos.x
+                                        val phoneDy = upPos.y - startPos.y
+                                        if (kotlin.math.abs(phoneDx) > kotlin.math.abs(phoneDy) * 1.5f) {
+                                            if (phoneDx > 0) adbClient?.sendKeyEvent("KEYCODE_DPAD_RIGHT")
+                                            else adbClient?.sendKeyEvent("KEYCODE_DPAD_LEFT")
+                                        } else if (kotlin.math.abs(phoneDy) > kotlin.math.abs(phoneDx) * 1.5f) {
+                                            if (phoneDy > 0) adbClient?.sendKeyEvent("KEYCODE_DPAD_DOWN")
+                                            else adbClient?.sendKeyEvent("KEYCODE_DPAD_UP")
+                                        }
+                                    }
+                                    break
+                                }
+                                if (changes.size == 1) {
+                                    val c = changes.first()
+                                    if (c.id == down.id) {
+                                        lastPos = c.position
+                                        if ((lastPos - startPos).getDistance() > thresholdPx) {
+                                            dragged = true
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+            )
+        }
+
+        // 顶部工具栏
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp)
+                .align(Alignment.TopStart),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .background(BrewPanel.copy(alpha = 0.8f), CircleShape)
             ) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier
-                        .background(BrewPanel.copy(alpha = 0.8f), CircleShape)
-                ) {
-                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", tint = BrewTextBright)
-                }
-                Text(
-                    text = status,
-                    color = BrewTextBright,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 16.dp)
-                )
-                TextButton(
-                    onClick = onResetScale,
-                    modifier = Modifier.background(BrewPanel.copy(alpha = 0.8f), CircleShape)
-                ) {
-                    Text("重置", color = BrewTextBright)
-                }
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", tint = BrewTextBright)
             }
-
+            Text(
+                text = status,
+                color = BrewTextBright,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 16.dp)
+            )
         }
     }
 }

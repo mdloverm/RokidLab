@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.glasses
+package com.rokidlab.phone.glasses
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -29,7 +30,7 @@ import androidx.compose.ui.unit.sp
  * 引导界面 - 指导用户完成前置条件
  */
 @Composable
-fun GuideScreen(
+internal fun GuideScreen(
     currentStep: GuideStep,
     selectedHostApp: RokidHostApp?,
     authorized: Boolean,
@@ -209,6 +210,7 @@ private fun SelectHostAppStep(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(
                         color = if (isSelected) BrewGreen else BrewPanel,
                         shape = RoundedCornerShape(12.dp),
@@ -261,6 +263,7 @@ private fun SelectMirrorSourceStep(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp)
+                .clip(RoundedCornerShape(12.dp))
                 .background(BrewGreen, shape = RoundedCornerShape(12.dp))
                 .clickable { onSelectMirrorSource() },
             contentAlignment = Alignment.Center,
@@ -320,6 +323,7 @@ private fun AuthorizeStep(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(BrewGreen, shape = RoundedCornerShape(12.dp))
                     .clickable { onAuthorize() },
                 contentAlignment = Alignment.Center,

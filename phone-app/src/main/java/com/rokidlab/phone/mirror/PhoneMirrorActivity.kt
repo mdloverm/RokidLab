@@ -269,6 +269,7 @@ class PhoneMirrorActivity : ComponentActivity() {
     }
 
     private fun startConnection() {
+        if (isConnecting || isStreaming) return
         Log.i(TAG, "startConnection: 开始连接流程")
         isConnecting = true
         connectionStatus = "正在请求屏幕录制权限..."
@@ -281,6 +282,8 @@ class PhoneMirrorActivity : ComponentActivity() {
 
     private fun stopStreaming() {
         isStreaming = false
+        val serviceIntent = Intent(this, PhoneMirrorService::class.java)
+        stopService(serviceIntent)
         finish()
     }
 
@@ -320,7 +323,10 @@ class PhoneMirrorActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        stopStreaming()
+        if (isStreaming) {
+            val serviceIntent = Intent(this, PhoneMirrorService::class.java)
+            stopService(serviceIntent)
+        }
         super.onDestroy()
     }
 }

@@ -36,13 +36,13 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
 
         // 全屏 ImageView，仅显示投屏画面
         imageView = ImageView(this).apply {
-            // FIT_XY 填满整个屏幕，最大化画面
-            scaleType = ImageView.ScaleType.FIT_XY
+            // FIT_CENTER 保持画面比例不变形
+            scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(Color.BLACK)
             // 双击退出
             setOnClickListener {
                 val now = System.currentTimeMillis()
-                if (now - lastTapTime < 300) {
+                if (now - lastTapTime < 500) {
                     stopServer()
                     finish()
                 }

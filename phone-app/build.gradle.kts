@@ -33,9 +33,9 @@ android {
     signingConfigs {
         create("release") {
             storeFile = file("D:\\rokidapp\\release.keystore")
-            storePassword = "rokid123"
-            keyAlias = "rokidbrew"
-            keyPassword = "rokid123"
+            storePassword = providers.gradleProperty("RELEASE_KEYSTORE_PASSWORD").orElse("rokid123").get()
+            keyAlias = providers.gradleProperty("RELEASE_KEY_ALIAS").orElse("rokidbrew").get()
+            keyPassword = providers.gradleProperty("RELEASE_KEY_PASSWORD").orElse("rokid123").get()
         }
     }
 
@@ -76,6 +76,15 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.4"
     }
+
+    // ── APK 输出命名规则 ──
+    applicationVariants.all {
+        val variant = this
+        variant.outputs.all {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            output.outputFileName = "RokidLab-v${variant.versionName}-${variant.buildType.name}.apk"
+        }
+    }
 }
 
 // ── 眼镜端 RokidLink APK 自动构建集成 ──
@@ -100,10 +109,14 @@ val buildRokidLinkRelease by tasks.registering {
     group = "build"
     dependsOn(":RokidLink:assembleRelease")
     doLast {
-        val sourceApk = rokidLinkProject.buildDir.resolve("outputs/apk/release/RokidLink-release.apk")
+        val releaseDir = rokidLinkProject.buildDir.resolve("outputs/apk/release")
+        // 优先取已签名的 APK，失败则取未签名的
+        val sourceApk = releaseDir.resolve("RokidLink-release.apk").takeIf { it.exists() }
+            ?: releaseDir.resolve("RokidLink-release-unsigned.apk").takeIf { it.exists() }
+            ?: error("在 $releaseDir 中未找到 RokidLink-release APK")
         val targetFile = file("src/main/assets/RokidLink.apk")
         sourceApk.copyTo(targetFile, overwrite = true)
-        logger.lifecycle("RokidLink APK (release) 已同步 -> $targetFile")
+        logger.lifecycle("RokidLink APK (release) 已同步 ${sourceApk.name} -> $targetFile")
     }
 }
 

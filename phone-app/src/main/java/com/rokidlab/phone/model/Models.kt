@@ -237,7 +237,9 @@ object BrewIndex {
     }
 
     suspend fun refresh(context: Context): BrewIndexRefresh = withContext(Dispatchers.IO) {
-        val urls = listOf(MIRRORS[currentMirrorIndex].url)
+        val primaryUrl = MIRRORS[currentMirrorIndex].url
+        val fallbackUrls = MIRRORS.filterIndexed { i, _ -> i != currentMirrorIndex }.map { it.url }
+        val urls = listOf(primaryUrl) + fallbackUrls
         var lastError: Throwable? = null
         for (url in urls) {
             runCatching {

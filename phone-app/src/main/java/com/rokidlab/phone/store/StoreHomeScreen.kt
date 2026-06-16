@@ -580,7 +580,7 @@ private fun AdbToolsModule(
         val ip = app.fileManagerIp.ifBlank { "192.168.1.168" }
         scope.launch(Dispatchers.IO) {
             try {
-                val c = AdbShellClient(ip)
+                val c = AdbShellClient(app, ip)
                 val ok = c.connect()
                 withContext(Dispatchers.Main) {
                     if (ok) {
@@ -1759,7 +1759,7 @@ private fun LazyListScope.appListItems(
 ) {
     val displayCount = if (expanded) apps.size else minOf(apps.size, COLLAPSED_APP_COUNT)
     
-    itemsIndexed(apps.take(displayCount)) { _, app ->
+    itemsIndexed(apps.take(displayCount), key = { _, app -> app.id }) { _, app ->
         AppListItem(
             app = app,
             iconLoader = iconLoader,
@@ -2376,6 +2376,7 @@ private fun StoreModule(
                         Box(
                             modifier = Modifier
                                 .height(36.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(if (categoryFilter == null) BrewGreen else BrewPanel)
                                 .border(width = 2.dp, color = if (categoryFilter == null) BrewGreen else BrewBorder, shape = RoundedCornerShape(12.dp))
                                 .padding(horizontal = 16.dp)
@@ -2394,6 +2395,7 @@ private fun StoreModule(
                             Box(
                                 modifier = Modifier
                                     .height(36.dp)
+                                    .clip(RoundedCornerShape(12.dp))
                                     .background(if (isSelected) BrewGreen else BrewPanel)
                                     .border(width = 2.dp, color = if (isSelected) BrewGreen else BrewBorder, shape = RoundedCornerShape(12.dp))
                                     .padding(horizontal = 16.dp)

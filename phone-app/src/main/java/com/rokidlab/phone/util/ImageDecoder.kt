@@ -1,16 +1,5 @@
-﻿package com.rokidlab.phone.util
+package com.rokidlab.phone.util
 
-import com.rokidlab.phone.app.*
-import com.rokidlab.phone.adb.*
-import com.rokidlab.phone.design.*
-import com.rokidlab.phone.filemanager.*
-import com.rokidlab.phone.glasses.*
-import com.rokidlab.phone.mirror.*
-import com.rokidlab.phone.model.*
-import com.rokidlab.phone.network.*
-import com.rokidlab.phone.settings.*
-import com.rokidlab.phone.store.*
-import com.rokidlab.phone.util.*
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import java.io.File

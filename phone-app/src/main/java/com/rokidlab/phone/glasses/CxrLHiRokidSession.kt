@@ -18,6 +18,7 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.rokid.cxr.link.CXRLink
@@ -41,6 +42,7 @@ class CxrLHiRokidSession(
     initialHostApp: RokidHostApp = RokidHostApp.DEFAULT,
 ) {
     companion object {
+        private const val TAG = "CxrLHiRokidSession"
         const val AUTH_REQUEST_CODE = 4027
 
         private const val AUTH_ACTIVITY_CLASS = "com.rokid.sprite.aiapp.externalapp.auth.AuthorizationActivity"
@@ -60,6 +62,8 @@ class CxrLHiRokidSession(
     private var cxrlConnected = false
     private var glassBtConnected = false
     private var operationStarted = false
+    /** 防止超时与 operation.onReady 回调竞态 */
+    private var operationCompleted = false
     private var timeoutJob: Job? = null
 
     fun hasAuthorization(): Boolean = !token.isNullOrBlank()
@@ -202,6 +206,14 @@ class CxrLHiRokidSession(
             return
         }
         val authToken = token.orEmpty()
+
+        // 如果已有查询在进行，追加包名并替换回调，不清除已有连接
+        if (queryQueue.isNotEmpty() && !operationStarted) {
+            queryQueue.addAll(packageNames.filterNot(queryQueue::contains))
+            onQueryResult = onResult
+            onQueryComplete = onComplete
+            return
+        }
 
         cleanup()
         queryQueue = ArrayDeque(packageNames.distinct())
@@ -463,9 +475,11 @@ class CxrLHiRokidSession(
         cxrlConnected = false
         glassBtConnected = false
         operationStarted = false
+        operationCompleted = false
         timeoutJob = activity.lifecycleScope.launch {
             delay(operation.timeoutMillis)
-            if (pendingOperation === operation) {
+            // 检查 operation 是否已经完成（onReady 回调已执行completeActiveOperation）
+            if (pendingOperation === operation && !operationCompleted) {
                 pendingOperation = null
                 operationStarted = false
                 onStatus(operation.timeoutMessage)
@@ -479,6 +493,7 @@ class CxrLHiRokidSession(
         if (!configured) {
             pendingOperation = null
             operationStarted = false
+            operationCompleted = true
             onStatus(operation.configureFailureMessage)
             operation.onFailure()
             cleanup()
@@ -504,6 +519,7 @@ class CxrLHiRokidSession(
     }
 
     private fun completeActiveOperation() {
+        operationCompleted = true
         timeoutJob?.cancel()
         timeoutJob = null
         pendingOperation = null
@@ -559,26 +575,32 @@ class CxrLHiRokidSession(
     }
 
     private fun bindRokidHostService(link: CXRLink, targetHostApp: RokidHostApp, authToken: String): Boolean {
+        val conn = findServiceConnection(link) ?: return false
         return runCatching {
             val intent = Intent(MEDIA_SERVICE_ACTION)
                 .setPackage(targetHostApp.packageName)
                 .putExtra(AUTH_TOKEN_EXTRA, authToken)
                 .putExtra(AUTH_PACKAGE_EXTRA, activity.packageName)
-            activity.applicationContext.bindService(intent, findServiceConnection(link), Context.BIND_AUTO_CREATE)
+            activity.applicationContext.bindService(intent, conn, Context.BIND_AUTO_CREATE)
         }.getOrDefault(false)
     }
 
-    private fun findServiceConnection(link: CXRLink): ServiceConnection {
+    private fun findServiceConnection(link: CXRLink): ServiceConnection? {
         var type: Class<*>? = link.javaClass
         while (type != null) {
-            val field = type.declaredFields.firstOrNull { ServiceConnection::class.java.isAssignableFrom(it.type) }
-            if (field != null) {
-                field.isAccessible = true
-                return field.get(link) as ServiceConnection
+            try {
+                val field = type.declaredFields.firstOrNull { ServiceConnection::class.java.isAssignableFrom(it.type) }
+                if (field != null) {
+                    field.isAccessible = true
+                    return field.get(link) as ServiceConnection
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "在 ${type?.name} 中查找 ServiceConnection 失败: ${e.message}")
             }
             type = type.superclass
         }
-        error("CXR-L ServiceConnection field not found")
+        Log.e(TAG, "未找到 CXR-L ServiceConnection 字段，CXR-L SDK 版本可能不兼容")
+        return null
     }
 
     private fun isWifiEnabled(): Boolean {

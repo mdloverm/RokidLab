@@ -1,16 +1,6 @@
 package com.rokidlab.phone.adb
 
-import com.rokidlab.phone.app.*
-import com.rokidlab.phone.adb.*
-import com.rokidlab.phone.design.*
-import com.rokidlab.phone.filemanager.*
-import com.rokidlab.phone.glasses.*
-import com.rokidlab.phone.mirror.*
-import com.rokidlab.phone.model.*
-import com.rokidlab.phone.network.*
-import com.rokidlab.phone.settings.*
-import com.rokidlab.phone.store.*
-import com.rokidlab.phone.util.*
+import android.content.Context
 import android.util.Base64
 import android.util.Log
 import java.io.ByteArrayOutputStream
@@ -32,6 +22,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 class AdbFileManagerClient(
+    private val context: Context,
     private val ipAddress: String,
     private val port: Int = 5555,
 ) {
@@ -112,7 +103,7 @@ class AdbFileManagerClient(
             Log.i(TAG, "TCP 连接已建立")
             onStatus("正在完成 ADB 认证...")
 
-            generateKeyPair()
+            keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
             doHandshake()
             Log.i(TAG, "ADB 连接成功")
             onStatus("连接成功")
@@ -125,15 +116,9 @@ class AdbFileManagerClient(
         }
     }
 
-    private fun generateKeyPair() {
-        val kpg = KeyPairGenerator.getInstance("RSA")
-        kpg.initialize(2048)
-        keyPair = kpg.genKeyPair()
-    }
-
     @Throws(Exception::class)
     private fun doHandshake() {
-        val kp = keyPair ?: throw IllegalStateException("keyPair not initialized — call generateKeyPair() first")
+        val kp = keyPair ?: throw IllegalStateException("keyPair not initialized")
         var sentSignature = false
         val cnxnPayload = "host::\u0000".toByteArray(Charsets.UTF_8)
         sendPacket(CMD_CNXN, CONNECT_VERSION, 256 * 1024, cnxnPayload)
@@ -383,76 +368,78 @@ class AdbFileManagerClient(
                 }
 
                 var totalReceived = 0L
-                FileOutputStream(localPath).use { fos ->
-                    while (true) {
-                        val msg = readPacket()
-                        when (msg.command) {
-                            CMD_OKAY -> {
-                                // 继续等待数据
-                            }
-                            CMD_WRTE -> {
-                                val payload = msg.payload
-                                if (payload != null && payload.size >= 8) {
-                                    val cmdStr = String(payload.copyOfRange(0, 4), Charsets.UTF_8)
-                                    when (cmdStr) {
-                                        "FAIL" -> {
-                                            val errLen = ((payload[4].toInt() and 0xFF) or
-                                                          ((payload[5].toInt() and 0xFF) shl 8) or
-                                                          ((payload[6].toInt() and 0xFF) shl 16) or
-                                                          ((payload[7].toInt() and 0xFF) shl 24))
-                                            val errMsg = if (payload.size >= 8 + errLen) {
-                                                String(payload.copyOfRange(8, 8 + errLen), Charsets.UTF_8)
-                                            } else {
-                                                "未知错误"
-                                            }
-                                            Log.e(TAG, "下载失败: $errMsg")
-                                            throw Exception("下载失败: $errMsg")
-                                        }
-                                        "DATA" -> {
-                                            // DATA 命令: "DATA" + 4字节数据长度 + 数据
-                                            val dataLen = ((payload[4].toInt() and 0xFF) or
-                                                           ((payload[5].toInt() and 0xFF) shl 8) or
-                                                           ((payload[6].toInt() and 0xFF) shl 16) or
-                                                           ((payload[7].toInt() and 0xFF) shl 24))
-
-                                            if (payload.size >= 8 + dataLen) {
-                                                fos.write(payload, 8, dataLen)
-                                                totalReceived += dataLen
-                                            }
-
-                                            if (totalReceived % (1024 * 1024) == 0L) {
-                                                Log.d(TAG, "下载进度: $totalReceived 字节")
-                                            }
-                                        }
-                                        "DONE" -> {
-                                            // 下载完成
-                                            Log.d(TAG, "下载完成: $totalReceived 字节")
-                                            sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                                            sendPacket(CMD_CLSE, sid, remoteId, null)
-                                            // 消费服务端的 CLSE 响应包，避免残留影响下一次操作
-                                            try {
-                                                val clseMsg = readPacket()
-                                                if (clseMsg.command == CMD_CLSE) {
-                                                    // 忽略服务端的 CLSE 确认
+                var downloadSuccess = false
+                try {
+                    FileOutputStream(localPath).use { fos ->
+                        while (true) {
+                            val msg = readPacket()
+                            when (msg.command) {
+                                CMD_OKAY -> {}
+                                CMD_WRTE -> {
+                                    val payload = msg.payload
+                                    if (payload != null && payload.size >= 8) {
+                                        val cmdStr = String(payload.copyOfRange(0, 4), Charsets.UTF_8)
+                                        when (cmdStr) {
+                                            "FAIL" -> {
+                                                val errLen = ((payload[4].toInt() and 0xFF) or
+                                                              ((payload[5].toInt() and 0xFF) shl 8) or
+                                                              ((payload[6].toInt() and 0xFF) shl 16) or
+                                                              ((payload[7].toInt() and 0xFF) shl 24))
+                                                val errMsg = if (payload.size >= 8 + errLen) {
+                                                    String(payload.copyOfRange(8, 8 + errLen), Charsets.UTF_8)
+                                                } else {
+                                                    "未知错误"
                                                 }
-                                            } catch (_: Exception) {}
-                                            return true
+                                                Log.e(TAG, "下载失败: $errMsg")
+                                                throw Exception("下载失败: $errMsg")
+                                            }
+                                            "DATA" -> {
+                                                val dataLen = ((payload[4].toInt() and 0xFF) or
+                                                               ((payload[5].toInt() and 0xFF) shl 8) or
+                                                               ((payload[6].toInt() and 0xFF) shl 16) or
+                                                               ((payload[7].toInt() and 0xFF) shl 24))
+                                                if (payload.size >= 8 + dataLen) {
+                                                    fos.write(payload, 8, dataLen)
+                                                    totalReceived += dataLen
+                                                }
+                                                if (totalReceived % (1024 * 1024) == 0L) {
+                                                    Log.d(TAG, "下载进度: $totalReceived 字节")
+                                                }
+                                            }
+                                            "DONE" -> {
+                                                Log.d(TAG, "下载完成: $totalReceived 字节")
+                                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                                                sendPacket(CMD_CLSE, sid, remoteId, null)
+                                                // 消费服务端的 CLSE 响应（仅消费当前 stream 的）
+                                                try {
+                                                    while (true) {
+                                                        val clseMsg = readPacket()
+                                                        if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) break
+                                                    }
+                                                } catch (_: Exception) {}
+                                                downloadSuccess = true
+                                                break
+                                            }
                                         }
                                     }
+                                    sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                 }
-                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                            }
-                            CMD_CLSE -> {
-                                sendPacket(CMD_CLSE, sid, remoteId, null)
-                                break
+                                CMD_CLSE -> {
+                                    sendPacket(CMD_CLSE, sid, remoteId, null)
+                                    break
+                                }
                             }
                         }
                     }
+                    downloadSuccess
+                } catch (e: Exception) {
+                    Log.e(TAG, "下载失败: ${e.message}", e)
+                    // 关闭 sync 流，防止泄漏
+                    try { sendPacket(CMD_CLSE, sid, remoteId, ByteArray(0)) } catch (_: Exception) {}
+                    false
                 }
-                Log.d(TAG, "下载成功: $localPath, 大小: $totalReceived")
-                true
             } catch (e: Exception) {
-                Log.e(TAG, "下载失败: ${e.message}", e)
+                Log.e(TAG, "文件操作失败: ${e.message}", e)
                 false
             }
         }
@@ -487,7 +474,7 @@ class AdbFileManagerClient(
         synchronized(lock) {
             return try {
                 val sid = localId.getAndIncrement()
-                val cmd = "shell:rm -rf \"$path\"\u0000"
+                val cmd = "shell:rm -rf ${shellEscape(path)}\u0000"
                 sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
                 var remoteId = 0
@@ -571,7 +558,7 @@ class AdbFileManagerClient(
         synchronized(lock) {
             return try {
                 val sid = localId.getAndIncrement()
-                val cmd = "shell:mv \"$oldPath\" \"$newPath\"\u0000"
+                val cmd = "shell:mv ${shellEscape(oldPath)} ${shellEscape(newPath)}\u0000"
                 sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
                 var remoteId = 0
@@ -803,7 +790,7 @@ class AdbFileManagerClient(
                 // 先确保目录存在
                 val remoteDir = remotePath.substringBeforeLast('/', "/")
                 if (remoteDir.isNotEmpty() && remoteDir != "/") {
-                    val mkdirCmd = "shell:mkdir -p \"$remoteDir\"\u0000"
+                    val mkdirCmd = "shell:mkdir -p ${shellEscape(remoteDir)}\u0000"
                     executeShellCommandInternal(mkdirCmd)
                     Log.d(TAG, "创建目录: $remoteDir")
                 }
@@ -908,7 +895,7 @@ class AdbFileManagerClient(
             
             sendPacket(CMD_WRTE, sid, remoteId, doneCmd)
 
-            // 等待响应
+            // 等待响应（超时由 socket.soTimeout 保护）
             var success = false
             while (true) {
                 val msg = readPacket()
@@ -928,8 +915,11 @@ class AdbFileManagerClient(
                         sendPacket(CMD_OKAY, sid, msg.arg0, null)
                     }
                     CMD_CLSE -> {
-                        sendPacket(CMD_OKAY, sid, remoteId, null)
-                        break
+                        // 只处理当前 stream 的 CLSE，其他继续等待
+                        if (msg.arg1 == sid) {
+                            sendPacket(CMD_OKAY, sid, remoteId, null)
+                            break
+                        }
                     }
                 }
             }
@@ -945,6 +935,10 @@ class AdbFileManagerClient(
     private fun uploadFileShell(file: File, remotePath: String): Boolean {
         Log.d(TAG, "使用 shell 方式上传: ${file.name}")
         
+        // shell 路径转义：用单引号包裹，路径内含单引号时用 '\'' 模式
+        fun shellEscape(s: String): String = "'${s.replace("'", "'\\''")}'"
+        val escapedRemotePath = shellEscape(remotePath)
+        
         // 使用分块追加方式上传
         val chunkSize = 64 * 1024
         var offset = 0L
@@ -958,7 +952,8 @@ class AdbFileManagerClient(
                 val base64 = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP)
                 
                 val redirect = if (isFirst) ">" else ">>"
-                val cmd = "shell:echo '$base64' | base64 -d $redirect \"$remotePath\"\u0000"
+                // base64 在单引号内，路径也在单引号内，无 shell 注入风险
+                val cmd = "shell:echo '$base64' | base64 -d $redirect $escapedRemotePath\u0000"
                 
                 executeShellCommandInternal(cmd)
                 
@@ -968,7 +963,7 @@ class AdbFileManagerClient(
         }
 
         // 验证文件大小
-        val checkCmd = "shell:stat -c %s \"$remotePath\" 2>/dev/null || echo 0\u0000"
+        val checkCmd = "shell:stat -c %s $escapedRemotePath 2>/dev/null || echo 0\u0000"
         val checkResult = executeShellCommandInternal(checkCmd).trim()
         val remoteSize = checkResult.toLongOrNull() ?: 0
         val success = remoteSize == file.length()
@@ -1004,11 +999,11 @@ class AdbFileManagerClient(
                     if (msg.arg1 == sid) {
                         sendPacket(CMD_OKAY, sid, msg.arg0, null)
                         sendPacket(CMD_CLSE, sid, remoteId, null)
-                        // 消费服务端可能的 CLSE 响应包
+                        // 消费服务端的 CLSE 响应（仅消费当前 stream 的）
                         try {
-                            val clseMsg = readPacket()
-                            if (clseMsg.command == CMD_CLSE) {
-                                // 忽略服务端的 CLSE 确认
+                            while (true) {
+                                val clseMsg = readPacket()
+                                if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) break
                             }
                         } catch (_: Exception) {}
                         break
@@ -1062,10 +1057,14 @@ class AdbFileManagerClient(
         }
     }
 
-    fun launchApp(packageName: String): Boolean {
+    fun launchApp(packageName: String, activityClass: String = ""): Boolean {
         return try {
             val sid = localId.getAndIncrement()
-            val cmd = "shell:am start -n $packageName/.MainActivity\u0000"
+            val activity = if (activityClass.isNotEmpty()) activityClass else ".MainActivity"
+            // shell 转义：单引号包裹防注入
+            val escapedPkg = shellEscape(packageName)
+            val escapedActivity = shellEscape(activity)
+            val cmd = "shell:am start -n $escapedPkg/$escapedActivity\u0000"
             sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
             var remoteId = 0
@@ -1146,6 +1145,9 @@ class AdbFileManagerClient(
             offset += read
         }
     }
+
+    /** Shell 路径转义：用单引号包裹，路径内含单引号时用 '\'' 模式 */
+    private fun shellEscape(s: String): String = "'${s.replace("'", "'\\''")}'"
 
     private fun checksum(data: ByteArray?): Int {
         if (data == null) return 0
@@ -1250,11 +1252,11 @@ class AdbFileManagerClient(
                             "DONE" -> {
                                 sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                 sendPacket(CMD_CLSE, sid, remoteId, null)
-                                // 消费服务端的 CLSE 响应包
+                                // 消费服务端的 CLSE 响应包（仅消费当前 stream 的）
                                 try {
-                                    val clseMsg = readPacket()
-                                    if (clseMsg.command == CMD_CLSE) {
-                                        // 忽略服务端的 CLSE 确认
+                                    while (true) {
+                                        val clseMsg = readPacket()
+                                        if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) break
                                     }
                                 } catch (_: Exception) {}
                                 return output.toString(Charsets.UTF_8.name())

@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.network
+package com.rokidlab.phone.network
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -22,14 +22,27 @@ class ApkDownloader(private val context: Context) {
         withContext(Dispatchers.IO) {
             val safeName = label.replace(Regex("[^A-Za-z0-9._-]"), "_")
             val target = File(context.cacheDir, safeName)
-            HttpClient.downloadWithPercent(url, target, onPercent = onProgress)
-            expectedSha256?.takeIf { it.isNotBlank() }?.let { expected ->
-                val actual = target.sha256()
-                require(actual.equals(expected, ignoreCase = true)) {
-                    "校验和不匹配：$safeName"
+            var lastError: Exception? = null
+            // 最多重试 2 次（首次 + 1 次重试）
+            repeat(2) { attempt ->
+                try {
+                    HttpClient.downloadWithPercent(url, target, onPercent = onProgress)
+                    expectedSha256?.takeIf { it.isNotBlank() }?.let { expected ->
+                        val actual = target.sha256()
+                        require(actual.equals(expected, ignoreCase = true)) {
+                            "校验和不匹配：$safeName"
+                        }
+                    }
+                    return@withContext target // 成功则返回
+                } catch (e: Exception) {
+                    target.delete()
+                    lastError = e
+                    if (attempt == 0) {
+                        android.util.Log.w("ApkDownloader", "第${attempt + 1}次下载失败，重试: ${e.message}")
+                    }
                 }
             }
-            target
+            throw lastError ?: IllegalStateException("下载失败：$safeName")
         }
 
     private fun File.sha256(): String {

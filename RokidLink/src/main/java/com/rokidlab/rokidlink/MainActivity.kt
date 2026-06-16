@@ -1,10 +1,13 @@
 package com.rokidlab.rokidlink
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
@@ -14,8 +17,6 @@ import android.util.Log
 import android.view.View
 import android.widget.TextView
 import android.widget.Toast
-import com.rokid.cxr.CXRServiceBridge
-import com.rokid.cxr.Caps
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
@@ -24,7 +25,34 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var ipText: TextView
     private lateinit var dot: View
-    private val cxrBridge = CXRServiceBridge()
+
+    // WiFi 状态实时监听
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            Log.i(TAG, "网络恢复，重新检查状态")
+            Handler(Looper.getMainLooper()).post { startSetup() }
+        }
+
+        override fun onLost(network: Network) {
+            Log.i(TAG, "WiFi 断开")
+            Handler(Looper.getMainLooper()).post {
+                setDotColor(DOT_ERROR)
+                statusText.text = "WiFi 已断开"
+                ipText.text = getIPAddress()
+            }
+        }
+
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+                Log.i(TAG, "网络切换为非 WiFi，标记断开")
+                Handler(Looper.getMainLooper()).post {
+                    setDotColor(DOT_ERROR)
+                    statusText.text = "WiFi 已断开"
+                }
+            }
+        }
+    }
 
     companion object {
         private const val TAG = "RokidLink"
@@ -45,20 +73,27 @@ class MainActivity : Activity() {
         ipText = findViewById(R.id.ipText)
         dot = findViewById(R.id.dot)
 
-        // 订阅 CXR-L 手机投屏自动启动命令
-        val subResult = cxrBridge.subscribe("phone_mirror_launch",
-            object : CXRServiceBridge.MsgCallback {
-                override fun onReceive(from: String, caps: Caps, data: ByteArray?) {
-                    Log.i(TAG, "收到手机投屏启动命令，自动跳转投屏页面")
-                    runOnUiThread {
-                        startActivity(Intent(this@MainActivity, PhoneMirrorActivity::class.java))
-                    }
-                }
-            })
-        Log.i(TAG, "订阅 phone_mirror_launch 结果: $subResult")
+        // 注册 WiFi 实时监听
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        cm.registerNetworkCallback(
+            NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+                .build(),
+            networkCallback
+        )
 
         setDotColor(DOT_IDLE)
         startSetup()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // 注销网络监听
+        runCatching {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.unregisterNetworkCallback(networkCallback)
+        }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

@@ -17,16 +17,20 @@ class PhoneMirrorServer(
     private var serverSocket: ServerSocket? = null
     private var clientSocket: Socket? = null
     private var inputStream: BufferedInputStream? = null
+    @Volatile
     private var isRunning = false
     private var receiveThread: Thread? = null
 
     /** 当前帧宽高（每帧从 header 读取，动态变化） */
     private var frameWidth = 480
     private var frameHeight = 640
+    /** 复用 Bitmap，避免每帧新建导致 GC 压力 */
+    private var reusableBitmap: Bitmap? = null
 
     companion object {
         private const val TAG = "RokidLink-Server"
         private const val HEADER_SIZE = 5 // 1方向 + 2宽 + 2高
+        private const val MAX_FRAME_DIMENSION = 2048
     }
 
     interface OnFrameListener {
@@ -43,8 +47,12 @@ class PhoneMirrorServer(
     }
 
     fun start(): Boolean {
+        if (isRunning) return false
         return try {
-            serverSocket = ServerSocket(port)
+            val server = ServerSocket()
+            server.reuseAddress = true
+            server.bind(java.net.InetSocketAddress(port))
+            serverSocket = server
             serverSocket?.soTimeout = 0  // 无限等待
             isRunning = true
             Log.i(TAG, "Socket 服务端已启动，端口: $port")
@@ -67,7 +75,9 @@ class PhoneMirrorServer(
                 Log.i(TAG, "等待客户端连接...")
 
                 clientSocket = serverSocket?.accept()
+                if (!isRunning) break
                 clientSocket?.tcpNoDelay = true
+                clientSocket?.soTimeout = 5000  // 5秒无数据判定断开
                 inputStream = BufferedInputStream(clientSocket?.getInputStream())
 
                 Log.i(TAG, "手机已连接")
@@ -78,6 +88,8 @@ class PhoneMirrorServer(
             } catch (e: Exception) {
                 if (isRunning) {
                     Log.e(TAG, "接收连接失败: ${e.message}", e)
+                    disconnect()  // 清理可能部分初始化的 clientSocket/inputStream
+                    try { Thread.sleep(1000) } catch (_: InterruptedException) { break }
                 }
             }
         }
@@ -100,7 +112,36 @@ class PhoneMirrorServer(
                 frameWidth = (header[1].toInt() and 0xFF) or ((header[2].toInt() and 0xFF) shl 8)
                 frameHeight = (header[3].toInt() and 0xFF) or ((header[4].toInt() and 0xFF) shl 8)
 
+                // 校验宽高，防止损坏数据导致 OOM/NegativeArraySizeException
+                if (frameWidth <= 0 || frameHeight <= 0 ||
+                    frameWidth > MAX_FRAME_DIMENSION || frameHeight > MAX_FRAME_DIMENSION) {
+                    Log.w(TAG, "丢弃异常帧尺寸: ${frameWidth}x${frameHeight}")
+                    // 尝试跳过此帧数据以对齐协议流（损坏的 header 导致 w/h 不可信，跳过合理上限）
+                    try {
+                        val skipSize = if (frameWidth > 0 && frameHeight > 0) {
+                            // 即使 w/h 异常但都为正，cap 到最大值防止溢出 OOM
+                            minOf(frameWidth, MAX_FRAME_DIMENSION) * minOf(frameHeight, MAX_FRAME_DIMENSION)
+                        } else {
+                            // w/h 有非正值，无法估算，跳过典型帧大小 480*640
+                            480 * 640
+                        }
+                        var skipped = 0
+                        val skipBuf = ByteArray(8192)
+                        while (skipped < skipSize) {
+                            val r = inputStream?.read(skipBuf, 0, minOf(skipBuf.size, skipSize - skipped)) ?: -1
+                            if (r == -1) throw Exception("连接已断开")
+                            skipped += r
+                        }
+                    } catch (_: Exception) { }
+                    continue
+                }
+
                 val frameSize = frameWidth * frameHeight
+                // 进一步校验 frameSize 防止 Int 溢出
+                if (frameSize <= 0 || frameSize > MAX_FRAME_DIMENSION * MAX_FRAME_DIMENSION) {
+                    Log.w(TAG, "丢弃帧: frameSize=$frameSize 异常")
+                    continue
+                }
                 Log.i(TAG, "接收到帧: ${frameWidth}x${frameHeight}, 方向=${if (isLandscape) "横屏" else "竖屏"}")
 
                 // 读取灰度数据
@@ -127,6 +168,10 @@ class PhoneMirrorServer(
         }
 
         disconnect()
+        frameListener?.onDisconnected()
+        // 为下一次 waitForClient 循环清理状态
+        inputStream = null
+        clientSocket = null
     }
 
     private fun createGrayscaleBitmap(data: ByteArray, w: Int, h: Int): Bitmap? {
@@ -134,25 +179,37 @@ class PhoneMirrorServer(
             val pixels = IntArray(w * h)
             for (i in 0 until minOf(data.size, w * h)) {
                 val gray = data[i].toInt() and 0xFF
-                pixels[i] = Color.rgb(0, gray, 0)
+                pixels[i] = Color.rgb(gray, gray, gray)
             }
-            Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
+            // 复用 Bitmap：仅在尺寸变化时重建，重建失败时不释放旧 Bitmap
+            if (reusableBitmap?.width != w || reusableBitmap?.height != h) {
+                val newBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                reusableBitmap?.recycle()  // 新 Bitmap 创建成功后再释放旧的
+                reusableBitmap = newBitmap
+            }
+            reusableBitmap?.setPixels(pixels, 0, w, 0, 0, w, h)
+            reusableBitmap
         } catch (e: Exception) {
             Log.e(TAG, "创建Bitmap失败: ${e.message}", e)
+            // 不置 null，保留旧的 reusableBitmap（如果存在）供后续帧使用
             null
         }
     }
 
     fun stop() {
         isRunning = false
-        disconnect()
-        receiveThread?.interrupt()
+        reusableBitmap?.recycle()
+        reusableBitmap = null
+        // 必须先关闭 ServerSocket，accept() 阻塞才能被解除（interrupt 对 accept() 无效）
         try {
             serverSocket?.close()
         } catch (e: Exception) {
             Log.e(TAG, "关闭ServerSocket失败: ${e.message}", e)
         }
         serverSocket = null
+        disconnect()
+        receiveThread?.interrupt()
+        receiveThread = null
         Log.i(TAG, "服务已停止")
     }
 
@@ -165,6 +222,6 @@ class PhoneMirrorServer(
         }
         inputStream = null
         clientSocket = null
-        Log.i(TAG, "客户端已断开，等待重连...")
+        Log.i(TAG, "客户端已断开")
     }
 }

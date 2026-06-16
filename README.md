@@ -34,8 +34,10 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 
 ### 屏幕镜像
 - 将眼镜屏幕实时显示在手机上（ADB over TCP 自定义实现）
+- 基于 scrcpy-server 通过 ADB tunnel_forward 获取 H.264 硬件编码流，手机端 MediaCodec 零拷贝解码渲染
+- 首次连接时自动推送 scrcpy-server.jar 到眼镜（仅一次，后续复用），无需每次推送
 - 支持缩放、双指平移查看
-- 自动开启眼镜端 ADB TCP 模式
+- 眼镜端 ADB TCP 断线后自动重连（最多 3 次）
 
 ### 手机投屏
 - 将手机屏幕投射到眼镜上（基于 CXR-L + MediaProjection）
@@ -107,9 +109,9 @@ RokidLab/
 │   │   │   │   ├── AdbFileManagerClient.kt   文件管理 ADB 客户端
 │   │   │   │   └── AdbScreenMirrorClient.kt  屏幕镜像 ADB 客户端
 │   │   │   ├── design/      设计系统
-│   │   │   ├── StoreTheme.kt      配色/字体/主题（Velvet Dark）
-│   │   │   ├── DesignComponents.kt 全局 UI 组件（错误/警告/加载/结果卡片）
-│   │   │   └── RokidHostApp.kt    HostApp 枚举
+│   │   │   │   ├── StoreTheme.kt      配色/字体/主题（Velvet Dark）
+│   │   │   │   ├── DesignComponents.kt 全局 UI 组件（错误/警告/加载/结果卡片）
+│   │   │   │   └── RokidHostApp.kt    HostApp 枚举
 │   │   │   ├── filemanager/  文件管理
 │   │   │   │   └── FileManagerActivity.kt  文件管理器界面/组件
 │   │   │   ├── glasses/     眼镜通信/UI
@@ -152,7 +154,7 @@ RokidLab/
 │   │   │       ├── HttpClient.kt      统一 HTTP 请求工具
 │   │   │       └── ImageDecoder.kt     图片解码工具
 │   │   ├── res/             资源文件
-│   │   └── assets/          内置眼镜端 APK
+│   │   └── assets/          内置资源
 │   └── build.gradle.kts
 │
 ├── RokidLink/                            眼镜端配套应用（RokidLink，自动打包到 phone-app assets）
@@ -164,6 +166,10 @@ RokidLab/
 │   │   ├── res/layout/activity_main.xml     状态面板布局
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts
+│
+├── phone-app/src/main/assets/              内置资源
+│   ├── RokidLink.apk                       通过 CXR-L SDK 安装到眼镜（自动从 RokidLink 构建同步）
+│   └── scrcpy-server.jar                   通过 ADB 推送到 /data/local/tmp/，供 scrcpy-server 启动使用
 │
 ├── UI-DESIGN.md                            UI 设计参考文档
 └── apps/                                   应用数据示例
@@ -186,11 +192,11 @@ RokidLab/
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/phone-app-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v1.0.0-debug.apk
 ```
 
 ### 眼镜端服务
-通过手机应用中的安装功能自动推送到眼镜，或手动安装：
+通过手机应用中的设置页 → "重装眼镜端" 自动推送到眼镜。也可手动安装：
 ```powershell
 adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 ```

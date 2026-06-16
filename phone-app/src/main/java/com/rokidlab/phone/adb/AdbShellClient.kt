@@ -1,5 +1,6 @@
 package com.rokidlab.phone.adb
 
+import android.content.Context
 import android.util.Base64
 import android.util.Log
 import java.io.ByteArrayOutputStream
@@ -17,6 +18,7 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 class AdbShellClient(
+    private val context: Context,
     private val ipAddress: String,
     private val port: Int = 5555,
 ) {
@@ -54,7 +56,7 @@ class AdbShellClient(
         Log.i(TAG, "TCP 连接已建立")
         inputStream = socket?.getInputStream()
         outputStream = socket?.getOutputStream()
-        keyPair = generateRsaKeyPair()
+        keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
         nextLocalId = 0
         doHandshake()
         Log.i(TAG, "ADB 连接成功")
@@ -111,7 +113,7 @@ class AdbShellClient(
         val modulusPadded = ByteArray(256)
         System.arraycopy(modulus, if (modulus.size > 256) 1 else 0, modulusPadded, 0, minOf(modulus.size, 256))
         buf.put(modulusPadded)
-        buf.put(pubKey.publicExponent.toByteArray()) // ⚠️ fix: 用 BigInteger.toByteArray 写完整 exponent
+        buf.putInt(pubKey.publicExponent.toInt())
         val keyBytes = buf.array()
         val b64 = Base64.encodeToString(keyBytes, Base64.NO_WRAP)
         val keyStr = "$b64 unknown@adb\u0000"
@@ -249,10 +251,10 @@ class AdbShellClient(
         Log.i(TAG, "sendNotification cmd_notification result_len=${result.length}")
         
         // 方式2: 尝试在眼镜上弹 Toast
-        executeShellCommand("am start -a android.intent.action.MAIN --es toast_text '$content' 2>/dev/null")
+        executeShellCommand("am start -a android.intent.action.MAIN --es toast_text ${escapeShell(content)} 2>/dev/null")
         
         // 方式3: 写入文件（最可靠）
-        executeShellCommand("echo '$logLine' >> /sdcard/Download/timer_messages.txt 2>/dev/null")
+        executeShellCommand("echo ${escapeShell(logLine)} >> /sdcard/Download/timer_messages.txt 2>/dev/null")
         
         return "通知已发送"
     }
@@ -277,7 +279,7 @@ class AdbShellClient(
     }
 
     fun sendText(text: String): String {
-        return executeShellCommand("input text '${escapeShell(text)}'")
+        return executeShellCommand("input text ${escapeShell(text)}")
     }
 
     fun sendKeyEvent(keyCode: Int): String {
@@ -298,74 +300,79 @@ class AdbShellClient(
 
     /** 通过 ADB sync RECV 协议从远程设备拉取文件到本地 */
     fun pullFile(remotePath: String, localPath: String): Boolean {
-        try {
-            // 打开 sync: 服务
-            val localId = ++nextLocalId
-            val syncPayload = "sync:\u0000".toByteArray(Charsets.UTF_8)
-            writeMessage(CMD_OPEN, localId, 0, syncPayload)
-            var resp = readMessage()
-            if (resp.command != CMD_OKAY) {
-                Log.w(TAG, "pullFile open sync 失败: cmd=0x${resp.command.toString(16)}")
-                return false
-            }
-            val remoteId = resp.arg0
+        lock.withLock {
+            var closeLocalId = 0
+            var closeRemoteId = 0
+            try {
+                val localId = ++nextLocalId
+                closeLocalId = localId
+                val syncPayload = "sync:\u0000".toByteArray(Charsets.UTF_8)
+                writeMessage(CMD_OPEN, localId, 0, syncPayload)
+                var resp = readMessage()
+                if (resp.command != CMD_OKAY) {
+                    Log.w(TAG, "pullFile open sync 失败: cmd=0x${resp.command.toString(16)}")
+                    return false
+                }
+                val remoteId = resp.arg0
+                closeRemoteId = remoteId
 
-            // 发送 RECV 命令 (ADB sync 协议中 RECV = "RECV" + 4-byte长度 + 路径)
-            val pathBytes = remotePath.toByteArray(Charsets.UTF_8)
-            val recvBuf = ByteBuffer.allocate(8 + pathBytes.size)
-            recvBuf.order(ByteOrder.LITTLE_ENDIAN)
-            recvBuf.put("RECV".toByteArray(Charsets.UTF_8))
-            recvBuf.putInt(pathBytes.size)
-            recvBuf.put(pathBytes)
-            writeMessage(CMD_WRTE, localId, remoteId, recvBuf.array())
+                val pathBytes = remotePath.toByteArray(Charsets.UTF_8)
+                val recvBuf = ByteBuffer.allocate(8 + pathBytes.size)
+                recvBuf.order(ByteOrder.LITTLE_ENDIAN)
+                recvBuf.put("RECV".toByteArray(Charsets.UTF_8))
+                recvBuf.putInt(pathBytes.size)
+                recvBuf.put(pathBytes)
+                writeMessage(CMD_WRTE, localId, remoteId, recvBuf.array())
 
-            var okay2 = readMessage()
-            if (okay2.command != CMD_OKAY) {
-                Log.w(TAG, "pullFile send RECV 后未收到 OKAY: cmd=0x${okay2.command.toString(16)}")
-                close(localId, remoteId)
-                return false
-            }
+                var okay2 = readMessage()
+                if (okay2.command != CMD_OKAY) {
+                    Log.w(TAG, "pullFile send RECV 后未收到 OKAY: cmd=0x${okay2.command.toString(16)}")
+                    close(localId, remoteId)
+                    return false
+                }
 
-            // 读取 DATA/DONE 响应 (通过 WRTE 消息传递)
-            val localFile = File(localPath)
-            localFile.parentFile?.mkdirs()
-            FileOutputStream(localFile).use { fos ->
-                socket?.soTimeout = 30000
-                while (true) {
-                    val msg = readMessage()
-                    if (msg.command == CMD_WRTE && msg.arg0 == remoteId) {
-                        // payload = "DATA"/"DONE" + 4-byte长度 + 数据
-                        if (msg.payload.size < 8) break
-                        val syncId = String(msg.payload, 0, 4, Charsets.UTF_8)
-                        when (syncId) {
-                            "DATA" -> {
-                                val len = ByteBuffer.wrap(msg.payload, 4, 4).order(ByteOrder.LITTLE_ENDIAN).getInt()
-                                if (len > 0 && 8 + len <= msg.payload.size) {
-                                    fos.write(msg.payload, 8, len)
+                val localFile = File(localPath)
+                localFile.parentFile?.mkdirs()
+                FileOutputStream(localFile).use { fos ->
+                    socket?.soTimeout = 30000
+                    while (true) {
+                        val msg = readMessage()
+                        if (msg.command == CMD_WRTE && msg.arg0 == remoteId) {
+                            if (msg.payload.size < 8) break
+                            val syncId = String(msg.payload, 0, 4, Charsets.UTF_8)
+                            when (syncId) {
+                                "DATA" -> {
+                                    val len = ByteBuffer.wrap(msg.payload, 4, 4).order(ByteOrder.LITTLE_ENDIAN).getInt()
+                                    if (len > 0 && 8 + len <= msg.payload.size) {
+                                        fos.write(msg.payload, 8, len)
+                                    }
+                                    writeMessage(CMD_OKAY, localId, remoteId, ByteArray(0))
                                 }
-                                writeMessage(CMD_OKAY, localId, remoteId, ByteArray(0))
+                                "DONE" -> {
+                                    writeMessage(CMD_OKAY, localId, remoteId, ByteArray(0))
+                                    break
+                                }
+                                else -> break
                             }
-                            "DONE" -> {
-                                writeMessage(CMD_OKAY, localId, remoteId, ByteArray(0))
-                                break
-                            }
-                            else -> break
+                        } else if (msg.command == CMD_CLSE && msg.arg0 == remoteId) {
+                            break
                         }
-                    } else if (msg.command == CMD_CLSE && msg.arg0 == remoteId) {
-                        break
                     }
                 }
-            }
 
-            // 关闭 sync 流
-            close(localId, remoteId)
-            socket?.soTimeout = 5000
-            Log.i(TAG, "pullFile 成功: $remotePath → $localPath (${localFile.length()} bytes)")
-            return true
-        } catch (e: Exception) {
-            Log.e(TAG, "pullFile 失败: ${e.message}", e)
-            socket?.soTimeout = 5000
-            return false
+                close(localId, remoteId)
+                socket?.soTimeout = 5000
+                Log.i(TAG, "pullFile 成功: $remotePath → $localPath (${localFile.length()} bytes)")
+                return true
+            } catch (e: Exception) {
+                Log.e(TAG, "pullFile 失败: ${e.message}", e)
+                // 异常时清理 sync 流，防止泄漏
+                if (closeLocalId > 0 && closeRemoteId > 0) {
+                    try { close(closeLocalId, closeRemoteId) } catch (_: Exception) {}
+                }
+                socket?.soTimeout = 5000
+                return false
+            }
         }
     }
 
@@ -441,7 +448,8 @@ class AdbShellClient(
             socket?.soTimeout = 3000
             while (true) {
                 val msg = readMessage()
-                if (msg.command == CMD_CLSE) break
+                // 只退出匹配当前 stream 的 CLSE，其他继续消费
+                if (msg.command == CMD_CLSE && msg.arg1 == localId) break
             }
         } catch (_: Exception) { }
     }

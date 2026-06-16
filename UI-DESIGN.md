@@ -93,7 +93,7 @@
 
 ### 2.1 BrutalButton（主按钮）
 
-定义：[store/StoreHomeScreen.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/StoreHomeScreen.kt) `BrutalButton`
+定义：[store/StoreHomeScreen.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/StoreHomeScreen.kt) `BrutalButton`、[settings/SettingsScreen.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/settings/SettingsScreen.kt) `BrutalButton`
 
 | 属性 | 值 |
 |------|-----|
@@ -105,6 +105,11 @@
 | 文字 | 14sp SemiBold, letterSpacing 1sp, 颜色=模块色 |
 | 按下交互 | 缩放至 98% + 透明度 85% |
 | 动画 | `spring(dampingRatio = MediumBouncy, stiffness = Medium)` |
+| 禁用态 | `enabled=false` 时透明度 45%，不响应点击 |
+
+**变体**：
+- SettingsScreen 版本额外支持 `enabled` 参数控制禁用态
+- StoreHomeScreen 版本额外支持 `compact` 模式（32dp 高，8dp 圆角）
 
 ### 2.2 ModuleHeader（模块标题）
 
@@ -436,9 +441,13 @@ by DLOVER（12sp BrewMuted）
 ```
 ModuleHeader "屏幕镜像" / "眼镜屏幕实时同步到手机" [BrewCyan #5B8FB9]
 → IpAddressInputCard IP地址 [BrewCyan]
-→ ScreenStreamStatusCard 安装状态
 → BrutalButton "▶ 开始镜像" [BrewCyan]
-→ UsageInstructionsCard [BrewCyan]
+↑ 若连接失败时替换为错误提示 + "重试连接" 按钮 + "返回设置" 文字按钮
+
+镜像中:
+  顶部栏 [返回箭头 ←] [状态文字 weight(1f)]
+  画面区域（缩放、双指平移）
+  触控：单指点击/双击返回/滑动
 ```
 
 ### 3.3 PhoneMirror 页面（手机投屏）
@@ -554,7 +563,7 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 → ── 眼镜端服务 ──
   → SettingCard "ScreenStream" 已安装(绿)/未安装(黄)
   → BrutalButton "重装眼镜端" [BrewWarning #F0A050] 停止→等待800ms→推送安装
-  → "正在安装中..." BrewCyan 12sp（安装中时显示）
+    安装中时: label 变为 "正在安装中..."，enabled=false 半透明不可点击
 
 → 开发者卡片: BrewPanel + 1dp BrewBorder 12dp 内 16dp padding
   标签 "开发者" 10sp Bold BrewDim letterSpacing 2sp

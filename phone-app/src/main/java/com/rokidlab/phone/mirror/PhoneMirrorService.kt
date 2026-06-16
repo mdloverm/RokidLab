@@ -42,12 +42,7 @@ class PhoneMirrorService : Service() {
         /** 基准分辨率（短边） */
         private const val BASE_SIZE = 480
 
-        private var savedResultCode = -1
-        private var savedData: Intent? = null
-
         fun startService(context: Context, glassesIp: String, port: Int, resultCode: Int, data: Intent) {
-            savedResultCode = resultCode
-            savedData = data
             val intent = Intent(context, PhoneMirrorService::class.java).apply {
                 putExtra("glassesIp", glassesIp)
                 putExtra("port", port)
@@ -72,6 +67,7 @@ class PhoneMirrorService : Service() {
     private var port: Int = DEFAULT_PORT
     private var resultCode: Int = -1
     private var projectionData: Intent? = null
+    @Volatile
     private var isMirrorRunning = false
     private var orientationListener: OrientationEventListener? = null
     private var imageHandler: Handler? = null
@@ -116,7 +112,7 @@ class PhoneMirrorService : Service() {
             Log.e(TAG, "Intent 为空")
             stopSelf()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -152,70 +148,81 @@ class PhoneMirrorService : Service() {
     private fun startMirror() {
         if (isMirrorRunning) return
         isMirrorRunning = true
+        reconnectAttempts = 0
 
         Thread {
             try {
-                // 1. 获取屏幕真实尺寸，按 BASE_SIZE 等比缩放
-                val metrics = DisplayMetrics()
-                val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-                val display = displayManager.displays[0]
-                display?.getRealMetrics(metrics) ?: metrics.setToDefaults()
-                screenWidth = metrics.widthPixels
-                screenHeight = metrics.heightPixels
-                screenDensity = metrics.densityDpi
-                updateMirrorSize(isLandscapeNow())
-                Log.i(TAG, "屏幕物理尺寸: ${screenWidth}x${screenHeight}, 镜像尺寸: ${mirrorWidth}x${mirrorHeight}")
+                try {
+                    // 1. 获取屏幕真实尺寸，按 BASE_SIZE 等比缩放
+                    val metrics = DisplayMetrics()
+                    val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+                    val display = displayManager.displays[0]
+                    display?.getRealMetrics(metrics) ?: metrics.setToDefaults()
+                    screenWidth = metrics.widthPixels
+                    screenHeight = metrics.heightPixels
+                    screenDensity = metrics.densityDpi
+                    updateMirrorSize(isLandscapeNow())
+                    Log.i(TAG, "屏幕物理尺寸: ${screenWidth}x${screenHeight}, 镜像尺寸: ${mirrorWidth}x${mirrorHeight}")
 
-                // 2. 连接眼镜（3秒超时）
-                Log.i(TAG, "连接眼镜: $glassesIp:$port")
-                socket = Socket()
-                socket?.connect(InetSocketAddress(glassesIp, port), 3000)
-                socket?.tcpNoDelay = true
-                outputStream = socket?.getOutputStream()
-                Log.i(TAG, "连接成功")
+                    // 2. 连接眼镜（3秒超时）
+                    Log.i(TAG, "连接眼镜: $glassesIp:$port")
+                    socket = Socket()
+                    socket?.connect(InetSocketAddress(glassesIp, port), 3000)
+                    socket?.tcpNoDelay = true
+                    socket?.keepAlive = true
+                    outputStream = socket?.getOutputStream()
+                    Log.i(TAG, "连接成功")
 
-                // 3. 获取 MediaProjection
-                val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                mediaProjection = projectionManager.getMediaProjection(resultCode, projectionData!!)
+                    // 3. 获取 MediaProjection
+                    val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    mediaProjection = projectionManager.getMediaProjection(resultCode, projectionData!!)
 
-                mediaProjection?.registerCallback(object : MediaProjection.Callback() {
-                    override fun onStop() {
-                        super.onStop()
-                        Log.i(TAG, "MediaProjection 已停止")
-                        stopMirror()
-                    }
-                }, null)
+                    mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                        override fun onStop() {
+                            super.onStop()
+                            Log.i(TAG, "MediaProjection 已停止")
+                            stopMirror()
+                        }
+                    }, null)
 
-                // 4. 启动图像监听线程（必须在 createMirrorSession 之前初始化 Handler）
-                imageHandlerThread = HandlerThread("ImageHandlerThread")
-                imageHandlerThread?.start()
-                imageHandler = Handler(imageHandlerThread!!.looper)
+                    // 4. 启动图像监听线程（必须在 createMirrorSession 之前初始化 Handler）
+                    imageHandlerThread = HandlerThread("ImageHandlerThread")
+                    imageHandlerThread?.start()
+                    imageHandler = Handler(imageHandlerThread!!.looper)
 
-                // 5. 创建初始 VirtualDisplay（内部自动注册 ImageReader 监听器）
-                createMirrorSession()
+                    // 5. 创建初始 VirtualDisplay（内部自动注册 ImageReader 监听器）
+                    createMirrorSession()
 
-                // 6. 注册方向监听（Scrcpy 方案：方向变化时重建 VirtualDisplay，带 1 秒防抖）
-                var lastOrientationChangeMs = 0L
-                orientationListener = object : OrientationEventListener(this) {
-                    override fun onOrientationChanged(orientation: Int) {
-                        if (!isMirrorRunning) return
-                        val now = System.currentTimeMillis()
-                        if (now - lastOrientationChangeMs < 1000) return
-                        val wasLandscape = mirrorWidth > mirrorHeight
-                        val isLandscape = orientation in 60..300
-                        if (wasLandscape != isLandscape) {
-                            lastOrientationChangeMs = now
-                            Log.i(TAG, "方向变化: ${if (isLandscape) "横屏" else "竖屏"} → 重建 VirtualDisplay")
-                            recreateMirrorSession()
+                    // 6. 注册方向监听（Scrcpy 方案：方向变化时重建 VirtualDisplay，带 1 秒防抖）
+                    var lastOrientationChangeMs = 0L
+                    orientationListener = object : OrientationEventListener(this) {
+                        override fun onOrientationChanged(orientation: Int) {
+                            if (!isMirrorRunning) return
+                            val now = System.currentTimeMillis()
+                            if (now - lastOrientationChangeMs < 1000) return
+                            val wasLandscape = mirrorWidth > mirrorHeight
+                            val isLandscape = orientation in 60..300
+                            if (wasLandscape != isLandscape) {
+                                lastOrientationChangeMs = now
+                                Log.i(TAG, "方向变化: ${if (isLandscape) "横屏" else "竖屏"} → 重建 VirtualDisplay")
+                                recreateMirrorSession()
+                            }
                         }
                     }
-                }
-                orientationListener?.enable()
+                    orientationListener?.enable()
 
-                Log.i(TAG, "投屏服务已启动")
+                    Log.i(TAG, "投屏服务已启动")
+                } catch (e: Exception) {
+                    Log.e(TAG, "启动投屏失败: ${e.message}", e)
+                    throw e
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "启动投屏失败: ${e.message}", e)
                 stopMirror()
+            }
+        }.apply {
+            setUncaughtExceptionHandler { _, e ->
+                Log.e(TAG, "投屏线程意外崩溃: ${e.message}")
+                runCatching { stopMirror() } // 确保资源完全回收
             }
         }.start()
     }
@@ -303,6 +310,13 @@ class PhoneMirrorService : Service() {
         val stride = plane.rowStride
         val pixelStride = plane.pixelStride
 
+        // 校验 buffer 大小防止越界
+        val minRequired = stride * (h - 1) + w * pixelStride
+        if (buffer.remaining() < minRequired) {
+            Log.w(TAG, "跳过帧: buffer(${buffer.remaining()}) < 所需($minRequired)")
+            return
+        }
+
         val grayData = ByteArray(w * h)
         var bufferIndex = 0
         var dataIndex = 0
@@ -326,6 +340,7 @@ class PhoneMirrorService : Service() {
     /**
      * 发送方向 + 宽高 + 灰度数据
      * 协议: [1字节方向][2字节宽(little-endian)][2字节高(little-endian)][N字节灰度]
+     * 注意：header 和 data 合并为一次 write，防止部分写入导致眼镜端协议偏移
      */
     private fun sendFrame(data: ByteArray, w: Int, h: Int) {
         try {
@@ -340,8 +355,11 @@ class PhoneMirrorService : Service() {
                 (h and 0xFF).toByte(),
                 ((h shr 8) and 0xFF).toByte()
             )
-            outputStream?.write(header)
-            outputStream?.write(data)
+            // 合并 header + data 为一次 write，确保原子写入
+            val combined = ByteArray(header.size + data.size)
+            System.arraycopy(header, 0, combined, 0, header.size)
+            System.arraycopy(data, 0, combined, header.size, data.size)
+            outputStream?.write(combined)
             outputStream?.flush()
         } catch (e: Exception) {
             Log.w(TAG, "发送帧失败: ${e.message}")
@@ -349,7 +367,7 @@ class PhoneMirrorService : Service() {
             try { socket?.close() } catch (_: Exception) {}
             socket = null
             outputStream = null
-            reconnectSocket()
+            if (isMirrorRunning) reconnectSocket()
         }
     }
 
@@ -359,15 +377,19 @@ class PhoneMirrorService : Service() {
     private var reconnectAttempts = 0
     private fun reconnectSocket() {
         if (reconnectAttempts >= 3) {
-            Log.w(TAG, "Socket 重连已达最大次数，停止重连")
+            Log.w(TAG, "Socket 重连已达最大次数，停止投屏")
+            stopMirror()
             return
         }
         reconnectAttempts++
+        if (!isMirrorRunning) return
+        try { Thread.sleep(200) } catch (_: InterruptedException) { return }
+        if (!isMirrorRunning) return
         try {
-            Thread.sleep(500)
             socket = Socket()
             socket?.connect(InetSocketAddress(glassesIp, port), 3000)
             socket?.tcpNoDelay = true
+            socket?.keepAlive = true
             outputStream = socket?.getOutputStream()
             reconnectAttempts = 0
             Log.i(TAG, "Socket 重连成功")
@@ -377,23 +399,24 @@ class PhoneMirrorService : Service() {
     }
 
     private fun stopMirror() {
+        if (!isMirrorRunning) return
         isMirrorRunning = false
-        orientationListener?.disable()
-        orientationListener = null
-        imageHandler?.removeCallbacksAndMessages(null)
-        imageHandler = null
-        imageHandlerThread?.quitSafely()
-        imageHandlerThread = null
-        try {
+        runCatching {
+            orientationListener?.disable()
+            orientationListener = null
+            imageHandler?.removeCallbacksAndMessages(null)
+            imageHandler = null
+            imageHandlerThread?.quitSafely()
+            imageHandlerThread = null
             imageReader?.close()
             surface?.release()
             virtualDisplay?.release()
             mediaProjection?.stop()
             outputStream?.close()
             socket?.close()
-        } catch (e: Exception) {
-            Log.e(TAG, "停止投屏失败: ${e.message}", e)
         }
+        socket = null
+        outputStream = null
         stopSelf()
     }
 }

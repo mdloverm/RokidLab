@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.adb
+package com.rokidlab.phone.adb
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -41,13 +41,20 @@ class AdbScreenMirrorClient(
     private var outputStream: OutputStream? = null
     private var keyPair: KeyPair? = null
     private var isRunning = false
-    private var localId = 1
+    private var localId = java.util.concurrent.atomic.AtomicInteger(1)
     private var sentSignature = false
 
     private val touchQueue = java.util.concurrent.ConcurrentLinkedQueue<Runnable>()
     private var continuousStreamId = 0
     private var continuousStreamRemoteId = 0
     private var streamBuffer = ByteArrayOutputStream()
+    /** 复用Bitmap避免每帧GC */
+    private var reusableBitmap: Bitmap? = null
+    /** scrcpy 视频流 ID */
+    @Volatile
+    private var videoStreamId = -1
+    @Volatile
+    private var videoStreamRemoteId = -1
 
     companion object {
         private const val TAG = "AdbScreenMirror"
@@ -65,6 +72,7 @@ class AdbScreenMirrorClient(
 
         private const val CONNECT_VERSION = 0x01000000
         private const val HEADER_LENGTH = 24
+        private const val MAX_STREAM_BUFFER_SIZE = 10 * 1024 * 1024 // 10MB 上限
     }
 
     fun connect(onStatus: (String) -> Unit): Boolean {
@@ -72,8 +80,9 @@ class AdbScreenMirrorClient(
             onStatus("正在连接眼镜 ($ipAddress:$port)...")
             Log.i(TAG, "正在连接 $ipAddress:$port")
 
-            socket = Socket(ipAddress, port)
+            socket = Socket()
             socket?.tcpNoDelay = true
+            socket?.connect(java.net.InetSocketAddress(ipAddress, port), 5000)
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
             Log.i(TAG, "TCP 连接已建立")
@@ -93,29 +102,7 @@ class AdbScreenMirrorClient(
     }
 
     private fun loadOrCreateKeys() {
-        val privKeyFile = File(context.filesDir, "adbkey")
-        val pubKeyFile = File(context.filesDir, "adbkey.pub")
-
-        if (privKeyFile.exists() && pubKeyFile.exists()) {
-            try {
-                val privBytes = FileInputStream(privKeyFile).use { it.readBytes() }
-                val pubBytes = FileInputStream(pubKeyFile).use { it.readBytes() }
-                val keyFactory = KeyFactory.getInstance("RSA")
-                val privKey = keyFactory.generatePrivate(PKCS8EncodedKeySpec(privBytes))
-                val pubKey = keyFactory.generatePublic(X509EncodedKeySpec(pubBytes))
-                keyPair = KeyPair(pubKey, privKey)
-                return
-            } catch (e: Exception) {
-                Log.w(TAG, "加载密钥失败，重新生成: ${e.message}")
-            }
-        }
-
-        val kpg = KeyPairGenerator.getInstance("RSA")
-        kpg.initialize(2048)
-        keyPair = kpg.genKeyPair()
-        val kp = keyPair ?: return
-        FileOutputStream(privKeyFile).use { it.write(kp.private.encoded) }
-        FileOutputStream(pubKeyFile).use { it.write(kp.public.encoded) }
+        keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
     }
 
     @Throws(Exception::class)
@@ -174,23 +161,320 @@ class AdbScreenMirrorClient(
         return keyStr.toByteArray(Charsets.UTF_8)
     }
 
+    /**
+     * 通过 screenrecord + FIFO 管道启动 H.264 视频流。
+     * 注：大部分设备 screenrecord 不支持 FIFO 管道（需要 seek），
+     * 此方法为实验性，若不工作请降级到 startStreaming。
+     */
+    /**
+     * 高帧率模式：使用 scrcpy-server (tunnel_forward=true) 输出 H.264 流。
+     * 通过 ADB CMD_OPEN localabstract:scrcpy 隧道连接 scrcpy LocalServerSocket，
+     * 视频数据通过 WRTE 包返回。
+     */
+    fun startH264Streaming(
+        decoder: ScreenStreamDecoder?,
+        onStatus: (String) -> Unit,
+    ) {
+        if (decoder == null) {
+            Log.w(TAG, "解码器未就绪，降级到 screencap")
+            startStreaming(onFrame = {}, onStatus = onStatus)
+            return
+        }
+
+        isRunning = true
+
+        Thread {
+            while (isRunning) {
+                var streamId = -1
+                var streamRemoteId = -1
+
+                try {
+                    // Step 0: 检查 scrcpy-server.jar 是否存在，不存在则推送
+                    try {
+                        val checkId = localId.getAndIncrement()
+                        sendPacket(CMD_OPEN, checkId, 0, "shell:test -f /data/local/tmp/scrcpy-server.jar && echo EXISTS\u0000".toByteArray(Charsets.UTF_8))
+                        val checkDeadline = System.currentTimeMillis() + 5_000L
+                        var checkResult = ""
+                        var checkDone = false
+                        while (isRunning && !checkDone && System.currentTimeMillis() < checkDeadline) {
+                            val msg = readPacket()
+                            if (msg.arg1 == checkId) {
+                                when (msg.command) {
+                                    CMD_OKAY -> {}
+                                    CMD_WRTE -> {
+                                        sendPacket(CMD_OKAY, checkId, msg.arg0, null)
+                                        checkResult += msg.payload?.let { String(it, Charsets.UTF_8) } ?: ""
+                                    }
+                                    CMD_CLSE -> checkDone = true
+                                }
+                            } else {
+                                when (msg.command) {
+                                    CMD_WRTE -> sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                                    CMD_CLSE -> sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                                    else -> {}
+                                }
+                            }
+                        }
+                        if (checkResult.contains("EXISTS")) {
+                            Log.i(TAG, "scrcpy-server.jar 已存在，跳过推送")
+                        } else {
+                             // 不存在，推送
+                             val pushId = localId.getAndIncrement()
+                             sendPacket(CMD_OPEN, pushId, 0, "shell:cat - > /data/local/tmp/scrcpy-server.jar\u0000".toByteArray(Charsets.UTF_8))
+                             val pushDeadline = System.currentTimeMillis() + 10_000L
+                             var pushRemoteId = -1
+                             var jarSent = false
+                             var pushDone = false
+                             while (isRunning && !pushDone && System.currentTimeMillis() < pushDeadline) {
+                                 val msg = readPacket()
+                                 if (msg.arg1 == pushId) {
+                                     when (msg.command) {
+                                         CMD_OKAY -> {
+                                             pushRemoteId = msg.arg0
+                                             if (!jarSent) {
+                                                 jarSent = true
+                                                 val jarBytes = context.assets.open("scrcpy-server.jar").use { it.readBytes() }
+                                                 sendPacket(CMD_WRTE, pushId, pushRemoteId, jarBytes)
+                                                 Log.i(TAG, "jar 已推送, size=${jarBytes.size}")
+                                             } else {
+                                                 // 数据已确认，关闭流
+                                                 sendPacket(CMD_CLSE, pushId, pushRemoteId, null)
+                                                 pushDone = true
+                                             }
+                                         }
+                                         CMD_WRTE -> {
+                                             sendPacket(CMD_OKAY, pushId, msg.arg0, null)
+                                             if (jarSent) {
+                                                 // shell 输出了提示信息，关闭流
+                                                 sendPacket(CMD_CLSE, pushId, pushRemoteId, null)
+                                                 pushDone = true
+                                             }
+                                         }
+                                         CMD_CLSE -> pushDone = true
+                                     }
+                                 } else {
+                                    when (msg.command) {
+                                        CMD_WRTE -> sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                                        CMD_CLSE -> sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                                        else -> {}
+                                    }
+                                }
+                            }
+                            if (pushRemoteId >= 0) sendPacket(CMD_CLSE, pushId, pushRemoteId, null)
+                            Thread.sleep(300)
+                            Log.i(TAG, "jar 推送完成")
+                        }
+                    } catch (_: Exception) {}
+
+                    // Step 1: 启动新 server（nohup 保护进程不被 shell 退出杀死）
+                    onStatus("正在启动 scrcpy-server...")
+                    val shellId = localId.getAndIncrement()
+                    val shellCmd = ("shell:nohup app_process -Djava.class.path=/data/local/tmp/scrcpy-server.jar " +
+                            "/ com.genymobile.scrcpy.Server 3.3.4 " +
+                            "tunnel_forward=true video_bit_rate=4000000 " +
+                            "video=true audio=false control=false cleanup=false " +
+                            "> /dev/null 2>&1 &\nsleep 3\necho ok\n\u0000")
+                    sendPacket(CMD_OPEN, shellId, 0, shellCmd.toByteArray(Charsets.UTF_8))
+                    Log.i(TAG, "启动 shell, shellId=$shellId")
+
+                    // 等待 shell 结束
+                    val shellDeadline = System.currentTimeMillis() + 15_000L
+                    var shellDone = false
+                    while (isRunning && !shellDone && System.currentTimeMillis() < shellDeadline) {
+                        val msg = readPacket()
+                        if (msg.arg1 == shellId) {
+                            when (msg.command) {
+                                CMD_OKAY -> {}
+                                CMD_WRTE -> {
+                                    sendPacket(CMD_OKAY, shellId, msg.arg0, null)
+                                    val text = msg.payload?.let { String(it, Charsets.UTF_8) } ?: ""
+                                    Log.d(TAG, "shell 输出: $text")
+                                }
+                                CMD_CLSE -> shellDone = true
+                            }
+                        } else {
+                            // 处理触控 shell 命令的响应
+                            when (msg.command) {
+                                CMD_WRTE -> sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                                CMD_CLSE -> sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                                CMD_OKAY -> {} // shell 流打开确认，无需处理
+                                else -> {}
+                            }
+                        }
+                    }
+                    if (!shellDone) {
+                        Log.w(TAG, "shell 未在 15s 内完成，尝试继续")
+                    }
+
+                    // Step 2: 通过 ADB 隧道连接 localabstract:scrcpy
+                    onStatus("连接 scrcpy 隧道...")
+                    Thread.sleep(500)
+                    streamId = localId.getAndIncrement()
+                    val connectCmd = "localabstract:scrcpy\u0000"
+                    sendPacket(CMD_OPEN, streamId, 0, connectCmd.toByteArray(Charsets.UTF_8))
+                    Log.i(TAG, "请求连接 localabstract:scrcpy, streamId=$streamId")
+
+                    // Step 3: 等待 OKAY 确认视频连接建立
+                    val connectDeadline = System.currentTimeMillis() + 10_000L
+                    var connected = false
+                    while (isRunning && !connected && System.currentTimeMillis() < connectDeadline) {
+                        val msg = readPacket()
+                        if (msg.arg1 == streamId) {
+                            when (msg.command) {
+                                CMD_OKAY -> {
+                                    streamRemoteId = msg.arg0
+                                    connected = true
+                                    Log.i(TAG, "LocalSocket 视频连接成功")
+                                }
+                                CMD_CLSE -> {
+                                    Log.w(TAG, "LocalSocket 连接被拒绝，重试中")
+                                    break
+                                }
+                                CMD_WRTE -> {
+                                    // 连接后可能立即有数据（dummy byte + device meta）
+                                    streamRemoteId = msg.arg0
+                                    connected = true
+                                    sendPacket(CMD_OKAY, streamId, msg.arg0, null)
+                                    Log.i(TAG, "有数据到达，LocalSocket 视频连接成功")
+                                    decoder.feedData(msg.payload)
+                                }
+                            }
+                        } else {
+                            when (msg.command) {
+                                CMD_WRTE -> sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                                CMD_CLSE -> sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                                else -> {}
+                            }
+                        }
+                    }
+                    if (!connected) {
+                        Log.w(TAG, "无法连接 LocalSocket，重试...")
+                        sendPacket(CMD_CLSE, streamId, 0, null)
+                        continue
+                    }
+
+                    videoStreamId = streamId
+                    videoStreamRemoteId = streamRemoteId
+
+                    // 设置 socket 超时 80ms 以便及时处理触控
+                    try { socket?.soTimeout = 80 } catch (_: Exception) {}
+
+                    onStatus("画面传输中...")
+                    Log.i(TAG, "开始读取 H.264 流...")
+
+                    // Step 5: 循环读取 WRTE 包，喂给解码器
+                    var totalBytes = 0L
+                    var lastDataTime = System.currentTimeMillis()
+                    val idleTimeout = 180_000L // 3 分钟无数据则重连
+
+                    while (isRunning) {
+                        // 处理触摸命令队列（优先处理触控，减少延迟）
+                        while (true) {
+                            val cmd = touchQueue.poll() ?: break
+                            cmd.run()
+                        }
+
+                        val msg: AdbMessage
+                        try {
+                            msg = readPacket()
+                        } catch (e: java.net.SocketTimeoutException) {
+                            // 超时是正常的，用于及时处理触控
+                            continue
+                        }
+                        if (msg.arg1 == streamId) {
+                            when (msg.command) {
+                                CMD_WRTE -> {
+                                    sendPacket(CMD_OKAY, streamId, msg.arg0, null)
+                                    lastDataTime = System.currentTimeMillis()
+                                    totalBytes += msg.payload.size
+                                    decoder.feedData(msg.payload)
+                                }
+                                CMD_CLSE -> {
+                                    Log.w(TAG, "流被对端关闭")
+                                    break
+                                }
+                                else -> {}
+                            }
+                        } else {
+                            when (msg.command) {
+                                CMD_WRTE -> sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                                CMD_CLSE -> sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                                else -> {}
+                            }
+                        }
+
+                        // 检查空闲超时
+                        if (System.currentTimeMillis() - lastDataTime > idleTimeout) {
+                            Log.w(TAG, "流空闲超时")
+                            break
+                        }
+                    }
+                    Log.i(TAG, "流结束, 共接收 $totalBytes 字节")
+                } catch (e: Exception) {
+                    if (e !is java.net.SocketTimeoutException) {
+                        if (e.message?.let { it.contains("Socket closed") || it.contains("Broken pipe") } == true) {
+                            Log.i(TAG, "连接已断开 (${e.message})")
+                        } else {
+                            Log.e(TAG, "流异常: ${e.message}")
+                        }
+                    }
+                } finally {
+                    videoStreamId = -1
+                    videoStreamRemoteId = -1
+                    if (streamId >= 0) {
+                        try { sendPacket(CMD_CLSE, streamId, streamRemoteId, null) } catch (_: Exception) {}
+                    }
+                }
+
+                if (isRunning) {
+                    decoder.reset()
+                    onStatus("重新连接...")
+                    // 重新建立 ADB 连接
+                    var reconnected = false
+                    for (retry in 1..3) {
+                        if (!isRunning) break
+                        if (retry > 1) Thread.sleep(2000)
+                        try {
+                            socket?.close()
+                            socket = Socket()
+                            socket?.tcpNoDelay = true
+                            socket?.connect(java.net.InetSocketAddress(ipAddress, port), 5000)
+                            inputStream = socket?.getInputStream()
+                            outputStream = socket?.getOutputStream()
+                            doHandshake()
+                            Log.i(TAG, "重连成功")
+                            reconnected = true
+                            break
+                        } catch (e: Exception) {
+                            Log.w(TAG, "重连失败 #$retry: ${e.message}")
+                        }
+                    }
+                    if (!reconnected && isRunning) {
+                        Log.w(TAG, "重连多次失败，继续重试")
+                        Thread.sleep(3000)
+                    }
+                }
+            }
+        }.apply { name = "scrcpy-stream" }.start()
+    }
+
+    /** 低画质模式：使用 screencap 逐帧获取原始像素（约 2FPS） */
     fun startStreaming(
         onFrame: (Bitmap) -> Unit,
         onStatus: (String) -> Unit,
     ) {
         isRunning = true
         Thread {
-            var frameCount = 0
-            var totalMs = 0L
-
             try {
-                continuousStreamId = localId++
+                continuousStreamId = localId.getAndIncrement()
                 val dest = "shell:while true; do screencap; done\u0000"
                 sendPacket(CMD_OPEN, continuousStreamId, 0, dest.toByteArray(Charsets.UTF_8))
                 Log.i(TAG, "连续流已打开，streamId=$continuousStreamId")
 
                 var streamOpened = false
                 streamBuffer = ByteArrayOutputStream()
+                var frameCount = 0
+                var totalMs = 0L
 
                 while (isRunning) {
                     try {
@@ -214,72 +498,81 @@ class AdbScreenMirrorClient(
                                         streamOpened = true
                                         continuousStreamRemoteId = msg.arg0
                                     }
-                                    streamBuffer.write(msg.payload)
                                     sendPacket(CMD_OKAY, continuousStreamId, msg.arg0, null)
 
+                                    // 累积数据
+                                    streamBuffer.write(msg.payload)
                                     val buf = streamBuffer.toByteArray()
-                                    val headerSize = 12
-                                    if (buf.size >= headerSize) {
-                                        val hdr = ByteBuffer.wrap(buf, 0, headerSize).order(ByteOrder.LITTLE_ENDIAN)
-                                        val w = hdr.getInt()
-                                        val h = hdr.getInt()
-                                        val fmt = hdr.getInt()
 
-                                        if (w > 0 && w <= 2000 && h > 0 && h <= 2000 && fmt in listOf(1, 2, 4)) {
-                                            val bpp = if (fmt == 4) 2 else 4
-                                            val frameSize = headerSize + w * h * bpp
+                                    // 扫描整个缓冲区找有效帧头
+                                    var frameFound = false
+                                    var scanOff = 0
+                                    while (scanOff + 12 <= buf.size) {
+                                        val w = (buf[scanOff].toInt() and 0xFF) or
+                                            ((buf[scanOff + 1].toInt() and 0xFF) shl 8) or
+                                            ((buf[scanOff + 2].toInt() and 0xFF) shl 16) or
+                                            ((buf[scanOff + 3].toInt() and 0xFF) shl 24)
+                                        val h = (buf[scanOff + 4].toInt() and 0xFF) or
+                                            ((buf[scanOff + 5].toInt() and 0xFF) shl 8) or
+                                            ((buf[scanOff + 6].toInt() and 0xFF) shl 16) or
+                                            ((buf[scanOff + 7].toInt() and 0xFF) shl 24)
+                                        val fmt = (buf[scanOff + 8].toInt() and 0xFF) or
+                                            ((buf[scanOff + 9].toInt() and 0xFF) shl 8) or
+                                            ((buf[scanOff + 10].toInt() and 0xFF) shl 16) or
+                                            ((buf[scanOff + 11].toInt() and 0xFF) shl 24)
 
-                                            if (buf.size >= frameSize) {
-                                                val pixelData = buf.copyOfRange(headerSize, frameSize)
+                                        if (w == 480 && h == 640 && fmt == 1) {
+                                            val frameSize = 12 + w * h * 4
+                                            if (buf.size >= scanOff + frameSize) {
+                                                val pixelData = buf.copyOfRange(scanOff + 12, scanOff + frameSize)
                                                 streamBuffer.reset()
-                                                val remaining = buf.size - frameSize
+                                                val remaining = buf.size - (scanOff + frameSize)
                                                 if (remaining > 0) {
-                                                    streamBuffer.write(buf, frameSize, remaining)
+                                                    streamBuffer.write(buf, scanOff + frameSize, remaining)
                                                 }
 
                                                 val t0 = System.nanoTime()
                                                 val pixels = IntArray(w * h)
-                                                if (fmt == 1 || fmt == 2) {
-                                                    for (i in 0 until w * h) {
-                                                        val off = i * 4
-                                                        val r = pixelData[off].toInt() and 0xFF
-                                                        val g = pixelData[off + 1].toInt() and 0xFF
-                                                        val b = pixelData[off + 2].toInt() and 0xFF
-                                                        val a = pixelData[off + 3].toInt() and 0xFF
-                                                        pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
-                                                    }
-                                                } else {
-                                                    for (i in 0 until w * h) {
-                                                        val off = i * 2
-                                                        val p = (pixelData[off].toInt() and 0xFF) or ((pixelData[off + 1].toInt() and 0xFF) shl 8)
-                                                        val r5 = (p shr 11) and 0x1F
-                                                        val g6 = (p shr 5) and 0x3F
-                                                        val b5 = p and 0x1F
-                                                        pixels[i] = (0xFF shl 24) or (r5 shl 19) or (g6 shl 10) or (b5 shl 3)
-                                                    }
+                                                var src = 0
+                                                for (i in 0 until w * h) {
+                                                    pixels[i] = (0xFF shl 24) or
+                                                        ((pixelData[src].toInt() and 0xFF) shl 16) or
+                                                        ((pixelData[src + 1].toInt() and 0xFF) shl 8) or
+                                                        (pixelData[src + 2].toInt() and 0xFF)
+                                                    src += 4
                                                 }
-                                                val bitmap = Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
+                                                if (reusableBitmap?.width != w || reusableBitmap?.height != h) {
+                                                    reusableBitmap?.recycle()
+                                                    reusableBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                                                }
+                                                reusableBitmap!!.setPixels(pixels, 0, w, 0, 0, w, h)
                                                 val elapsedMs = (System.nanoTime() - t0) / 1_000_000
+                                                onFrame(reusableBitmap!!)
 
                                                 frameCount++
                                                 totalMs += elapsedMs
-                                                onFrame(bitmap)
-
                                                 if (frameCount % 5 == 0) {
-                                                    val avg = if (frameCount > 1) totalMs / frameCount else elapsedMs
                                                     val fps = frameCount * 1000f / totalMs
-                                                    onStatus("${w}x${h} ${elapsedMs}ms ${fps.toInt()}fps")
-                                                    Log.i(TAG, "帧 #$frameCount: ${w}x${h} fmt=$fmt 耗时=${elapsedMs}ms 平均=${avg}ms")
+                                                    Log.i(TAG, "帧 #$frameCount: 480x640 ${elapsedMs}ms ${fps.toInt()}fps")
                                                 }
+                                                frameFound = true
+                                                break  // 处理了一帧，等下一个 WRTE
+                                            } else {
+                                                break  // 等更多数据
                                             }
-                                        } else {
-                                            Log.w(TAG, "跳过无效header: w=$w, h=$h, fmt=$fmt, bufSize=${buf.size}")
-                                            streamBuffer.reset()
                                         }
+                                        scanOff++
+                                    }
+
+                                    // 找不到且缓冲区过大，丢弃旧数据
+                                    if (!frameFound && buf.size > 3 * 1024 * 1024) {
+                                        streamBuffer.reset()
+                                        streamBuffer.write(buf, buf.size - 2 * 1024 * 1024, 2 * 1024 * 1024)
                                     }
                                 }
                                 CMD_CLSE -> {
                                     Log.w(TAG, "连续流被关闭")
+                                    sendPacket(CMD_CLSE, continuousStreamId, continuousStreamRemoteId, null)
                                     break
                                 }
                             }
@@ -287,12 +580,11 @@ class AdbScreenMirrorClient(
                             when (msg.command) {
                                 CMD_WRTE -> {
                                     sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                                }
+                                CMD_CLSE -> {
                                     sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                                 }
-                                CMD_CLSE -> {}
-                                CMD_OKAY -> {
-                                    sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
-                                }
+                                CMD_OKAY -> {}
                                 else -> {}
                             }
                         }
@@ -307,25 +599,79 @@ class AdbScreenMirrorClient(
         }.start()
     }
 
+    /**
+     * 仅处理触摸事件，不进行视频流接收。
+     * 视频流改为通过 TCP Port 6556 直接接收 JPEG 帧。
+     */
+    fun startTouchProcessing() {
+        isRunning = true
+        Thread {
+            try {
+                // 打开一个空 shell，用于处理触摸命令的 ADB 协议交互
+                val shellId = localId.getAndIncrement()
+                val dest = "shell:echo ready\u0000"
+                sendPacket(CMD_OPEN, shellId, 0, dest.toByteArray(Charsets.UTF_8))
+                Log.i(TAG, "触摸处理流已打开，streamId=$shellId")
+                var opened = false
+                while (isRunning) {
+                    try {
+                        while (true) {
+                            val cmd = touchQueue.poll() ?: break
+                            cmd.run()
+                        }
+                        val msg = readPacket()
+                        if (msg.arg1 == shellId) {
+                            when (msg.command) {
+                                CMD_OKAY -> { opened = true }
+                                CMD_WRTE -> { sendPacket(CMD_OKAY, shellId, msg.arg0, null) }
+                                CMD_CLSE -> {
+                                    sendPacket(CMD_CLSE, shellId, msg.arg0, null)
+                                    break
+                                }
+                                else -> {}
+                            }
+                        }
+                    } catch (e: Exception) {
+                        if (isRunning) Thread.sleep(500)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "触摸处理错误: ${e.message}")
+            }
+        }.apply { name = "touch-processor" }.start()
+    }
+
     fun sendTap(x: Int, y: Int) {
-        touchQueue.add(Runnable {
-            val sid = localId++
-            sendPacket(CMD_OPEN, sid, 0, "shell:input tap $x $y\u0000".toByteArray(Charsets.UTF_8))
-        })
+        touchQueue.add {
+            try {
+                val sid = localId.getAndIncrement()
+                sendPacket(CMD_OPEN, sid, 0, "shell:input tap $x $y\u0000".toByteArray(Charsets.UTF_8))
+            } catch (e: Exception) {
+                Log.e(TAG, "sendTap 失败: ${e.message}")
+            }
+        }
     }
 
     fun sendSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int = 300) {
-        touchQueue.add(Runnable {
-            val sid = localId++
-            sendPacket(CMD_OPEN, sid, 0, "shell:input swipe $x1 $y1 $x2 $y2 $durationMs\u0000".toByteArray(Charsets.UTF_8))
-        })
+        touchQueue.add {
+            try {
+                val sid = localId.getAndIncrement()
+                sendPacket(CMD_OPEN, sid, 0, "shell:input swipe $x1 $y1 $x2 $y2 $durationMs\u0000".toByteArray(Charsets.UTF_8))
+            } catch (e: Exception) {
+                Log.e(TAG, "sendSwipe 失败: ${e.message}")
+            }
+        }
     }
 
     fun sendKeyEvent(key: String) {
-        touchQueue.add(Runnable {
-            val sid = localId++
-            sendPacket(CMD_OPEN, sid, 0, "shell:input keyevent $key\u0000".toByteArray(Charsets.UTF_8))
-        })
+        touchQueue.add {
+            try {
+                val sid = localId.getAndIncrement()
+                sendPacket(CMD_OPEN, sid, 0, "shell:input keyevent $key\u0000".toByteArray(Charsets.UTF_8))
+            } catch (e: Exception) {
+                Log.e(TAG, "sendKeyEvent 失败: ${e.message}")
+            }
+        }
     }
 
     @Throws(Exception::class)
@@ -391,12 +737,27 @@ class AdbScreenMirrorClient(
         return sum
     }
 
+    /** 检查 /data/local/tmp/scrcpy-server.jar 是否存在，不存在则从 assets 推送 */
     fun disconnect() {
         isRunning = false
+        touchQueue.clear()
+        // 通知眼镜端杀掉 server
+        killServer()
         try { socket?.close() } catch (_: Exception) {}
         socket = null
         inputStream = null
         outputStream = null
+        reusableBitmap?.recycle()
+        reusableBitmap = null
+    }
+
+    /** 发送命令杀死眼镜端的 scrcpy-server */
+    private fun killServer() {
+        try {
+            val sid = localId.getAndIncrement()
+            val cmd = "shell:pkill -9 -f scrcpy.Server 2>/dev/null\necho killed\u0000"
+            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+        } catch (_: Exception) {}
     }
 
     private data class AdbMessage(

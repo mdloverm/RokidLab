@@ -19,6 +19,7 @@ Thumbs.db
 
 # Android
 local.properties
+gradle.properties
 
 # Misc
 *.log
