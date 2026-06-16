@@ -123,6 +123,7 @@ internal data class StoreUiState(
     val fileManagerState: FileManagerState = FileManagerState(),
     val showMirrorDialog: Boolean = false,
     val currentMirrorIndex: Int = 0,
+    val currentLocale: String = "zh",
 )
 
 // ===== UI 操作回调 =====
@@ -181,6 +182,8 @@ internal data class StoreActions(
     val onCancelDownload: (String) -> Unit,
     // 设置页 — 眼镜端服务
     val onSettingsReinstallRokidLink: () -> Unit,
+    // 设置页 — 语言切换
+    val onSwitchLanguage: (String) -> Unit,
 )
 
 // ===== 应用入口 =====

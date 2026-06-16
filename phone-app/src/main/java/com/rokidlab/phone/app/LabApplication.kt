@@ -2,6 +2,7 @@ package com.rokidlab.phone.app
 
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import com.rokidlab.phone.hid.BluetoothHidManager
+import com.rokidlab.phone.util.LocalizationManager
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -35,6 +36,10 @@ class LabApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // 初始化本地化管理器并应用已保存的语言设置
+        LocalizationManager.init(this)
+        LocalizationManager.applyLocale(LocalizationManager.getCurrentLocaleCode())
 
         hidManager = BluetoothHidManager(this)
 

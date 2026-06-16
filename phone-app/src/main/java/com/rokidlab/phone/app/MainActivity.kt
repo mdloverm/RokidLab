@@ -294,6 +294,7 @@ class MainActivity : AppCompatActivity() {
                         fileManagerState = fileManagerState,
                         showMirrorDialog = showMirrorDialog,
                         currentMirrorIndex = BrewIndex.getMirrorIndex(this@MainActivity),
+                        currentLocale = com.rokidlab.phone.util.LocalizationManager.getCurrentLocaleCode(),
                     ),
                     actions = StoreActions(
                         onRefresh = { refreshStoreIndex(manual = true) },
@@ -362,6 +363,11 @@ class MainActivity : AppCompatActivity() {
                         onCancelDownload = { key -> cancelDownload(key) },
                         onExitApp = { finishAndRemoveTask() },
                         onSettingsReinstallRokidLink = { reinstallRokidLinkOnGlasses() },
+                        onSwitchLanguage = { code ->
+                            com.rokidlab.phone.util.LocalizationManager.setLocale(this@MainActivity, code)
+                            // Recreate activity to apply language
+                            recreate()
+                        },
                     ),
                     iconLoader = iconLoader,
                     mediaLoader = mediaLoader,

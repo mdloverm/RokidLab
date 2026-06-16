@@ -1,5 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- App -->
     <string name="app_name">Rokid Lab</string>
     <string name="app_author">DLOVER</string>
-    <string name="app_description">Rokid Glasses Companion App</string>
+    <string name="app_description">Rokid 眼镜伴侣应用</string>
+
+    <!-- Navigation / Store -->
+    <string name="store_title">应用商店</string>
+    <string name="store_subtitle">发现更多眼镜应用</string>
+    <string name="screen_mirror_title">屏幕镜像</string>
+    <string name="screen_mirror_subtitle">眼镜屏幕实时同步到手机</string>
+    <string name="phone_mirror_title">手机投屏</string>
+    <string name="phone_mirror_subtitle">手机屏幕投射到眼镜</string>
+    <string name="file_manager_title">文件管理</string>
+    <string name="file_manager_subtitle">管理眼镜中的文件</string>
+    <string name="system_info">系统信息</string>
+    <string name="app_manager">应用管理</string>
+    <string name="timer_func">定时功能</string>
+    <string name="switch_mirror_source">切换商店源</string>
+    <string name="exit_app">退出应用</string>
+    <string name="exit_confirm">确定要退出吗？</string>
+    <string name="exit_confirm_desc">退出后所有投屏连接将断开。</string>
+    <string name="exit">退出</string>
+    <string name="cancel">取消</string>
+    <string name="close">关闭</string>
+    <string name="retry">重试</string>
+    <string name="done">完成</string>
+    <string name="confirm">确定</string>
+
+    <!-- App Actions -->
+    <string name="install">安装</string>
+    <string name="uninstall">卸载</string>
+    <string name="launch">启动</string>
+    <string name="freeze">冻结</string>
+    <string name="unfreeze">解冻</string>
+    <string name="extract">提取</string>
+    <string name="install_to_phone">安装到手机</string>
+    <string name="install_to_glasses">安装到眼镜</string>
+    <string name="more">更多</string>
+    <string name="refresh">刷新</string>
+    <string name="select_app_hint">点击下方应用选择操作</string>
+    <string name="all_apps">全部</string>
+    <string name="third_party">第三方</string>
+    <string name="system_apps">系统应用</string>
+    <string name="installed">已安装</string>
+    <string name="not_installed">未安装</string>
+    <string name="installing">安装中</string>
+    <string name="running">运行中</string>
+    <string name="update_available">有更新可用</string>
+    <string name="no_update">暂无更新</string>
+
+    <!-- Settings -->
+    <string name="settings">设置</string>
+    <string name="settings_subtitle">应用配置</string>
+    <string name="app_version">应用版本</string>
+    <string name="host_app">主机应用</string>
+    <string name="update_status">更新状态</string>
+    <string name="developer">开发者</string>
+    <string name="language">语言</string>
+    <string name="language_subtitle">界面语言设置</string>
+    <string name="language_simple_chinese">简体中文</string>
+    <string name="language_english">English</string>
+
+    <!-- Glasses Services -->
+    <string name="glasses_services">眼镜端服务</string>
+    <string name="rokid_link_installed">已安装</string>
+    <string name="rokid_link_not_installed">未安装</string>
+    <string name="reinstall_rokid_link">重装眼镜端</string>
+    <string name="installing_rokid_link">正在安装中…</string>
+
+    <!-- Mirror -->
+    <string name="connecting">正在连接…</string>
+    <string name="connected">已连接</string>
+    <string name="disconnected">已断开</string>
+    <string name="connection_failed">连接失败</string>
+    <string name="record">录制</string>
+    <string name="stop">停止</string>
+    <string name="recording_started">录屏已开始</string>
+    <string name="recording_saved">录屏已保存到相册</string>
+    <string name="recording_failed">录屏保存失败</string>
+    <string name="phone_mirror_notification_title">手机投屏</string>
+    <string name="phone_mirror_notification_text">正在投射屏幕到眼镜</string>
+    <string name="phone_mirror_notification_channel">手机投屏</string>
+    <string name="phone_mirror_notification_channel_desc">手机屏幕投射到眼镜</string>
+    <string name="timer_notification_channel">定时消息</string>
+    <string name="timer_notification_channel_desc">来自 ADB 工具的定时消息</string>
+
+    <!-- Permissions -->
+    <string name="bluetooth_permission_denied">需要蓝牙权限才能连接眼镜，请在设置中开启</string>
+    <string name="bluetooth_not_enabled">蓝牙仍未启用。</string>
+    <string name="notification_permission_granted">通知权限已授予</string>
+    <string name="notification_permission_denied">通知权限被拒绝，可在系统设置中手动开启</string>
+    <string name="media_projection_required">需要"屏幕录制"权限才能将手机画面投到眼镜</string>
+    <string name="media_projection_denied">权限被拒绝</string>
+
+    <!-- Status -->
+    <string name="mirroring">投屏中</string>
+    <string name="starting">启动中…</string>
+    <string name="start_mirror_failed">启动眼镜端失败</string>
+    <string name="stop_mirror">停止投屏</string>
+
+    <!-- Timer -->
+    <string name="timer_title">定时消息</string>
+    <string name="timer_content_label">通知内容</string>
+    <string name="timer_interval_label">间隔</string>
+    <string name="timer_count_label">次</string>
+    <string name="timer_scheduled_open">定时打开应用</string>
+    <string name="timer_select_app">选择应用</string>
+    <string name="timer_command">命令</string>
+    <string name="timer_execute">执行</string>
+
+    <!-- File Manager -->
+    <string name="file_upload_success">上传成功</string>
+    <string name="file_upload_failed">上传失败</string>
+    <string name="file_connected">连接成功</string>
+    <string name="unknown_error">未知错误</string>
+    <string name="stream_closed">流已关闭</string>
+
+    <!-- Guide -->
+    <string name="guide_step1_title">引导设置</string>
+    <string name="reset_host_app">已重置主机应用选择，请重新完成引导设置</string>
+    <string name="start_guide">前往引导</string>
+
+    <!-- ADB -->
+    <string name="apk_downloaded">已下载到手机</string>
+    <string name="apk_pull_failed">拉取到手机失败</string>
+    <string name="notification_sent">通知已发送</string>
+    <string name="glasses_install_success">眼镜安装成功。</string>
+    <string name="glasses_install_failed">眼镜安装失败。</string>
+    <string name="glasses_uninstall_success">眼镜卸载成功。</string>
+    <string name="glasses_uninstall_failed">眼镜卸载失败。</string>
 </resources>

@@ -2,6 +2,7 @@ package com.rokidlab.phone.settings
 
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.store.*
+import com.rokidlab.phone.util.LocalizationManager
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
@@ -26,7 +27,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,6 +44,8 @@ internal fun SettingsScreen(
     state: StoreUiState,
     actions: StoreActions,
 ) {
+    var showLangDialog by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -58,6 +63,18 @@ internal fun SettingsScreen(
             content = state.selectedHostApp.displayName,
             color = BrewCyan,
             onClick = { actions.onGoToGuideStep1() },
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Language selector
+        val currentLangName = LocalizationManager.AppLocale.entries
+            .find { it.code == state.currentLocale }
+            ?.let { "${it.displayName}" } ?: "简体中文"
+        SettingCard(
+            title = "语言",
+            content = currentLangName,
+            color = BrewPurple,
+            onClick = { showLangDialog = true },
         )
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -113,6 +130,70 @@ internal fun SettingsScreen(
             }
         }
     }
+
+    // Language selection dialog
+    if (showLangDialog) {
+        LanguageDialog(
+            currentCode = state.currentLocale,
+            onSelect = { code ->
+                actions.onSwitchLanguage(code)
+                showLangDialog = false
+            },
+            onDismiss = { showLangDialog = false },
+        )
+    }
+}
+
+@Composable
+private fun LanguageDialog(
+    currentCode: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = BrewPanel,
+        titleContentColor = BrewTextBright,
+        textContentColor = BrewText,
+        shape = RoundedCornerShape(16.dp),
+        title = {
+            Text("选择语言 / Select Language", color = BrewTextBright, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column {
+                LocalizationManager.AppLocale.entries.forEach { locale ->
+                    val selected = locale.code == currentCode
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (selected) BrewPurple.copy(alpha = 0.15f) else Color.Transparent)
+                            .clickable { onSelect(locale.code) }
+                            .padding(16.dp),
+                    ) {
+                        Column {
+                            Text(
+                                text = locale.displayName,
+                                color = if (selected) BrewPurple else BrewText,
+                                fontSize = 16.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            )
+                            Text(
+                                text = locale.displayNameEnglish,
+                                color = BrewMuted,
+                                fontSize = 12.sp,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text("取消 / Cancel", color = BrewMuted)
+            }
+        },
+    )
 }
 
 @Composable
