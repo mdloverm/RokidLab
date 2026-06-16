@@ -123,7 +123,7 @@ internal data class StoreUiState(
     val fileManagerState: FileManagerState = FileManagerState(),
     val showMirrorDialog: Boolean = false,
     val currentMirrorIndex: Int = 0,
-    val currentLocale: String = "zh",
+    val currentLocale: String = "en",
 )
 
 // ===== UI 操作回调 =====
