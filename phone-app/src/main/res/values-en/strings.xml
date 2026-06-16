@@ -192,4 +192,53 @@
     <string name="caution">Caution</string>
     <string name="success">Success</string>
     <string name="failure">Failed</string>
+
+    <!-- Navigation tab -->
+    <string name="nav_store">App Store</string>
+    <string name="nav_screen_mirror">Screen Mirror</string>
+    <string name="nav_phone_mirror">Phone Cast</string>
+    <string name="nav_file_manager">File Manager</string>
+    <string name="nav_adb_tools">ADB Tools</string>
+    <string name="nav_hid_gamepad">Gamepad</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Store main interface -->
+    <string name="featured_apps">Featured Apps</string>
+    <string name="search_apps_placeholder">Search apps…</string>
+    <string name="featured">Featured</string>
+    <string name="view_all">View All</string>
+    <string name="category">Category</string>
+    <string name="all">All</string>
+    <string name="no_apps_found">No apps found</string>
+    <string name="switch_source">Switch Source</string>
+    <string name="install_apk_to_glasses">Install APK to Glasses</string>
+    <string name="search_label">Search</string>
+
+    <!-- ADB Dialog extra -->
+    <string name="charging">Charging</string>
+    <string name="not_charging">Not charging</string>
+    <string name="fetch_failed">Fetch failed</string>
+    <string name="filter_all">All</string>
+    <string name="filter_third_party">Third Party</string>
+    <string name="select_app_below">Select an app below</string>
+    <string name="app_count_fmt">%d apps</string>
+    <string name="updating_dots">Updating…</string>
+    <string name="tap_to_select_app">Tap to select app…</string>
+    <string name="shell_connected">Connected</string>
+    <string name="shell_disconnected">Disconnected</string>
+    <string name="execute_btn">Execute</string>
+    <string name="insert_msg_hint">Enter message to display on glasses…</string>
+    <string name="interval_label">Interval</string>
+    <string name="seconds_x_label">sec ×</string>
+    <string name="times_label">times</string>
+    <string name="timer_msg_title">Message Content</string>
+    <string name="timer_scheduled_open_title">Scheduled Launch</string>
+    <string name="select_app_label">Select App</string>
+    <string name="started">Start</string>
+    <string name="stopped">Stop</string>
+    <string name="uninstall_phone">Uninstall from Phone</string>
+    <string name="uninstall_glasses">Uninstall from Glasses</string>
+    <string name="open_label">Open</string>
+    <string name="app_not_found">App not found</string>
+    <string name="shell_command">Shell</string>
 </resources>

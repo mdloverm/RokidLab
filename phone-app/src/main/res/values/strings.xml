@@ -192,4 +192,53 @@
     <string name="caution">注意</string>
     <string name="success">成功</string>
     <string name="failure">失败</string>
+
+    <!-- Navigation tab -->
+    <string name="nav_store">应用商店</string>
+    <string name="nav_screen_mirror">屏幕镜像</string>
+    <string name="nav_phone_mirror">手机投屏</string>
+    <string name="nav_file_manager">文件管理</string>
+    <string name="nav_adb_tools">ADB工具</string>
+    <string name="nav_hid_gamepad">蓝牙手柄</string>
+    <string name="nav_settings">设置</string>
+
+    <!-- Store main interface -->
+    <string name="featured_apps">精选应用</string>
+    <string name="search_apps_placeholder">搜索应用…</string>
+    <string name="featured">精选</string>
+    <string name="view_all">查看全部</string>
+    <string name="category">分类</string>
+    <string name="all">全部</string>
+    <string name="no_apps_found">未找到应用</string>
+    <string name="switch_source">切换源</string>
+    <string name="install_apk_to_glasses">安装 APK 到眼镜</string>
+    <string name="search_label">搜索</string>
+
+    <!-- ADB Dialog extra -->
+    <string name="charging">充电中</string>
+    <string name="not_charging">未充电</string>
+    <string name="fetch_failed">获取失败</string>
+    <string name="filter_all">全部</string>
+    <string name="filter_third_party">第三方</string>
+    <string name="select_app_below">点击下方应用选择操作</string>
+    <string name="app_count_fmt">共 %d 个应用</string>
+    <string name="updating_dots">更新中…</string>
+    <string name="tap_to_select_app">点击选择应用…</string>
+    <string name="shell_connected">已连接</string>
+    <string name="shell_disconnected">未连接</string>
+    <string name="execute_btn">执行</string>
+    <string name="insert_msg_hint">输入要在眼镜上显示的消息…</string>
+    <string name="interval_label">间隔</string>
+    <string name="seconds_x_label">秒 ×</string>
+    <string name="times_label">次</string>
+    <string name="timer_msg_title">通知内容</string>
+    <string name="timer_scheduled_open_title">定时打开应用</string>
+    <string name="select_app_label">选择应用</string>
+    <string name="started">开始</string>
+    <string name="stopped">停止</string>
+    <string name="uninstall_phone">卸载手机端</string>
+    <string name="uninstall_glasses">卸载眼镜端</string>
+    <string name="open_label">打开</string>
+    <string name="app_not_found">未找到应用</string>
+    <string name="shell_command">Shell 命令</string>
 </resources>

@@ -766,7 +766,8 @@ private fun AdbDialogContent(
 // ── 系统信息弹窗 ──
 @Composable
 private fun SysInfoDialog(client: AdbShellClient?, connected: Boolean, scope: CoroutineScope, getOrConnect: ((AdbShellClient?) -> Unit) -> Unit, onDismiss: () -> Unit) {
-    AdbDialogContent("系统信息", BrewInfo, client, connected, scope, getOrConnect, onDismiss) { c ->
+    val ctx = LocalContext.current
+    AdbDialogContent(ctx.getString(R.string.system_info), BrewInfo, client, connected, scope, getOrConnect, onDismiss) { c ->
         var loading by remember { mutableStateOf(true) }
         var content by remember { mutableStateOf("") }
         
@@ -788,7 +789,7 @@ private fun SysInfoDialog(client: AdbShellClient?, connected: Boolean, scope: Co
                     
                     val level = lines.firstOrNull { it.contains("level:") }?.substringAfter(":")?.trim()?.let { "${it}%" } ?: "?"
                     val charging = lines.firstOrNull { it.contains("AC powered:") }?.let {
-                        if (it.contains("true")) "充电中" else "未充电"
+                        if (it.contains("true")) ctx.getString(R.string.charging) else ctx.getString(R.string.not_charging)
                     } ?: "?"
                     val health = lines.firstOrNull { it.contains("health:") }?.substringAfter(":")?.trim() ?: "?"
                     val memTotal = lines.firstOrNull { it.contains("MemTotal") }?.substringAfter(":")?.trim() ?: "?"
@@ -798,26 +799,26 @@ private fun SysInfoDialog(client: AdbShellClient?, connected: Boolean, scope: Co
                     
                     withContext(Dispatchers.Main) {
                         content = buildString {
-                            appendLine("━━━ 设备信息 ━━━")
-                            appendLine("  制造商: $manufacturer")
-                            appendLine("  型号: $model")
-                            appendLine("  系统版本: Android $release (API $sdk)")
-                            appendLine("  处理器: $board")
-                            appendLine("  序列号: $serial")
-                            appendLine("  版本号: $build")
+                            appendLine("━━━ Device Info ━━━")
+                            appendLine("  Manufacturer: $manufacturer")
+                            appendLine("  Model: $model")
+                            appendLine("  OS: Android $release (API $sdk)")
+                            appendLine("  Processor: $board")
+                            appendLine("  Serial: $serial")
+                            appendLine("  Build: $build")
                             appendLine("")
-                            appendLine("━━━ 存储信息 ━━━")
-                            appendLine("  运行内存: $memTotal")
-                            if (stTotal != "?") appendLine("  数据分区: 共 $stTotal / 已用 $stUsed")
+                            appendLine("━━━ Storage ━━━")
+                            appendLine("  RAM: $memTotal")
+                            if (stTotal != "?") appendLine("  Data: $stTotal total / $stUsed used")
                             appendLine("")
-                            appendLine("━━━ 电池信息 ━━━")
-                            appendLine("  电量: $level")
-                            appendLine("  充电状态: $charging")
-                            appendLine("  健康度: $health")
+                            appendLine("━━━ Battery ━━━")
+                            appendLine("  Level: $level")
+                            appendLine("  Power: $charging")
+                            appendLine("  Health: $health")
                         }
                     }
                 } catch (e: Exception) {
-                    withContext(Dispatchers.Main) { content = "获取失败: ${e.message}" }
+                    withContext(Dispatchers.Main) { content = "${ctx.getString(R.string.fetch_failed)}: ${e.message}" }
                 }
                 withContext(Dispatchers.Main) { loading = false }
             }
@@ -830,7 +831,7 @@ private fun SysInfoDialog(client: AdbShellClient?, connected: Boolean, scope: Co
         ) {
             if (loading) {
                 Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("正在获取系统信息...", color = BrewMuted, fontSize = 13.sp)
+                    Text(ctx.getString(R.string.fetching_sysinfo), color = BrewMuted, fontSize = 13.sp)
                 }
             } else {
                 Text(content, color = BrewText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
@@ -842,7 +843,8 @@ private fun SysInfoDialog(client: AdbShellClient?, connected: Boolean, scope: Co
 // ── 应用管理弹窗 ──
 @Composable
 private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: CoroutineScope, getOrConnect: ((AdbShellClient?) -> Unit) -> Unit, onDismiss: () -> Unit) {
-    AdbDialogContent("应用管理", BrewGreen, client, connected, scope, getOrConnect, onDismiss) { c ->
+    val ctx = LocalContext.current
+    AdbDialogContent(ctx.getString(R.string.app_manager), BrewGreen, client, connected, scope, getOrConnect, onDismiss) { c ->
         var packages by remember { mutableStateOf(emptyList<String>()) }
         var disabledPkgs by remember { mutableStateOf(emptySet<String>()) }
         var showSystem by remember { mutableStateOf(false) }
@@ -854,7 +856,6 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
         val filtered = if (search.isBlank()) packages else packages.filter { it.contains(search, ignoreCase = true) }
         val isSelectedFrozen = selectedPkg.isNotEmpty() && (selectedPkg in disabledPkgs)
         
-        // 自动加载（showSystem 变化时取消旧协程，重新加载）
         LaunchedEffect(showSystem) {
             Log.w("AppMgr", "LaunchedEffect start showSystem=$showSystem")
             loading = true
@@ -862,35 +863,27 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
             try {
                 val pkgs = withContext(Dispatchers.IO) { c.listPackages(showSystem) }
                 packages = pkgs
-                Log.w("AppMgr", "LaunchedEffect listPackages done count=${pkgs.size}")
-            } catch (e: Exception) { Log.w("AppMgr", "LaunchedEffect listPackages FAILED: ${e.message}") }
+            } catch (e: Exception) { Log.w("AppMgr", "listPackages FAILED: ${e.message}") }
             try {
                 val disabled = withContext(Dispatchers.IO) { c.listDisabledPackages() }
                 disabledPkgs = disabled
-                Log.w("AppMgr", "LaunchedEffect listDisabled done count=${disabled.size}")
-            } catch (e: Exception) { Log.w("AppMgr", "LaunchedEffect listDisabled FAILED: ${e.message}") }
-            Log.w("AppMgr", "LaunchedEffect done")
+            } catch (e: Exception) { Log.w("AppMgr", "listDisabled FAILED: ${e.message}") }
             loading = false
         }
-        
-        // 手动刷新（从刷新图标或操作后的自动刷新调用）
+
         fun refreshAll(from: String = "unknown") {
-            Log.w("AppMgr", "refreshAll called from=$from showSystem=$showSystem")
             scope.launch {
                 loading = true
                 selectedPkg = ""
                 try {
                     val pkgs = withContext(Dispatchers.IO) { c.listPackages(showSystem) }
                     packages = pkgs
-                    Log.w("AppMgr", "refreshAll listPackages done count=${pkgs.size} from=$from")
-                } catch (e: Exception) { Log.w("AppMgr", "refreshAll listPackages FAILED: ${e.message} from=$from") }
+                } catch (e: Exception) { Log.w("AppMgr", "refreshAll listPackages FAILED: ${e.message}") }
                 try {
                     val disabled = withContext(Dispatchers.IO) { c.listDisabledPackages() }
                     disabledPkgs = disabled
-                    Log.w("AppMgr", "refreshAll listDisabled done count=${disabled.size} from=$from")
-                } catch (e: Exception) { Log.w("AppMgr", "refreshAll listDisabled FAILED: ${e.message} from=$from") }
+                } catch (e: Exception) { Log.w("AppMgr", "refreshAll listDisabled FAILED: ${e.message}") }
                 loading = false
-                Log.w("AppMgr", "refreshAll done from=$from")
             }
         }
         
@@ -899,21 +892,20 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
                 try {
                     val result = action(pkg)
                     withContext(Dispatchers.Main) {
-                        statusMsg = result.lines().firstOrNull { it.isNotBlank() } ?: "完成"
+                        statusMsg = result.lines().firstOrNull { it.isNotBlank() } ?: ctx.getString(R.string.done_label)
                         if (shouldRefresh) refreshAll("after_action")
                     }
                 } catch (e: Exception) {
-                    withContext(Dispatchers.Main) { statusMsg = "错误: ${e.message}" }
+                    withContext(Dispatchers.Main) { statusMsg = "${ctx.getString(R.string.error_label)}: ${e.message}" }
                 }
             }
         }
         
         Column(modifier = Modifier.fillMaxWidth().heightIn(max = 580.dp)) {
-            // ── 搜索栏 + 切换 + 刷新 ──
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BrutalTextField(
                     value = search, onValueChange = { search = it },
-                    placeholder = "搜索应用...", color = BrewGreen,
+                    placeholder = ctx.getString(R.string.search_apps_placeholder), color = BrewGreen,
                     modifier = Modifier.weight(1f), singleLine = true,
                 )
                 Spacer(Modifier.width(6.dp))
@@ -925,10 +917,9 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
                         .padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(if (showSystem) "全部" else "第三方", color = if (showSystem) BrewGreen else BrewMuted, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(if (showSystem) ctx.getString(R.string.filter_all) else ctx.getString(R.string.filter_third_party), color = if (showSystem) BrewGreen else BrewMuted, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 }
                 Spacer(Modifier.width(6.dp))
-                // 刷新图标（加载时旋转）
                 val refreshTransition = rememberInfiniteTransition(label = "refreshSpin")
                 val refreshAngle by refreshTransition.animateFloat(
                     initialValue = 0f, targetValue = 360f,
@@ -943,7 +934,7 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        Icons.Outlined.Refresh, contentDescription = "刷新",
+                        Icons.Outlined.Refresh, contentDescription = ctx.getString(R.string.refresh),
                         tint = BrewGreen, modifier = Modifier.size(24.dp)
                             .graphicsLayer { rotationZ = if (loading) refreshAngle else 0f },
                     )
@@ -952,7 +943,6 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
             
             Spacer(Modifier.height(8.dp))
             
-            // ── 选中应用操作栏 ──
             Box(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
                     .background(if (selectedPkg.isNotEmpty()) BrewGreen.copy(alpha = 0.08f) else Color.Transparent)
@@ -960,10 +950,10 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
             ) {
                 if (selectedPkg.isNotEmpty()) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        ActionButton("启动", BrewSuccess) { doAction({ c.launchApp(it) }, selectedPkg) }
-                        ActionButton("卸载", BrewRed) { doAction({ c.uninstallApp(it) }, selectedPkg) }
+                        ActionButton(ctx.getString(R.string.launch), BrewSuccess) { doAction({ c.launchApp(it) }, selectedPkg) }
+                        ActionButton(ctx.getString(R.string.uninstall), BrewRed) { doAction({ c.uninstallApp(it) }, selectedPkg) }
                         ActionButton(
-                             if (isSelectedFrozen) "解冻" else "冻结",
+                             if (isSelectedFrozen) ctx.getString(R.string.unfreeze) else ctx.getString(R.string.freeze),
                              if (isSelectedFrozen) BrewSuccess else BrewWarning,
                          ) {
                              if (isSelectedFrozen) {
@@ -972,7 +962,7 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
                                  doAction({ c.disableApp(it) }, selectedPkg)
                              }
                          }
-                        ActionButton("提取", BrewMagenta) {
+                        ActionButton(ctx.getString(R.string.extract), BrewMagenta) {
                             val pkg = selectedPkg
                             scope.launch(Dispatchers.IO) {
                                 if (pkg.isEmpty()) return@launch
@@ -984,28 +974,27 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
                     }
                 } else {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text("点击下方应用选择操作", color = BrewMuted.copy(alpha = 0.5f), fontSize = 13.sp)
+                        Text(ctx.getString(R.string.select_app_below), color = BrewMuted.copy(alpha = 0.5f), fontSize = 13.sp)
                     }
                 }
             }
             
             if (statusMsg.isNotEmpty()) {
                 Spacer(Modifier.height(4.dp))
-                Text("  $statusMsg", color = if (statusMsg.startsWith("错误")) BrewRed else BrewGreen, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("  $statusMsg", color = if (statusMsg.startsWith(ctx.getString(R.string.error_label))) BrewRed else BrewGreen, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("共 ${filtered.size} 个应用", color = BrewMuted, fontSize = 12.sp)
-                if (loading) { Spacer(Modifier.width(8.dp)); Text("更新中...", color = BrewGreen.copy(alpha = 0.6f), fontSize = 11.sp) }
+                Text(String.format(ctx.getString(R.string.app_count_fmt), filtered.size), color = BrewMuted, fontSize = 12.sp)
+                if (loading) { Spacer(Modifier.width(8.dp)); Text(ctx.getString(R.string.updating_dots), color = BrewGreen.copy(alpha = 0.6f), fontSize = 11.sp) }
             }
             Spacer(Modifier.height(2.dp))
             
-            // ── 应用列表 ──
             Box(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                 if (loading && packages.isEmpty()) {
                     Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                        Text("加载中...", color = BrewMuted, fontSize = 14.sp)
+                        Text(ctx.getString(R.string.loading), color = BrewMuted, fontSize = 14.sp)
                     }
                 } else {
                     Column {
@@ -1042,7 +1031,7 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
 @Composable
 private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: CoroutineScope, getOrConnect: ((AdbShellClient?) -> Unit) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    AdbDialogContent("定时功能", BrewWarning, client, connected, scope, getOrConnect, onDismiss) { c ->
+    AdbDialogContent(context.getString(R.string.timer_func), BrewWarning, client, connected, scope, getOrConnect, onDismiss) { c ->
         // ── 定时消息状态 ──
         var msgContent by remember { mutableStateOf("") }
         var msgInterval by remember { mutableStateOf("5") }
@@ -1327,7 +1316,8 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
 // ── Shell命令弹窗（终端风格） ──
 @Composable
 private fun ShellDialog(client: AdbShellClient?, connected: Boolean, scope: CoroutineScope, getOrConnect: ((AdbShellClient?) -> Unit) -> Unit, onDismiss: () -> Unit) {
-    AdbDialogContent("Shell命令", BrewMagenta, client, connected, scope, getOrConnect, onDismiss,
+    val ctx = LocalContext.current
+    AdbDialogContent(ctx.getString(R.string.shell_command), BrewMagenta, client, connected, scope, getOrConnect, onDismiss,
         titleContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Shell", color = BrewMagenta, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -1980,6 +1970,7 @@ private fun MainInterface(
     onUpdateSheetVisibleChange: (Boolean) -> Unit,
     app: LabApplication,
 ) {
+    val ctx = LocalContext.current
     val lists = remember(state.apps, query, categoryFilter) {
         val visibleApps = state.apps.filter { a ->
             val matchesQuery = query.isBlank() ||
@@ -2118,6 +2109,7 @@ private fun BottomNavigationBar(
     onNavigate: (NavPage) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val ctx = LocalContext.current
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -2134,13 +2126,13 @@ private fun BottomNavigationBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val navItems = listOf(
-                NavPage.STORE to "应用商店",
-                NavPage.SCREEN_MIRROR to "屏幕镜像",
-                NavPage.PHONE_MIRROR to "手机投屏",
-                NavPage.FILE_MANAGER to "文件管理",
-                NavPage.ADB_TOOLS to "ADB工具",
-                NavPage.HID_GAMEPAD to "蓝牙手柄",
-                NavPage.SETTINGS to "设置",
+                NavPage.STORE to ctx.getString(R.string.nav_store),
+                NavPage.SCREEN_MIRROR to ctx.getString(R.string.nav_screen_mirror),
+                NavPage.PHONE_MIRROR to ctx.getString(R.string.nav_phone_mirror),
+                NavPage.FILE_MANAGER to ctx.getString(R.string.nav_file_manager),
+                NavPage.ADB_TOOLS to ctx.getString(R.string.nav_adb_tools),
+                NavPage.HID_GAMEPAD to ctx.getString(R.string.nav_hid_gamepad),
+                NavPage.SETTINGS to ctx.getString(R.string.nav_settings),
             )
             
             navItems.forEach { (page, label) ->
@@ -2199,6 +2191,7 @@ private fun StoreModule(
     onSelectApp: (BrewApp) -> Unit,
     onUpdateOpen: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     LazyColumn(
         state = listState,
         modifier = Modifier
@@ -2215,7 +2208,7 @@ private fun StoreModule(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "精选应用",
+                            text = ctx.getString(R.string.featured_apps),
                             color = BrewGreen,
                             fontSize = 24.sp,
                             fontWeight = FontWeight.Bold,
@@ -2299,7 +2292,7 @@ private fun StoreModule(
                         modifier = Modifier.weight(1f),
                         decorationBox = { inner ->
                             if (query.isBlank()) {
-                                Text("搜索应用...", color = BrewDim, fontSize = 14.sp)
+                                Text(ctx.getString(R.string.search_apps_placeholder), color = BrewDim, fontSize = 14.sp)
                             }
                             inner()
                         },
@@ -2327,7 +2320,7 @@ private fun StoreModule(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "精选",
+                            text = ctx.getString(R.string.featured),
                             color = BrewTextBright,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
@@ -2344,7 +2337,7 @@ private fun StoreModule(
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                text = "查看全部",
+                                text = ctx.getString(R.string.view_all),
                                 color = BrewText,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
@@ -2378,7 +2371,7 @@ private fun StoreModule(
             if (lists.categories.isNotEmpty()) {
                 item(key = "categories-header") {
                     Text(
-                        text = "分类",
+                        text = ctx.getString(R.string.category),
                         color = BrewMuted,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
@@ -2403,7 +2396,7 @@ private fun StoreModule(
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                text = "全部",
+                                text = ctx.getString(R.string.all),
                                 color = if (categoryFilter == null) BrewBg else BrewText,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
