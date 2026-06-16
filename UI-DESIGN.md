@@ -252,7 +252,7 @@
 | 未选中态 | 背景=BrewPanel, 文字=BrewMuted |
 | 文字 | 10sp Bold, letterSpacing 1sp |
 
-**七模块映射（水平排列，超出可左右滑动）：**
+**七模块映射（水平排列，超出可左右滑动，标签文字来自 `R.string.nav_xxx` 资源，随语言切换自动变化）：**
 
 | 页面 | label | color |
 |------|-------|-------|
@@ -560,15 +560,29 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 → SettingCard "更新状态" / BrutalButton "有更新可用" [BrewGreen]
 → BrutalButton "切换商店源" [BrewCyan]
 
-→ ── 眼镜端服务 ──
-  → SettingCard "ScreenStream" 已安装(绿)/未安装(黄)
-  → BrutalButton "重装眼镜端" [BrewWarning #F0A050] 停止→等待800ms→推送安装
-    安装中时: label 变为 "正在安装中..."，enabled=false 半透明不可点击
+  → ── 眼镜端服务 ──
+    → SettingCard "ScreenStream" 已安装(绿)/未安装(黄)
+    → BrutalButton "重装眼镜端" [BrewWarning #F0A050] 停止→等待800ms→推送安装
+      安装中时: label 变为 "正在安装中..."，enabled=false 半透明不可点击
 
-→ 开发者卡片: BrewPanel + 1dp BrewBorder 12dp 内 16dp padding
-  标签 "开发者" 10sp Bold BrewDim letterSpacing 2sp
-  装饰线 32×3dp BrewGreen
-  文字 "DLOVER" 24sp Bold BrewGreen
+  → ── 语言 ──
+    → LanguageSwitcher:
+      背景 BrewPanel, 圆角 12dp, 边框 1dp BrewBorder
+      标签 "语言" 10sp Bold uppercase BrewMuted letterSpacing 3sp
+      装饰线 32×3dp BrewCyan
+      当前语言文字 18sp Bold BrewCyan letterSpacing 1sp
+      可点击弹出 LanguagePickerDialog:
+        Dialog RoundedCornerShape(16dp), 背景 BrewPanel
+        标题 "选择语言" 18sp Bold BrewTextBright
+        选项: "简体中文" / "English"
+        选中项 → ✓ 图标 BrewGreen + 文字 BrewGreen
+        未选中 → 文字 BrewTextBright
+        点击后立即切换语言，对话框自动关闭，界面即时刷新
+
+  → 开发者卡片: BrewPanel + 1dp BrewBorder 12dp 内 16dp padding
+    标签 "开发者" 10sp Bold BrewDim letterSpacing 2sp
+    装饰线 32×3dp BrewGreen
+    文字 "DLOVER" 24sp Bold BrewGreen
 ```
 
 ---
@@ -681,3 +695,58 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 | 安装完成闪动 | AppListItem 安装完毕 | alpha 0.25→0 | tween 600ms |
 | 连接庆祝脉冲 | 眼镜已连接 | 状态点 scale 1→1.6 + alpha 混合 | tween 400ms |
 | 刷新旋转 | Header/ADB 刷新按钮 | rotationZ 0→360 | infiniteRepeatable 800ms |
+
+---
+
+## 六、本地化系统
+
+### 6.1 架构
+
+```
+[ strings.xml（values/ 简体中文 默认）] ←→ [ values-en/strings.xml（English）]
+        │                                           │
+        └────────── AppCompatDelegate ──────────────┘
+                .setApplicationLocales()
+                        │
+                LocalizationManager
+                  ├─ 首次启动检测系统语言（zh→中文，其他→English）
+                  ├─ 持久化到 SharedPreferences
+                  └─ 运行时切换后立即重建 Activity
+```
+
+### 6.2 实现方式
+
+| 组件 | 说明 |
+|------|------|
+| `LocalizationManager` | 单例，封装语言检测/切换/持久化逻辑 |
+| `LabApplication.onCreate()` | 初始化 `LocalizationManager.init(this)` |
+| `MainActivity` | 监听 `currentLocale` 状态，提供 `onSwitchLanguage` 回调 |
+| `AppCompatDelegate.setApplicationLocales()` | AndroidX 官方 API，支持 Android 5.0+ 运行时切换 |
+| Compose UI | 通过 `LocalContext.current.getString(R.string.xxx)` 引用资源 |
+
+### 6.3 字符串约定
+
+- 所有 UI 文字必须通过 `R.string.xxx` 引用，禁止硬编码
+- 默认语言（`values/strings.xml`）为简体中文
+- 英文翻译放在 `values-en/strings.xml`
+- 新增语种：在 `res/` 下新建 `values-{lang}/strings.xml`，Crowdin 自动同步
+
+### 6.4 底部导航标签映射
+
+| 页面 | 资源 ID | 中文 | English |
+|------|---------|------|---------|
+| STORE | `nav_store` | 应用商店 | App Store |
+| SCREEN_MIRROR | `nav_screen_mirror` | 屏幕镜像 | Screen Mirror |
+| PHONE_MIRROR | `nav_phone_mirror` | 手机投屏 | Phone Cast |
+| FILE_MANAGER | `nav_file_manager` | 文件管理 | File Manager |
+| ADB_TOOLS | `nav_adb_tools` | ADB工具 | ADB Tools |
+| HID_GAMEPAD | `nav_hid_gamepad` | 蓝牙手柄 | Gamepad |
+| SETTINGS | `nav_settings` | 设置 | Settings |
+
+### 6.5 Crowdin 工作流
+
+1. 开发者修改 `values/strings.xml`
+2. 同步到 Crowdin 平台（`crowdin upload sources`）
+3. 翻译人员在 Crowdin 上完成翻译
+4. 下载翻译成果（`crowdin download`），自动生成 `values-{lang}/strings.xml`
+5. 编译验证后提交代码

@@ -57,12 +57,14 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - 眼镜端 RokidLink 服务管理（安装/重装/启动/停止）
 - 商店源切换
 - 主机应用切换
+- **多语言切换**：支持简体中文/English 随时切换，首次启动自动检测系统语言
 - 应用版本和更新
 
 ## 技术栈
 
 - **语言**: Kotlin
 - **UI**: Jetpack Compose (Material 3)
+- **本地化**: Android 原生资源系统（`values/` + `values-en/`），运行时 `AppCompatDelegate.setApplicationLocales()` 切换，Crowdin 云端翻译管理
 - **设计风格**: Velvet Dark — 丝绒暗调 × 油画色板（详见 [UI-DESIGN.md](./UI-DESIGN.md)）
 - **通信**:
   - CXR-L SDK（手机-眼镜通信，用于安装/启动/卸载应用）
@@ -152,8 +154,11 @@ RokidLab/
 │   │   │   │   └── UpdateDialog.kt       更新对话框
 │   │   │   └── util/        工具
 │   │   │       ├── HttpClient.kt      统一 HTTP 请求工具
+│   │   │       ├── LocalizationManager.kt  语言切换管理（首次启动自动检测 + 运行时切换）
 │   │   │       └── ImageDecoder.kt     图片解码工具
 │   │   ├── res/             资源文件
+│   │   │   ├── values/strings.xml   简体中文（默认语言）
+│   │   │   └── values-en/strings.xml  English
 │   │   └── assets/          内置资源
 │   └── build.gradle.kts
 │
@@ -171,6 +176,7 @@ RokidLab/
 │   ├── RokidLink.apk                       通过 CXR-L SDK 安装到眼镜（自动从 RokidLink 构建同步）
 │   └── scrcpy-server.jar                   通过 ADB 推送到 /data/local/tmp/，供 scrcpy-server 启动使用
 │
+├── crowdin.yml                             Crowdin 翻译管理配置
 ├── UI-DESIGN.md                            UI 设计参考文档
 └── apps/                                   应用数据示例
 ```
@@ -212,7 +218,15 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
    - **文件管理**：浏览和管理眼镜文件
    - **ADB 工具**：应用管理、定时消息/启动、系统信息
    - **蓝牙手柄**：鼠标/游戏手柄模式控制眼镜
-   - **设置**：应用配置、服务管理
+   - **设置**：应用配置、服务管理、**语言切换**
+
+## 多语言支持
+
+- **默认语言**：简体中文（`values/strings.xml`）
+- **支持语言**：English（`values-en/strings.xml`）
+- **首次启动**：自动检测手机系统语言，zh 显示中文，其他语言显示英文
+- **运行时切换**：设置 → 语言 → 选择后立即生效，无需重启
+- **扩展语言**：通过 Crowdin 管理翻译，在 `res/` 下新建 `values-{lang}/strings.xml` 即可
 
 ## 依赖
 
