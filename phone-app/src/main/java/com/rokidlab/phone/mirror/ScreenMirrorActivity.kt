@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.Surface
 import android.view.TextureView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -24,6 +25,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -86,7 +89,7 @@ class ScreenMirrorActivity : ComponentActivity() {
         ipAddress = app.screenMirrorIp
 
         isStreaming = true
-        connectionStatus = "正在连接眼镜..."
+        connectionStatus = "Starting mirror..."
 
         setContent {
             RokidLabTheme {
@@ -95,10 +98,12 @@ class ScreenMirrorActivity : ComponentActivity() {
                         ConnectionFailedUI(
                             status = connectionStatus,
                             onRetry = {
+                                // Just reset flags and wait for TextureView to recreate → onSurfaceReady
                                 connectionFailed = false
-                                connectionStatus = "正在连接眼镜..."
+                                connectionStatus = "Starting mirror..."
                                 isStreaming = true
-                                connectToGlasses()
+                                // connectToGlasses() will be called by onSurfaceReady
+                                // when the new TextureView's Surface is available
                             },
                             onBack = { disconnectAndFinish() }
                         )
@@ -129,15 +134,19 @@ class ScreenMirrorActivity : ComponentActivity() {
         }
     }
 
+    private var isConnecting = false
+
     private fun connectToGlasses(surfaceOverride: Surface? = null) {
+        if (isConnecting) return
+        isConnecting = true
         val useSurface = surfaceOverride ?: surface
-        connectionStatus = "正在连接眼镜..."
+        connectionStatus = "Starting mirror..."
         isStreaming = true
 
         Thread {
             val client = AdbScreenMirrorClient(this, ipAddress, GLASSES_ADB_PORT)
             adbClient = client
-            if (isDestroyed) return@Thread
+            if (isDestroyed) { isConnecting = false; return@Thread }
 
             val connected = client.connect { status ->
                 runOnUiThread { connectionStatus = status }
@@ -145,15 +154,16 @@ class ScreenMirrorActivity : ComponentActivity() {
             if (isDestroyed || !connected) {
                 if (!connected) {
                     runOnUiThread {
-                        connectionStatus = "连接失败"
+                        connectionStatus = "Connect failed"
                         connectionFailed = true
                         isStreaming = false
                     }
                 }
+                isConnecting = false
                 return@Thread
             }
 
-            runOnUiThread { connectionStatus = "已连接，接收画面中..." }
+            runOnUiThread { connectionStatus = "Connected, receiving stream..." }
 
             if (useSurface != null) {
                 // H.264 硬件解码模式 - 使用 scrcpy-server
@@ -162,21 +172,21 @@ class ScreenMirrorActivity : ComponentActivity() {
                         runOnUiThread {
                             glassesWidth = w
                             glassesHeight = h
-                            Log.i(TAG, "视频尺寸: ${w}x${h}")
+                            Log.i(TAG, "video size: ${w}x${h}")
                         }
                     }
                 }
                 streamDecoder = decoder
                 decoder.start()
-                Log.i(TAG, "H.264 解码器已创建并启动")
+                Log.i(TAG, "H.264 decoder created")
 
                 // 连接后的 ADB 端 shell 命令错误等重置
-                connectionStatus = "等待 H.264 流..."
+                connectionStatus = "Waiting for H.264 stream..."
 
                 client.startH264Streaming(decoder) { status ->
                     runOnUiThread {
                         connectionStatus = status
-                        if (status.contains("失败") || status.contains("中断")) {
+                        if (status.contains("fail") || status.contains("interrupt")) {
                             connectionFailed = true
                             isStreaming = false
                         }
@@ -191,7 +201,7 @@ class ScreenMirrorActivity : ComponentActivity() {
                     onStatus = { status ->
                         runOnUiThread {
                             connectionStatus = status
-                            if (status.contains("失败") || status.contains("中断")) {
+                            if (status.contains("fail") || status.contains("interrupt")) {
                                 connectionFailed = true
                                 isStreaming = false
                             }
@@ -199,6 +209,7 @@ class ScreenMirrorActivity : ComponentActivity() {
                     }
                 )
             }
+            isConnecting = false
         }.apply {
             name = "mirror-connector"
             start()
@@ -235,7 +246,7 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "连接失败",
+            text = "Connect failed",
             color = BrewRed,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
@@ -249,7 +260,7 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
             modifier = Modifier.padding(bottom = 16.dp)
         )
         Text(
-            text = "请检查：\n1. 眼镜已连接到同一 WiFi\n2. 眼镜 ADB 网络调试已开启（指示灯绿色）\n3. IP 地址输入正确\n4. 在眼镜上已同意屏幕录制权限",
+            text = "Check:\n1. Glasses connected to same WiFi\n2. ADB over WiFi enabled (green LED)\n3. IP address correct\n4. Screen recording permission granted on glasses",
             color = BrewText,
             fontSize = 14.sp,
             modifier = Modifier.padding(bottom = 32.dp)
@@ -263,13 +274,13 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
                 contentColor = BrewTextBright
             )
         ) {
-            Text("重试连接")
+            Text("Reconnect")
         }
         TextButton(
             onClick = onBack,
             modifier = Modifier.padding(top = 8.dp)
         ) {
-            Text("返回设置", color = BrewTextBright)
+            Text("Back", color = BrewTextBright)
         }
     }
 }
@@ -342,7 +353,7 @@ private fun ScreenMirrorUI(
         )
 
         // 加载中或画面未就绪时显示状态文字
-        if (!surfaceReady || status.contains("连接")) {
+        if (!surfaceReady || status.contains("Connecting") || status.contains("scrcpy") || status.contains("tunnel")) {
             Text(
                 text = status,
                 color = BrewTextBright,
@@ -409,7 +420,7 @@ private fun ScreenMirrorUI(
                                             lastTapTime = now
                                             val gx = mapToGlassesX(upPos.x, containerWidth, containerHeight, glassesWidth, glassesHeight, scale, offsetX, offsetY)
                                             val gy = mapToGlassesY(upPos.y, containerWidth, containerHeight, glassesWidth, glassesHeight, scale, offsetX, offsetY)
-                                            Log.i("ScreenMirror", "手指抬起: pos=${upPos.x.toInt()},${upPos.y.toInt()} -> glasses=$gx,$gy")
+                                            Log.i("ScreenMirror", "finger up: pos=${upPos.x.toInt()},${upPos.y.toInt()} -> glasses=$gx,$gy")
                                             if (gx in 0 until glassesWidth && gy in 0 until glassesHeight) {
                                                 adbClient?.sendTap(gx, gy)
                                             }
@@ -455,7 +466,7 @@ private fun ScreenMirrorUI(
                 modifier = Modifier
                     .background(BrewPanel.copy(alpha = 0.8f), CircleShape)
             ) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", tint = BrewTextBright)
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", tint = BrewTextBright)
             }
             Text(
                 text = status,

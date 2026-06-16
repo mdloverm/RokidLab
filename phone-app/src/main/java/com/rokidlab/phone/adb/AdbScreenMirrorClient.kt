@@ -39,6 +39,7 @@ class AdbScreenMirrorClient(
     private var socket: Socket? = null
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
+    private val SOCKET_TIMEOUT_MS = 3000
     private var keyPair: KeyPair? = null
     private var isRunning = false
     private var localId = java.util.concurrent.atomic.AtomicInteger(1)
@@ -73,25 +74,27 @@ class AdbScreenMirrorClient(
         private const val CONNECT_VERSION = 0x01000000
         private const val HEADER_LENGTH = 24
         private const val MAX_STREAM_BUFFER_SIZE = 10 * 1024 * 1024 // 10MB 上限
+        private const val MAX_ADB_PAYLOAD = 1024 * 1024 // 1MB：ADB 单个包最大负载，超过视为损坏
     }
 
     fun connect(onStatus: (String) -> Unit): Boolean {
         return try {
-            onStatus("正在连接眼镜 ($ipAddress:$port)...")
-            Log.i(TAG, "正在连接 $ipAddress:$port")
+            onStatus("Connecting glasses ($ipAddress:$port)...")
+            Log.i(TAG, "Connecting $ipAddress:$port")
 
             socket = Socket()
             socket?.tcpNoDelay = true
+            socket?.soTimeout = SOCKET_TIMEOUT_MS
             socket?.connect(java.net.InetSocketAddress(ipAddress, port), 5000)
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
-            Log.i(TAG, "TCP 连接已建立")
-            onStatus("正在完成 ADB 认证...")
+            Log.i(TAG, "TCP connected")
+            onStatus("ADB auth in progress...")
 
             loadOrCreateKeys()
             doHandshake()
-            Log.i(TAG, "ADB 连接成功")
-            onStatus("连接成功")
+            Log.i(TAG, "ADB connected")
+            onStatus("Connected")
             true
         } catch (e: Exception) {
             Log.e(TAG, "连接失败: ${e.message}", e)
@@ -130,7 +133,7 @@ class AdbScreenMirrorClient(
                             sendPacket(CMD_AUTH, AUTH_SIGNATURE, 0, sig.sign())
                             sentSignature = true
                         } else {
-                            Log.i(TAG, "AUTH TOKEN -> 发送公钥，请查看眼镜点击允许")
+                            Log.i(TAG, "AUTH TOKEN -> sending public key, check glasses to allow")
                             val pubKeyPayload = getAdbPublicKeyPayload()
                             sendPacket(CMD_AUTH, AUTH_RSA_PUBLIC, 0, pubKeyPayload)
                         }
@@ -197,7 +200,7 @@ class AdbScreenMirrorClient(
                         var checkResult = ""
                         var checkDone = false
                         while (isRunning && !checkDone && System.currentTimeMillis() < checkDeadline) {
-                            val msg = readPacket()
+                            val msg = try { readPacket() } catch (e: java.net.SocketTimeoutException) { continue }
                             if (msg.arg1 == checkId) {
                                 when (msg.command) {
                                     CMD_OKAY -> {}
@@ -216,7 +219,7 @@ class AdbScreenMirrorClient(
                             }
                         }
                         if (checkResult.contains("EXISTS")) {
-                            Log.i(TAG, "scrcpy-server.jar 已存在，跳过推送")
+                            Log.i(TAG, "scrcpy-server.jar exists, skip push")
                         } else {
                              // 不存在，推送
                              val pushId = localId.getAndIncrement()
@@ -235,7 +238,7 @@ class AdbScreenMirrorClient(
                                                  jarSent = true
                                                  val jarBytes = context.assets.open("scrcpy-server.jar").use { it.readBytes() }
                                                  sendPacket(CMD_WRTE, pushId, pushRemoteId, jarBytes)
-                                                 Log.i(TAG, "jar 已推送, size=${jarBytes.size}")
+                                                 Log.i(TAG, "jar pushed, size=${jarBytes.size}")
                                              } else {
                                                  // 数据已确认，关闭流
                                                  sendPacket(CMD_CLSE, pushId, pushRemoteId, null)
@@ -262,12 +265,12 @@ class AdbScreenMirrorClient(
                             }
                             if (pushRemoteId >= 0) sendPacket(CMD_CLSE, pushId, pushRemoteId, null)
                             Thread.sleep(300)
-                            Log.i(TAG, "jar 推送完成")
+                            Log.i(TAG, "jar push done")
                         }
                     } catch (_: Exception) {}
 
                     // Step 1: 启动新 server（nohup 保护进程不被 shell 退出杀死）
-                    onStatus("正在启动 scrcpy-server...")
+                    onStatus("Starting scrcpy-server...")
                     val shellId = localId.getAndIncrement()
                     val shellCmd = ("shell:nohup app_process -Djava.class.path=/data/local/tmp/scrcpy-server.jar " +
                             "/ com.genymobile.scrcpy.Server 3.3.4 " +
@@ -281,7 +284,7 @@ class AdbScreenMirrorClient(
                     val shellDeadline = System.currentTimeMillis() + 15_000L
                     var shellDone = false
                     while (isRunning && !shellDone && System.currentTimeMillis() < shellDeadline) {
-                        val msg = readPacket()
+                        val msg = try { readPacket() } catch (e: java.net.SocketTimeoutException) { continue }
                         if (msg.arg1 == shellId) {
                             when (msg.command) {
                                 CMD_OKAY -> {}
@@ -307,7 +310,7 @@ class AdbScreenMirrorClient(
                     }
 
                     // Step 2: 通过 ADB 隧道连接 localabstract:scrcpy
-                    onStatus("连接 scrcpy 隧道...")
+                    onStatus("Connecting scrcpy tunnel...")
                     Thread.sleep(500)
                     streamId = localId.getAndIncrement()
                     val connectCmd = "localabstract:scrcpy\u0000"
@@ -318,13 +321,13 @@ class AdbScreenMirrorClient(
                     val connectDeadline = System.currentTimeMillis() + 10_000L
                     var connected = false
                     while (isRunning && !connected && System.currentTimeMillis() < connectDeadline) {
-                        val msg = readPacket()
+                        val msg = try { readPacket() } catch (e: java.net.SocketTimeoutException) { continue }
                         if (msg.arg1 == streamId) {
                             when (msg.command) {
                                 CMD_OKAY -> {
                                     streamRemoteId = msg.arg0
                                     connected = true
-                                    Log.i(TAG, "LocalSocket 视频连接成功")
+                                    Log.i(TAG, "LocalSocket video connected")
                                 }
                                 CMD_CLSE -> {
                                     Log.w(TAG, "LocalSocket 连接被拒绝，重试中")
@@ -335,7 +338,7 @@ class AdbScreenMirrorClient(
                                     streamRemoteId = msg.arg0
                                     connected = true
                                     sendPacket(CMD_OKAY, streamId, msg.arg0, null)
-                                    Log.i(TAG, "有数据到达，LocalSocket 视频连接成功")
+                                    Log.i(TAG, "data arrived, LocalSocket video connected")
                                     decoder.feedData(msg.payload)
                                 }
                             }
@@ -348,7 +351,7 @@ class AdbScreenMirrorClient(
                         }
                     }
                     if (!connected) {
-                        Log.w(TAG, "无法连接 LocalSocket，重试...")
+                        Log.w(TAG, "cannot connect LocalSocket, retrying...")
                         sendPacket(CMD_CLSE, streamId, 0, null)
                         continue
                     }
@@ -368,10 +371,10 @@ class AdbScreenMirrorClient(
                     val idleTimeout = 180_000L // 3 分钟无数据则重连
 
                     while (isRunning) {
-                        // 处理触摸命令队列（优先处理触控，减少延迟）
-                        while (true) {
-                            val cmd = touchQueue.poll() ?: break
-                            cmd.run()
+                        // 每轮最多处理 1 个触摸命令，防止 ADB Shell 响应洪流阻塞视频流
+                        val touchCmd = touchQueue.poll()
+                        if (touchCmd != null) {
+                            touchCmd.run()
                         }
 
                         val msg: AdbMessage
@@ -390,7 +393,7 @@ class AdbScreenMirrorClient(
                                     decoder.feedData(msg.payload)
                                 }
                                 CMD_CLSE -> {
-                                    Log.w(TAG, "流被对端关闭")
+                                    Log.w(TAG, "stream closed by peer")
                                     break
                                 }
                                 else -> {}
@@ -405,11 +408,11 @@ class AdbScreenMirrorClient(
 
                         // 检查空闲超时
                         if (System.currentTimeMillis() - lastDataTime > idleTimeout) {
-                            Log.w(TAG, "流空闲超时")
+                            Log.w(TAG, "stream idle timeout")
                             break
                         }
                     }
-                    Log.i(TAG, "流结束, 共接收 $totalBytes 字节")
+                    Log.i(TAG, "stream ended, total $totalBytes bytes")
                 } catch (e: Exception) {
                     if (e !is java.net.SocketTimeoutException) {
                         if (e.message?.let { it.contains("Socket closed") || it.contains("Broken pipe") } == true) {
@@ -427,7 +430,8 @@ class AdbScreenMirrorClient(
                 }
 
                 if (isRunning) {
-                    decoder.reset()
+                    decoder.stop()
+                    decoder.start()
                     onStatus("重新连接...")
                     // 重新建立 ADB 连接
                     var reconnected = false
@@ -438,11 +442,12 @@ class AdbScreenMirrorClient(
                             socket?.close()
                             socket = Socket()
                             socket?.tcpNoDelay = true
+                            socket?.soTimeout = SOCKET_TIMEOUT_MS
                             socket?.connect(java.net.InetSocketAddress(ipAddress, port), 5000)
                             inputStream = socket?.getInputStream()
                             outputStream = socket?.getOutputStream()
                             doHandshake()
-                            Log.i(TAG, "重连成功")
+                            Log.i(TAG, "reconnect ok")
                             reconnected = true
                             break
                         } catch (e: Exception) {
@@ -450,7 +455,7 @@ class AdbScreenMirrorClient(
                         }
                     }
                     if (!reconnected && isRunning) {
-                        Log.w(TAG, "重连多次失败，继续重试")
+                        Log.w(TAG, "reconnect failed multiple times, keep retrying")
                         Thread.sleep(3000)
                     }
                 }
@@ -478,9 +483,10 @@ class AdbScreenMirrorClient(
 
                 while (isRunning) {
                     try {
-                        while (true) {
-                            val cmd = touchQueue.poll() ?: break
-                            cmd.run()
+                        // 每轮最多处理 1 个触摸命令
+                        val touchCmd = touchQueue.poll()
+                        if (touchCmd != null) {
+                            touchCmd.run()
                         }
 
                         val msg = readPacket()
@@ -553,7 +559,7 @@ class AdbScreenMirrorClient(
                                                 totalMs += elapsedMs
                                                 if (frameCount % 5 == 0) {
                                                     val fps = frameCount * 1000f / totalMs
-                                                    Log.i(TAG, "帧 #$frameCount: 480x640 ${elapsedMs}ms ${fps.toInt()}fps")
+                                                    Log.i(TAG, "frame #$frameCount: 480x640 ${elapsedMs}ms ${fps.toInt()}fps")
                                                 }
                                                 frameFound = true
                                                 break  // 处理了一帧，等下一个 WRTE
@@ -589,7 +595,7 @@ class AdbScreenMirrorClient(
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "流读取错误: ${e.message}")
+                        Log.e(TAG, "stream read error: ${e.message}")
                         Thread.sleep(500)
                     }
                 }
@@ -599,55 +605,13 @@ class AdbScreenMirrorClient(
         }.start()
     }
 
-    /**
-     * 仅处理触摸事件，不进行视频流接收。
-     * 视频流改为通过 TCP Port 6556 直接接收 JPEG 帧。
-     */
-    fun startTouchProcessing() {
-        isRunning = true
-        Thread {
-            try {
-                // 打开一个空 shell，用于处理触摸命令的 ADB 协议交互
-                val shellId = localId.getAndIncrement()
-                val dest = "shell:echo ready\u0000"
-                sendPacket(CMD_OPEN, shellId, 0, dest.toByteArray(Charsets.UTF_8))
-                Log.i(TAG, "触摸处理流已打开，streamId=$shellId")
-                var opened = false
-                while (isRunning) {
-                    try {
-                        while (true) {
-                            val cmd = touchQueue.poll() ?: break
-                            cmd.run()
-                        }
-                        val msg = readPacket()
-                        if (msg.arg1 == shellId) {
-                            when (msg.command) {
-                                CMD_OKAY -> { opened = true }
-                                CMD_WRTE -> { sendPacket(CMD_OKAY, shellId, msg.arg0, null) }
-                                CMD_CLSE -> {
-                                    sendPacket(CMD_CLSE, shellId, msg.arg0, null)
-                                    break
-                                }
-                                else -> {}
-                            }
-                        }
-                    } catch (e: Exception) {
-                        if (isRunning) Thread.sleep(500)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "触摸处理错误: ${e.message}")
-            }
-        }.apply { name = "touch-processor" }.start()
-    }
-
     fun sendTap(x: Int, y: Int) {
         touchQueue.add {
             try {
                 val sid = localId.getAndIncrement()
                 sendPacket(CMD_OPEN, sid, 0, "shell:input tap $x $y\u0000".toByteArray(Charsets.UTF_8))
             } catch (e: Exception) {
-                Log.e(TAG, "sendTap 失败: ${e.message}")
+                Log.e(TAG, "sendTap failed: ${e.message}")
             }
         }
     }
@@ -669,7 +633,7 @@ class AdbScreenMirrorClient(
                 val sid = localId.getAndIncrement()
                 sendPacket(CMD_OPEN, sid, 0, "shell:input keyevent $key\u0000".toByteArray(Charsets.UTF_8))
             } catch (e: Exception) {
-                Log.e(TAG, "sendKeyEvent 失败: ${e.message}")
+                Log.e(TAG, "sendKeyEvent failed: ${e.message}")
             }
         }
     }
@@ -712,6 +676,10 @@ class AdbScreenMirrorClient(
         msg.checksum = buf.getInt()
         msg.magic = buf.getInt()
 
+        if (msg.payloadLength < 0 || msg.payloadLength > MAX_ADB_PAYLOAD) {
+            throw java.io.IOException("非法 payload 大小: ${msg.payloadLength}")
+        }
+
         if (msg.payloadLength > 0) {
             msg.payload = ByteArray(msg.payloadLength)
             readFully(msg.payload)
@@ -725,7 +693,7 @@ class AdbScreenMirrorClient(
         var offset = 0
         while (offset < buffer.size) {
             val read = inputStream?.read(buffer, offset, buffer.size - offset) ?: -1
-            if (read < 0) throw java.io.IOException("流已关闭")
+            if (read < 0) throw java.io.IOException("stream closed")
             offset += read
         }
     }
