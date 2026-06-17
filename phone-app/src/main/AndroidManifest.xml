@@ -35,7 +35,7 @@
         android:name=".app.LabApplication"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
+        android:label="Rokid Lab"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:usesCleartextTraffic="${cleartextTrafficPermitted}"
         android:supportsRtl="true"

@@ -154,50 +154,21 @@ private fun LanguageDialog(
     onDismiss: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = BrewPanel,
-        titleContentColor = BrewTextBright,
-        textContentColor = BrewText,
-        shape = BrewShapeLarge,
-        title = {
-            Text(ctx.getString(R.string.select_language), color = BrewTextBright, fontWeight = FontWeight.Bold)
-        },
-        text = {
-            Column {
-                LocalizationManager.AppLocale.entries.forEach { locale ->
-                    val selected = locale.code == currentCode
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(BrewShapeMedium)
-                            .background(if (selected) BrewPurple.copy(alpha = 0.15f) else Color.Transparent)
-                            .clickable { onSelect(locale.code) }
-                            .padding(16.dp),
-                    ) {
-                        Column {
-                            Text(
-                                text = locale.displayName,
-                                color = if (selected) BrewPurple else BrewText,
-                                fontSize = 16.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                            )
-                            Text(
-                                text = locale.displayNameEnglish,
-                                color = BrewMuted,
-                                fontSize = 12.sp,
-                            )
-                        }
-                    }
-                }
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.select_language)) {
+        BrewDialogContent {
+            LocalizationManager.AppLocale.entries.forEach { locale ->
+                val selected = locale.code == currentCode
+                BrewDialogSelectItem(
+                    primaryText = locale.displayName,
+                    secondaryText = locale.displayNameEnglish,
+                    isSelected = selected,
+                    onClick = { onSelect(locale.code) },
+                    selectedColor = BrewPurple,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
             }
-        },
-        confirmButton = {
-            androidx.compose.material3.TextButton(onClick = onDismiss) {
-                Text(ctx.getString(R.string.cancel), color = BrewMuted)
-            }
-        },
-    )
+        }
+    }
 }
 
 @Composable

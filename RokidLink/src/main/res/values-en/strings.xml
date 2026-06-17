@@ -1,5 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">RokidLink</string>
     <!-- Status strings -->
     <string name="status_checking_wifi">Checking WiFi...</string>
     <string name="status_wifi_disabled">WiFi is disabled</string>

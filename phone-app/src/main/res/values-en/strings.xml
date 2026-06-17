@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- App -->
-    <string name="app_name">Rokid Lab</string>
-    <string name="app_author">DLOVER</string>
     <string name="app_description">Rokid Glasses Companion App</string>
 
     <!-- Navigation / Store -->
@@ -253,9 +251,6 @@
     <string name="uninstall_failed_toast">Failed to uninstall %s from glasses</string>
     <string name="no_package_for_target">No %s package for %s</string>
     <string name="install_failed_simple">Install failed: %s</string>
-    <string name="rokidlink_install_success">RokidLink installed successfully</string>
-    <string name="rokidlink_install_failed">RokidLink installation failed, check glasses connection</string>
-    <string name="rokidlink_install_error">RokidLink installation failed, please check glasses connection and retry</string>
     <string name="app_not_installed_on_phone">%s is not installed on phone</string>
     <string name="reset_guide">Host app selection has been reset, please complete the setup guide again</string>
     <string name="screen_record_permission">Screen recording permission is required to project phone screen to glasses</string>
@@ -298,7 +293,6 @@
     <string name="changelog_section_content">What\'s New</string>
     <string name="view_full_changelog">View Full Changelog</string>
     <string name="changelog_placeholder">Release notes will appear here after the registry imports GitHub releases.</string>
-    <string name="no_changelog_placeholder">Release notes will appear here after the registry imports RokidLab GitHub releases.</string>
     <string name="latest_version_text">Latest Version</string>
 
     <!-- StoreInstallState -->
@@ -362,7 +356,6 @@
     <string name="authorize_in_host">Please authorize in %s first.</string>
 
     <!-- PhonePackageInstallHelper -->
-    <string name="allow_install_app">Please allow installation from RokidLab, then try again.</string>
     <string name="uninstall_page_opened">Phone uninstall page opened: %s.</string>
     <string name="phone_uninstall_failed">Phone uninstall failed: %s</string>
     <string name="install_session_submitted">Install session submitted. Waiting for confirmation...</string>

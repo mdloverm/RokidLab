@@ -56,7 +56,16 @@ object AdbKeyManager {
         try {
             FileOutputStream(privKeyFile).use { it.write(kp.private.encoded) }
             FileOutputStream(pubKeyFile).use { it.write(kp.public.encoded) }
-            Log.i(TAG, "ADB key generated and persisted")
+            // 设置私钥文件权限：仅所有者可读写
+            privKeyFile.setReadable(false, false)
+            privKeyFile.setReadable(true, true)
+            privKeyFile.setWritable(false, false)
+            privKeyFile.setWritable(true, true)
+            // 设置公钥文件权限：所有者可读写，其他用户只读
+            pubKeyFile.setReadable(true, false)
+            pubKeyFile.setWritable(false, false)
+            pubKeyFile.setWritable(true, true)
+            Log.i(TAG, "ADB key generated and persisted with secure permissions")
         } catch (e: Exception) {
             Log.w(TAG, "ADB key persistence failed (does not affect current connection): ${e.message}")
         }

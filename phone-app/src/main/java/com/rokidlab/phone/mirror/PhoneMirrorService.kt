@@ -1,6 +1,7 @@
 package com.rokidlab.phone.mirror
 
 import com.rokidlab.phone.R
+import com.rokidlab.phone.util.AppConfig
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -38,9 +39,6 @@ class PhoneMirrorService : Service() {
         private const val TAG = "PhoneMirrorService"
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "PhoneMirror"
-        private const val DEFAULT_PORT = 7654
-        /** 基准分辨率（短边） */
-        private const val BASE_SIZE = 480
 
         fun startService(context: Context, glassesIp: String, port: Int, resultCode: Int, data: Intent) {
             val intent = Intent(context, PhoneMirrorService::class.java).apply {
@@ -64,7 +62,7 @@ class PhoneMirrorService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var mediaProjection: MediaProjection? = null
     private var glassesIp: String = ""
-    private var port: Int = DEFAULT_PORT
+    private var port: Int = AppConfig.DEFAULT_MIRROR_PORT
     private var resultCode: Int = -1
     private var projectionData: Intent? = null
     @Volatile
@@ -73,13 +71,15 @@ class PhoneMirrorService : Service() {
     private var imageHandler: Handler? = null
     private var imageHandlerThread: HandlerThread? = null
 
-    /** 当前虚拟显示器宽高（屏幕短边缩放到 BASE_SIZE） */
-    private var mirrorWidth = BASE_SIZE
-    private var mirrorHeight = BASE_SIZE
+    /** 当前虚拟显示器宽高（屏幕短边缩放到 MIRROR_BASE_SIZE） */
+    private var mirrorWidth = AppConfig.MIRROR_BASE_SIZE
+    private var mirrorHeight = AppConfig.MIRROR_BASE_SIZE
     /** 当前屏幕物理尺寸和 DPI（用于计算缩放比例） */
     private var screenWidth = 0
     private var screenHeight = 0
     private var screenDensity = DisplayMetrics.DENSITY_DEFAULT
+    /** 复用灰度数据缓冲区，避免每帧创建新数组 */
+    private var reusableGrayData: ByteArray? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -95,7 +95,7 @@ class PhoneMirrorService : Service() {
 
         if (intent != null) {
             glassesIp = intent.getStringExtra("glassesIp") ?: ""
-            port = intent.getIntExtra("port", DEFAULT_PORT)
+            port = intent.getIntExtra("port", AppConfig.DEFAULT_MIRROR_PORT)
             resultCode = intent.getIntExtra("resultCode", -1)
             projectionData = intent.getParcelableExtra("data")
 
@@ -153,7 +153,7 @@ class PhoneMirrorService : Service() {
         Thread {
             try {
                 try {
-                    // 1. 获取屏幕真实尺寸，按 BASE_SIZE 等比缩放
+                    // 1. 获取屏幕真实尺寸，按 MIRROR_BASE_SIZE 等比缩放
                     val metrics = DisplayMetrics()
                     val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
                     val display = displayManager.displays[0]
@@ -164,10 +164,10 @@ class PhoneMirrorService : Service() {
                     updateMirrorSize(isLandscapeNow())
                     Log.i(TAG, "Screen size: ${screenWidth}x${screenHeight}, Mirror size: ${mirrorWidth}x${mirrorHeight}")
 
-                    // 2. 连接眼镜（3秒超时）
+                    // 2. 连接眼镜（使用配置的超时时间）
                     Log.i(TAG, "Connecting to glasses: $glassesIp:$port")
                     socket = Socket()
-                    socket?.connect(InetSocketAddress(glassesIp, port), 3000)
+                    socket?.connect(InetSocketAddress(glassesIp, port), AppConfig.MIRROR_CONNECT_TIMEOUT_MS)
                     socket?.tcpNoDelay = true
                     socket?.keepAlive = true
                     outputStream = socket?.getOutputStream()
@@ -238,15 +238,15 @@ class PhoneMirrorService : Service() {
     }
 
     /**
-     * 根据方向计算镜像尺寸（短边缩放到 BASE_SIZE，长边等比）
+     * 根据方向计算镜像尺寸（短边缩放到 MIRROR_BASE_SIZE，长边等比）
      */
     private fun updateMirrorSize(isLandscape: Boolean) {
         if (isLandscape) {
-            mirrorWidth = BASE_SIZE
-            mirrorHeight = (BASE_SIZE * screenHeight.toFloat() / screenWidth).toInt()
+            mirrorWidth = AppConfig.MIRROR_BASE_SIZE
+            mirrorHeight = (AppConfig.MIRROR_BASE_SIZE * screenHeight.toFloat() / screenWidth).toInt()
         } else {
-            mirrorHeight = BASE_SIZE
-            mirrorWidth = (BASE_SIZE * screenWidth.toFloat() / screenHeight).toInt()
+            mirrorHeight = AppConfig.MIRROR_BASE_SIZE
+            mirrorWidth = (AppConfig.MIRROR_BASE_SIZE * screenWidth.toFloat() / screenHeight).toInt()
         }
     }
 
@@ -301,6 +301,7 @@ class PhoneMirrorService : Service() {
 
     /**
      * 从 RGBA_8888 图像提取灰度数据（动态尺寸）
+     * 使用整数运算优化性能，复用缓冲区减少 GC
      */
     private fun processImage(image: Image) {
         val w = image.width
@@ -317,7 +318,8 @@ class PhoneMirrorService : Service() {
             return
         }
 
-        val grayData = ByteArray(w * h)
+        // 复用或创建灰度数据缓冲区
+        val grayData = reusableGrayData?.takeIf { it.size == w * h } ?: ByteArray(w * h).also { reusableGrayData = it }
         var bufferIndex = 0
         var dataIndex = 0
 
@@ -326,7 +328,8 @@ class PhoneMirrorService : Service() {
                 val r = buffer.get(bufferIndex).toInt() and 0xFF
                 val g = buffer.get(bufferIndex + 1).toInt() and 0xFF
                 val b = buffer.get(bufferIndex + 2).toInt() and 0xFF
-                val gray = (0.299 * r + 0.587 * g + 0.114 * b).toInt().toByte()
+                // 使用整数运算优化：gray = (299*r + 587*g + 114*b + 500) / 1000
+                val gray = ((299 * r + 587 * g + 114 * b + 500) / 1000).toByte()
                 grayData[dataIndex++] = gray
                 bufferIndex += pixelStride
             }
@@ -372,11 +375,11 @@ class PhoneMirrorService : Service() {
     }
 
     /**
-     * 重连眼镜 Socket（最多重试 3 次后放弃）
+     * 重连眼镜 Socket（最多重试后放弃）
      */
     private var reconnectAttempts = 0
     private fun reconnectSocket() {
-        if (reconnectAttempts >= 3) {
+        if (reconnectAttempts >= AppConfig.MIRROR_MAX_RECONNECT_ATTEMPTS) {
             Log.w(TAG, "Socket reconnect max attempts reached, stopping mirror")
             stopMirror()
             return
@@ -387,14 +390,14 @@ class PhoneMirrorService : Service() {
         if (!isMirrorRunning) return
         try {
             socket = Socket()
-            socket?.connect(InetSocketAddress(glassesIp, port), 3000)
+            socket?.connect(InetSocketAddress(glassesIp, port), AppConfig.MIRROR_CONNECT_TIMEOUT_MS)
             socket?.tcpNoDelay = true
             socket?.keepAlive = true
             outputStream = socket?.getOutputStream()
             reconnectAttempts = 0
             Log.i(TAG, "Socket reconnected successfully")
         } catch (e: Exception) {
-            Log.w(TAG, "Socket reconnect failed ($reconnectAttempts/3): ${e.message}")
+            Log.w(TAG, "Socket reconnect failed ($reconnectAttempts/${AppConfig.MIRROR_MAX_RECONNECT_ATTEMPTS}): ${e.message}")
         }
     }
 
@@ -402,21 +405,29 @@ class PhoneMirrorService : Service() {
         if (!isMirrorRunning) return
         isMirrorRunning = false
         runCatching {
+            // 先取消注册监听器，防止回调
             orientationListener?.disable()
             orientationListener = null
+            // 停止并等待 HandlerThread 完全退出
             imageHandler?.removeCallbacksAndMessages(null)
             imageHandler = null
-            imageHandlerThread?.quitSafely()
+            imageHandlerThread?.quit()
+            imageHandlerThread?.join(1000) // 等待最多1秒
             imageHandlerThread = null
+            // 释放资源
             imageReader?.close()
+            imageReader = null
             surface?.release()
+            surface = null
             virtualDisplay?.release()
+            virtualDisplay = null
             mediaProjection?.stop()
+            mediaProjection = null
             outputStream?.close()
+            outputStream = null
             socket?.close()
+            socket = null
         }
-        socket = null
-        outputStream = null
         stopSelf()
     }
 }

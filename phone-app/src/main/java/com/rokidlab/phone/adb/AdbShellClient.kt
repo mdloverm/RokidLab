@@ -1,5 +1,6 @@
 package com.rokidlab.phone.adb
 
+import com.rokidlab.phone.util.AppConfig
 import android.content.Context
 import android.util.Base64
 import android.util.Log
@@ -51,8 +52,8 @@ class AdbShellClient(
         Log.i(TAG, "Connecting to $ipAddress:$port...")
         socket = Socket()
         socket?.tcpNoDelay = true
-        socket?.soTimeout = 10000
-        socket?.connect(java.net.InetSocketAddress(ipAddress, port), 10000)
+        socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+        socket?.connect(java.net.InetSocketAddress(ipAddress, port), AppConfig.ADB_CONNECT_TIMEOUT_MS)
         Log.i(TAG, "TCP connection established")
         inputStream = socket?.getInputStream()
         outputStream = socket?.getOutputStream()
@@ -121,6 +122,8 @@ class AdbShellClient(
     }
 
     fun disconnect() {
+        try { inputStream?.close() } catch (_: Exception) {}
+        try { outputStream?.close() } catch (_: Exception) {}
         try { socket?.close() } catch (_: Exception) {}
         socket = null
         inputStream = null
@@ -229,14 +232,6 @@ class AdbShellClient(
         val localFile = File(localDir, "${packageName}.apk")
         val pullOk = pullFile(remoteDest, localFile.absolutePath)
         return if (pullOk) "已下载到手机 Download/${packageName}.apk" else "拉取到手机失败"
-    }
-
-    fun openDownloads() {
-        // 尝试多种方式打开下载目录，全部 2>/dev/null 避免异常
-        executeShellCommand("am start -a android.settings.INTERNAL_STORAGE_SETTINGS 2>/dev/null")
-        executeShellCommand("am start -a android.intent.action.VIEW -d content://com.android.externalstorage.documents/document/primary%3ADownload 2>/dev/null")
-        executeShellCommand("am start -a android.intent.action.MAIN -d content://com.android.externalstorage.documents/document/primary%3ADownload 2>/dev/null")
-        executeShellCommand("am start -a android.intent.action.VIEW -d file:///sdcard/Download 2>/dev/null")
     }
 
     fun sendNotification(title: String, content: String): String {

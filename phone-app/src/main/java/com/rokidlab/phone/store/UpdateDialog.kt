@@ -70,16 +70,8 @@ internal fun UpdateDialog(
     onCancelDownload: (() -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = true),
-    ) {
-        Card(
-            shape = BrewShapeXLarge,
-            colors = CardDefaults.cardColors(containerColor = BrewPanelAlt),
-            border = BorderStroke(1.dp, BrewBorder),
-        ) {
-            Column(modifier = Modifier.padding(24.dp)) {
+    BrewDialog(onDismiss = onDismiss) {
+        Column(modifier = Modifier.padding(24.dp)) {
                 Text(
                     if (downloading) ctx.getString(R.string.download_in_progress) else ctx.getString(R.string.update_available_short),
                     style = MaterialTheme.typography.titleLarge,
@@ -88,7 +80,7 @@ internal fun UpdateDialog(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    if (downloading) "RokidLab $version（$downloadPercent%）" else ctx.getString(R.string.update_available_info, version),
+                    if (downloading) "RokidLab $version（$downloadPercent%）" else "RokidLab $version is ready to install.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = BrewText,
                 )
@@ -126,7 +118,6 @@ internal fun UpdateDialog(
                         Text(ctx.getString(R.string.update_now), color = BrewBg)
                     }
                 }
-            }
         }
     }
 }
@@ -213,7 +204,7 @@ private fun UpdateHero(state: BrewSelfUpdateState, modifier: Modifier = Modifier
                 .weight(1f),
         ) {
             Text(
-                ctx.getString(R.string.rokidlab_update),
+                "RokidLab Update",
                 color = BrewTextBright,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -342,7 +333,7 @@ private fun UpdateChangelog(state: BrewSelfUpdateState, modifier: Modifier = Mod
     Column(modifier = modifier.fillMaxWidth()) {
         if (state.changes.isEmpty() && state.notes.isBlank()) {
             Text(
-                ctx.getString(R.string.no_changelog_placeholder),
+                "Release notes will appear here after the registry imports RokidLab GitHub releases.",
                 color = BrewMuted,
                 fontSize = 13.sp,
                 lineHeight = 19.sp,

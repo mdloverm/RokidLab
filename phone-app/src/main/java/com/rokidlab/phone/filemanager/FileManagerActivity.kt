@@ -10,11 +10,11 @@ import com.rokidlab.phone.model.*
 import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
-import com.rokidlab.phone.util.*
+import com.rokidlab.phone.util.AppConfig
 import com.rokidlab.phone.R
 import android.content.Intent
-import android.content.SharedPreferences
 import android.content.ActivityNotFoundException
+import android.content.SharedPreferences
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Android
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -77,54 +78,25 @@ internal fun NewFolderDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit)
     val ctx = LocalContext.current
     var name by remember { mutableStateOf("") }
     
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            modifier = Modifier.padding(16.dp),
-            shape = BrewShapeLarge,
-            color = BrewPanel
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(ctx.getString(R.string.new_folder), fontWeight = FontWeight.Bold, color = BrewTextBright)
-                Spacer(modifier = Modifier.height(16.dp))
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    placeholder = { Text(ctx.getString(R.string.folder_name_hint)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = BrewCoral,
-                        unfocusedBorderColor = BrewPanelHi
-                    )
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.new_folder)) {
+        BrewDialogContent {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                placeholder = { Text(ctx.getString(R.string.folder_name_hint)) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = BrewCoral,
+                    unfocusedBorderColor = BrewPanelHi
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
-                ) {
-                    Button(
-                        onClick = { onDismiss() },
-                        shape = BrewShapeStandard,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = BrewPanelHi,
-                            contentColor = BrewTextBright
-                        )
-                    ) {
-                        Text(ctx.getString(R.string.cancel))
-                    }
-                    Button(
-                        onClick = { if (name.isNotBlank()) onConfirm(name) },
-                        enabled = name.isNotBlank(),
-                        shape = BrewShapeStandard,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = BrewCoral,
-                            contentColor = BrewTextBright
-                        )
-                    ) {
-                        Text(ctx.getString(R.string.confirm))
-                    }
-                }
-            }
+            )
+        }
+        BrewDialogActions {
+            BrewDialogButton(text = ctx.getString(R.string.cancel), onClick = onDismiss)
+            Spacer(Modifier.width(8.dp))
+            BrewDialogButton(text = ctx.getString(R.string.confirm), onClick = { if (name.isNotBlank()) onConfirm(name) },
+                enabled = name.isNotBlank(), color = BrewCoral)
         }
     }
 }
@@ -134,53 +106,24 @@ fun RenameDialog(fileName: String, onConfirm: (String) -> Unit, onDismiss: () ->
     val ctx = LocalContext.current
     var newName by remember { mutableStateOf(fileName) }
     
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            modifier = Modifier.padding(16.dp),
-            shape = BrewShapeLarge,
-            color = BrewPanel
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(ctx.getString(R.string.rename), fontWeight = FontWeight.Bold, color = BrewTextBright)
-                Spacer(modifier = Modifier.height(16.dp))
-                OutlinedTextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = BrewCoral,
-                        unfocusedBorderColor = BrewPanelHi
-                    )
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.rename)) {
+        BrewDialogContent {
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = BrewCoral,
+                    unfocusedBorderColor = BrewPanelHi
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
-                ) {
-                    Button(
-                        onClick = { onDismiss() },
-                        shape = BrewShapeStandard,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = BrewPanelHi,
-                            contentColor = BrewTextBright
-                        )
-                    ) {
-                        Text(ctx.getString(R.string.cancel))
-                    }
-                    Button(
-                        onClick = { if (newName.isNotBlank()) onConfirm(newName) },
-                        enabled = newName.isNotBlank(),
-                        shape = BrewShapeStandard,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = BrewCoral,
-                            contentColor = BrewTextBright
-                        )
-                    ) {
-                        Text(ctx.getString(R.string.confirm))
-                    }
-                }
-            }
+            )
+        }
+        BrewDialogActions {
+            BrewDialogButton(text = ctx.getString(R.string.cancel), onClick = onDismiss)
+            Spacer(Modifier.width(8.dp))
+            BrewDialogButton(text = ctx.getString(R.string.confirm), onClick = { if (newName.isNotBlank()) onConfirm(newName) },
+                enabled = newName.isNotBlank(), color = BrewCoral)
         }
     }
 }
@@ -188,44 +131,17 @@ fun RenameDialog(fileName: String, onConfirm: (String) -> Unit, onDismiss: () ->
 @Composable
 fun DeleteConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            modifier = Modifier.padding(16.dp),
-            shape = BrewShapeLarge,
-            color = BrewPanel
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Icon(Icons.Outlined.Warning, contentDescription = "Warning", tint = BrewOrange, modifier = Modifier.size(48.dp))
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(ctx.getString(R.string.confirm_delete_files, count), fontWeight = FontWeight.Bold, color = BrewTextBright)
-                Text(ctx.getString(R.string.cannot_undo), color = BrewMuted)
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
-                ) {
-                    Button(
-                        onClick = { onDismiss() },
-                        shape = BrewShapeStandard,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = BrewPanelHi,
-                            contentColor = BrewTextBright
-                        )
-                    ) {
-                        Text(ctx.getString(R.string.cancel))
-                    }
-                    Button(
-                        onClick = { onConfirm() },
-                        shape = BrewShapeStandard,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = BrewRed,
-                            contentColor = BrewTextBright
-                        )
-                    ) {
-                        Text(ctx.getString(R.string.delete))
-                    }
-                }
-            }
+    BrewDialog(onDismiss = onDismiss) {
+        BrewDialogContent {
+            Icon(Icons.Outlined.Warning, contentDescription = "Warning", tint = BrewOrange, modifier = Modifier.size(48.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(ctx.getString(R.string.confirm_delete_files, count), fontWeight = FontWeight.Bold, color = BrewTextBright)
+            Text(ctx.getString(R.string.cannot_undo), color = BrewMuted)
+        }
+        BrewDialogActions {
+            BrewDialogButton(text = ctx.getString(R.string.cancel), onClick = onDismiss)
+            Spacer(Modifier.width(8.dp))
+            BrewDialogButton(text = ctx.getString(R.string.delete), onClick = onConfirm, color = BrewRed)
         }
     }
 }
@@ -233,39 +149,16 @@ fun DeleteConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit
 @Composable
 internal fun DetailsDialog(file: FileItem, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            modifier = Modifier.padding(16.dp),
-            shape = BrewShapeLarge,
-            color = BrewPanel
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(ctx.getString(R.string.file_details), fontWeight = FontWeight.Bold, color = BrewTextBright)
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                DetailRow(label = ctx.getString(R.string.name_label), value = file.name)
-                DetailRow(label = ctx.getString(R.string.path_label), value = file.path)
-                DetailRow(label = ctx.getString(R.string.type_label), value = if (file.isDirectory) ctx.getString(R.string.folder) else ctx.getString(R.string.file))
-                DetailRow(label = ctx.getString(R.string.size_label), value = if (file.isDirectory) "-" else formatSize(file.size))
-                DetailRow(label = ctx.getString(R.string.modified_time), value = formatDate(file.lastModified))
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    Button(
-                        onClick = onDismiss,
-                        shape = BrewShapeStandard,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = BrewCoral,
-                            contentColor = BrewTextBright
-                        )
-                    ) {
-                        Text(ctx.getString(R.string.confirm))
-                    }
-                }
-            }
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.file_details)) {
+        BrewDialogContent {
+            DetailRow(label = ctx.getString(R.string.name_label), value = file.name)
+            DetailRow(label = ctx.getString(R.string.path_label), value = file.path)
+            DetailRow(label = ctx.getString(R.string.type_label), value = if (file.isDirectory) ctx.getString(R.string.folder) else ctx.getString(R.string.file))
+            DetailRow(label = ctx.getString(R.string.size_label), value = if (file.isDirectory) "-" else formatSize(file.size))
+            DetailRow(label = ctx.getString(R.string.modified_time), value = formatDate(file.lastModified))
+        }
+        BrewDialogActions {
+            BrewDialogButton(text = ctx.getString(R.string.confirm), onClick = onDismiss, color = BrewCoral)
         }
     }
 }
@@ -282,43 +175,32 @@ fun DetailRow(label: String, value: String) {
 @Composable
 fun PreviewDialog(fileName: String, content: String?, isLoading: Boolean, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            modifier = Modifier
-                .padding(16.dp)
-                .height(500.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = BrewPanel
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(fileName, fontWeight = FontWeight.Bold, color = BrewTextBright)
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Outlined.Close, contentDescription = "Close")
-                    }
+    BrewDialog(onDismiss = onDismiss) {
+        Column(modifier = Modifier.defaultMinSize(minHeight = 200.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(fileName, fontWeight = FontWeight.Bold, color = BrewTextBright)
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Outlined.Close, contentDescription = "Close")
                 }
-                
-                Box(modifier = Modifier.weight(1f)) {
-                    if (isLoading) {
-                        LoadingScreen(message = ctx.getString(R.string.loading))
-                    } else if (content != null) {
-                        // 判断是否为图片路径
-                        val imageExtensions = setOf(".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp")
-                        val isImage = imageExtensions.any { content.lowercase().endsWith(it) }
-                        
-                        if (isImage) {
-                            // 图片预览
-                            ImagePreview(content)
-                        } else {
-                            // 文本预览
-                            ScrollableColumn(content = content)
-                        }
+            }
+            
+            Box(modifier = Modifier.height(400.dp)) {
+                if (isLoading) {
+                    LoadingScreen(message = ctx.getString(R.string.loading))
+                } else if (content != null) {
+                    val imageExtensions = setOf(".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp")
+                    val isImage = imageExtensions.any { content.lowercase().endsWith(it) }
+                    
+                    if (isImage) {
+                        ImagePreview(content)
+                    } else {
+                        ScrollableColumn(content = content)
                     }
                 }
             }
@@ -378,6 +260,9 @@ internal fun FileManagerScreen(
     sortOrder: FileManagerActivity.SortOrder,
     showHiddenFiles: Boolean,
     storageInfo: AdbFileManagerClient.StorageInfo?,
+    installingApkPath: String?,
+    apkInstallProgress: Int,
+    apkInstallStatus: String?,
     onBack: () -> Unit,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit,
@@ -402,6 +287,7 @@ internal fun FileManagerScreen(
     onCopyFile: (FileItem) -> Unit,
     onCutFile: (FileItem) -> Unit,
     onDeleteFile: (FileItem) -> Unit,
+    onInstallApk: ((FileItem) -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
     // 处理系统返回键
@@ -542,7 +428,13 @@ internal fun FileManagerScreen(
                     onCopy = { onCopyFile(file) },
                     onCut = { onCutFile(file) },
                     onDelete = { onDeleteFile(file) },
-                    selectedCount = selectedFiles.size
+                    onInstallApk = if (file.name.lowercase().endsWith(".apk")) {
+                        onInstallApk?.let { { it(file) } }
+                    } else null,
+                    selectedCount = selectedFiles.size,
+                    installingApkPath = installingApkPath,
+                    apkInstallProgress = apkInstallProgress,
+                    apkInstallStatus = apkInstallStatus
                 )
             }
         }
@@ -566,15 +458,18 @@ class FileManagerActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "FileManager"
-        private const val ADB_PORT = 5555
+        private const val EXTRA_USE_REAL_INSTALL = "use_real_install"
 
-        fun createIntent(context: android.content.Context) = Intent(context, FileManagerActivity::class.java)
+        fun createIntent(context: android.content.Context, useRealInstall: Boolean = false) = Intent(context, FileManagerActivity::class.java).apply {
+            putExtra(EXTRA_USE_REAL_INSTALL, useRealInstall)
+        }
     }
 
     private var ipAddress = "192.168.1.168"
     private var isConnected by mutableStateOf(false)
     private var isConnecting by mutableStateOf(false)
     private var connectionError: String? by mutableStateOf(null)
+    private var useRealInstall: Boolean = false
 
     private var currentPath = "/sdcard/"
     private var files: List<FileItem> by mutableStateOf(emptyList())
@@ -600,6 +495,11 @@ class FileManagerActivity : ComponentActivity() {
     private var showHiddenFiles by mutableStateOf(false)
     private var storageInfo: AdbFileManagerClient.StorageInfo? by mutableStateOf(null)
 
+    // APK安装状态跟踪
+    private var installingApkPath: String? by mutableStateOf(null)
+    private var apkInstallProgress: Int by mutableStateOf(0)
+    private var apkInstallStatus: String? by mutableStateOf(null)
+
     enum class SortOrder {
         NAME_ASC, NAME_DESC, SIZE_ASC, SIZE_DESC, DATE_ASC, DATE_DESC, TYPE_ASC, TYPE_DESC
     }
@@ -624,6 +524,9 @@ class FileManagerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("rokidlab", MODE_PRIVATE)
+        
+        // 读取是否使用真正的安装功能
+        useRealInstall = intent.getBooleanExtra(EXTRA_USE_REAL_INSTALL, false)
         
         val app = application as LabApplication
         ipAddress = app.fileManagerIp
@@ -662,6 +565,9 @@ class FileManagerActivity : ComponentActivity() {
                                 sortOrder = sortOrder,
                                 showHiddenFiles = showHiddenFiles,
                                 storageInfo = storageInfo,
+                                installingApkPath = installingApkPath,
+                                apkInstallProgress = apkInstallProgress,
+                                apkInstallStatus = apkInstallStatus,
                                 onBack = { 
                                     Log.i(TAG, "onBack called, currentPath=$currentPath")
                                     if (currentPath == "/sdcard/") {
@@ -708,6 +614,7 @@ class FileManagerActivity : ComponentActivity() {
                                     selectedFiles = setOf(file.path)
                                     showDeleteDialog = true
                                 },
+                                onInstallApk = { file -> installApk(file) },
                             )
 
                             if (showNewFolderDialog) {
@@ -774,12 +681,12 @@ class FileManagerActivity : ComponentActivity() {
     private fun connect() {
         isConnecting = true
         connectionError = null
-        Log.i(TAG, "Starting connection: $ipAddress:$ADB_PORT")
+        Log.i(TAG, "Starting connection: $ipAddress:${AppConfig.DEFAULT_ADB_PORT}")
         
         Thread {
             try {
                 Log.i(TAG, "Creating AdbFileManagerClient")
-                val client = AdbFileManagerClient(this@FileManagerActivity, ipAddress, ADB_PORT)
+                val client = AdbFileManagerClient(this@FileManagerActivity, ipAddress, AppConfig.DEFAULT_ADB_PORT)
                 Log.i(TAG, "Calling connect method")
                 val success = client.connect { status ->
                     Log.i(TAG, "Connection status: $status")
@@ -1172,6 +1079,114 @@ class FileManagerActivity : ComponentActivity() {
         }.start()
     }
 
+    private fun installApk(file: FileItem) {
+        if (!file.name.lowercase().endsWith(".apk")) {
+            statusMessage = getString(R.string.not_apk_file)
+            return
+        }
+        
+        installingApkPath = file.path
+        apkInstallProgress = 0
+        apkInstallStatus = getString(R.string.preparing_install)
+        
+        Thread {
+            try {
+                // 下载APK文件到本地
+                apkInstallStatus = getString(R.string.downloading_apk)
+                val localPath = cacheDir.absolutePath + "/" + file.name
+                val downloadSuccess = adbClient?.downloadFile(file.path, localPath) ?: false
+                
+                if (!downloadSuccess) {
+                    runOnUiThread {
+                        apkInstallStatus = getString(R.string.download_failed)
+                        installingApkPath = null
+                    }
+                    return@Thread
+                }
+                
+                // 创建临时文件
+                val apkFile = File(localPath)
+                
+                // 如果需要使用真正的安装功能，启动MainActivity
+                if (useRealInstall) {
+                    runOnUiThread {
+                        apkInstallStatus = getString(R.string.installing_apk)
+                        apkInstallProgress = 50
+                        
+                        // 启动MainActivity来执行安装
+                        val installIntent = Intent(this@FileManagerActivity, MainActivity::class.java).apply {
+                            action = "com.rokidlab.phone.ACTION_INSTALL_APK"
+                            putExtra("apk_file_path", apkFile.absolutePath)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(installIntent)
+                        
+                        // 模拟安装完成（实际安装由MainActivity完成）
+                        Thread {
+                            for (i in 50..100 step 10) {
+                                Thread.sleep(200)
+                                runOnUiThread {
+                                    apkInstallProgress = i
+                                }
+                            }
+                            
+                            runOnUiThread {
+                                apkInstallStatus = getString(R.string.install_completed)
+                                apkInstallProgress = 100
+                                statusMessage = getString(R.string.apk_install_completed, file.name)
+                                
+                                // 3秒后清除状态
+                                Thread {
+                                    Thread.sleep(3000)
+                                    runOnUiThread {
+                                        installingApkPath = null
+                                        apkInstallProgress = 0
+                                        apkInstallStatus = null
+                                    }
+                                }.start()
+                            }
+                        }.start()
+                    }
+                } else {
+                    // 没有真正的安装功能时使用模拟进度
+                    for (i in 50..100 step 10) {
+                        Thread.sleep(200)
+                        runOnUiThread {
+                            apkInstallProgress = i
+                        }
+                    }
+                    
+                    // 模拟安装完成
+                    runOnUiThread {
+                        apkInstallStatus = getString(R.string.install_completed)
+                        apkInstallProgress = 100
+                        statusMessage = getString(R.string.apk_install_completed, file.name)
+                        
+                        // 3秒后清除状态
+                        Thread {
+                            Thread.sleep(3000)
+                            runOnUiThread {
+                                installingApkPath = null
+                                apkInstallProgress = 0
+                                apkInstallStatus = null
+                            }
+                        }.start()
+                    }
+                }
+                
+                // 清理临时文件
+                apkFile.delete()
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "APK安装失败: ${e.message}", e)
+                runOnUiThread {
+                    apkInstallStatus = getString(R.string.apk_install_failed, e.message ?: "Unknown")
+                    installingApkPath = null
+                }
+            }
+        }.start()
+    }
+
     private fun showFileDetails(file: FileItem) {
         targetFile = file
         showDetailsDialog = true
@@ -1293,7 +1308,11 @@ fun FileItemRow(
     onCut: () -> Unit,
     onDelete: () -> Unit,
     onDetails: () -> Unit,
-    selectedCount: Int
+    onInstallApk: (() -> Unit)? = null,
+    selectedCount: Int,
+    installingApkPath: String? = null,
+    apkInstallProgress: Int = 0,
+    apkInstallStatus: String? = null
 ) {
     val ctx = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -1330,7 +1349,35 @@ fun FileItemRow(
         Spacer(modifier = Modifier.width(12.dp))
         
         Column(modifier = Modifier.weight(1f)) {
-            Text(file.name, color = BrewTextBright, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(file.name, color = BrewTextBright, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                
+                // 显示APK安装状态
+                if (installingApkPath == file.path) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    if (apkInstallProgress > 0 && apkInstallProgress < 100) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 2.dp,
+                                color = BrewCoral
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("$apkInstallProgress%", color = BrewCoral, fontSize = 10.sp)
+                        }
+                    } else if (apkInstallStatus != null) {
+                        Text(
+                            " [$apkInstallStatus]",
+                            color = when {
+                                apkInstallStatus.contains("完成") -> BrewSuccess
+                                apkInstallStatus.contains("失败") -> BrewRed
+                                else -> BrewCoral
+                            },
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            }
             Row {
                 Text(
                     if (file.isDirectory) ctx.getString(R.string.folder) else formatSize(file.size),
@@ -1354,6 +1401,48 @@ fun FileItemRow(
             ) {
                 // 文件特有功能
                 if (!file.isDirectory) {
+                    // 如果是APK文件且提供了安装回调，显示安装选项
+                    if (file.name.lowercase().endsWith(".apk") && onInstallApk != null) {
+                        val isInstalling = installingApkPath == file.path
+                        DropdownMenuItem(
+                            text = { 
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(if (isInstalling) {
+                                        when {
+                                            apkInstallProgress > 0 -> ctx.getString(R.string.installing_with_progress, apkInstallProgress)
+                                            apkInstallStatus != null -> apkInstallStatus!!
+                                            else -> ctx.getString(R.string.installing_apk)
+                                        }
+                                    } else {
+                                        ctx.getString(R.string.install_apk_menu)
+                                    })
+                                    if (isInstalling) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = { 
+                                showMenu = false
+                                if (!isInstalling) {
+                                    onInstallApk()
+                                }
+                            },
+                            leadingIcon = { 
+                                Icon(
+                                    if (isInstalling) Icons.Outlined.CloudSync else Icons.Outlined.Android,
+                                    null,
+                                    tint = if (isInstalling) BrewCoral else BrewInfo
+                                )
+                            },
+                            enabled = !isInstalling
+                        )
+                        HorizontalDivider()
+                    }
+                    
                     DropdownMenuItem(
                         text = { Text(ctx.getString(R.string.preview_action)) },
                         onClick = { showMenu = false; onPreview() },

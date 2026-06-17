@@ -864,3 +864,286 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 3. 翻译人员在 Crowdin 上完成翻译
 4. 下载翻译成果（`crowdin download`），自动生成 `values-{lang}/strings.xml`
 5. 编译验证后提交代码
+
+---
+
+## 七、代码质量与架构
+
+### 7.1 配置管理
+
+项目采用集中式配置管理，所有硬编码的配置参数统一在 `AppConfig.kt` 中定义：
+
+```kotlin
+object AppConfig {
+    /** ADB 默认端口 */
+    const val DEFAULT_ADB_PORT = 5555
+
+    /** 手机投屏服务默认端口 */
+    const val DEFAULT_MIRROR_PORT = 7654
+
+    /** 投屏基准分辨率（短边） */
+    const val MIRROR_BASE_SIZE = 480
+
+    /** ADB 连接超时时间（毫秒） */
+    const val ADB_CONNECT_TIMEOUT_MS = 10000
+
+    /** ADB Socket 超时时间（毫秒） */
+    const val ADB_SOCKET_TIMEOUT_MS = 3000
+
+    /** 投屏 Socket 连接超时时间（毫秒） */
+    const val MIRROR_CONNECT_TIMEOUT_MS = 3000
+
+    /** 投屏 Socket 重连最大尝试次数 */
+    const val MIRROR_MAX_RECONNECT_ATTEMPTS = 3
+
+    /** 蓝牙 HID 快速断连最大重试次数 */
+    const val BLUETOOTH_MAX_QUICK_DISCONNECT_RETRIES = 5
+
+    /** 投屏空闲超时时间（毫秒） */
+    const val MIRROR_IDLE_TIMEOUT_MS = 180_000L
+
+    /** scrcpy 视频流超时时间（毫秒） */
+    const val SCRCPY_STREAM_TIMEOUT_MS = 80
+
+    /** ADB 单个包最大负载（字节） */
+    const val ADB_MAX_PAYLOAD = 1024 * 1024
+
+    /** ADB 流缓冲区最大大小（字节） */
+    const val ADB_MAX_STREAM_BUFFER_SIZE = 10 * 1024 * 1024
+}
+```
+
+**优势**：
+- 集中管理所有配置参数，便于维护和修改
+- 避免在多个文件中重复定义相同的常量
+- 统一命名规范，提高代码可读性
+- 便于后续添加配置验证和文档
+
+### 7.2 线程安全
+
+项目采用多种机制确保线程安全：
+
+#### 7.2.1 同步锁保护
+
+关键操作使用 `synchronized` 块保护：
+
+```kotlin
+private val operationLock = Any()
+
+private fun maybeRunPendingOperation() {
+    synchronized(operationLock) {
+        // Critical section - prevent concurrent modification
+        if (isOperationInProgress) {
+            return
+        }
+        isOperationInProgress = true
+        // Perform operation
+    }
+}
+```
+
+#### 7.2.2 @Volatile 注解
+
+确保多线程环境下的变量可见性：
+
+```kotlin
+@Volatile
+var connectionState: Int = STATE_DISCONNECTED
+    private set
+
+@Volatile
+private var connectedDeviceInternal: BluetoothDevice? = null
+```
+
+#### 7.2.3 协程安全
+
+协程间通信使用 Channel 和 Flow，避免竞态条件：
+
+```kotlin
+private val _connectionEvents = Channel<Int>(Channel.CONFLATED)
+val connectionEvents: Flow<Int> = _connectionEvents.receiveAsFlow()
+```
+
+### 7.3 资源管理
+
+项目重视资源管理，防止内存泄漏和资源泄漏：
+
+#### 7.3.1 自动资源释放
+
+所有网络连接、文件流、ADB 连接等资源在使用后正确关闭：
+
+```kotlin
+fun disconnect() {
+    try { inputStream?.close() } catch (_: Exception) {}
+    try { outputStream?.close() } catch (_: Exception) {}
+    try { socket?.close() } catch (_: Exception) {}
+}
+```
+
+#### 7.3.2 投屏服务资源释放
+
+投屏服务停止时释放所有相关资源：
+
+```kotlin
+fun stopMirror() {
+    imageHandlerThread?.quit()
+    imageHandlerThread?.join(1000)
+    imageReader?.close()
+    surface?.release()
+    virtualDisplay?.release()
+    mediaProjection?.stop()
+}
+```
+
+#### 7.3.3 线程管理
+
+使用 HandlerThread 管理后台线程，避免主线程阻塞：
+
+```kotlin
+private val imageHandlerThread = HandlerThread("PhoneMirrorImageThread").apply { start() }
+private val imageHandler = Handler(imageHandlerThread.looper)
+```
+
+### 7.4 安全性
+
+项目注重安全性，保护用户数据和系统安全：
+
+#### 7.4.1 ADB 密钥保护
+
+生成的 RSA 私钥文件权限设置为仅应用可读写：
+
+```kotlin
+privKeyFile.setReadable(false, false)
+privKeyFile.setReadable(true, true)
+privKeyFile.setWritable(false, false)
+privKeyFile.setWritable(true, true)
+```
+
+#### 7.4.2 输入验证
+
+所有用户输入都经过验证，防止注入攻击：
+
+```kotlin
+private fun validateIpAddress(ip: String): Boolean {
+    val ipPattern = "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+    return ip.matches(Regex(ipPattern))
+}
+```
+
+#### 7.4.3 网络安全
+
+使用 HTTPS 连接，支持证书验证：
+
+```kotlin
+val connection = url.openConnection() as HttpsURLConnection
+connection.sslSocketFactory = sslContext.socketFactory
+connection.hostnameVerifier = hostnameVerifier
+```
+
+### 7.5 错误处理
+
+项目采用完善的错误处理机制：
+
+#### 7.5.1 异常捕获
+
+所有可能失败的操作都使用 try-catch 包裹：
+
+```kotlin
+runCatching {
+    cxrL.installApk(apkFile) { installed ->
+        // Handle installation result
+    }
+}.onFailure { error ->
+    log(getString(R.string.apk_install_failed, error.message ?: error.javaClass.simpleName))
+}
+```
+
+#### 7.5.2 用户友好提示
+
+错误信息通过 Toast 和状态卡片显示，便于用户理解：
+
+```kotlin
+BrewStateCard(
+    type = StateCardType.ERROR,
+    title = "安装失败",
+    message = error.message ?: "未知错误",
+    actionButton = {
+        BrewCompactButton(
+            text = "重试",
+            onClick = { retry() }
+        )
+    }
+)
+```
+
+#### 7.5.3 日志记录
+
+详细的日志记录便于问题排查和调试：
+
+```kotlin
+private const val TAG = "PhoneMirrorService"
+
+Log.d(TAG, "Starting mirror service on port $port")
+Log.e(TAG, "Mirror failed: ${error.message}", error)
+Log.w(TAG, "Connection timeout, retrying...")
+```
+
+### 7.6 性能优化
+
+项目注重性能优化，提升用户体验：
+
+#### 7.6.1 灰度转换优化
+
+使用整数运算和缓冲区复用减少 GC 压力：
+
+```kotlin
+val gray = ((299 * r + 587 * g + 114 * b + 500) / 1000).toByte()
+val grayData = reusableGrayData?.takeIf { it.size == w * h } ?: ByteArray(w * h).also { reusableGrayData = it }
+```
+
+#### 7.6.2 图片加载优化
+
+使用 Coil 库进行异步图片加载和缓存：
+
+```kotlin
+AsyncImage(
+    model = ImageRequest.Builder(LocalContext.current)
+        .data(app.iconUrl)
+        .crossfade(true)
+        .build(),
+    contentDescription = app.name,
+    modifier = Modifier.size(64.dp)
+)
+```
+
+#### 7.6.3 协程优化
+
+使用协程进行异步操作，避免阻塞主线程：
+
+```kotlin
+lifecycleScope.launch {
+    withContext(Dispatchers.IO) {
+        val apps = loadAppsFromRegistry()
+        withContext(Dispatchers.Main) {
+            appList = apps
+        }
+    }
+}
+```
+
+---
+
+## 八、版本历史
+
+### v1.0.0 (2024-06-17)
+
+**初始版本**
+
+- 实现所有核心功能：应用商店、蓝牙手柄、ADB工具、屏幕镜像、手机投屏、文件管理
+- 完整的 Velvet Dark 设计系统
+- 多语言支持（简体中文/English）
+- 眼镜端 RokidLink 自动集成
+- 完善的错误处理和日志系统
+- 配置集中管理（AppConfig）
+- 线程安全和资源管理优化
+- 性能优化（灰度转换、图片加载、协程）

@@ -27,7 +27,7 @@ object PhonePackageInstallHelper {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !activity.packageManager.canRequestPackageInstalls()
         ) {
-            onStatus(activity.getString(R.string.allow_install_app))
+            onStatus("Please allow installation from RokidLab, then try again.")
             activity.startActivity(
                 Intent(
                     Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,

@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import com.rokidlab.phone.util.AppConfig
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Base64
@@ -39,15 +40,15 @@ class AdbScreenMirrorClient(
     private var socket: Socket? = null
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
-    private val SOCKET_TIMEOUT_MS = 3000
     private var keyPair: KeyPair? = null
     private var isRunning = false
     private var localId = java.util.concurrent.atomic.AtomicInteger(1)
     private var sentSignature = false
 
     private val touchQueue = java.util.concurrent.ConcurrentLinkedQueue<Runnable>()
-    private var continuousStreamId = 0
-    private var continuousStreamRemoteId = 0
+    private val streamLock = Any()
+    @Volatile private var continuousStreamId = 0
+    @Volatile private var continuousStreamRemoteId = 0
     private var streamBuffer = ByteArrayOutputStream()
     /** 复用Bitmap避免每帧GC */
     private var reusableBitmap: Bitmap? = null
@@ -84,7 +85,7 @@ class AdbScreenMirrorClient(
 
             socket = Socket()
             socket?.tcpNoDelay = true
-            socket?.soTimeout = SOCKET_TIMEOUT_MS
+            socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
             socket?.connect(java.net.InetSocketAddress(ipAddress, port), 5000)
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
@@ -360,7 +361,7 @@ class AdbScreenMirrorClient(
                     videoStreamRemoteId = streamRemoteId
 
                     // 设置 socket 超时 80ms 以便及时处理触控
-                    try { socket?.soTimeout = 80 } catch (_: Exception) {}
+                    try { socket?.soTimeout = AppConfig.SCRCPY_STREAM_TIMEOUT_MS } catch (_: Exception) {}
 
                     onStatus("Streaming...")
                     Log.i(TAG, "Starting H.264 stream reading...")
@@ -442,7 +443,7 @@ class AdbScreenMirrorClient(
                             socket?.close()
                             socket = Socket()
                             socket?.tcpNoDelay = true
-                            socket?.soTimeout = SOCKET_TIMEOUT_MS
+                            socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
                             socket?.connect(java.net.InetSocketAddress(ipAddress, port), 5000)
                             inputStream = socket?.getInputStream()
                             outputStream = socket?.getOutputStream()

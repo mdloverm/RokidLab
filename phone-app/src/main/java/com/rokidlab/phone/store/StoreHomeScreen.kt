@@ -125,6 +125,10 @@ internal data class StoreUiState(
     val showMirrorDialog: Boolean = false,
     val currentMirrorIndex: Int = 0,
     val currentLocale: String = "en",
+    // 本地APK安装状态
+    val isInstallingLocalApk: Boolean = false,
+    val localApkInstallProgress: Int = 0,
+    val localApkInstallStatus: String = "",
 )
 
 // ===== UI 操作回调 =====
@@ -245,79 +249,40 @@ internal fun BrewPhoneApp(
     
     // 退出确认对话框
     if (!showGuide && showExitDialog) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { showExitDialog = false },
-            containerColor = BrewPanel,
-            titleContentColor = BrewTextBright,
-            textContentColor = BrewText,
-            shape = BrewShapeStandard,
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = ctx.getString(R.string.exit_app),
-                        color = BrewRed,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 2.sp,
-                    )
-                }
-            },
-            text = {
-                Column {
-                    Box(
-                        modifier = Modifier
-                            .width(48.dp)
-                            .height(4.dp)
-                            .background(BrewRed)
-                            .padding(bottom = 12.dp),
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = ctx.getString(R.string.exit_confirm),
-                        color = BrewText,
-                        fontSize = 14.sp,
-                        letterSpacing = 1.sp,
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = ctx.getString(R.string.exit_confirm_desc),
-                        color = BrewMuted,
-                        fontSize = 12.sp,
-                    )
-                }
-            },
-            confirmButton = {
+        BrewDialog(
+            onDismiss = { showExitDialog = false },
+            title = ctx.getString(R.string.exit_app),
+            titleColor = BrewRed,
+        ) {
+            BrewDialogContent {
                 Box(
                     modifier = Modifier
-                        .height(44.dp)
-                        .width(120.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(BrewBg)
-                        .border(width = 1.dp, color = BrewRed, shape = BrewShapeStandard)
-                        .clickable {
-                            showExitDialog = false
-                            actions.onExitApp()
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(text = ctx.getString(R.string.exit), color = BrewRed, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                }
-            },
-            dismissButton = {
-                Box(
-                    modifier = Modifier
-                        .height(44.dp)
-                        .width(120.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(BrewBg)
-                        .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
-                        .clickable { showExitDialog = false },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(text = ctx.getString(R.string.cancel), color = BrewText, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                }
-            },
-        )
+                        .width(48.dp)
+                        .height(4.dp)
+                        .background(BrewRed),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = ctx.getString(R.string.exit_confirm),
+                    color = BrewText,
+                    fontSize = 14.sp,
+                    letterSpacing = 1.sp,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = ctx.getString(R.string.exit_confirm_desc),
+                    color = BrewMuted,
+                    fontSize = 12.sp,
+                )
+            }
+            BrewDialogActions(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                BrewDialogButton(text = ctx.getString(R.string.cancel), onClick = { showExitDialog = false })
+                BrewDialogButton(text = ctx.getString(R.string.exit), onClick = {
+                    showExitDialog = false
+                    actions.onExitApp()
+                }, color = BrewRed)
+            }
+        }
     }
     
     if (!showGuide) {
@@ -532,9 +497,18 @@ private fun FileManagerModule(
         Spacer(modifier = Modifier.height(12.dp))
         
         BrutalButton(
-            label = ctx.getString(R.string.install_local_apk),
-            color = BrewInfo,
+            label = if (state.isInstallingLocalApk) {
+                when {
+                    state.localApkInstallProgress > 0 -> ctx.getString(R.string.installing_with_progress, state.localApkInstallProgress)
+                    state.localApkInstallStatus.isNotEmpty() -> state.localApkInstallStatus
+                    else -> ctx.getString(R.string.installing_apk)
+                }
+            } else {
+                ctx.getString(R.string.install_local_apk)
+            },
+            color = if (state.isInstallingLocalApk) BrewCoral else BrewInfo,
             onClick = actions.onInstallApk,
+            enabled = !state.isInstallingLocalApk
         )
         Spacer(modifier = Modifier.height(24.dp))
         
@@ -704,28 +678,15 @@ private fun AdbDialogContent(
         }
     }
     
-    Dialog(
-        onDismissRequest = onDismiss,
+    BrewDialog(
+        onDismiss = onDismiss,
+        title = title,
+        titleColor = color,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Box(
-            modifier.fillMaxWidth().padding(horizontal = 24.dp)
-                .clip(RoundedCornerShape(12.dp)).background(BrewPanel)
-                .border(1.dp, BrewBorder, RoundedCornerShape(12.dp))
-                .padding(16.dp),
-        ) {
-            Column {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    if (titleContent != null) {
-                        titleContent()
-                    } else {
-                        Text(title, color = color, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    }
-                    TextButton(onClick = onDismiss) { Text(ctx.getString(R.string.close), color = BrewMuted) }
-                }
-                Spacer(Modifier.height(8.dp))
-                
-                when (status) {
+        Column {
+            // Connection status handling
+            when (status) {
                     "connecting" -> {
                         Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -757,8 +718,6 @@ private fun AdbDialogContent(
                         content(c)
                     }
                 }
-            
-            }
         }
     }
 }
@@ -1687,7 +1646,13 @@ private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running
 }
 
 @Composable
-private fun BrutalButton(label: String, color: Color, onClick: () -> Unit, compact: Boolean = false) {
+private fun BrutalButton(
+    label: String, 
+    color: Color, 
+    onClick: () -> Unit, 
+    compact: Boolean = false,
+    enabled: Boolean = true
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
@@ -1697,21 +1662,38 @@ private fun BrutalButton(label: String, color: Color, onClick: () -> Unit, compa
     )
     val height = if (compact) 32.dp else 52.dp
     val btnShape = if (compact) BrewShapeMedium else BrewShapeStandard
+    
+    val effectiveColor = if (enabled) color else BrewMuted
+    val effectiveAlpha = if (enabled) {
+        if (isPressed) 0.20f else 0.12f
+    } else {
+        0.08f
+    }
+    val effectiveBorderAlpha = if (enabled) {
+        if (isPressed) 0.7f else 0.5f
+    } else {
+        0.3f
+    }
+    
     Box(
         modifier = Modifier
             .then(if (compact) Modifier.wrapContentWidth() else Modifier.fillMaxWidth())
             .height(height)
             .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
             .clip(btnShape)
-            .background(color.copy(alpha = if (isPressed) 0.20f else 0.12f))
-            .border(width = 1.dp, color = color.copy(alpha = if (isPressed) 0.7f else 0.5f), shape = btnShape)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .background(effectiveColor.copy(alpha = effectiveAlpha))
+            .border(width = 1.dp, color = effectiveColor.copy(alpha = effectiveBorderAlpha), shape = btnShape)
+            .then(if (enabled) {
+                Modifier.clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            } else {
+                Modifier
+            })
             .padding(horizontal = if (compact) 12.dp else 0.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = label,
-            color = color,
+            color = effectiveColor,
             fontSize = if (compact) 12.sp else 14.sp,
             fontWeight = FontWeight.SemiBold,
             letterSpacing = if (compact) 0.sp else 1.sp,

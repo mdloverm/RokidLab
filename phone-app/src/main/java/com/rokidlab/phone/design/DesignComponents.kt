@@ -182,17 +182,16 @@ internal fun BrewIconButton(
 
 /**
  * 标准对话框容器 — 统一所有弹窗的外观
- * 使用方式：
- * ```kotlin
- * BrewDialog(onDismiss = { }) {
- *     // 自定义内容
- * }
- * ```
+ *
+ * @param title 可选标题
+ * @param titleColor 标题颜色（默认 BrewTextBright，可传模块色标记）
  */
 @Composable
 internal fun BrewDialog(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    title: String? = null,
+    titleColor: Color = BrewTextBright,
     properties: androidx.compose.ui.window.DialogProperties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = true),
     content: @Composable () -> Unit,
 ) {
@@ -206,25 +205,46 @@ internal fun BrewDialog(
             color = BrewPanelAlt,
             border = androidx.compose.foundation.BorderStroke(1.dp, BrewBorder),
         ) {
-            content()
+            Column {
+                if (title != null) {
+                    BrewDialogTitle(text = title, color = titleColor)
+                }
+                content()
+            }
         }
     }
 }
 
 /**
  * 标准标题栏 — 用于对话框标题
+ * @param color 标题颜色，可传模块色（如 BrewInfo, BrewMagenta 等）
  */
 @Composable
 internal fun BrewDialogTitle(
     text: String,
     modifier: Modifier = Modifier,
+    color: Color = BrewTextBright,
 ) {
     Text(
         text = text,
-        color = BrewTextBright,
+        color = color,
         fontSize = 18.sp,
         fontWeight = FontWeight.Bold,
         modifier = modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp),
+    )
+}
+
+/**
+ * 标准对话框内容区域
+ */
+@Composable
+internal fun BrewDialogContent(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+        content = content,
     )
 }
 
@@ -234,16 +254,100 @@ internal fun BrewDialogTitle(
 @Composable
 internal fun BrewDialogActions(
     modifier: Modifier = Modifier,
+    horizontalArrangement: Arrangement.Horizontal = Arrangement.End,
     content: @Composable RowScope.() -> Unit,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 16.dp),
-        horizontalArrangement = Arrangement.End,
+        horizontalArrangement = horizontalArrangement,
         verticalAlignment = Alignment.CenterVertically,
         content = content,
     )
+}
+
+/**
+ * 标准对话框操作按钮（text button 样式，同 BrewOutlineButton 风格）
+ */
+@Composable
+internal fun BrewDialogButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    color: Color = BrewText,
+    enabled: Boolean = true,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.95f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "dlgBtnScale",
+    )
+    Box(
+        modifier = modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(BrewShapeMedium)
+            .background(if (isPressed) color.copy(alpha = 0.12f) else Color.Transparent)
+            .border(1.dp, color.copy(alpha = if (isPressed) 1f else 0.5f), BrewShapeMedium)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            color = color.copy(alpha = if (enabled) 1f else 0.4f),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+/**
+ * 标准对话框可选中的列表项 — 用于语言选择、源选择等
+ */
+@Composable
+internal fun BrewDialogSelectItem(
+    primaryText: String,
+    secondaryText: String? = null,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    selectedColor: Color = BrewGreen,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(BrewShapeMedium)
+            .background(if (isSelected) selectedColor.copy(alpha = 0.12f) else Color.Transparent)
+            .border(
+                if (isSelected) 1.dp else 0.dp,
+                if (isSelected) selectedColor.copy(alpha = 0.5f) else Color.Transparent,
+                BrewShapeMedium,
+            )
+            .clickable { onClick() }
+            .padding(16.dp),
+    ) {
+        if (secondaryText != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(primaryText, color = if (isSelected) selectedColor else BrewText, fontSize = 16.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                    Spacer(Modifier.height(2.dp))
+                    Text(secondaryText, color = BrewMuted, fontSize = 12.sp)
+                }
+                if (isSelected) {
+                    Text("✓", color = selectedColor, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        } else {
+            Text(primaryText, color = if (isSelected) selectedColor else BrewText, fontSize = 16.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════

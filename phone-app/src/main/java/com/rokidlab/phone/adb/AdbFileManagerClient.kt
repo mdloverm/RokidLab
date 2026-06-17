@@ -1,5 +1,6 @@
 package com.rokidlab.phone.adb
 
+import com.rokidlab.phone.util.AppConfig
 import android.content.Context
 import android.util.Base64
 import android.util.Log
@@ -121,7 +122,7 @@ class AdbFileManagerClient(
         val kp = keyPair ?: throw IllegalStateException("keyPair not initialized")
         var sentSignature = false
         val cnxnPayload = "host::\u0000".toByteArray(Charsets.UTF_8)
-        sendPacket(CMD_CNXN, CONNECT_VERSION, 256 * 1024, cnxnPayload)
+        sendPacket(CMD_CNXN, CONNECT_VERSION, AppConfig.ADB_MAX_PAYLOAD, cnxnPayload)
 
         while (true) {
             val msg = readPacket()
@@ -325,7 +326,7 @@ class AdbFileManagerClient(
                         CMD_CLSE -> {
                             Log.e(TAG, "Sync service open failed - CLSE received, falling back to shell")
                             // 检查是否有错误信息
-                            if (msg.payload != null) {
+                            if (msg.payload.isNotEmpty()) {
                                 val error = String(msg.payload, Charsets.UTF_8)
                                 Log.e(TAG, "Error: $error")
                             }
@@ -377,7 +378,7 @@ class AdbFileManagerClient(
                                 CMD_OKAY -> {}
                                 CMD_WRTE -> {
                                     val payload = msg.payload
-                                    if (payload != null && payload.size >= 8) {
+                                    if (payload.size >= 8) {
                                         val cmdStr = String(payload.copyOfRange(0, 4), Charsets.UTF_8)
                                         when (cmdStr) {
                                             "FAIL" -> {
@@ -903,7 +904,7 @@ class AdbFileManagerClient(
                     CMD_OKAY -> { }
                     CMD_WRTE -> {
                         val payload = msg.payload
-                        if (payload != null && payload.size >= 4) {
+                        if (payload.size >= 4) {
                             val cmdStr = String(payload.copyOfRange(0, 4), Charsets.UTF_8)
                             if (cmdStr == "OKAY") {
                                 success = true
@@ -1236,7 +1237,7 @@ class AdbFileManagerClient(
                 }
                 CMD_WRTE -> {
                     val payload = msg.payload
-                    if (payload != null && payload.size >= 8) {
+                    if (payload.size >= 8) {
                         val cmdStr = String(payload, 0, 4, Charsets.UTF_8)
                         when (cmdStr) {
                             "DATA" -> {

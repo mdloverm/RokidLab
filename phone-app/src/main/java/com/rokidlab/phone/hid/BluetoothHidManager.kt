@@ -1,5 +1,6 @@
 package com.rokidlab.phone.hid
 
+import com.rokidlab.phone.util.AppConfig
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -47,8 +48,6 @@ class BluetoothHidManager(private val appContext: Context) {
         const val STATE_CONNECTING   = 1
         const val STATE_CONNECTED    = 2
         const val STATE_RETRY_FAILED = 3  // Smart retry exceeded max attempts, manual Bluetooth reset required
-
-        const val MAX_QUICK_DISCONNECT_RETRIES = 5
 
         const val MODE_UI   = 0  // 菜单导航模式 — Consumer Control 方向键 + 键盘按钮
         const val MODE_GAME = 1  // 游戏模式 — 全部用键盘
@@ -187,8 +186,24 @@ class BluetoothHidManager(private val appContext: Context) {
     @Volatile
     var connectionState: Int = STATE_DISCONNECTED
         private set
-    var connectedDevice: BluetoothDevice? = null
-        private set
+
+    @Volatile
+    private var connectedDeviceInternal: BluetoothDevice? = null
+        set(value) {
+            synchronized(deviceLock) {
+                field = value
+            }
+        }
+        get() {
+            synchronized(deviceLock) {
+                return field
+            }
+        }
+
+    val connectedDevice: BluetoothDevice?
+        get() = connectedDeviceInternal
+
+    private val deviceLock = Any()
 
     @Volatile
     var hidMode: Int = MODE_UI
@@ -326,7 +341,7 @@ class BluetoothHidManager(private val appContext: Context) {
                     // 快速断连检测：连接后 2 秒内断开 → 眼镜 HID Host 状态异常
                     if (lastConnectTime > 0 && lastDisconnectTime - lastConnectTime < 2000) {
                         quickDisconnectCount++
-                        if (quickDisconnectCount >= MAX_QUICK_DISCONNECT_RETRIES) {
+                        if (quickDisconnectCount >= AppConfig.BLUETOOTH_MAX_QUICK_DISCONNECT_RETRIES) {
                             Log.w(TAG, "Quick disconnects reached $quickDisconnectCount times, stopping retries, please restart glasses Bluetooth")
                             quickDisconnectCount = 0
                             retryRunnable?.let { mainHandler.removeCallbacks(it); retryRunnable = null }
@@ -334,7 +349,7 @@ class BluetoothHidManager(private val appContext: Context) {
                         } else {
                             val waitMs = minOf(quickDisconnectCount * 3000L, 15000L)
                             Log.w(TAG, "Quick disconnect #$quickDisconnectCount, waiting ${waitMs}ms before retry")
-                            val dev = device
+                            val dev: BluetoothDevice? = device
                             retryRunnable?.let { mainHandler.removeCallbacks(it) }
                             retryRunnable = Runnable {
                                 if (dev != null) {
@@ -537,7 +552,7 @@ class BluetoothHidManager(private val appContext: Context) {
         }
 
         // ---- HID 模式 ----
-        val dev = device ?: connectedDevice ?: return
+        val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered) return
 
@@ -571,7 +586,7 @@ class BluetoothHidManager(private val appContext: Context) {
         }
 
         // ---- HID 模式 ----
-        val dev = device ?: connectedDevice ?: return
+        val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered) return
         val release = byteArrayOf(0x00, 0x00)
@@ -585,7 +600,7 @@ class BluetoothHidManager(private val appContext: Context) {
     @SuppressLint("MissingPermission")
     fun sendMouseMove(device: BluetoothDevice?, dx: Int, dy: Int) {
         if (connectionType != CONN_HID) return
-        val dev = device ?: connectedDevice ?: return
+        val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered) return
         val clampedDx = dx.coerceIn(-127, 127).toByte()
@@ -599,7 +614,7 @@ class BluetoothHidManager(private val appContext: Context) {
     @SuppressLint("MissingPermission")
     fun sendMouseClick(device: BluetoothDevice?, button: Int = 1) {
         if (connectionType != CONN_HID) return
-        val dev = device ?: connectedDevice ?: return
+        val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered) return
         // 按下
@@ -613,7 +628,7 @@ class BluetoothHidManager(private val appContext: Context) {
 
     private fun updateConnectionState(state: Int, device: BluetoothDevice?) {
         connectionState = state
-        connectedDevice = device
+        connectedDeviceInternal = device
         _connectionEvents.trySend(state)
     }
 }

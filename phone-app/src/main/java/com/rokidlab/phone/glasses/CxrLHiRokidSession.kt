@@ -70,6 +70,8 @@ class CxrLHiRokidSession(
     /** 防止超时与 operation.onReady 回调竞态 */
     private var operationCompleted = false
     private var timeoutJob: Job? = null
+    /** 使用同步锁保护操作状态 */
+    private val operationLock = Any()
 
     init {
         // 从 SharedPreferences 恢复之前保存的授权令牌
@@ -79,6 +81,8 @@ class CxrLHiRokidSession(
                 token = it
             }
         }
+        // 初始化时通知连接状态（含授权状态），触发 checkRokidLinkInstallation() 等依赖连接状态的回调
+        notifyConnectionChanged()
     }
 
     fun hasAuthorization(): Boolean = !token.isNullOrBlank()
@@ -519,12 +523,14 @@ class CxrLHiRokidSession(
         operationCompleted = false
         timeoutJob = activity.lifecycleScope.launch {
             delay(operation.timeoutMillis)
-            // 检查 operation 是否已经完成（onReady 回调已执行completeActiveOperation）
-            if (pendingOperation === operation && !operationCompleted) {
-                pendingOperation = null
-                operationStarted = false
-                onStatus(operation.timeoutMessage)
-                operation.onFailure()
+            // 使用同步锁检查操作是否已完成，防止竞态条件
+            synchronized(operationLock) {
+                if (pendingOperation === operation && !operationCompleted) {
+                    pendingOperation = null
+                    operationStarted = false
+                    onStatus(operation.timeoutMessage)
+                    operation.onFailure()
+                }
             }
         }
 
@@ -552,19 +558,24 @@ class CxrLHiRokidSession(
     }
 
     private fun maybeRunPendingOperation() {
-        val operation = pendingOperation ?: return
-        if (operationStarted || !cxrlConnected || !glassBtConnected) return
-        val link = cxrLink ?: return
-        operationStarted = true
-        operation.onReady(link)
+        synchronized(operationLock) {
+            val operation = pendingOperation ?: return
+            if (operationStarted || !cxrlConnected || !glassBtConnected) return
+            val link = cxrLink ?: return
+            operationStarted = true
+            operationCompleted = false
+            operation.onReady(link)
+        }
     }
 
     private fun completeActiveOperation() {
-        operationCompleted = true
-        timeoutJob?.cancel()
-        timeoutJob = null
-        pendingOperation = null
-        operationStarted = false
+        synchronized(operationLock) {
+            operationCompleted = true
+            timeoutJob?.cancel()
+            timeoutJob = null
+            pendingOperation = null
+            operationStarted = false
+        }
     }
 
     private fun glassAppCallback(

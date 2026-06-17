@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- App -->
-    <string name="app_name">Rokid Lab</string>
-    <string name="app_author">DLOVER</string>
     <string name="app_description">Rokid 眼镜伴侣应用</string>
 
     <!-- Navigation / Store -->
@@ -253,9 +251,6 @@
     <string name="uninstall_failed_toast">%s 从眼镜卸载失败</string>
     <string name="no_package_for_target">没有 %s 的 %s 包</string>
     <string name="install_failed_simple">安装失败: %s</string>
-    <string name="rokidlink_install_success">RokidLink 安装成功</string>
-    <string name="rokidlink_install_failed">RokidLink 安装失败，请检查眼镜连接</string>
-    <string name="rokidlink_install_error">RokidLink 安装失败，请检查眼镜连接后重试</string>
     <string name="app_not_installed_on_phone">%s 未安装在手机上</string>
     <string name="reset_guide">已重置主机应用选择，请重新完成引导设置</string>
     <string name="screen_record_permission">需要"屏幕录制"权限才能将手机画面投到眼镜</string>
@@ -290,8 +285,6 @@
     <string name="not_checked">未检查</string>
     <string name="unknown">未知</string>
     <string name="downloading_progress">正在下载 %s（%d%%）</string>
-    <string name="rokidlab_update">RokidLab 更新</string>
-    <string name="update_available_info">RokidLab %s 已准备好安装。</string>
 
     <!-- DetailInfoSections -->
     <string name="about_section">关于</string>
@@ -362,7 +355,6 @@
     <string name="authorize_in_host">请先在 %s 中点击授权。</string>
 
     <!-- PhonePackageInstallHelper -->
-    <string name="allow_install_app">请允许从 RokidLab 安装应用，然后再次点击安装。</string>
     <string name="uninstall_page_opened">手机卸载页面已打开：%s。</string>
     <string name="phone_uninstall_failed">手机卸载失败：%s</string>
     <string name="install_session_submitted">手机安装会话已提交。等待确认...</string>
@@ -372,7 +364,19 @@
     <string name="install_confirm_page_opened">手机安装确认页面已打开。</string>
     <string name="install_confirm_no_intent">手机安装需要确认，但 Android 未返回安装器 Intent。</string>
     <string name="phone_install_success">手机安装成功。</string>
-    <string name="phone_install_failed">手机安装失败：%s</string>
+    <string name="phone_install_failed">手机安装失败。</string>
+
+    <!-- File Manager APK Install -->
+    <string name="not_apk_file">不是APK文件</string>
+    <string name="preparing_install">准备安装...</string>
+    <string name="downloading_apk">下载APK...</string>
+    <string name="download_failed">下载失败</string>
+    <string name="installing_apk">安装中...</string>
+    <string name="install_completed">安装完成</string>
+    <string name="apk_install_completed">APK安装完成: %s</string>
+    <string name="apk_install_failed">安装失败: %s</string>
+    <string name="install_apk_menu">安装APK</string>
+    <string name="installing_with_progress">安装中 (%d%%)</string>
 
     <!-- FileManagerActivity -->
     <string name="new_folder">新建文件夹</string>
@@ -400,7 +404,6 @@
     <string name="preview_not_supported">该文件类型不支持预览</string>
     <string name="download_status">正在下载…</string>
     <string name="download_success">下载成功</string>
-    <string name="download_failed">下载失败</string>
     <string name="upload_status">正在上传…</string>
     <string name="folder_create_success">文件夹创建成功</string>
     <string name="folder_create_failed">文件夹创建失败</string>
