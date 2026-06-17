@@ -1062,9 +1062,9 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                 val nm = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                     val channel = android.app.NotificationChannel(
-                        "timer_notify", "定时消息",
+                        "timer_notify", context.getString(R.string.timer_notification_channel),
                         android.app.NotificationManager.IMPORTANCE_HIGH
-                    ).apply { description = "来自 ADB 工具的定时消息" }
+                    ).apply { description = context.getString(R.string.timer_notification_channel_desc) }
                     nm.createNotificationChannel(channel)
                 }
                 val notification = android.app.Notification.Builder(context, "timer_notify")
@@ -1105,20 +1105,20 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                     .padding(12.dp),
             ) {
                 Column {
-                    Text("定时消息", color = BrewWarning, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(context.getString(R.string.timer_notification_channel), color = BrewWarning, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
                     
-                    Text("通知内容", color = BrewMuted, fontSize = 12.sp)
+                    Text(context.getString(R.string.notification_content_hint), color = BrewMuted, fontSize = 12.sp)
                     Spacer(Modifier.height(4.dp))
                     BrutalTextField(
                         value = msgContent, onValueChange = { msgContent = it },
-                        placeholder = "输入要在眼镜上显示的消息...", color = BrewWarning,
+                        placeholder = context.getString(R.string.insert_msg_hint), color = BrewWarning,
                         modifier = Modifier.fillMaxWidth(), singleLine = false,
                     )
                     
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("间隔", color = BrewMuted, fontSize = 12.sp)
+                        Text(context.getString(R.string.interval_label), color = BrewMuted, fontSize = 12.sp)
                         Spacer(Modifier.width(6.dp))
                         BrutalTextField(
                             value = msgInterval, onValueChange = { msgInterval = it },
@@ -1126,7 +1126,7 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                             modifier = Modifier.width(70.dp), singleLine = true,
                         )
                         Spacer(Modifier.width(4.dp))
-                        Text("秒 ×", color = BrewMuted, fontSize = 12.sp)
+                        Text(context.getString(R.string.seconds_x_label), color = BrewMuted, fontSize = 12.sp)
                         Spacer(Modifier.width(6.dp))
                         BrutalTextField(
                             value = msgCount, onValueChange = { msgCount = it },
@@ -1134,7 +1134,7 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                             modifier = Modifier.width(60.dp), singleLine = true,
                         )
                         Spacer(Modifier.width(4.dp))
-                        Text("次", color = BrewMuted, fontSize = 12.sp)
+                        Text(context.getString(R.string.times_label), color = BrewMuted, fontSize = 12.sp)
                     }
                     
                     Spacer(Modifier.height(8.dp))
@@ -1190,14 +1190,14 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                     .padding(12.dp),
             ) {
                 Column {
-                    Text("定时打开应用", color = BrewInfo, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(context.getString(R.string.timer_scheduled_open_title), color = BrewInfo, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
                     
                     // 应用选择
-                    Text("选择应用", color = BrewMuted, fontSize = 12.sp)
+                    Text(context.getString(R.string.select_app_label), color = BrewMuted, fontSize = 12.sp)
                     Spacer(Modifier.height(4.dp))
                     if (appLoading) {
-                        Text("加载应用中...", color = BrewMuted, fontSize = 12.sp)
+                        Text(context.getString(R.string.loading_apps), color = BrewMuted, fontSize = 12.sp)
                     } else {
                         var showAppPicker by remember { mutableStateOf(false) }
                         
@@ -1208,7 +1208,7 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                if (selectedApp.isEmpty()) "点击选择应用..." else selectedApp,
+                                if (selectedApp.isEmpty()) context.getString(R.string.tap_to_select_app) else selectedApp,
                                 color = if (selectedApp.isEmpty()) BrewMuted else BrewText,
                                 fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
@@ -1246,7 +1246,7 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                     
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("间隔", color = BrewMuted, fontSize = 12.sp)
+                        Text(context.getString(R.string.interval_label), color = BrewMuted, fontSize = 12.sp)
                         Spacer(Modifier.width(6.dp))
                         BrutalTextField(
                             value = appInterval, onValueChange = { appInterval = it },
@@ -1254,7 +1254,7 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                             modifier = Modifier.width(70.dp), singleLine = true,
                         )
                         Spacer(Modifier.width(4.dp))
-                        Text("秒 ×", color = BrewMuted, fontSize = 12.sp)
+                        Text(context.getString(R.string.seconds_x_label), color = BrewMuted, fontSize = 12.sp)
                         Spacer(Modifier.width(6.dp))
                         BrutalTextField(
                             value = appCount, onValueChange = { appCount = it },
@@ -1262,7 +1262,7 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                             modifier = Modifier.width(60.dp), singleLine = true,
                         )
                         Spacer(Modifier.width(4.dp))
-                        Text("次", color = BrewMuted, fontSize = 12.sp)
+                        Text(context.getString(R.string.times_label), color = BrewMuted, fontSize = 12.sp)
                     }
                     
                     Spacer(Modifier.height(8.dp))
@@ -1320,19 +1320,18 @@ private fun ShellDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
     AdbDialogContent(ctx.getString(R.string.shell_command), BrewMagenta, client, connected, scope, getOrConnect, onDismiss,
         titleContent = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Shell", color = BrewMagenta, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Text("命令", color = BrewInfo, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(ctx.getString(R.string.shell_command), color = BrewMagenta, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
         }
     ) { c ->
         data class ShellEntry(val type: String, val text: String, val time: String)
         
-        var entries by remember { mutableStateOf(listOf(ShellEntry("info", "Shell 已就绪，输入命令后按 Enter 执行", ""))) }
+        var entries by remember { mutableStateOf(listOf(ShellEntry("info", ctx.getString(R.string.shell_ready), ""))) }
         var cmd by remember { mutableStateOf("") }
         var loading by remember { mutableStateOf(false) }
         var history by remember { mutableStateOf(listOf<String>()) }
         val listScrollState = rememberScrollState()
-        val status = if (connected) "已连接" else "未连接"
+        val status = if (connected) ctx.getString(R.string.shell_connected) else ctx.getString(R.string.shell_disconnected)
         val ts = { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()) }
         
         fun execute(input: String) {
@@ -1351,7 +1350,7 @@ private fun ShellDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
-                        entries = entries + ShellEntry("error", "错误: ${e.message}", ts())
+                        entries = entries + ShellEntry("error", "${ctx.getString(R.string.error_label)}: ${e.message}", ts())
                         loading = false
                     }
                 }
@@ -1404,7 +1403,7 @@ private fun ShellDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                     keyboardActions = KeyboardActions(onSend = { execute(cmd.trim()) }),
                     decorationBox = { innerTextField ->
                         Box(contentAlignment = Alignment.CenterStart) {
-                            if (cmd.isEmpty()) Text("输入命令...", color = BrewMuted.copy(alpha = 0.4f), fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+                            if (cmd.isEmpty()) Text(ctx.getString(R.string.enter_command), color = BrewMuted.copy(alpha = 0.4f), fontSize = 14.sp, fontFamily = FontFamily.Monospace)
                             innerTextField()
                         }
                     },
@@ -1418,7 +1417,7 @@ private fun ShellDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                         .padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(if (loading) "..." else "执行", color = if (loading) BrewMuted else BrewInfo, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    Text(if (loading) "..." else ctx.getString(R.string.execute_btn), color = if (loading) BrewMuted else BrewInfo, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 }
             }
             

@@ -3,6 +3,7 @@ package com.rokidlab.phone.app
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import com.rokidlab.phone.hid.BluetoothHidManager
 import com.rokidlab.phone.util.LocalizationManager
+import com.rokidlab.phone.R
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -62,10 +63,10 @@ class LabApplication : Application() {
         try {
             val nm = getSystemService(NotificationManager::class.java)
             val channel = NotificationChannel(
-                "timer_notify", "定时消息",
+                "timer_notify", getString(R.string.timer_channel_name),
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "来自 ADB 工具的定时消息"
+                description = getString(R.string.timer_channel_desc)
             }
             nm.createNotificationChannel(channel)
         } catch (_: Exception) { }

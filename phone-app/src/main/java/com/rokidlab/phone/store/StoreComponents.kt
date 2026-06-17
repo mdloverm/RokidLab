@@ -12,6 +12,7 @@ import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
 import com.rokidlab.phone.R
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.LinearEasing
@@ -90,6 +91,7 @@ internal fun Header(
     onInstallApk: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -192,7 +194,7 @@ internal fun Header(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.SwapHoriz, null, tint = BrewTextBright, modifier = Modifier.size(20.dp))
                             Spacer(Modifier.width(12.dp))
-                            Text("切换源", color = BrewTextBright, fontSize = 15.sp)
+                            Text(ctx.getString(R.string.switch_source), color = BrewTextBright, fontSize = 15.sp)
                         }
                     },
                     onClick = {
@@ -205,7 +207,7 @@ internal fun Header(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.InstallDesktop, null, tint = BrewTextBright, modifier = Modifier.size(20.dp))
                             Spacer(Modifier.width(12.dp))
-                            Text("安装 APK 到眼镜", color = BrewTextBright, fontSize = 15.sp)
+                            Text(ctx.getString(R.string.install_apk_to_glasses), color = BrewTextBright, fontSize = 15.sp)
                         }
                     },
                     onClick = {
@@ -238,6 +240,7 @@ internal fun BrandTitle(fontSize: Int, modifier: Modifier = Modifier) {
 }
 @Composable
 internal fun SearchBar(query: String, onQueryChange: (String) -> Unit) {
+    val ctx = LocalContext.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -260,7 +263,7 @@ internal fun SearchBar(query: String, onQueryChange: (String) -> Unit) {
             decorationBox = { inner ->
                 if (query.isBlank()) {
                     Text(
-                        "搜索",
+                        ctx.getString(R.string.search_label),
                         color = BrewMuted.copy(alpha = 0.75f),
                         fontSize = 15.sp,
                         maxLines = 1,
@@ -399,6 +402,7 @@ internal fun StoreActionButton(
 }
 @Composable
 internal fun EmptyState(modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -408,6 +412,6 @@ internal fun EmptyState(modifier: Modifier = Modifier) {
             .border(1.dp, BrewBorder, RoundedCornerShape(12.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        Text("未找到应用", color = BrewMuted, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Text(ctx.getString(R.string.no_apps_found), color = BrewMuted, fontSize = 14.sp, fontWeight = FontWeight.Bold)
     }
 }

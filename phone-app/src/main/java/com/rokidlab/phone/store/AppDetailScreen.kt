@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.store
+package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -54,6 +54,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import com.rokidlab.phone.R
 
 @Composable
 internal fun DetailSheet(
@@ -249,6 +251,7 @@ internal fun DetailUninstallActions(
     onUninstall: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val ctx = LocalContext.current
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -260,7 +263,7 @@ internal fun DetailUninstallActions(
     ) {
         if (app.hasTarget("phone")) {
             StoreActionButton(
-                label = "卸载手机端",
+                label = ctx.getString(R.string.uninstall_phone),
                 primary = false,
                 destructive = true,
                 enabled = !busy && canUninstall(phoneInstallState),
@@ -273,7 +276,7 @@ internal fun DetailUninstallActions(
         }
         if (app.hasTarget("glasses")) {
             StoreActionButton(
-                label = "卸载眼镜端",
+                label = ctx.getString(R.string.uninstall_glasses),
                 primary = false,
                 destructive = true,
                 enabled = !busy && canUninstall(glassesInstallState),
@@ -297,6 +300,7 @@ internal fun DetailInstallActions(
     onLaunch: ((BrewApp, String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    val ctx = LocalContext.current
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -304,7 +308,7 @@ internal fun DetailInstallActions(
         if (app.hasTarget("phone")) {
             if (phoneInstallState == MainActivity.InstallState.INSTALLED && onLaunch != null) {
                 StoreActionButton(
-                    label = "打开",
+                    label = ctx.getString(R.string.open_label),
                     primary = true,
                     enabled = !busy,
                     icon = { Icon(Icons.Outlined.CheckCircle, null, modifier = Modifier.size(20.dp)) },
@@ -329,7 +333,7 @@ internal fun DetailInstallActions(
         if (app.hasTarget("glasses")) {
             if (glassesInstallState == MainActivity.InstallState.INSTALLED && onLaunch != null) {
                 StoreActionButton(
-                    label = "打开",
+                    label = ctx.getString(R.string.open_label),
                     primary = false,
                     enabled = !busy,
                     icon = { Icon(Icons.Outlined.CheckCircle, null, modifier = Modifier.size(20.dp)) },

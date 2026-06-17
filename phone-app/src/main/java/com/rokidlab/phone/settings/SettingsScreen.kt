@@ -38,12 +38,15 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import com.rokidlab.phone.R
 
 @Composable
 internal fun SettingsScreen(
     state: StoreUiState,
     actions: StoreActions,
 ) {
+    val ctx = LocalContext.current
     var showLangDialog by remember { mutableStateOf(false) }
 
     Column(
@@ -53,13 +56,13 @@ internal fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
-        ModuleHeader(title = "设置", subtitle = "应用配置", color = BrewMagenta)
+        ModuleHeader(title = ctx.getString(R.string.nav_settings), subtitle = ctx.getString(R.string.settings_subtitle), color = BrewMagenta)
         Spacer(modifier = Modifier.height(24.dp))
 
-        SettingCard(title = "应用版本", content = state.selfUpdateState.currentVersion, color = BrewGreen)
+        SettingCard(title = ctx.getString(R.string.app_version), content = state.selfUpdateState.currentVersion, color = BrewGreen)
         Spacer(modifier = Modifier.height(16.dp))
         SettingCard(
-            title = "主机应用",
+            title = ctx.getString(R.string.host_app),
             content = state.selectedHostApp.displayName,
             color = BrewCyan,
             onClick = { actions.onGoToGuideStep1() },
@@ -69,9 +72,9 @@ internal fun SettingsScreen(
         // Language selector
         val currentLangName = LocalizationManager.AppLocale.entries
             .find { it.code == state.currentLocale }
-            ?.let { "${it.displayName}" } ?: "简体中文"
+            ?.let { "${it.displayName}" } ?: ctx.getString(R.string.language_simple_chinese)
         SettingCard(
-            title = "语言",
+            title = ctx.getString(R.string.language),
             content = currentLangName,
             color = BrewPurple,
             onClick = { showLangDialog = true },
@@ -79,12 +82,12 @@ internal fun SettingsScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (state.selfUpdateState.available) {
-            BrutalButton(label = "有更新可用", color = BrewGreen, onClick = actions.onSelfUpdate)
+            BrutalButton(label = ctx.getString(R.string.update_available), color = BrewGreen, onClick = actions.onSelfUpdate)
         } else {
-            SettingCard(title = "更新状态", content = "暂无更新", color = BrewMuted)
+            SettingCard(title = ctx.getString(R.string.update_status), content = ctx.getString(R.string.no_update), color = BrewMuted)
         }
         Spacer(modifier = Modifier.height(16.dp))
-        BrutalButton(label = "切换商店源", color = BrewCyan, onClick = actions.onSwitchMirror)
+        BrutalButton(label = ctx.getString(R.string.switch_source), color = BrewCyan, onClick = actions.onSwitchMirror)
         Spacer(modifier = Modifier.height(24.dp))
 
         // ── 眼镜端服务 ──
@@ -93,16 +96,16 @@ internal fun SettingsScreen(
                 .fillMaxWidth()
                 .padding(vertical = 12.dp),
         ) {
-            Text(text = "眼镜端服务", color = BrewMagenta.copy(alpha = 0.8f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+            Text(text = ctx.getString(R.string.glasses_services), color = BrewMagenta.copy(alpha = 0.8f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
             Spacer(modifier = Modifier.height(12.dp))
             SettingCard(
                 title = "RokidLink",
-                content = if (state.screenMirrorState.rokidLinkInstalled == true) "已安装" else "未安装",
+                content = if (state.screenMirrorState.rokidLinkInstalled == true) ctx.getString(R.string.installed) else ctx.getString(R.string.not_installed),
                 color = if (state.screenMirrorState.rokidLinkInstalled == true) BrewGreen else BrewWarning,
             )
             Spacer(modifier = Modifier.height(12.dp))
             BrutalButton(
-                label = if (state.screenMirrorState.isInstallingRokidLink) "正在安装中..." else "重装眼镜端",
+                label = if (state.screenMirrorState.isInstallingRokidLink) ctx.getString(R.string.installing_rokid_link) else ctx.getString(R.string.reinstall_glasses),
                 color = BrewWarning,
                 enabled = !state.screenMirrorState.isInstallingRokidLink,
                 onClick = actions.onSettingsReinstallRokidLink,
@@ -118,7 +121,7 @@ internal fun SettingsScreen(
                 .padding(16.dp),
         ) {
             Column {
-                Text(text = "开发者", color = BrewDim, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                Text(text = ctx.getString(R.string.developer), color = BrewDim, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 Box(
                     modifier = Modifier
                         .width(32.dp)
@@ -150,6 +153,7 @@ private fun LanguageDialog(
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = BrewPanel,
@@ -157,7 +161,7 @@ private fun LanguageDialog(
         textContentColor = BrewText,
         shape = RoundedCornerShape(16.dp),
         title = {
-            Text("选择语言 / Select Language", color = BrewTextBright, fontWeight = FontWeight.Bold)
+            Text(ctx.getString(R.string.select_language), color = BrewTextBright, fontWeight = FontWeight.Bold)
         },
         text = {
             Column {
@@ -190,7 +194,7 @@ private fun LanguageDialog(
         },
         confirmButton = {
             androidx.compose.material3.TextButton(onClick = onDismiss) {
-                Text("取消 / Cancel", color = BrewMuted)
+                Text(ctx.getString(R.string.cancel), color = BrewMuted)
             }
         },
     )

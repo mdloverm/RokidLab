@@ -126,10 +126,10 @@ class PhoneMirrorService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "手机投屏",
+                getString(R.string.phone_mirror_channel),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "手机屏幕投射到眼镜"
+                description = getString(R.string.phone_mirror_channel_desc)
             }
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
@@ -138,8 +138,8 @@ class PhoneMirrorService : Service() {
 
     private fun createNotification(): Notification =
         NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("手机投屏")
-            .setContentText("正在投射屏幕到眼镜")
+            .setContentTitle(getString(R.string.phone_mirror_channel))
+            .setContentText(getString(R.string.phone_mirror_projecting))
             .setSmallIcon(R.mipmap.ic_launcher)
             .build()
 

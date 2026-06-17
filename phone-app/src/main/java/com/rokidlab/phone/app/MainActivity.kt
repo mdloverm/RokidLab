@@ -12,6 +12,7 @@ import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
 import com.rokidlab.phone.BuildConfig
+import com.rokidlab.phone.R
 import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -43,6 +44,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -136,7 +138,7 @@ class MainActivity : AppCompatActivity() {
                 consumePendingAction()
             } else {
                 log("蓝牙权限被拒绝。")
-                Toast.makeText(this, "需要蓝牙权限才能连接眼镜，请在设置中开启", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, this.getString(R.string.bluetooth_permission_denied), Toast.LENGTH_LONG).show()
             }
         }
 
@@ -183,7 +185,7 @@ class MainActivity : AppCompatActivity() {
             log("MediaProjection 权限被拒绝")
             phoneMirrorState = phoneMirrorState.copy(
                 isMirroring = false,
-                connectionStatus = "权限被拒绝"
+                connectionStatus = this@MainActivity.getString(R.string.permission_denied)
             )
             // 眼镜端 RokidLink 已启动，需关闭
             cxrL.stopApp("com.rokidlab.rokidlink")
@@ -197,7 +199,7 @@ class MainActivity : AppCompatActivity() {
             val app = application as LabApplication
             phoneMirrorState = phoneMirrorState.copy(
                 isMirroring = true,
-                connectionStatus = "投屏中..."
+                connectionStatus = this@MainActivity.getString(R.string.screen_projection)
             )
             PhoneMirrorService.startService(
                 this,
@@ -210,7 +212,7 @@ class MainActivity : AppCompatActivity() {
             log("MediaProjection 权限被拒绝")
             phoneMirrorState = phoneMirrorState.copy(
                 isMirroring = false,
-                connectionStatus = "权限被拒绝"
+                connectionStatus = this@MainActivity.getString(R.string.permission_denied)
             )
             // 眼镜端 RokidLink 已启动，需关闭
             cxrL.stopApp("com.rokidlab.rokidlink")
@@ -508,7 +510,7 @@ class MainActivity : AppCompatActivity() {
                 log("商店注册表已更新（${refresh.apps.size} 个应用）。")
             }.onFailure { error ->
                 log("远程注册表不可用：${error.message ?: error.javaClass.simpleName}")
-                Toast.makeText(this@MainActivity, "注册表不可用：${error.message ?: error.javaClass.simpleName}，下拉可重试", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.registry_unavailable, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
             }
             val elapsed = System.currentTimeMillis() - started
             if (elapsed < 300) delay(300 - elapsed)
@@ -780,7 +782,7 @@ class MainActivity : AppCompatActivity() {
         val artifact = app.artifactFor(target)
         val packageName = artifact?.packageName?.takeIf { it.isNotBlank() }
         if (packageName == null) {
-            Toast.makeText(this, "无法获取 ${app.name} 的包名", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.cannot_get_package, app.name), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -790,7 +792,7 @@ class MainActivity : AppCompatActivity() {
                     if (launched) {
                         log("已在眼镜上启动 ${app.name}")
                     } else {
-                        Toast.makeText(this, "无法在眼镜上启动 ${app.name}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.cannot_launch_glasses, app.name), Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -801,10 +803,10 @@ class MainActivity : AppCompatActivity() {
                     startActivity(intent)
                     log("已在手机上启动 ${app.name}")
                 } else {
-                    Toast.makeText(this, "${app.name} 未安装在手机上", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.app_not_installed_on_phone, app.name), Toast.LENGTH_SHORT).show()
                 }
             }.onFailure { error ->
-                Toast.makeText(this, "启动 ${app.name} 失败：${error.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.launch_failed, app.name, error.message), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -813,7 +815,7 @@ class MainActivity : AppCompatActivity() {
         if (busy) return
         val artifact = app.artifactFor(target)
         if (artifact == null) {
-            Toast.makeText(this, "没有 ${app.name} 的 $target 构件", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.no_build_for_target, app.name, target), Toast.LENGTH_SHORT).show()
             return
         }
         if (target == "glasses" && !cxrL.ensureGlassesOperationReady()) return
@@ -841,7 +843,7 @@ class MainActivity : AppCompatActivity() {
                                     cachedGlassesInstallState(app, artifact) ?: InstallState.INSTALLED,
                                     InstallStateSource.VERIFIED,
                                 )
-                                Toast.makeText(this@MainActivity, "${app.name} 已安装到眼镜", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.install_success_toast, app.name), Toast.LENGTH_SHORT).show()
                             } else {
                                 installCache.removeGlasses(packageName)
                                 setGlassesInstallState(packageName, InstallState.NOT_INSTALLED, InstallStateSource.VERIFIED)
@@ -860,7 +862,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 log("安装失败：${error.message ?: error.javaClass.simpleName}")
-                Toast.makeText(this@MainActivity, "安装 ${app.name} 失败：${error.message ?: error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.install_failed, app.name, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
                 downloadProgress.remove(progressKey)
                 downloadCancelJobs.remove(progressKey)
                 updateBusy(false)
@@ -874,7 +876,7 @@ class MainActivity : AppCompatActivity() {
         val artifact = app.artifactFor(target)
         val packageName = artifact?.packageName?.takeIf { it.isNotBlank() }
         if (artifact == null || packageName == null) {
-            Toast.makeText(this, "没有 ${app.name} 的 $target 包", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.no_package_for_target, app.name, target), Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -884,9 +886,9 @@ class MainActivity : AppCompatActivity() {
                     installCache.removeGlasses(packageName)
                     setGlassesInstallState(packageName, InstallState.NOT_INSTALLED, InstallStateSource.VERIFIED)
                     installCheckTick += 1
-                    runOnUiThread { Toast.makeText(this@MainActivity, "${app.name} 已从眼镜卸载", Toast.LENGTH_SHORT).show() }
+                    runOnUiThread { Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.uninstall_success_toast, app.name), Toast.LENGTH_SHORT).show() }
                 } else {
-                    runOnUiThread { Toast.makeText(this@MainActivity, "${app.name} 从眼镜卸载失败", Toast.LENGTH_SHORT).show() }
+                    runOnUiThread { Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.uninstall_failed_toast, app.name), Toast.LENGTH_SHORT).show() }
                 }
             }
         } else {
@@ -1020,19 +1022,19 @@ class MainActivity : AppCompatActivity() {
                             if (installed) {
                                 settingsReinstallError = null
                                 log("RokidLink 安装成功")
-                                Toast.makeText(this@MainActivity, "RokidLink 安装成功", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.rokidlink_install_success), Toast.LENGTH_SHORT).show()
                             } else {
-                                settingsReinstallError = "RokidLink 安装失败，请检查眼镜连接后重试"
+                                settingsReinstallError = this@MainActivity.getString(R.string.rokidlink_install_error)
                                 log(settingsReinstallError!!)
-                                Toast.makeText(this@MainActivity, "RokidLink 安装失败，请检查眼镜连接", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.rokidlink_install_failed), Toast.LENGTH_SHORT).show()
                             }
                         }
                         tempFile.delete()
                     }
                 }.onFailure { e ->
-                    settingsReinstallError = "安装 RokidLink 失败: ${e.message}"
+                    settingsReinstallError = this@MainActivity.getString(R.string.install_failed_simple, e.message)
                     log(settingsReinstallError!!)
-                    Toast.makeText(this@MainActivity, "安装失败: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.install_failed_simple, e.message), Toast.LENGTH_LONG).show()
                     screenMirrorState = screenMirrorState.copy(isInstallingRokidLink = false)
                     phoneMirrorState = phoneMirrorState.copy(isInstallingRokidLink = false)
                     fileManagerState = fileManagerState.copy(isInstallingRokidLink = false)
@@ -1142,7 +1144,7 @@ class MainActivity : AppCompatActivity() {
             authorized = false
         )
         log("用户跳转到引导界面第一步")
-        Toast.makeText(this, "已重置主机应用选择，请重新完成引导设置", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.reset_guide), Toast.LENGTH_SHORT).show()
     }
 
     private fun log(message: String) {
@@ -1189,7 +1191,7 @@ class MainActivity : AppCompatActivity() {
     private fun startScreenMirror() {
         // 先通过 CXR-L 启动眼镜端的 ScreenMirrorIntentActivity（触发 MediaProjection 权限）
         log("正在启动眼镜端屏幕镜像服务...")
-        screenMirrorState = screenMirrorState.copy(connectionStatus = "正在启动眼镜端...")
+        screenMirrorState = screenMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses))
         cxrL.launchApp("com.rokidlab.rokidlink", activityClass = ".ScreenMirrorIntentActivity") { launched ->
             if (launched) {
                 log("眼镜端屏幕镜像服务已启动")
@@ -1197,7 +1199,7 @@ class MainActivity : AppCompatActivity() {
                 startActivity(ScreenMirrorActivity.createIntent(this))
             } else {
                 log("眼镜端启动失败")
-                screenMirrorState = screenMirrorState.copy(connectionStatus = "启动眼镜端失败")
+                screenMirrorState = screenMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses_failed))
             }
         }
     }
@@ -1206,9 +1208,9 @@ class MainActivity : AppCompatActivity() {
         if (isStartingPhoneMirror) return
         isStartingPhoneMirror = true
         log("启动手机投屏")
-        phoneMirrorState = phoneMirrorState.copy(connectionStatus = "正在启动眼镜端...")
+        phoneMirrorState = phoneMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses))
         // 先提示用户权限用途
-        Toast.makeText(this, "需要\"屏幕录制\"权限才能将手机画面投到眼镜", Toast.LENGTH_LONG).show()
+        Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.screen_record_permission), Toast.LENGTH_LONG).show()
         // 通过 CXR-L 直接启动眼镜端投屏接收页（PhoneMirrorActivity 启动后自动监听 7654 端口）
         cxrL.launchApp("com.rokidlab.rokidlink", activityClass = ".PhoneMirrorActivity") { launched ->
             if (launched) {
@@ -1221,7 +1223,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 isStartingPhoneMirror = false
                 log("眼镜端启动失败")
-                phoneMirrorState = phoneMirrorState.copy(connectionStatus = "启动眼镜端失败")
+                phoneMirrorState = phoneMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses_failed))
             }
         }
     }
@@ -1251,6 +1253,7 @@ internal fun MirrorSourceDialog(
     onSelect: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(),
@@ -1262,7 +1265,7 @@ internal fun MirrorSourceDialog(
                 .padding(24.dp),
         ) {
             Text(
-                "切换源",
+                ctx.getString(R.string.switch_source_btn),
                 color = BrewTextBright,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
@@ -1332,7 +1335,7 @@ internal fun MirrorSourceDialog(
             Spacer(Modifier.height(20.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onDismiss) {
-                    Text("取消", color = BrewMuted, fontSize = 15.sp)
+                    Text(ctx.getString(R.string.cancel_btn), color = BrewMuted, fontSize = 15.sp)
                 }
             }
         }

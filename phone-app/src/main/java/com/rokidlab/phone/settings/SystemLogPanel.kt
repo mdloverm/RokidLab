@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.settings
+package com.rokidlab.phone.settings
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -11,6 +11,8 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import androidx.compose.ui.platform.LocalContext
+import com.rokidlab.phone.R
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -52,8 +54,9 @@ internal fun SystemLogPanel(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val ctx = LocalContext.current
     val logScrollState = rememberScrollState()
-    val latestLine = statusLines.lastOrNull() ?: "就绪。"
+    val latestLine = statusLines.lastOrNull() ?: ctx.getString(R.string.ready)
     LaunchedEffect(expanded, statusLines.size) {
         if (expanded) logScrollState.animateScrollTo(logScrollState.maxValue)
     }
@@ -83,7 +86,7 @@ internal fun SystemLogPanel(
         ) {
             TerminalBadge(size = 30.dp, active = false)
             Spacer(Modifier.width(12.dp))
-            Text("系统日志", color = BrewTextBright, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = BrewFont)
+            Text(ctx.getString(R.string.system_log), color = BrewTextBright, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFamily = BrewFont)
             Spacer(Modifier.weight(1f))
             LogStatusPill(busy)
             Spacer(Modifier.width(10.dp))
@@ -139,6 +142,7 @@ internal fun TerminalBadge(size: androidx.compose.ui.unit.Dp, active: Boolean, m
 }
 @Composable
 internal fun LogStatusPill(busy: Boolean) {
+    val ctx = LocalContext.current
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(7.dp))
@@ -146,7 +150,7 @@ internal fun LogStatusPill(busy: Boolean) {
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(
-            if (busy) "运行中" else "就绪",
+            if (busy) ctx.getString(R.string.running) else ctx.getString(R.string.ready),
             color = if (busy) BrewAmber else BrewGreen,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
