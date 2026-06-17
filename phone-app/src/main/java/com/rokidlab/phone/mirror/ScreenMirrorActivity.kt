@@ -268,7 +268,7 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
         Button(
             onClick = onRetry,
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
+            shape = BrewShapeStandard,
             colors = ButtonDefaults.buttonColors(
                 containerColor = BrewCoral,
                 contentColor = BrewTextBright
@@ -414,7 +414,7 @@ private fun ScreenMirrorUI(
                                         val sinceLast = if (lastTapTime > 0) (now - lastTapTime) / 1_000_000 else Long.MAX_VALUE
                                         if (sinceLast < doubleTapMs) {
                                             lastTapTime = 0L
-                                            Log.i("ScreenMirror", "双击返回")
+                                            Log.i("ScreenMirror", "double tap back")
                                             adbClient?.sendKeyEvent("KEYCODE_BACK")
                                         } else {
                                             lastTapTime = now

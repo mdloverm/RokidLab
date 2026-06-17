@@ -29,15 +29,15 @@ class MainActivity : Activity() {
     // WiFi 状态实时监听
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            Log.i(TAG, "网络恢复，重新检查状态")
+            Log.i(TAG, getString(R.string.log_network_recovered))
             Handler(Looper.getMainLooper()).post { startSetup() }
         }
 
         override fun onLost(network: Network) {
-            Log.i(TAG, "WiFi 断开")
+            Log.i(TAG, getString(R.string.log_wifi_disconnected))
             Handler(Looper.getMainLooper()).post {
                 setDotColor(DOT_ERROR)
-                statusText.text = "WiFi 已断开"
+                statusText.text = getString(R.string.status_wifi_disconnected)
                 ipText.text = getIPAddress()
             }
         }
@@ -45,10 +45,10 @@ class MainActivity : Activity() {
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
             if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
                 !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
-                Log.i(TAG, "网络切换为非 WiFi，标记断开")
+                Log.i(TAG, getString(R.string.log_network_switched))
                 Handler(Looper.getMainLooper()).post {
                     setDotColor(DOT_ERROR)
-                    statusText.text = "WiFi 已断开"
+                    statusText.text = getString(R.string.status_wifi_disconnected)
                 }
             }
         }
@@ -106,11 +106,11 @@ class MainActivity : Activity() {
     }
 
     private fun startSetup() {
-        statusText.text = "检查 WiFi..."
+        statusText.text = getString(R.string.status_checking_wifi)
         
         // 1. 检查 WiFi 硬件开关是否开启
         if (!isWifiEnabled()) {
-            statusText.text = "WiFi 未开启"
+            statusText.text = getString(R.string.status_wifi_disabled)
             setDotColor(DOT_ERROR)
             ipText.text = "0.0.0.0"
             openWifiSettings()
@@ -123,20 +123,20 @@ class MainActivity : Activity() {
         
         // 3. 检查是否已连接到 WiFi 网络
         if (!isWifiConnected()) {
-            statusText.text = "未连接 WiFi"
+            statusText.text = getString(R.string.status_not_connected_wifi)
             setDotColor(DOT_ERROR)
             openWifiSettings()
             return
         }
 
-        statusText.text = "检查 ADB 状态..."
+        statusText.text = getString(R.string.status_checking_adb)
         if (isAdbTcpListening()) {
             setDotColor(DOT_READY)
-            statusText.text = "已就绪"
+            statusText.text = getString(R.string.status_ready)
             return
         }
 
-        statusText.text = "正在开启 ADB..."
+        statusText.text = getString(R.string.status_enabling_adb)
         setDotColor(DOT_CHECKING)
         enableAdbTcp()
     }
@@ -155,7 +155,7 @@ class MainActivity : Activity() {
     }
 
     private fun openWifiSettings() {
-        Toast.makeText(this, "请在设置中开启并连接 WiFi", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, getString(R.string.toast_enable_wifi), Toast.LENGTH_LONG).show()
         val intent = Intent(Settings.ACTION_WIFI_SETTINGS)
         startActivityForResult(intent, REQUEST_WIFI)
     }
@@ -187,18 +187,18 @@ class MainActivity : Activity() {
             Runtime.getRuntime().exec(arrayOf("setprop", "service.adb.tcp.port", "5555"))
             Thread.sleep(300)
         } catch (e: Exception) {
-            Log.e(TAG, "setprop 失败: ${e.message}")
+            Log.e(TAG, getString(R.string.log_setprop_failed, e.message))
         }
     }
 
     private fun enableAdbTcp() {
         Thread {
-            Log.i(TAG, "尝试开启 ADB TCP 模式...")
+            Log.i(TAG, getString(R.string.log_try_enable_adb_tcp))
 
             setAdbProperty()
 
             for (attempt in 1..3) {
-                Log.i(TAG, "尝试 #$attempt: ctl.restart adbd")
+                Log.i(TAG, getString(R.string.log_try_attempt, attempt))
                 tryExec("setprop", "ctl.restart", "adbd")
 
                 for (wait in 1..4) {
@@ -206,9 +206,9 @@ class MainActivity : Activity() {
                     if (isAdbTcpListening()) {
                         Handler(Looper.getMainLooper()).post {
                             setDotColor(0xFF4CAF50.toInt())
-                            statusText.text = "已就绪"
+                            statusText.text = getString(R.string.status_ready)
                         }
-                        Log.i(TAG, "ADB TCP 已开启（尝试 #$attempt 后 ${wait}s）")
+                        Log.i(TAG, getString(R.string.log_adb_tcp_enabled, attempt, wait))
                         return@Thread
                     }
                 }
@@ -216,8 +216,8 @@ class MainActivity : Activity() {
 
             Handler(Looper.getMainLooper()).post {
                 setDotColor(0xFFFF5722.toInt())
-                statusText.text = "ADB 开启失败，请重启 App"
-                Log.w(TAG, "重试 3 次后仍无法开启 ADB TCP")
+                statusText.text = getString(R.string.status_adb_failed)
+                Log.w(TAG, getString(R.string.log_retry_failed))
             }
         }.start()
     }
@@ -227,7 +227,7 @@ class MainActivity : Activity() {
             val p = Runtime.getRuntime().exec(cmd)
             p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
         } catch (e: Exception) {
-            Log.d(TAG, "命令失败: ${cmd.joinToString(" ")}: ${e.message}")
+            Log.d(TAG, "Command failed: ${cmd.joinToString(" ")}: ${e.message}")
         }
     }
 
@@ -246,7 +246,7 @@ class MainActivity : Activity() {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "获取 IP 失败", e)
+            Log.e(TAG, getString(R.string.log_get_ip_failed), e)
         }
         return "0.0.0.0"
     }

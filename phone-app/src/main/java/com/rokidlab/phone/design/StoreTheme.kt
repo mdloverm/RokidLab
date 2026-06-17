@@ -13,6 +13,7 @@ import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
 import com.rokidlab.phone.R
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -26,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 internal const val NEW_CATEGORY = "New"
 
 @Composable
@@ -86,6 +88,21 @@ val BrewDim = Color(0xFF5C5952)         // 深石色 — 禁/淡出
 val BrewCoral = Color(0xFFE85D3F)       // 朱砂红 — 温暖的强调
 // ── 边框：几乎融入背景 ──
 val BrewBorder = Color(0xFF2C2C33)
+
+// ═══════════════════════════════════════════════════
+// 标准圆角系统
+// ═══════════════════════════════════════════════════
+val BrewRadiusSmall = 4.dp
+val BrewRadiusMedium = 8.dp
+val BrewRadiusStandard = 12.dp
+val BrewRadiusLarge = 16.dp
+val BrewRadiusXLarge = 20.dp
+
+val BrewShapeSmall = RoundedCornerShape(BrewRadiusSmall)
+val BrewShapeMedium = RoundedCornerShape(BrewRadiusMedium)
+val BrewShapeStandard = RoundedCornerShape(BrewRadiusStandard)
+val BrewShapeLarge = RoundedCornerShape(BrewRadiusLarge)
+val BrewShapeXLarge = RoundedCornerShape(BrewRadiusXLarge)
 
 // ═══════════════════════════════════════════════════
 // 五模块五色：取自油画色板

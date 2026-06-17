@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.store
+package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import com.rokidlab.phone.R
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.BorderStroke
@@ -68,25 +69,26 @@ internal fun UpdateDialog(
     onDismiss: () -> Unit,
     onCancelDownload: (() -> Unit)? = null,
 ) {
+    val ctx = LocalContext.current
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = true),
     ) {
         Card(
-            shape = RoundedCornerShape(20.dp),
+            shape = BrewShapeXLarge,
             colors = CardDefaults.cardColors(containerColor = BrewPanelAlt),
             border = BorderStroke(1.dp, BrewBorder),
         ) {
             Column(modifier = Modifier.padding(24.dp)) {
                 Text(
-                    if (downloading) "下载中..." else "有可用更新",
+                    if (downloading) ctx.getString(R.string.download_in_progress) else ctx.getString(R.string.update_available_short),
                     style = MaterialTheme.typography.titleLarge,
                     color = BrewGreen,
                     fontFamily = BrewFont,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    if (downloading) "RokidLab $version（$downloadPercent%）" else "RokidLab $version 已准备好安装。",
+                    if (downloading) "RokidLab $version（$downloadPercent%）" else ctx.getString(R.string.update_available_info, version),
                     style = MaterialTheme.typography.bodyMedium,
                     color = BrewText,
                 )
@@ -102,7 +104,7 @@ internal fun UpdateDialog(
                         if (onCancelDownload != null) {
                             Spacer(Modifier.width(8.dp))
                             TextButton(onClick = onCancelDownload) {
-                                Text("取消", color = BrewCoral, fontSize = 12.sp, fontFamily = BrewFont)
+                                Text(ctx.getString(R.string.cancel), color = BrewCoral, fontSize = 12.sp, fontFamily = BrewFont)
                             }
                         }
                     }
@@ -113,7 +115,7 @@ internal fun UpdateDialog(
                     horizontalArrangement = Arrangement.End,
                 ) {
                     TextButton(onClick = onDismiss, enabled = !downloading) {
-                        Text("稍后", color = BrewDim)
+                        Text(ctx.getString(R.string.later), color = BrewDim)
                     }
                     Spacer(Modifier.width(8.dp))
                     Button(
@@ -121,7 +123,7 @@ internal fun UpdateDialog(
                         enabled = !downloading,
                         colors = ButtonDefaults.buttonColors(containerColor = BrewGreen),
                     ) {
-                        Text("更新", color = BrewBg)
+                        Text(ctx.getString(R.string.update_now), color = BrewBg)
                     }
                 }
             }
@@ -136,6 +138,7 @@ internal fun UpdateSheet(
     onUpdate: () -> Unit,
     onCancelDownload: (() -> Unit)? = null,
 ) {
+    val ctx = LocalContext.current
     val scrollState = rememberScrollState()
     Box(
         modifier = Modifier
@@ -160,7 +163,7 @@ internal fun UpdateSheet(
                             onClick = onCancelDownload,
                             modifier = Modifier.padding(top = 16.dp),
                         ) {
-                            Text("取消", color = BrewCoral, fontSize = 13.sp, fontFamily = BrewFont)
+                            Text(ctx.getString(R.string.cancel), color = BrewCoral, fontSize = 13.sp, fontFamily = BrewFont)
                         }
                     }
                 }
@@ -180,6 +183,7 @@ internal fun UpdateSheet(
 
 @Composable
 private fun UpdateHero(state: BrewSelfUpdateState, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -187,12 +191,12 @@ private fun UpdateHero(state: BrewSelfUpdateState, modifier: Modifier = Modifier
         Box(
             modifier = Modifier
                 .size(78.dp)
-                .clip(RoundedCornerShape(18.dp))
+                .clip(BrewShapeLarge)
                 .background(if (state.available) BrewAmber.copy(alpha = 0.18f) else BrewPanelAlt)
                 .border(
                     1.dp,
                     if (state.available) BrewAmber.copy(alpha = 0.72f) else BrewBorder.copy(alpha = 0.60f),
-                    RoundedCornerShape(18.dp),
+                    BrewShapeLarge,
                 ),
             contentAlignment = Alignment.Center,
         ) {
@@ -209,7 +213,7 @@ private fun UpdateHero(state: BrewSelfUpdateState, modifier: Modifier = Modifier
                 .weight(1f),
         ) {
             Text(
-                "RokidLab 更新",
+                ctx.getString(R.string.rokidlab_update),
                 color = BrewTextBright,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -218,7 +222,7 @@ private fun UpdateHero(state: BrewSelfUpdateState, modifier: Modifier = Modifier
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                updateStatusText(state),
+                updateStatusText(ctx, state),
                 color = if (state.available) BrewAmber else BrewMuted,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
@@ -250,9 +254,9 @@ private fun UpdateActions(
     ) {
         StoreActionButton(
             label = when {
-                state.downloading -> "下载中"
-                state.available -> "下载/安装"
-                else -> "已是最新"
+                state.downloading -> context.getString(R.string.downloading_text)
+                state.available -> context.getString(R.string.download_install)
+                else -> context.getString(R.string.already_latest)
             },
             primary = true,
             enabled = state.available && !state.downloading && state.apkUrl.isNotBlank(),
@@ -263,7 +267,7 @@ private fun UpdateActions(
                 .height(44.dp),
         )
         StoreActionButton(
-            label = "发布页",
+            label = context.getString(R.string.release_page),
             primary = false,
             enabled = state.releaseUrl.isNotBlank(),
             icon = { Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, modifier = Modifier.size(19.dp)) },
@@ -271,7 +275,7 @@ private fun UpdateActions(
                 runCatching {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(state.releaseUrl)))
                 }.onFailure { e ->
-                    android.util.Log.w("UpdateDialog", "打开发布页失败", e)
+                    android.util.Log.w("UpdateDialog", "Failed to open release page", e)
                 }
             },
             modifier = Modifier
@@ -283,22 +287,23 @@ private fun UpdateActions(
 
 @Composable
 private fun UpdateInfoPanel(state: BrewSelfUpdateState, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(15.dp),
+        shape = BrewShapeLarge,
         colors = CardDefaults.cardColors(containerColor = BrewPanel.copy(alpha = 0.76f)),
         border = BorderStroke(1.dp, BrewBorder.copy(alpha = 0.46f)),
     ) {
         Column(Modifier.padding(14.dp)) {
-            DetailSectionTitle("版本")
+            DetailSectionTitle(ctx.getString(R.string.version_section))
             UpdateVersionRow(
-                label = "已安装",
+                label = ctx.getString(R.string.installed_label),
                 value = "${versionBadge(state.currentVersion)} (${state.currentVersionCode})",
                 modifier = Modifier.padding(top = 11.dp),
             )
             UpdateVersionRow(
-                label = "最新",
-                value = latestVersionText(state),
+                label = ctx.getString(R.string.latest_label),
+                value = latestVersionText(ctx, state),
                 modifier = Modifier.padding(top = 8.dp),
             )
             Box(
@@ -308,7 +313,7 @@ private fun UpdateInfoPanel(state: BrewSelfUpdateState, modifier: Modifier = Mod
                     .height(1.dp)
                     .background(BrewBorder.copy(alpha = 0.32f)),
             )
-            DetailSectionTitle("更新日志", Modifier.padding(top = 16.dp))
+            DetailSectionTitle(ctx.getString(R.string.changelog_section), Modifier.padding(top = 16.dp))
             UpdateChangelog(state, Modifier.padding(top = 10.dp))
         }
     }
@@ -333,10 +338,11 @@ private fun UpdateVersionRow(label: String, value: String, modifier: Modifier = 
 
 @Composable
 private fun UpdateChangelog(state: BrewSelfUpdateState, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
     Column(modifier = modifier.fillMaxWidth()) {
         if (state.changes.isEmpty() && state.notes.isBlank()) {
             Text(
-                "当注册表导入 RokidLab GitHub Release 后，发布说明将显示在此处。",
+                ctx.getString(R.string.no_changelog_placeholder),
                 color = BrewMuted,
                 fontSize = 13.sp,
                 lineHeight = 19.sp,
@@ -356,15 +362,15 @@ private fun UpdateChangelog(state: BrewSelfUpdateState, modifier: Modifier = Mod
     }
 }
 
-private fun updateStatusText(state: BrewSelfUpdateState): String = when {
-    state.downloading -> "正在下载 ${versionBadge(state.latestVersion)}（${state.downloadPercent}%）"
-    state.available -> "有可用更新"
-    state.latestVersion.isNotBlank() -> "已是最新版本"
-    else -> "刷新注册表以检查最新版本"
+private fun updateStatusText(context: android.content.Context, state: BrewSelfUpdateState): String = when {
+    state.downloading -> context.getString(R.string.downloading_progress, versionBadge(state.latestVersion), state.downloadPercent)
+    state.available -> context.getString(R.string.update_available_short)
+    state.latestVersion.isNotBlank() -> context.getString(R.string.latest_version_text)
+    else -> context.getString(R.string.refresh_check_update)
 }
 
-private fun latestVersionText(state: BrewSelfUpdateState): String {
-    if (state.latestVersion.isBlank()) return "未检查"
+private fun latestVersionText(context: android.content.Context, state: BrewSelfUpdateState): String {
+    if (state.latestVersion.isBlank()) return context.getString(R.string.not_checked)
     return buildString {
         append(versionBadge(state.latestVersion))
         state.latestVersionCode?.let { append(" ($it)") }
@@ -373,6 +379,6 @@ private fun latestVersionText(state: BrewSelfUpdateState): String {
 
 private fun versionBadge(version: String): String {
     val clean = version.trim()
-    if (clean.isBlank()) return "未知"
+    if (clean.isBlank()) return "v?"
     return if (clean.startsWith("v", ignoreCase = true)) clean else "v$clean"
 }

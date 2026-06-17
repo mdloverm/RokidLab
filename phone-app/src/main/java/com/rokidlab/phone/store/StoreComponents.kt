@@ -98,7 +98,7 @@ internal fun Header(
     ) {
         Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(BrewShapeMedium)
             .clickable(onClick = onReset)
             .padding(end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -109,7 +109,7 @@ internal fun Header(
         Box(
             modifier = Modifier
                 .size(38.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(BrewShapeStandard)
                 .clickable(onClick = onSearchToggle),
             contentAlignment = Alignment.Center,
         ) {
@@ -124,7 +124,7 @@ internal fun Header(
         Box(
             modifier = Modifier
                 .size(38.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(BrewShapeStandard)
                 .clickable(onClick = onUpdateOpen),
             contentAlignment = Alignment.Center,
         ) {
@@ -174,7 +174,7 @@ internal fun Header(
             Box(
                 modifier = Modifier
                     .size(38.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(BrewShapeStandard)
                     .clickable(onClick = { menuExpanded = true }),
                 contentAlignment = Alignment.Center,
             ) {
@@ -246,11 +246,11 @@ internal fun SearchBar(query: String, onQueryChange: (String) -> Unit) {
             .fillMaxWidth()
             .padding(top = 14.dp)
             .height(46.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(BrewShapeLarge)
             .background(BrewPanel.copy(alpha = 0.88f))
-            .border(1.dp, BrewBorder.copy(alpha = 0.42f), RoundedCornerShape(14.dp))
+            .border(1.dp, BrewBorder.copy(alpha = 0.42f), BrewShapeLarge)
             .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+          verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Outlined.Search, null, tint = BrewMuted, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(12.dp))
@@ -280,7 +280,7 @@ internal fun SearchBar(query: String, onQueryChange: (String) -> Unit) {
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(BrewShapeMedium)
                     .clickable { onQueryChange("") }
                     .padding(8.dp),
             )
@@ -306,9 +306,9 @@ internal fun CategoryChip(
             .height(34.dp)
             .widthIn(min = 64.dp)
             .graphicsLayer { scaleX = chipScale; scaleY = chipScale }
-            .clip(RoundedCornerShape(12.dp))
+            .clip(BrewShapeStandard)
             .background(if (selected) BrewGreen else BrewPanelAlt.copy(alpha = 0.86f))
-            .border(1.dp, if (selected) BrewGreen else BrewBorder.copy(alpha = 0.44f), RoundedCornerShape(12.dp))
+            .border(1.dp, if (selected) BrewGreen else BrewBorder.copy(alpha = 0.44f), BrewShapeStandard)
             .clickable(onClick = onClick)
             .padding(horizontal = 13.dp),
         contentAlignment = Alignment.Center,
@@ -374,9 +374,9 @@ internal fun StoreActionButton(
     val contentColor = if (primary) BrewBg else accent
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(BrewShapeMedium)
             .background(if (enabled) background else BrewPanelHi.copy(alpha = 0.45f))
-            .border(1.dp, if (enabled) border else BrewBorder, RoundedCornerShape(8.dp))
+            .border(1.dp, if (enabled) border else BrewBorder, BrewShapeMedium)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -407,9 +407,9 @@ internal fun EmptyState(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .height(132.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(BrewShapeMedium)
             .background(BrewPanel)
-            .border(1.dp, BrewBorder, RoundedCornerShape(12.dp)),
+            .border(1.dp, BrewBorder, BrewShapeMedium),
         contentAlignment = Alignment.Center,
     ) {
         Text(ctx.getString(R.string.no_apps_found), color = BrewMuted, fontSize = 14.sp, fontWeight = FontWeight.Bold)

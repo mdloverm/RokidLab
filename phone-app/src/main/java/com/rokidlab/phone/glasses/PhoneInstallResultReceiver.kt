@@ -1,5 +1,6 @@
 package com.rokidlab.phone.glasses
 
+import com.rokidlab.phone.R
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -16,18 +17,18 @@ class PhoneInstallResultReceiver : BroadcastReceiver() {
                 if (confirmIntent != null) {
                     confirmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(confirmIntent)
-                    broadcastStatus(context, "手机安装确认页面已打开。")
+                    broadcastStatus(context, context.getString(R.string.install_confirm_page_opened))
                 } else {
-                    broadcastStatus(context, "手机安装需要确认，但 Android 未返回安装器 Intent。")
+                    broadcastStatus(context, context.getString(R.string.install_confirm_no_intent))
                 }
             }
 
             PackageInstaller.STATUS_SUCCESS -> {
-                broadcastStatus(context, "手机安装成功。")
+                broadcastStatus(context, context.getString(R.string.phone_install_success))
             }
 
             else -> {
-                broadcastStatus(context, "手机安装失败：${message ?: "状态 $status"}")
+                broadcastStatus(context, context.getString(R.string.phone_install_failed, message ?: "status $status"))
             }
         }
     }

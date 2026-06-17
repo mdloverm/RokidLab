@@ -89,9 +89,9 @@ class PhoneMirrorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.i(TAG, "onStartCommand 被调用")
+        Log.i(TAG, "onStartCommand called")
         startForeground(NOTIFICATION_ID, createNotification())
-        Log.i(TAG, "startForeground 已调用")
+        Log.i(TAG, "startForeground called")
 
         if (intent != null) {
             glassesIp = intent.getStringExtra("glassesIp") ?: ""
@@ -99,17 +99,17 @@ class PhoneMirrorService : Service() {
             resultCode = intent.getIntExtra("resultCode", -1)
             projectionData = intent.getParcelableExtra("data")
 
-            Log.i(TAG, "接收到参数: glassesIp=$glassesIp, port=$port, resultCode=$resultCode, data=${projectionData != null}")
+            Log.i(TAG, "Received params: glassesIp=$glassesIp, port=$port, resultCode=$resultCode, data=${projectionData != null}")
 
             if (resultCode == android.app.Activity.RESULT_OK && projectionData != null && glassesIp.isNotEmpty()) {
-                Log.i(TAG, "参数完整，开始启动投屏")
+                Log.i(TAG, "Params complete, starting mirror")
                 startMirror()
             } else {
-                Log.e(TAG, "参数不完整，无法启动投屏")
+                Log.e(TAG, "Incomplete params, cannot start mirror")
                 stopSelf()
             }
         } else {
-            Log.e(TAG, "Intent 为空")
+            Log.e(TAG, "Intent is null")
             stopSelf()
         }
         return START_NOT_STICKY
@@ -162,16 +162,16 @@ class PhoneMirrorService : Service() {
                     screenHeight = metrics.heightPixels
                     screenDensity = metrics.densityDpi
                     updateMirrorSize(isLandscapeNow())
-                    Log.i(TAG, "屏幕物理尺寸: ${screenWidth}x${screenHeight}, 镜像尺寸: ${mirrorWidth}x${mirrorHeight}")
+                    Log.i(TAG, "Screen size: ${screenWidth}x${screenHeight}, Mirror size: ${mirrorWidth}x${mirrorHeight}")
 
                     // 2. 连接眼镜（3秒超时）
-                    Log.i(TAG, "连接眼镜: $glassesIp:$port")
+                    Log.i(TAG, "Connecting to glasses: $glassesIp:$port")
                     socket = Socket()
                     socket?.connect(InetSocketAddress(glassesIp, port), 3000)
                     socket?.tcpNoDelay = true
                     socket?.keepAlive = true
                     outputStream = socket?.getOutputStream()
-                    Log.i(TAG, "连接成功")
+                    Log.i(TAG, "Connection successful")
 
                     // 3. 获取 MediaProjection
                     val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -180,7 +180,7 @@ class PhoneMirrorService : Service() {
                     mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                         override fun onStop() {
                             super.onStop()
-                            Log.i(TAG, "MediaProjection 已停止")
+                            Log.i(TAG, "MediaProjection stopped")
                             stopMirror()
                         }
                     }, null)
@@ -204,16 +204,16 @@ class PhoneMirrorService : Service() {
                             val isLandscape = orientation in 60..300
                             if (wasLandscape != isLandscape) {
                                 lastOrientationChangeMs = now
-                                Log.i(TAG, "方向变化: ${if (isLandscape) "横屏" else "竖屏"} → 重建 VirtualDisplay")
+                                Log.i(TAG, "Orientation changed: ${if (isLandscape) "landscape" else "portrait"} → recreating VirtualDisplay")
                                 recreateMirrorSession()
                             }
                         }
                     }
                     orientationListener?.enable()
 
-                    Log.i(TAG, "投屏服务已启动")
+                    Log.i(TAG, "Mirror service started")
                 } catch (e: Exception) {
-                    Log.e(TAG, "启动投屏失败: ${e.message}", e)
+                    Log.e(TAG, "Mirror start failed: ${e.message}", e)
                     throw e
                 }
             } catch (e: Exception) {
@@ -221,7 +221,7 @@ class PhoneMirrorService : Service() {
             }
         }.apply {
             setUncaughtExceptionHandler { _, e ->
-                Log.e(TAG, "投屏线程意外崩溃: ${e.message}")
+                Log.e(TAG, "Mirror thread crashed unexpectedly: ${e.message}")
                 runCatching { stopMirror() } // 确保资源完全回收
             }
         }.start()
@@ -267,7 +267,7 @@ class PhoneMirrorService : Service() {
             "PhoneMirror", mirrorWidth, mirrorHeight, screenDensity,
             0, surface, null, null
         )
-        Log.i(TAG, "VirtualDisplay 创建: ${mirrorWidth}x${mirrorHeight} @ ${screenDensity}dpi")
+        Log.i(TAG, "VirtualDisplay created: ${mirrorWidth}x${mirrorHeight} @ ${screenDensity}dpi")
         registerImageListener()
     }
 
@@ -282,9 +282,9 @@ class PhoneMirrorService : Service() {
             try {
                 processImage(image)
             } catch (e: IllegalStateException) {
-                Log.w(TAG, "跳过失效帧: ${e.message}")
+                Log.w(TAG, "Skipping invalid frame: ${e.message}")
             } catch (e: Exception) {
-                Log.e(TAG, "处理图像失败: ${e.message}", e)
+                Log.e(TAG, "Image processing failed: ${e.message}", e)
             } finally {
                 image.close()
             }
@@ -313,7 +313,7 @@ class PhoneMirrorService : Service() {
         // 校验 buffer 大小防止越界
         val minRequired = stride * (h - 1) + w * pixelStride
         if (buffer.remaining() < minRequired) {
-            Log.w(TAG, "跳过帧: buffer(${buffer.remaining()}) < 所需($minRequired)")
+            Log.w(TAG, "Skipping frame: buffer(${buffer.remaining()}) < required($minRequired)")
             return
         }
 
@@ -362,7 +362,7 @@ class PhoneMirrorService : Service() {
             outputStream?.write(combined)
             outputStream?.flush()
         } catch (e: Exception) {
-            Log.w(TAG, "发送帧失败: ${e.message}")
+            Log.w(TAG, "Send frame failed: ${e.message}")
             try { outputStream?.close() } catch (_: Exception) {}
             try { socket?.close() } catch (_: Exception) {}
             socket = null
@@ -377,7 +377,7 @@ class PhoneMirrorService : Service() {
     private var reconnectAttempts = 0
     private fun reconnectSocket() {
         if (reconnectAttempts >= 3) {
-            Log.w(TAG, "Socket 重连已达最大次数，停止投屏")
+            Log.w(TAG, "Socket reconnect max attempts reached, stopping mirror")
             stopMirror()
             return
         }
@@ -392,9 +392,9 @@ class PhoneMirrorService : Service() {
             socket?.keepAlive = true
             outputStream = socket?.getOutputStream()
             reconnectAttempts = 0
-            Log.i(TAG, "Socket 重连成功")
+            Log.i(TAG, "Socket reconnected successfully")
         } catch (e: Exception) {
-            Log.w(TAG, "Socket 重连失败 ($reconnectAttempts/3): ${e.message}")
+            Log.w(TAG, "Socket reconnect failed ($reconnectAttempts/3): ${e.message}")
         }
     }
 

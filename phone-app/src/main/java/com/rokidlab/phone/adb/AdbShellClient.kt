@@ -48,21 +48,21 @@ class AdbShellClient(
     private data class AdbMessage(val command: Int, val arg0: Int, val arg1: Int, val payload: ByteArray)
 
     fun connect(): Boolean = try {
-        Log.i(TAG, "正在连接 $ipAddress:$port...")
+        Log.i(TAG, "Connecting to $ipAddress:$port...")
         socket = Socket()
         socket?.tcpNoDelay = true
         socket?.soTimeout = 10000
         socket?.connect(java.net.InetSocketAddress(ipAddress, port), 10000)
-        Log.i(TAG, "TCP 连接已建立")
+        Log.i(TAG, "TCP connection established")
         inputStream = socket?.getInputStream()
         outputStream = socket?.getOutputStream()
         keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
         nextLocalId = 0
         doHandshake()
-        Log.i(TAG, "ADB 连接成功")
+        Log.i(TAG, "ADB connection successful")
         true
     } catch (e: Exception) {
-        Log.e(TAG, "连接失败: ${e.message}", e)
+        Log.e(TAG, "Connection failed: ${e.message}", e)
         disconnect()
         false
     }
@@ -71,15 +71,15 @@ class AdbShellClient(
     private fun doHandshake() {
         val kp = keyPair ?: error("keyPair not initialized")
         val cnxnPayload = "host::\u0000".toByteArray(Charsets.UTF_8)
-        Log.i(TAG, "发送 CNXN...")
+        Log.i(TAG, "Sending CNXN...")
         writeMessage(CMD_CNXN, CONNECT_VERSION, MAX_PAYLOAD, cnxnPayload)
         var authAttempts = 0
 
         while (authAttempts < 5) {
             val msg = readMessage()
-            Log.i(TAG, "收到命令: 0x${msg.command.toString(16)}, arg0=${msg.arg0}, arg1=${msg.arg1}")
+            Log.i(TAG, "Received command: 0x${msg.command.toString(16)}, arg0=${msg.arg0}, arg1=${msg.arg1}")
             when (msg.command) {
-                CMD_CNXN -> { Log.i(TAG, "收到 CNXN，握手完成"); return }
+                CMD_CNXN -> { Log.i(TAG, "Received CNXN, handshake complete"); return }
                 CMD_AUTH -> {
                     if (msg.arg0 == AUTH_TOKEN) {
                         authAttempts++
@@ -89,18 +89,18 @@ class AdbShellClient(
                             sig.initSign(kp.private)
                             sig.update(msg.payload)
                             writeMessage(CMD_AUTH, AUTH_SIGNATURE, 0, sig.sign())
-                            Log.i(TAG, "发送 AUTH_SIGNATURE")
+                            Log.i(TAG, "Sending AUTH_SIGNATURE")
                         } else {
                             val pub = getAdbPublicKeyPayload()
                             writeMessage(CMD_AUTH, AUTH_RSA_PUBLIC, 0, pub)
-                            Log.i(TAG, "发送 AUTH_RSA_PUBLIC (${pub.size} bytes)")
+                            Log.i(TAG, "Sending AUTH_RSA_PUBLIC (${pub.size} bytes)")
                         }
                     }
                 }
-                else -> Log.w(TAG, "未知命令: 0x${msg.command.toString(16)}")
+                else -> Log.w(TAG, "Unknown command: 0x${msg.command.toString(16)}")
             }
         }
-        throw RuntimeException("ADB 认证失败（尝试 $authAttempts 次）")
+        throw RuntimeException("ADB authentication failed ($authAttempts attempts)")
     }
 
     // ── 公钥编码 ──
@@ -310,7 +310,7 @@ class AdbShellClient(
                 writeMessage(CMD_OPEN, localId, 0, syncPayload)
                 var resp = readMessage()
                 if (resp.command != CMD_OKAY) {
-                    Log.w(TAG, "pullFile open sync 失败: cmd=0x${resp.command.toString(16)}")
+                    Log.w(TAG, "pullFile open sync failed: cmd=0x${resp.command.toString(16)}")
                     return false
                 }
                 val remoteId = resp.arg0
@@ -326,7 +326,7 @@ class AdbShellClient(
 
                 var okay2 = readMessage()
                 if (okay2.command != CMD_OKAY) {
-                    Log.w(TAG, "pullFile send RECV 后未收到 OKAY: cmd=0x${okay2.command.toString(16)}")
+                    Log.w(TAG, "pullFile no OKAY after RECV: cmd=0x${okay2.command.toString(16)}")
                     close(localId, remoteId)
                     return false
                 }
@@ -362,10 +362,10 @@ class AdbShellClient(
 
                 close(localId, remoteId)
                 socket?.soTimeout = 5000
-                Log.i(TAG, "pullFile 成功: $remotePath → $localPath (${localFile.length()} bytes)")
+                Log.i(TAG, "pullFile success: $remotePath → $localPath (${localFile.length()} bytes)")
                 return true
             } catch (e: Exception) {
-                Log.e(TAG, "pullFile 失败: ${e.message}", e)
+                Log.e(TAG, "pullFile failed: ${e.message}", e)
                 // 异常时清理 sync 流，防止泄漏
                 if (closeLocalId > 0 && closeRemoteId > 0) {
                     try { close(closeLocalId, closeRemoteId) } catch (_: Exception) {}
@@ -407,7 +407,7 @@ class AdbShellClient(
             // OKAY: arg0=服务器分配的远程ID, arg1=我们的localId(确认)
             Triple(localId, resp.arg0, resp)
         } else {
-            Log.w(TAG, "open($service) 失败: cmd=0x${resp.command.toString(16)}")
+            Log.w(TAG, "open($service) failed: cmd=0x${resp.command.toString(16)}")
             null
         }
     }

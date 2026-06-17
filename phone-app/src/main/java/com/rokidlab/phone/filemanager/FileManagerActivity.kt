@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import com.rokidlab.phone.R
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.ActivityNotFoundException
@@ -49,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
 import java.io.File
 import java.text.SimpleDateFormat
@@ -72,21 +74,22 @@ enum class ClipboardAction { COPY, CUT }
 
 @Composable
 internal fun NewFolderDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
     var name by remember { mutableStateOf("") }
     
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.padding(16.dp),
-            shape = RoundedCornerShape(16.dp),
+            shape = BrewShapeLarge,
             color = BrewPanel
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("新建文件夹", fontWeight = FontWeight.Bold, color = BrewTextBright)
+                Text(ctx.getString(R.string.new_folder), fontWeight = FontWeight.Bold, color = BrewTextBright)
                 Spacer(modifier = Modifier.height(16.dp))
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    placeholder = { Text("输入文件夹名称") },
+                    placeholder = { Text(ctx.getString(R.string.folder_name_hint)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -101,24 +104,24 @@ internal fun NewFolderDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit)
                 ) {
                     Button(
                         onClick = { onDismiss() },
-                        shape = RoundedCornerShape(12.dp),
+                        shape = BrewShapeStandard,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = BrewPanelHi,
                             contentColor = BrewTextBright
                         )
                     ) {
-                        Text("取消")
+                        Text(ctx.getString(R.string.cancel))
                     }
                     Button(
                         onClick = { if (name.isNotBlank()) onConfirm(name) },
                         enabled = name.isNotBlank(),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = BrewShapeStandard,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = BrewCoral,
                             contentColor = BrewTextBright
                         )
                     ) {
-                        Text("确定")
+                        Text(ctx.getString(R.string.confirm))
                     }
                 }
             }
@@ -128,16 +131,17 @@ internal fun NewFolderDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit)
 
 @Composable
 fun RenameDialog(fileName: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
     var newName by remember { mutableStateOf(fileName) }
     
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.padding(16.dp),
-            shape = RoundedCornerShape(16.dp),
+            shape = BrewShapeLarge,
             color = BrewPanel
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("重命名", fontWeight = FontWeight.Bold, color = BrewTextBright)
+                Text(ctx.getString(R.string.rename), fontWeight = FontWeight.Bold, color = BrewTextBright)
                 Spacer(modifier = Modifier.height(16.dp))
                 OutlinedTextField(
                     value = newName,
@@ -156,24 +160,24 @@ fun RenameDialog(fileName: String, onConfirm: (String) -> Unit, onDismiss: () ->
                 ) {
                     Button(
                         onClick = { onDismiss() },
-                        shape = RoundedCornerShape(12.dp),
+                        shape = BrewShapeStandard,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = BrewPanelHi,
                             contentColor = BrewTextBright
                         )
                     ) {
-                        Text("取消")
+                        Text(ctx.getString(R.string.cancel))
                     }
                     Button(
                         onClick = { if (newName.isNotBlank()) onConfirm(newName) },
                         enabled = newName.isNotBlank(),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = BrewShapeStandard,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = BrewCoral,
                             contentColor = BrewTextBright
                         )
                     ) {
-                        Text("确定")
+                        Text(ctx.getString(R.string.confirm))
                     }
                 }
             }
@@ -183,17 +187,18 @@ fun RenameDialog(fileName: String, onConfirm: (String) -> Unit, onDismiss: () ->
 
 @Composable
 fun DeleteConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.padding(16.dp),
-            shape = RoundedCornerShape(16.dp),
+            shape = BrewShapeLarge,
             color = BrewPanel
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Icon(Icons.Outlined.Warning, contentDescription = "Warning", tint = BrewOrange, modifier = Modifier.size(48.dp))
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("确定要删除 ${count} 个文件吗？", fontWeight = FontWeight.Bold, color = BrewTextBright)
-                Text("此操作无法撤销。", color = BrewMuted)
+                Text(ctx.getString(R.string.confirm_delete_files, count), fontWeight = FontWeight.Bold, color = BrewTextBright)
+                Text(ctx.getString(R.string.cannot_undo), color = BrewMuted)
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -201,23 +206,23 @@ fun DeleteConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit
                 ) {
                     Button(
                         onClick = { onDismiss() },
-                        shape = RoundedCornerShape(12.dp),
+                        shape = BrewShapeStandard,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = BrewPanelHi,
                             contentColor = BrewTextBright
                         )
                     ) {
-                        Text("取消")
+                        Text(ctx.getString(R.string.cancel))
                     }
                     Button(
                         onClick = { onConfirm() },
-                        shape = RoundedCornerShape(12.dp),
+                        shape = BrewShapeStandard,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = BrewRed,
                             contentColor = BrewTextBright
                         )
                     ) {
-                        Text("删除")
+                        Text(ctx.getString(R.string.delete))
                     }
                 }
             }
@@ -227,21 +232,22 @@ fun DeleteConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit
 
 @Composable
 internal fun DetailsDialog(file: FileItem, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier.padding(16.dp),
-            shape = RoundedCornerShape(16.dp),
+            shape = BrewShapeLarge,
             color = BrewPanel
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("文件详情", fontWeight = FontWeight.Bold, color = BrewTextBright)
+                Text(ctx.getString(R.string.file_details), fontWeight = FontWeight.Bold, color = BrewTextBright)
                 Spacer(modifier = Modifier.height(16.dp))
                 
-                DetailRow(label = "名称", value = file.name)
-                DetailRow(label = "路径", value = file.path)
-                DetailRow(label = "类型", value = if (file.isDirectory) "文件夹" else "文件")
-                DetailRow(label = "大小", value = if (file.isDirectory) "-" else formatSize(file.size))
-                DetailRow(label = "修改时间", value = formatDate(file.lastModified))
+                DetailRow(label = ctx.getString(R.string.name_label), value = file.name)
+                DetailRow(label = ctx.getString(R.string.path_label), value = file.path)
+                DetailRow(label = ctx.getString(R.string.type_label), value = if (file.isDirectory) ctx.getString(R.string.folder) else ctx.getString(R.string.file))
+                DetailRow(label = ctx.getString(R.string.size_label), value = if (file.isDirectory) "-" else formatSize(file.size))
+                DetailRow(label = ctx.getString(R.string.modified_time), value = formatDate(file.lastModified))
                 
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(
@@ -250,13 +256,13 @@ internal fun DetailsDialog(file: FileItem, onDismiss: () -> Unit) {
                 ) {
                     Button(
                         onClick = onDismiss,
-                        shape = RoundedCornerShape(12.dp),
+                        shape = BrewShapeStandard,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = BrewCoral,
                             contentColor = BrewTextBright
                         )
                     ) {
-                        Text("确定")
+                        Text(ctx.getString(R.string.confirm))
                     }
                 }
             }
@@ -275,6 +281,7 @@ fun DetailRow(label: String, value: String) {
 
 @Composable
 fun PreviewDialog(fileName: String, content: String?, isLoading: Boolean, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier
@@ -299,7 +306,7 @@ fun PreviewDialog(fileName: String, content: String?, isLoading: Boolean, onDism
                 
                 Box(modifier = Modifier.weight(1f)) {
                     if (isLoading) {
-                        LoadingScreen(message = "加载中...")
+                        LoadingScreen(message = ctx.getString(R.string.loading))
                     } else if (content != null) {
                         // 判断是否为图片路径
                         val imageExtensions = setOf(".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp")
@@ -321,6 +328,7 @@ fun PreviewDialog(fileName: String, content: String?, isLoading: Boolean, onDism
 
 @Composable
 internal fun ImagePreview(imagePath: String) {
+    val ctx = LocalContext.current
     val bitmap = remember {
         BitmapFactory.decodeFile(imagePath)
     }
@@ -341,7 +349,7 @@ internal fun ImagePreview(imagePath: String) {
             verticalArrangement = Arrangement.Center
         ) {
             Icon(Icons.Outlined.BrokenImage, contentDescription = "Broken Image", tint = BrewMuted)
-            Text("图片加载失败", color = BrewMuted)
+            Text(ctx.getString(R.string.image_load_failed), color = BrewMuted)
         }
     }
 }
@@ -395,6 +403,7 @@ internal fun FileManagerScreen(
     onCutFile: (FileItem) -> Unit,
     onDeleteFile: (FileItem) -> Unit,
 ) {
+    val ctx = LocalContext.current
     // 处理系统返回键
     BackHandler {
         onBack()
@@ -435,7 +444,7 @@ internal fun FileManagerScreen(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { onSearchChange(it) },
-                placeholder = { Text("搜索文件...") },
+                placeholder = { Text(ctx.getString(R.string.search_files)) },
                 modifier = Modifier.weight(1f),
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = "Search") },
                 singleLine = true,
@@ -464,10 +473,10 @@ internal fun FileManagerScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("已选择 ${selectedFiles.size} 项", color = BrewText)
+                    Text(ctx.getString(R.string.items_selected, selectedFiles.size), color = BrewText)
                     Spacer(modifier = Modifier.width(8.dp))
-                    TextButton(onClick = onSelectAll) { Text("全选") }
-                    TextButton(onClick = onClearSelection) { Text("取消") }
+                    TextButton(onClick = onSelectAll) { Text(ctx.getString(R.string.select_all)) }
+                    TextButton(onClick = onClearSelection) { Text(ctx.getString(R.string.clear_selection)) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     IconButton(onClick = onCopy, enabled = !hasClipboard) {
@@ -508,13 +517,13 @@ internal fun FileManagerScreen(
             // 快捷操作按钮
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 IconButton(onClick = onNewFolder) {
-                    Icon(Icons.Outlined.CreateNewFolder, contentDescription = "新建文件夹", tint = BrewCoral)
+                    Icon(Icons.Outlined.CreateNewFolder, contentDescription = ctx.getString(R.string.new_folder), tint = BrewCoral)
                 }
                 IconButton(onClick = onUpload) {
-                    Icon(Icons.Outlined.Upload, contentDescription = "上传文件", tint = BrewCoral)
+                    Icon(Icons.Outlined.Upload, contentDescription = ctx.getString(R.string.upload_status), tint = BrewCoral)
                 }
                 IconButton(onClick = onRefresh) {
-                    Icon(Icons.Outlined.Refresh, contentDescription = "刷新", tint = BrewCoral)
+                    Icon(Icons.Outlined.Refresh, contentDescription = ctx.getString(R.string.refresh), tint = BrewCoral)
                 }
             }
         }
@@ -546,8 +555,8 @@ internal fun FileManagerScreen(
                     .padding(8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("存储: ${formatSize(storageInfo.usedBytes)} / ${formatSize(storageInfo.totalBytes)}", color = BrewMuted)
-                Text("文件数: ${files.size}", color = BrewMuted)
+                Text(ctx.getString(R.string.storage_info, formatSize(storageInfo.usedBytes), formatSize(storageInfo.totalBytes)), color = BrewMuted)
+                Text(ctx.getString(R.string.file_count, files.size), color = BrewMuted)
             }
         }
     }
@@ -623,11 +632,12 @@ class FileManagerActivity : ComponentActivity() {
         connect()
 
         setContent {
+            val ctx = LocalContext.current
             RokidLabTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     when {
                         isConnecting || (!isConnected && connectionError == null) -> {
-                            LoadingScreen(message = "正在连接眼镜...")
+                            LoadingScreen(message = ctx.getString(R.string.connecting_glasses))
                         }
                         connectionError != null -> {
                             ErrorScreen(
@@ -653,12 +663,12 @@ class FileManagerActivity : ComponentActivity() {
                                 showHiddenFiles = showHiddenFiles,
                                 storageInfo = storageInfo,
                                 onBack = { 
-                                    Log.i(TAG, "onBack 被调用, currentPath=$currentPath")
+                                    Log.i(TAG, "onBack called, currentPath=$currentPath")
                                     if (currentPath == "/sdcard/") {
-                                        Log.i(TAG, "当前是根目录，退出应用")
+                                        Log.i(TAG, "At root directory, exiting app")
                                         finish()
                                     } else {
-                                        Log.i(TAG, "当前不是根目录，返回上级")
+                                        Log.i(TAG, "Not at root, navigating up")
                                         navigateUp()
                                     }
                                 },
@@ -764,19 +774,19 @@ class FileManagerActivity : ComponentActivity() {
     private fun connect() {
         isConnecting = true
         connectionError = null
-        Log.i(TAG, "开始连接: $ipAddress:$ADB_PORT")
+        Log.i(TAG, "Starting connection: $ipAddress:$ADB_PORT")
         
         Thread {
             try {
-                Log.i(TAG, "创建 AdbFileManagerClient")
+                Log.i(TAG, "Creating AdbFileManagerClient")
                 val client = AdbFileManagerClient(this@FileManagerActivity, ipAddress, ADB_PORT)
-                Log.i(TAG, "调用 connect 方法")
+                Log.i(TAG, "Calling connect method")
                 val success = client.connect { status ->
-                    Log.i(TAG, "连接状态: $status")
+                    Log.i(TAG, "Connection status: $status")
                     runOnUiThread { statusMessage = status }
                 }
                 
-                Log.i(TAG, "连接结果: $success")
+                Log.i(TAG, "Connection result: $success")
                 runOnUiThread {
                     isConnecting = false
                     if (success) {
@@ -784,14 +794,14 @@ class FileManagerActivity : ComponentActivity() {
                         adbClient = client
                         loadFiles()
                     } else {
-                        connectionError = "连接失败，请检查IP地址和网络"
+                        connectionError = getString(R.string.connection_failed_check_ip)
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "连接异常: ${e.message}", e)
+                Log.e(TAG, "Connection error: ${e.message}", e)
                 runOnUiThread {
                     isConnecting = false
-                    connectionError = "连接异常: ${e.message}"
+                    connectionError = getString(R.string.connection_error_format, e.message)
                 }
             }
         }.start()
@@ -820,7 +830,7 @@ class FileManagerActivity : ComponentActivity() {
                 runOnUiThread {
                     if (loadId == loadFilesCounter) {
                         isLoading = false
-                        statusMessage = "加载文件夹失败: ${e.message}"
+                        statusMessage = getString(R.string.load_folder_failed, e.message)
                     }
                 }
             }
@@ -837,11 +847,11 @@ class FileManagerActivity : ComponentActivity() {
     }
 
     private fun navigateUp() {
-        Log.i(TAG, "navigateUp 被调用, 当前路径: $currentPath")
+        Log.i(TAG, "navigateUp called, current path: $currentPath")
         
         // 移除末尾的斜杠进行处理
         val normalizedPath = currentPath.trimEnd('/')
-        Log.i(TAG, "标准化路径: $normalizedPath")
+        Log.i(TAG, "Normalized path: $normalizedPath")
         
         val parentPath = if (normalizedPath == "/sdcard") {
             "/sdcard/"
@@ -854,7 +864,7 @@ class FileManagerActivity : ComponentActivity() {
             }
         }
         
-        Log.i(TAG, "上级路径: $parentPath")
+        Log.i(TAG, "Parent path: $parentPath")
         
         if (parentPath != currentPath) {
             currentPath = parentPath
@@ -905,7 +915,7 @@ class FileManagerActivity : ComponentActivity() {
         targetFile = file
         showPreviewDialog = true
         previewLoading = true
-        Log.i(TAG, "预览文件: ${file.path}")
+        Log.i(TAG, "Previewing file: ${file.path}")
         
         Thread {
             try {
@@ -914,11 +924,11 @@ class FileManagerActivity : ComponentActivity() {
                 val imageExtensions = setOf("jpg", "jpeg", "png", "gif", "bmp", "webp")
                 
                 val extension = file.name.substringAfterLast('.', "").lowercase()
-                Log.i(TAG, "文件扩展名: $extension")
+                Log.i(TAG, "File extension: $extension")
                 
                 if (imageExtensions.contains(extension)) {
                     // 图片文件 - 下载到本地后预览
-                    Log.i(TAG, "图片文件，开始下载")
+                    Log.i(TAG, "Image file, starting download")
                     val localPath = cacheDir.absolutePath + "/" + file.name
                     val success = adbClient?.downloadFile(file.path, localPath) ?: false
                     
@@ -926,42 +936,42 @@ class FileManagerActivity : ComponentActivity() {
                         previewLoading = false
                         if (success) {
                             previewContent = localPath // 存储本地路径用于图片预览
-                            Log.i(TAG, "图片下载成功: $localPath")
+                            Log.i(TAG, "Image download successful: $localPath")
                         } else {
-                            previewContent = "图片下载失败"
-                            Log.e(TAG, "图片下载失败")
+                            previewContent = getString(R.string.image_download_failed)
+                            Log.e(TAG, "Image download failed")
                         }
                     }
                 } else if (textExtensions.contains(extension)) {
                     // 文本文件可以预览 - 使用 shell cat 命令读取（sync 协议不支持此设备）
-                    Log.i(TAG, "文本文件，开始读取内容")
+                    Log.i(TAG, "Text file, reading content")
                     val content = if (adbClient != null) {
                         try {
                             adbClient!!.executeShellCommand("cat \"${file.path}\"")
                         } catch (e: Exception) {
-                            Log.e(TAG, "shell cat 失败: ${e.message}")
+                            Log.e(TAG, "shell cat failed: ${e.message}")
                             null
                         }
                     } else null
-                    Log.i(TAG, "文本内容预览结果: ${if (content != null && content.isNotEmpty()) "成功, 长度: ${content.length}" else "失败"}")
+                    Log.i(TAG, "Text content preview result: ${if (content != null && content.isNotEmpty()) "success, length: ${content.length}" else "failed"}")
                     
                     runOnUiThread {
                         previewLoading = false
-                        previewContent = content ?: "无法读取文件内容"
+                        previewContent = content ?: getString(R.string.cannot_read_content)
                     }
                 } else {
                     // 其他文件
                     runOnUiThread {
                         previewLoading = false
-                        previewContent = "该文件类型不支持预览\n\n文件名: ${file.name}\n大小: ${formatSize(file.size)}"
+                        previewContent = getString(R.string.preview_not_supported) + "\n\n" + getString(R.string.name_label) + ": ${file.name}\n" + getString(R.string.size_label) + ": ${formatSize(file.size)}"
                     }
-                    Log.i(TAG, "不支持的文件类型")
+                    Log.i(TAG, "Unsupported file type")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "预览失败: ${e.message}", e)
+                Log.e(TAG, "Preview failed: ${e.message}", e)
                 runOnUiThread {
                     previewLoading = false
-                    previewContent = "预览失败: ${e.message}"
+                    previewContent = getString(R.string.preview_failed_format, e.message)
                 }
             }
         }.start()
@@ -974,7 +984,7 @@ class FileManagerActivity : ComponentActivity() {
 
     private fun downloadFileToUri(file: FileItem, uri: Uri) {
         isLoading = true
-        statusMessage = "正在下载..."
+        statusMessage = getString(R.string.download_status)
         
         Thread {
             val localPath = cacheDir.absolutePath + "/" + file.name
@@ -988,21 +998,21 @@ class FileManagerActivity : ComponentActivity() {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "复制文件失败: ${e.message}")
+                    Log.e(TAG, "Copy file failed: ${e.message}")
                 }
                 File(localPath).delete()
             }
             
             runOnUiThread {
                 isLoading = false
-                statusMessage = if (success) "下载成功" else "下载失败"
+                statusMessage = if (success) getString(R.string.download_success) else getString(R.string.download_failed)
             }
         }.start()
     }
 
     private fun uploadFile(uri: Uri) {
         isLoading = true
-        statusMessage = "正在上传..."
+        statusMessage = getString(R.string.upload_status)
         
         Thread {
             val fileName = uri.getFileName() ?: "unknown"
@@ -1016,7 +1026,7 @@ class FileManagerActivity : ComponentActivity() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "复制文件失败: ${e.message}")
+                Log.e(TAG, "Copy file failed: ${e.message}")
             }
             
             val success = adbClient?.uploadFile(localPath, targetPath) ?: false
@@ -1025,10 +1035,10 @@ class FileManagerActivity : ComponentActivity() {
             runOnUiThread {
                 isLoading = false
                 if (success) {
-                    statusMessage = "上传成功"
+                    statusMessage = getString(R.string.file_upload_success)
                     loadFiles()
                 } else {
-                    statusMessage = "上传失败"
+                    statusMessage = getString(R.string.file_upload_failed)
                 }
             }
         }.start()
@@ -1044,7 +1054,7 @@ class FileManagerActivity : ComponentActivity() {
             
             runOnUiThread {
                 isLoading = false
-                statusMessage = if (success) "文件夹创建成功" else "文件夹创建失败"
+                statusMessage = if (success) getString(R.string.folder_create_success) else getString(R.string.folder_create_failed)
                 if (success) loadFiles()
             }
         }.start()
@@ -1061,7 +1071,7 @@ class FileManagerActivity : ComponentActivity() {
 
     private fun renameFile(newName: String) {
         if (newName.isBlank() || targetFile == null) {
-            statusMessage = "文件名不能为空"
+            statusMessage = getString(R.string.filename_empty)
             return
         }
         
@@ -1074,7 +1084,7 @@ class FileManagerActivity : ComponentActivity() {
             
             runOnUiThread {
                 isLoading = false
-                statusMessage = if (success) "重命名成功" else "重命名失败"
+                statusMessage = if (success) getString(R.string.rename_success) else getString(R.string.rename_failed)
                 targetFile = null
                 renameText = ""
                 if (success) loadFiles()
@@ -1085,21 +1095,21 @@ class FileManagerActivity : ComponentActivity() {
     private fun copySelected() {
         if (selectedFiles.isEmpty()) return
         clipboard = Pair(ClipboardAction.COPY, selectedFiles)
-        statusMessage = "已复制 ${selectedFiles.size} 项"
+        statusMessage = getString(R.string.copied_items, selectedFiles.size)
         selectedFiles = emptySet()
     }
 
     private fun cutSelected() {
         if (selectedFiles.isEmpty()) return
         clipboard = Pair(ClipboardAction.CUT, selectedFiles)
-        statusMessage = "已剪切 ${selectedFiles.size} 项"
+        statusMessage = getString(R.string.cut_items, selectedFiles.size)
         selectedFiles = emptySet()
     }
 
     private fun pasteFiles() {
         clipboard?.let { (action, paths) ->
             isLoading = true
-            statusMessage = "正在粘贴..."
+            statusMessage = getString(R.string.pasting_status)
             
             Thread {
                 var successCount = 0
@@ -1120,9 +1130,9 @@ class FileManagerActivity : ComponentActivity() {
                 runOnUiThread {
                     isLoading = false
                     statusMessage = if (successCount == paths.size) {
-                        "已粘贴 ${successCount} 项"
+                        getString(R.string.pasted_items, successCount)
                     } else {
-                        "粘贴成功 $successCount/${paths.size} 项"
+                        getString(R.string.pasted_items, successCount) + "/${paths.size}"
                     }
                     if (action == ClipboardAction.CUT) {
                         clipboard = null
@@ -1141,7 +1151,7 @@ class FileManagerActivity : ComponentActivity() {
     private fun deleteSelectedFiles() {
         showDeleteDialog = false
         isLoading = true
-        statusMessage = "正在删除..."
+        statusMessage = getString(R.string.deleting_status)
         
         Thread {
             var successCount = 0
@@ -1152,10 +1162,10 @@ class FileManagerActivity : ComponentActivity() {
             runOnUiThread {
                 isLoading = false
                 statusMessage = if (successCount == selectedFiles.size) {
-                    "已删除 ${successCount} 项"
-                } else {
-                    "删除成功 $successCount/${selectedFiles.size} 项"
-                }
+                        getString(R.string.deleted_items, successCount)
+                    } else {
+                        getString(R.string.deleted_items, successCount) + "/${selectedFiles.size}"
+                    }
                 selectedFiles = emptySet()
                 loadFiles()
             }
@@ -1230,6 +1240,7 @@ fun LoadingScreen(message: String) {
 
 @Composable
 fun ErrorScreen(error: String, onRetry: () -> Unit, onBack: () -> Unit) {
+    val ctx = LocalContext.current
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
@@ -1252,7 +1263,7 @@ fun ErrorScreen(error: String, onRetry: () -> Unit, onBack: () -> Unit) {
                         contentColor = BrewTextBright
                     )
                 ) {
-                    Text("重试")
+                    Text(ctx.getString(R.string.retry_action))
                 }
                 Button(
                     onClick = onBack,
@@ -1262,7 +1273,7 @@ fun ErrorScreen(error: String, onRetry: () -> Unit, onBack: () -> Unit) {
                         contentColor = BrewTextBright
                     )
                 ) {
-                    Text("返回")
+                    Text(ctx.getString(R.string.back_action))
                 }
             }
         }
@@ -1284,6 +1295,7 @@ fun FileItemRow(
     onDetails: () -> Unit,
     selectedCount: Int
 ) {
+    val ctx = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
     var showMenu by remember { mutableStateOf(false) }
     
@@ -1321,7 +1333,7 @@ fun FileItemRow(
             Text(file.name, color = BrewTextBright, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row {
                 Text(
-                    if (file.isDirectory) "文件夹" else formatSize(file.size),
+                    if (file.isDirectory) ctx.getString(R.string.folder) else formatSize(file.size),
                     color = BrewMuted,
                     fontSize = 12.sp
                 )
@@ -1333,7 +1345,7 @@ fun FileItemRow(
         // 文件功能菜单
         Box {
             IconButton(onClick = { showMenu = true }) {
-                Icon(Icons.Outlined.MoreVert, contentDescription = "功能菜单", modifier = Modifier.size(20.dp))
+                Icon(Icons.Outlined.MoreVert, contentDescription = ctx.getString(R.string.function_menu), modifier = Modifier.size(20.dp))
             }
             
             DropdownMenu(
@@ -1343,12 +1355,12 @@ fun FileItemRow(
                 // 文件特有功能
                 if (!file.isDirectory) {
                     DropdownMenuItem(
-                        text = { Text("预览") },
+                        text = { Text(ctx.getString(R.string.preview_action)) },
                         onClick = { showMenu = false; onPreview() },
                         leadingIcon = { Icon(Icons.Outlined.RemoveRedEye, null) }
                     )
                     DropdownMenuItem(
-                        text = { Text("下载") },
+                        text = { Text(ctx.getString(R.string.download_action)) },
                         onClick = { showMenu = false; onDownload() },
                         leadingIcon = { Icon(Icons.Outlined.Download, null) }
                     )
@@ -1357,29 +1369,29 @@ fun FileItemRow(
                 
                 // 通用功能
                 DropdownMenuItem(
-                    text = { Text("重命名") },
+                    text = { Text(ctx.getString(R.string.rename)) },
                     onClick = { showMenu = false; onRename() },
                     leadingIcon = { Icon(Icons.Outlined.DriveFileRenameOutline, null) }
                 )
                 DropdownMenuItem(
-                    text = { Text("复制") },
+                    text = { Text(ctx.getString(R.string.copy_action)) },
                     onClick = { showMenu = false; onCopy() },
                     leadingIcon = { Icon(Icons.Outlined.FileCopy, null) }
                 )
                 DropdownMenuItem(
-                    text = { Text("剪切") },
+                    text = { Text(ctx.getString(R.string.cut_action)) },
                     onClick = { showMenu = false; onCut() },
                     leadingIcon = { Icon(Icons.Outlined.ContentCut, null) }
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("删除") },
+                    text = { Text(ctx.getString(R.string.delete)) },
                     onClick = { showMenu = false; onDelete() },
                     leadingIcon = { Icon(Icons.Outlined.Delete, null, tint = BrewRed) }
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("详情") },
+                    text = { Text(ctx.getString(R.string.details_action)) },
                     onClick = { showMenu = false; onDetails() },
                     leadingIcon = { Icon(Icons.Outlined.Info, null) }
                 )

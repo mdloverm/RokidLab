@@ -97,8 +97,8 @@ class AdbScreenMirrorClient(
             onStatus("Connected")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "连接失败: ${e.message}", e)
-            onStatus("连接失败: ${e.message}")
+            Log.e(TAG, "Connection failed: ${e.message}", e)
+            onStatus("Connection failed: ${e.message}")
             disconnect()
             false
         }
@@ -114,19 +114,19 @@ class AdbScreenMirrorClient(
         sentSignature = false
         val cnxnPayload = "host::\u0000".toByteArray(Charsets.UTF_8)
         sendPacket(CMD_CNXN, CONNECT_VERSION, 256 * 1024, cnxnPayload)
-        Log.i(TAG, "CNXN 已发送")
+        Log.i(TAG, "CNXN sent")
 
         while (true) {
             val msg = readPacket()
             when (msg.command) {
                 CMD_CNXN -> {
-                    Log.i(TAG, "CNXN 收到")
+                    Log.i(TAG, "CNXN received")
                     return
                 }
                 CMD_AUTH -> {
                     if (msg.arg0 == AUTH_TOKEN) {
                         if (!sentSignature) {
-                            Log.i(TAG, "AUTH TOKEN -> 发送签名")
+                            Log.i(TAG, "AUTH TOKEN -> sending signature")
                             val sig = Signature.getInstance("SHA1withRSA")
                             sig.initSign(kp.private)
                             sig.update(msg.payload)
@@ -179,7 +179,7 @@ class AdbScreenMirrorClient(
         onStatus: (String) -> Unit,
     ) {
         if (decoder == null) {
-            Log.w(TAG, "解码器未就绪，降级到 screencap")
+            Log.w(TAG, "Decoder not ready, falling back to screencap")
             startStreaming(onFrame = {}, onStatus = onStatus)
             return
         }
@@ -278,7 +278,7 @@ class AdbScreenMirrorClient(
                             "video=true audio=false control=false cleanup=false " +
                             "> /dev/null 2>&1 &\nsleep 3\necho ok\n\u0000")
                     sendPacket(CMD_OPEN, shellId, 0, shellCmd.toByteArray(Charsets.UTF_8))
-                    Log.i(TAG, "启动 shell, shellId=$shellId")
+                    Log.i(TAG, "Starting shell, shellId=$shellId")
 
                     // 等待 shell 结束
                     val shellDeadline = System.currentTimeMillis() + 15_000L
@@ -291,7 +291,7 @@ class AdbScreenMirrorClient(
                                 CMD_WRTE -> {
                                     sendPacket(CMD_OKAY, shellId, msg.arg0, null)
                                     val text = msg.payload?.let { String(it, Charsets.UTF_8) } ?: ""
-                                    Log.d(TAG, "shell 输出: $text")
+                                    Log.d(TAG, "shell output: $text")
                                 }
                                 CMD_CLSE -> shellDone = true
                             }
@@ -306,7 +306,7 @@ class AdbScreenMirrorClient(
                         }
                     }
                     if (!shellDone) {
-                        Log.w(TAG, "shell 未在 15s 内完成，尝试继续")
+                        Log.w(TAG, "shell did not complete within 15s, continuing")
                     }
 
                     // Step 2: 通过 ADB 隧道连接 localabstract:scrcpy
@@ -315,7 +315,7 @@ class AdbScreenMirrorClient(
                     streamId = localId.getAndIncrement()
                     val connectCmd = "localabstract:scrcpy\u0000"
                     sendPacket(CMD_OPEN, streamId, 0, connectCmd.toByteArray(Charsets.UTF_8))
-                    Log.i(TAG, "请求连接 localabstract:scrcpy, streamId=$streamId")
+                    Log.i(TAG, "Requesting connection to localabstract:scrcpy, streamId=$streamId")
 
                     // Step 3: 等待 OKAY 确认视频连接建立
                     val connectDeadline = System.currentTimeMillis() + 10_000L
@@ -330,7 +330,7 @@ class AdbScreenMirrorClient(
                                     Log.i(TAG, "LocalSocket video connected")
                                 }
                                 CMD_CLSE -> {
-                                    Log.w(TAG, "LocalSocket 连接被拒绝，重试中")
+                                Log.w(TAG, "LocalSocket connection rejected, retrying")
                                     break
                                 }
                                 CMD_WRTE -> {
@@ -362,8 +362,8 @@ class AdbScreenMirrorClient(
                     // 设置 socket 超时 80ms 以便及时处理触控
                     try { socket?.soTimeout = 80 } catch (_: Exception) {}
 
-                    onStatus("画面传输中...")
-                    Log.i(TAG, "开始读取 H.264 流...")
+                    onStatus("Streaming...")
+                    Log.i(TAG, "Starting H.264 stream reading...")
 
                     // Step 5: 循环读取 WRTE 包，喂给解码器
                     var totalBytes = 0L
@@ -416,9 +416,9 @@ class AdbScreenMirrorClient(
                 } catch (e: Exception) {
                     if (e !is java.net.SocketTimeoutException) {
                         if (e.message?.let { it.contains("Socket closed") || it.contains("Broken pipe") } == true) {
-                            Log.i(TAG, "连接已断开 (${e.message})")
+                        Log.i(TAG, "Connection closed (${e.message})")
                         } else {
-                            Log.e(TAG, "流异常: ${e.message}")
+                        Log.e(TAG, "Stream error: ${e.message}")
                         }
                     }
                 } finally {
@@ -432,7 +432,7 @@ class AdbScreenMirrorClient(
                 if (isRunning) {
                     decoder.stop()
                     decoder.start()
-                    onStatus("重新连接...")
+                    onStatus("Reconnecting...")
                     // 重新建立 ADB 连接
                     var reconnected = false
                     for (retry in 1..3) {
@@ -451,7 +451,7 @@ class AdbScreenMirrorClient(
                             reconnected = true
                             break
                         } catch (e: Exception) {
-                            Log.w(TAG, "重连失败 #$retry: ${e.message}")
+                            Log.w(TAG, "Reconnect failed #$retry: ${e.message}")
                         }
                     }
                     if (!reconnected && isRunning) {
@@ -474,7 +474,7 @@ class AdbScreenMirrorClient(
                 continuousStreamId = localId.getAndIncrement()
                 val dest = "shell:while true; do screencap; done\u0000"
                 sendPacket(CMD_OPEN, continuousStreamId, 0, dest.toByteArray(Charsets.UTF_8))
-                Log.i(TAG, "连续流已打开，streamId=$continuousStreamId")
+        Log.i(TAG, "Continuous stream opened, streamId=$continuousStreamId")
 
                 var streamOpened = false
                 streamBuffer = ByteArrayOutputStream()
@@ -496,7 +496,7 @@ class AdbScreenMirrorClient(
                                     if (!streamOpened) {
                                         streamOpened = true
                                         continuousStreamRemoteId = msg.arg0
-                                        Log.i(TAG, "连续流 OKAY")
+                    Log.i(TAG, "Continuous stream OKAY")
                                     }
                                 }
                                 CMD_WRTE -> {
@@ -577,7 +577,7 @@ class AdbScreenMirrorClient(
                                     }
                                 }
                                 CMD_CLSE -> {
-                                    Log.w(TAG, "连续流被关闭")
+                    Log.i(TAG, "Connected stream closed")
                                     sendPacket(CMD_CLSE, continuousStreamId, continuousStreamRemoteId, null)
                                     break
                                 }
@@ -600,7 +600,7 @@ class AdbScreenMirrorClient(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "连续流启动失败: ${e.message}")
+                Log.e(TAG, "Continuous stream start failed: ${e.message}")
             }
         }.start()
     }
@@ -622,7 +622,7 @@ class AdbScreenMirrorClient(
                 val sid = localId.getAndIncrement()
                 sendPacket(CMD_OPEN, sid, 0, "shell:input swipe $x1 $y1 $x2 $y2 $durationMs\u0000".toByteArray(Charsets.UTF_8))
             } catch (e: Exception) {
-                Log.e(TAG, "sendSwipe 失败: ${e.message}")
+                Log.e(TAG, "sendSwipe failed: ${e.message}")
             }
         }
     }
@@ -677,7 +677,7 @@ class AdbScreenMirrorClient(
         msg.magic = buf.getInt()
 
         if (msg.payloadLength < 0 || msg.payloadLength > MAX_ADB_PAYLOAD) {
-            throw java.io.IOException("非法 payload 大小: ${msg.payloadLength}")
+            throw java.io.IOException("Invalid payload size: ${msg.payloadLength}")
         }
 
         if (msg.payloadLength > 0) {

@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.store
+package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -48,6 +48,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.rokidlab.phone.R
+import androidx.compose.ui.platform.LocalContext
 
 @Composable
 internal fun DetailScreenshotStrip(
@@ -55,6 +57,7 @@ internal fun DetailScreenshotStrip(
     mediaLoader: MediaLoader,
     onScreenshotClick: (Int) -> Unit,
 ) {
+    val ctx = LocalContext.current
     if (app.screenshotCount == 0) return
     Column(modifier = Modifier.padding(top = 20.dp)) {
         Row(
@@ -70,9 +73,9 @@ internal fun DetailScreenshotStrip(
                     modifier = Modifier
                         .width(92.dp)
                         .height(154.dp)
-                        .clip(RoundedCornerShape(9.dp))
+                        .clip(BrewShapeMedium)
                         .background(BrewPanelAlt)
-                        .border(1.dp, BrewBorder.copy(alpha = 0.6f), RoundedCornerShape(9.dp))
+                        .border(1.dp, BrewBorder.copy(alpha = 0.6f), BrewShapeMedium)
                         .clickable { onScreenshotClick(index) },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -84,7 +87,7 @@ internal fun DetailScreenshotStrip(
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
-                        Text("加载中", color = BrewMuted, fontSize = 12.sp)
+                        Text(ctx.getString(R.string.loading), color = BrewMuted, fontSize = 12.sp)
                     }
                 }
             }
@@ -100,6 +103,7 @@ internal fun ScreenshotViewerDialog(
     mediaLoader: MediaLoader,
     onDismiss: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     val startPage = initialIndex.coerceIn(0, (app.screenshotCount - 1).coerceAtLeast(0))
     val pagerState = rememberPagerState(initialPage = startPage, pageCount = { app.screenshotCount })
     Dialog(
@@ -110,7 +114,7 @@ internal fun ScreenshotViewerDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.96f)),
+                .background(BrewBg.copy(alpha = 0.96f)),
             contentAlignment = Alignment.Center,
         ) {
             HorizontalPager(
@@ -133,7 +137,7 @@ internal fun ScreenshotViewerDialog(
                             modifier = Modifier.fillMaxSize(),
                         )
                     } else {
-                        Text("正在加载预览", color = BrewTextBright, fontSize = 14.sp)
+                        Text(ctx.getString(R.string.loading_preview), color = BrewTextBright, fontSize = 14.sp)
                     }
                 }
             }
@@ -146,9 +150,9 @@ internal fun ScreenshotViewerDialog(
                     .align(Alignment.TopEnd)
                     .statusBarsPadding()
                     .padding(top = 12.dp, end = 14.dp)
-                    .clip(RoundedCornerShape(9.dp))
+                    .clip(BrewShapeMedium)
                     .background(BrewBg.copy(alpha = 0.76f))
-                    .border(1.dp, BrewBorder.copy(alpha = 0.58f), RoundedCornerShape(9.dp))
+                    .border(1.dp, BrewBorder.copy(alpha = 0.58f), BrewShapeMedium)
                     .padding(horizontal = 9.dp, vertical = 5.dp),
             )
             Icon(
@@ -160,7 +164,7 @@ internal fun ScreenshotViewerDialog(
                     .statusBarsPadding()
                     .padding(top = 9.dp, start = 10.dp)
                     .size(38.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(BrewShapeStandard)
                     .background(BrewBg.copy(alpha = 0.76f))
                     .clickable(onClick = onDismiss)
                     .padding(7.dp),

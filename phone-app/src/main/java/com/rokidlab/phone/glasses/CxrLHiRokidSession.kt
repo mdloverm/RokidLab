@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import com.rokidlab.phone.R
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -44,12 +45,16 @@ class CxrLHiRokidSession(
     companion object {
         private const val TAG = "CxrLHiRokidSession"
         const val AUTH_REQUEST_CODE = 4027
+        private const val PREFS_NAME = "cxr_l_auth"
+        private const val KEY_TOKEN_PREFIX = "token_"
 
         private const val AUTH_ACTIVITY_CLASS = "com.rokid.sprite.aiapp.externalapp.auth.AuthorizationActivity"
         private const val AUTH_ACTION = "com.rokid.sprite.aiapp.externalapp.AUTHORIZATION"
         private const val MEDIA_SERVICE_ACTION = "com.rokid.sprite.aiapp.externalapp.MEDIA_STREAM_SERVICE"
         private const val AUTH_TOKEN_EXTRA = "auth_token"
         private const val AUTH_PACKAGE_EXTRA = "auth_package"
+
+        private fun tokenPrefKey(hostApp: RokidHostApp) = KEY_TOKEN_PREFIX + hostApp.packageName
     }
 
     private var hostApp: RokidHostApp = initialHostApp
@@ -66,6 +71,16 @@ class CxrLHiRokidSession(
     private var operationCompleted = false
     private var timeoutJob: Job? = null
 
+    init {
+        // 从 SharedPreferences 恢复之前保存的授权令牌
+        runCatching {
+            val prefs = activity.getSharedPreferences(PREFS_NAME, 0)
+            prefs.getString(tokenPrefKey(hostApp), null)?.takeIf { it.isNotBlank() }?.let {
+                token = it
+            }
+        }
+    }
+
     fun hasAuthorization(): Boolean = !token.isNullOrBlank()
     
     fun getToken(): String? = token
@@ -79,6 +94,13 @@ class CxrLHiRokidSession(
         cleanup()
         token = null
         hostApp = nextHostApp
+        // 尝试加载新 hostApp 之前保存的令牌
+        runCatching {
+            val prefs = activity.getSharedPreferences(PREFS_NAME, 0)
+            prefs.getString(tokenPrefKey(hostApp), null)?.takeIf { it.isNotBlank() }?.let {
+                token = it
+            }
+        }
         notifyConnectionChanged()
     }
 
@@ -96,7 +118,7 @@ class CxrLHiRokidSession(
     fun requestAuthorization() {
         val targetHostApp = hostApp
         if (!isHostAppInstalled(targetHostApp)) {
-            onStatus("请先安装 ${targetHostApp.displayName}。")
+            onStatus(activity.getString(R.string.install_glasses_host_first, targetHostApp.displayName))
             return
         }
 
@@ -107,9 +129,9 @@ class CxrLHiRokidSession(
             val fallback = Intent(AUTH_ACTION).setPackage(targetHostApp.packageName)
             activity.startActivityForResult(fallback, AUTH_REQUEST_CODE)
         }.onSuccess {
-            onStatus("已在 ${targetHostApp.displayName} 中打开授权页面。")
+            onStatus(activity.getString(R.string.auth_page_opened, targetHostApp.displayName))
         }.onFailure { error ->
-            onStatus("打开 ${targetHostApp.displayName} 授权失败：${error.message ?: error.javaClass.simpleName}")
+            onStatus(activity.getString(R.string.auth_failed, targetHostApp.displayName, error.message ?: error.javaClass.simpleName))
         }
     }
 
@@ -117,19 +139,38 @@ class CxrLHiRokidSession(
         when (val result = AuthorizationHelper.parseAuthorizationResult(resultCode, data)) {
             is AuthResult.AuthSuccess -> {
                 token = result.token
-                onStatus("已获取 ${hostApp.displayName} 授权令牌。")
+                // 持久化保存授权令牌，Activity 重建（如切换语言）后可恢复
+                runCatching {
+                    activity.getSharedPreferences(PREFS_NAME, 0)
+                        .edit()
+                        .putString(tokenPrefKey(hostApp), result.token)
+                        .apply()
+                }
+                onStatus(activity.getString(R.string.auth_token_obtained, hostApp.displayName))
                 notifyConnectionChanged()
             }
 
             is AuthResult.AuthCancel -> {
                 token = null
-                onStatus("${hostApp.displayName} 授权已取消。")
+                runCatching {
+                    activity.getSharedPreferences(PREFS_NAME, 0)
+                        .edit()
+                        .remove(tokenPrefKey(hostApp))
+                        .apply()
+                }
+                onStatus(activity.getString(R.string.auth_cancelled, hostApp.displayName))
                 notifyConnectionChanged()
             }
 
             is AuthResult.AuthFail -> {
                 token = null
-                onStatus("${hostApp.displayName} 授权失败。")
+                runCatching {
+                    activity.getSharedPreferences(PREFS_NAME, 0)
+                        .edit()
+                        .remove(tokenPrefKey(hostApp))
+                        .apply()
+                }
+                onStatus(activity.getString(R.string.auth_failed_simple, hostApp.displayName))
                 notifyConnectionChanged()
             }
         }
@@ -146,10 +187,10 @@ class CxrLHiRokidSession(
         onBusyChanged(true)
         runCatching {
             val packageName = readPackageName(apkFile)
-            onStatus("检测到包：$packageName")
+            onStatus(activity.getString(R.string.detected_package, packageName))
             connectAndUpload(authToken, targetHostApp, packageName, apkFile, onInstallResult)
         }.onFailure { error ->
-            onStatus("CXR-L 失败：${error.message ?: error.javaClass.simpleName}")
+            onStatus(activity.getString(R.string.cxrl_failed_msg, error.message ?: error.javaClass.simpleName))
             onBusyChanged(false)
             onInstallResult?.invoke(false)
         }
@@ -248,17 +289,17 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = packageName,
                 timeoutMillis = 90_000,
-                timeoutMessage = "等待 ${targetHostApp.displayName} 安装结果超时。",
-                bindMessage = "正在绑定到 ${targetHostApp.displayName} 服务...",
-                configureFailureMessage = "配置 CXR-L CUSTOMAPP 会话失败。",
-                bindFailureMessage = "${targetHostApp.displayName} 服务绑定失败。请先打开 ${targetHostApp.displayName}，然后重试。",
+                timeoutMessage = activity.getString(R.string.waiting_install_result, targetHostApp.displayName),
+                bindMessage = activity.getString(R.string.binding_service, targetHostApp.displayName),
+                configureFailureMessage = activity.getString(R.string.cxrl_config_failed),
+                bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 showConnectionStatus = true,
                 onReady = { link ->
-                    onStatus("CXR-L 就绪。正在上传并安装到眼镜...")
+                    onStatus(activity.getString(R.string.cxrl_ready_installing))
                     link.appUploadAndInstall(apkFile.absolutePath, glassAppCallback(
                         onInstall = { success ->
                             completeActiveOperation()
-                            onStatus(if (success) "眼镜安装成功。" else "眼镜安装失败。")
+                            onStatus(if (success) activity.getString(R.string.glasses_install_success) else activity.getString(R.string.glasses_install_failed))
                             onBusyChanged(false)
                             onInstallResult?.invoke(success)
                         },
@@ -289,9 +330,9 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = packageName,
                 timeoutMillis = 30_000,
-                timeoutMessage = "查询 $packageName 超时。",
-                configureFailureMessage = "配置 $packageName 的查询失败。",
-                bindFailureMessage = "${targetHostApp.displayName} 服务绑定失败。请先打开 ${targetHostApp.displayName}，然后重试。",
+                timeoutMessage = activity.getString(R.string.query_timeout, packageName),
+                configureFailureMessage = activity.getString(R.string.query_config_failed, packageName),
+                bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 onReady = { link ->
                     link.appIsInstalled(glassAppCallback(
                         onQuery = { installed ->
@@ -324,17 +365,17 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = packageName,
                 timeoutMillis = 60_000,
-                timeoutMessage = "从眼镜卸载 $packageName 超时。",
-                bindMessage = "正在绑定到 ${targetHostApp.displayName} 服务...",
-                configureFailureMessage = "配置 $packageName 的卸载失败。",
-                bindFailureMessage = "${targetHostApp.displayName} 服务绑定失败。请先打开 ${targetHostApp.displayName}，然后重试。",
+                timeoutMessage = activity.getString(R.string.uninstall_timeout, packageName),
+                bindMessage = activity.getString(R.string.binding_service, targetHostApp.displayName),
+                configureFailureMessage = activity.getString(R.string.uninstall_config_failed, packageName),
+                bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 showConnectionStatus = true,
                 onReady = { link ->
-                    onStatus("CXR-L 就绪。正在从眼镜卸载 $packageName...")
+                    onStatus(activity.getString(R.string.cxrl_ready_uninstalling, packageName))
                     link.appUninstall(glassAppCallback(
                         onUninstall = { success ->
                             completeActiveOperation()
-                            onStatus(if (success) "眼镜卸载成功。" else "眼镜卸载失败。")
+                            onStatus(if (success) activity.getString(R.string.glasses_uninstall_success) else activity.getString(R.string.glasses_uninstall_failed))
                             onBusyChanged(false)
                             onUninstallResult?.invoke(success)
                         },
@@ -363,13 +404,13 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = packageName,
                 timeoutMillis = 30_000,
-                timeoutMessage = "启动 $packageName 超时。",
-                bindMessage = "正在绑定到 ${targetHostApp.displayName} 服务...",
-                configureFailureMessage = "配置 $packageName 的启动失败。",
-                bindFailureMessage = "${targetHostApp.displayName} 服务绑定失败。请先打开 ${targetHostApp.displayName}，然后重试。",
+                timeoutMessage = activity.getString(R.string.launch_timeout, packageName),
+                bindMessage = activity.getString(R.string.binding_service, targetHostApp.displayName),
+                configureFailureMessage = activity.getString(R.string.launch_config_failed, packageName),
+                bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 showConnectionStatus = true,
                 onReady = { link ->
-                    onStatus("CXR-L 就绪。正在启动 $packageName...")
+                    onStatus(activity.getString(R.string.cxrl_ready_launching, packageName))
                     // 文档要求 appStart 使用 "${packageName}${activityClassName}" 格式
                     val entryUri = "$packageName$activityClass"
                     link.appStart(entryUri, object : IGlassAppCbk {
@@ -379,10 +420,10 @@ class CxrLHiRokidSession(
                             if (success && sendCmdAfterLaunch != null) {
                                 // 眼镜端已启动，发送自定义命令触发自动操作
                                 val cmdResult = link.sendCustomCmd(sendCmdAfterLaunch, Caps())
-                                onStatus("发送命令 $sendCmdAfterLaunch 结果: $cmdResult")
+                                onStatus(activity.getString(R.string.cmd_result, sendCmdAfterLaunch, cmdResult))
                             }
                             completeActiveOperation()
-                            onStatus(if (success) "已在眼镜启动 $packageName。" else "启动 $packageName 失败。")
+                            onStatus(if (success) activity.getString(R.string.glasses_launch_success, packageName) else activity.getString(R.string.glasses_launch_failed, packageName))
                             onBusyChanged(false)
                             onLaunchResult?.invoke(success)
                         }
@@ -412,20 +453,20 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = packageName,
                 timeoutMillis = 30_000,
-                timeoutMessage = "停止 $packageName 超时。",
-                bindMessage = "正在绑定到 ${targetHostApp.displayName} 服务...",
-                configureFailureMessage = "配置 $packageName 的停止失败。",
-                bindFailureMessage = "${targetHostApp.displayName} 服务绑定失败。请先打开 ${targetHostApp.displayName}，然后重试。",
+                timeoutMessage = activity.getString(R.string.stop_timeout, packageName),
+                bindMessage = activity.getString(R.string.binding_service, targetHostApp.displayName),
+                configureFailureMessage = activity.getString(R.string.stop_config_failed, packageName),
+                bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 showConnectionStatus = true,
                 onReady = { link ->
-                    onStatus("CXR-L 就绪。正在停止 $packageName...")
+                    onStatus(activity.getString(R.string.cxrl_ready_stopping, packageName))
                     link.appStop(object : IGlassAppCbk {
                         override fun onInstallAppResult(success: Boolean) = Unit
                         override fun onUnInstallAppResult(success: Boolean) = Unit
                         override fun onOpenAppResult(success: Boolean) = Unit
                         override fun onStopAppResult(success: Boolean) {
                             completeActiveOperation()
-                            onStatus(if (success) "已停止 $packageName。" else "停止 $packageName 失败。")
+                            onStatus(if (success) activity.getString(R.string.glasses_stop_success, packageName) else activity.getString(R.string.glasses_stop_failed, packageName))
                             onBusyChanged(false)
                             onStopResult?.invoke(success)
                         }
@@ -453,7 +494,7 @@ class CxrLHiRokidSession(
                 onConnected = { connected ->
                     activity.runOnUiThread {
                         cxrlConnected = connected
-                        if (operation.showConnectionStatus) onStatus("CXR-L 服务已连接：$connected")
+                        if (operation.showConnectionStatus) onStatus(activity.getString(R.string.cxrl_service_connected, connected.toString()))
                         notifyConnectionChanged()
                         maybeRunPendingOperation()
                     }
@@ -461,7 +502,7 @@ class CxrLHiRokidSession(
                 onBtConnected = { connected ->
                     activity.runOnUiThread {
                         glassBtConnected = connected
-                        if (operation.showConnectionStatus) onStatus("眼镜蓝牙已连接：$connected")
+                        if (operation.showConnectionStatus) onStatus(activity.getString(R.string.bluetooth_connected_status, connected.toString()))
                         notifyConnectionChanged()
                         maybeRunPendingOperation()
                     }
@@ -595,11 +636,11 @@ class CxrLHiRokidSession(
                     return field.get(link) as ServiceConnection
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "在 ${type?.name} 中查找 ServiceConnection 失败: ${e.message}")
+                Log.w(TAG, "Failed to find ServiceConnection in ${type?.name}: ${e.message}")
             }
             type = type.superclass
         }
-        Log.e(TAG, "未找到 CXR-L ServiceConnection 字段，CXR-L SDK 版本可能不兼容")
+        Log.e(TAG, "CXR-L ServiceConnection field not found, CXR-L SDK version may be incompatible")
         return null
     }
 
@@ -613,15 +654,15 @@ class CxrLHiRokidSession(
         requestAuthorizationIfMissing: Boolean,
     ): Boolean {
         if (!isHostAppInstalled(targetHostApp)) {
-            onStatus("请先在手机上安装 ${targetHostApp.displayName}。")
+            onStatus(activity.getString(R.string.install_host_first, targetHostApp.displayName))
             return false
         }
         if (!isWifiEnabled()) {
-            onStatus("请先打开手机 Wi-Fi。${targetHostApp.displayName} 需要通过它连接眼镜热点。")
+            onStatus(activity.getString(R.string.enable_wifi_first, targetHostApp.displayName))
             return false
         }
         if (token.isNullOrBlank()) {
-            onStatus("请先在 ${targetHostApp.displayName} 中点击授权。")
+            onStatus(activity.getString(R.string.authorize_in_host, targetHostApp.displayName))
             if (requestAuthorizationIfMissing) requestAuthorization()
             return false
         }

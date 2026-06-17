@@ -562,7 +562,7 @@ class MainActivity : AppCompatActivity() {
                 updateBusy(true)
                 runCatching {
                     val input = contentResolver.openInputStream(uri)
-                        ?: throw IllegalStateException("无法打开 APK 文件")
+                        ?: throw IllegalStateException("Cannot open APK file")
                     val tempFile = File(cacheDir, "local_install_${System.currentTimeMillis()}.apk")
                     FileOutputStream(tempFile).use { output ->
                         input.copyTo(output)
@@ -975,13 +975,13 @@ class MainActivity : AppCompatActivity() {
             while (true) {
                 delay(15_000)
                 if (!cxrConnection.cxrlConnected || !cxrConnection.glassBtConnected) {
-                    android.util.Log.w("MainActivity", "RokidLink 心跳检测：CXR-L 连接已断开，标记为未运行")
+                    android.util.Log.w("MainActivity", "RokidLink heartbeat: CXR-L connection lost, marking as not running")
                     screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
                     phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
                     fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
                     break
                 }
-                android.util.Log.d("MainActivity", "RokidLink 心跳检测：连接正常")
+                android.util.Log.d("MainActivity", "RokidLink heartbeat: connection alive")
             }
         }
     }
@@ -1291,7 +1291,7 @@ internal fun MirrorSourceDialog(
                     Box(
                         modifier = Modifier
                             .size(28.dp)
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(BrewShapeSmall)
                             .background(BrewTextBright.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center,
                     ) {

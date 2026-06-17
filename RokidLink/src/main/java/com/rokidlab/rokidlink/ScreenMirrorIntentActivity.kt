@@ -19,7 +19,7 @@ class ScreenMirrorIntentActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.i(TAG, "ScreenMirrorIntentActivity 启动，2秒后自动关闭")
+        Log.i(TAG, "ScreenMirrorIntentActivity started, auto closing in 2 seconds")
 
         // 延时关闭，确保眼镜画面切换到前台
         Handler(Looper.getMainLooper()).postDelayed({

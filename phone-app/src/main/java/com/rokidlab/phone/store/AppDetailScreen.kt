@@ -168,7 +168,7 @@ internal fun DetailTopBar(
             tint = BrewTextBright,
             modifier = Modifier
                 .size(30.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(BrewShapeMedium)
                 .clickable(onClick = onDismiss)
                 .padding(3.dp),
         )
@@ -185,7 +185,7 @@ internal fun DetailTopBar(
             },
             modifier = Modifier
                 .size(30.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(BrewShapeMedium)
                 .clickable(enabled = uninstallAvailable, onClick = onToggleUninstall)
                 .padding(4.dp),
         )
@@ -255,9 +255,9 @@ internal fun DetailUninstallActions(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(BrewShapeMedium)
             .background(BrewPanel.copy(alpha = 0.82f))
-            .border(1.dp, BrewBorder, RoundedCornerShape(10.dp))
+            .border(1.dp, BrewBorder, BrewShapeMedium)
             .padding(8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -319,7 +319,7 @@ internal fun DetailInstallActions(
                 )
             } else {
                 StoreActionButton(
-                    label = installButtonLabel("phone", phoneInstallState),
+                    label = installButtonLabel(ctx, "phone", phoneInstallState),
                     primary = true,
                     enabled = !busy && phoneInstallState != MainActivity.InstallState.INSTALLED,
                     icon = { Icon(Icons.Outlined.Download, null, modifier = Modifier.size(20.dp)) },
@@ -344,7 +344,7 @@ internal fun DetailInstallActions(
                 )
             } else {
                 StoreActionButton(
-                    label = installButtonLabel("glasses", glassesInstallState),
+                    label = installButtonLabel(ctx, "glasses", glassesInstallState),
                     primary = false,
                     enabled = !busy && glassesInstallState != MainActivity.InstallState.INSTALLED,
                     icon = { Icon(Icons.Outlined.Visibility, null, modifier = Modifier.size(20.dp)) },

@@ -42,7 +42,7 @@ class ApkDownloader(private val context: Context) {
                     }
                 }
             }
-            throw lastError ?: IllegalStateException("下载失败：$safeName")
+            throw lastError ?: IllegalStateException("Download failed: $safeName")
         }
 
     private fun File.sha256(): String {

@@ -265,7 +265,7 @@ object BrewIndex {
                 lastError = error
             }
         }
-        throw lastError ?: IllegalStateException("没有可用的注册表端点")
+        throw lastError ?: IllegalStateException("No available registry endpoint")
     }
 
     private fun cacheFile(context: Context): File {

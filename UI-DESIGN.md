@@ -79,7 +79,7 @@
 
 | 属性 | 值 |
 |------|-----|
-| 圆角 | **12dp**（全站统一） |
+| 圆角系统 | **BrewShapeSmall(4dp)** / **BrewShapeMedium(8dp)** / **BrewShapeStandard(12dp)** / **BrewShapeLarge(16dp)** / **BrewShapeXLarge(20dp)** |
 | 边框宽度 | **1dp**（全站统一） |
 | 模块间距 | 24dp |
 | 组件间距 | 16dp |
@@ -87,29 +87,143 @@
 | 内边距 | 16dp |
 | 页面水平 padding | 16dp |
 
+### 1.5 补色定律 — 模块色互补对
+
+每个模块色有明确的主色与互补色关系，用于按钮按压态、背景色、边框色等场景：
+
+| 模块 | 主色 | 互补/辅助色 | 说明 |
+|------|------|------------|------|
+| 商店 (朱砂红) | `BrewGreen=#E85D3F` 珊瑚红 | `BrewInfo=#5B8FB9` 静谧蓝 | 暖红 ↔ 冷蓝 |
+| 屏幕镜像 | `BrewCyan=#5B8FB9` 静谧蓝 | 暖琥珀 | 冷调主色 |
+| 手机投屏 | `BrewPurple=#D4A85C` 画廊金 | 紫色调 | 暖而有质感 |
+| 文件管理 | `BrewAmber=#A78BFA` 雾紫 | 金色调 | 柔和区分 |
+| 蓝牙手柄 | `BrewSuccess=#4ADE80` 翡翠绿 | 朱砂红 | 绿 ↔ 红 |
+| 设置 | `BrewMagenta=#8A8780` 石灰色 | — | 最低调中性色 |
+
+**按压态色彩规则**：所有交互元素按下时，背景色向互补色方向偏移（主色 alpha 加深 0.08→0.20），缩放至 0.95~0.97。
+
 ---
 
 ## 二、全局组件
 
-### 2.1 BrutalButton（主按钮）
+### 2.1 标准交互组件体系
+
+定义：[design/DesignComponents.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/design/DesignComponents.kt)
+
+所有按钮遵循统一的交互反馈模型：**按下时 scale(0.95~0.97) + 背景色加深**。动画统一使用 `spring(dampingRatio = MediumBouncy)`。
+
+#### 2.1.1 标准按钮
+
+**BrewButton — 主要操作按钮**
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | BrewShapeStandard (12dp) |
+| 背景 | 模块色，按下时 alpha 0.8 |
+| 文字 | 14sp Bold, BrewTextBright |
+| 禁用态 | alpha 0.45 |
+| 加载态 | 显示 "..." |
+| 按下交互 | scale 0.95 + 背景变暗 |
+
+**BrewOutlineButton — 次要操作按钮（边框样式）**
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | BrewShapeStandard (12dp) |
+| 背景 | 透明，按下时 color alpha 0.12 |
+| 边框 | 1dp, color alpha 0.6→按下时 1.0 |
+| 文字 | 14sp Bold, 模块色 |
+| 禁用态 | alpha 0.4 |
+| 按下交互 | scale 0.95 + 背景染色 |
+
+**BrewCompactButton — 紧凑操作按钮（行内操作）**
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | BrewShapeMedium (8dp) |
+| 背景 | color alpha 0.15→按下时 0.25 |
+| 边框 | 1dp, color alpha 0.4→按下时 0.7 |
+| 文字 | 12sp Bold, 模块色 |
+| 按下交互 | scale 0.93 |
+
+**BrewIconButton — 图标操作按钮**
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | BrewShapeStandard (12dp) |
+| 背景 | 自定义，按下时 bg alpha 0.7 |
+| 内边距 | 7dp |
+| 按下交互 | scale 0.90 |
+
+#### 2.1.2 标准对话框
+
+**BrewDialog + BrewDialogTitle + BrewDialogActions**
+
+| 属性 | 值 |
+|------|-----|
+| 容器形状 | BrewShapeLarge (16dp) |
+| 背景色 | BrewPanelAlt |
+| 边框 | 1dp BrewBorder |
+| 标题 | 18sp Bold, BrewTextBright, padding 24dp |
+| 操作行 | Row, Arrangement.End, padding 16dp |
+
+#### 2.1.3 标准状态指示器
+
+**BrewStatusDot — 状态圆点**
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | CircleShape (8dp) |
+| 激活色 | BrewSuccess (绿) |
+| 非激活色 | BrewRed (红) |
+
+**BrewStatusPill — 状态标签**
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | BrewShapeSmall (4dp) |
+| 背景 | color alpha bgAlpha (默认0.15) |
+| 文字 | 12sp Bold, 模块色 |
+| 内边距 | horizontal 10dp, vertical 4dp |
+
+**BrewStateCard — 状态卡片**
+
+| 属性 | 值 |
+|------|-----|
+| 形状 | BrewShapeMedium (8dp) |
+| 背景 | color alpha 0.08 |
+| 边框 | 1dp, color alpha 0.25 |
+| 内边距 | 12dp |
+| 标题 | 10sp Bold, 模块色, letterSpacing 1sp |
+| 消息 | 12sp, 模块色 alpha 0.9 |
+| 操作按钮 | 可选 BrewCompactButton |
+
+四种类型：`StateCardType.SUCCESS` / `ERROR` / `WARNING` / `INFO`
+
+#### 2.1.4 兼容组件（已委托给 BrewStateCard）
+
+- `BrewErrorCard` → StateCardType.ERROR
+- `BrewWarningCard` → StateCardType.WARNING  
+- `BrewLoadingCard` → 独立实现（BrewPanel + BrewBorder）
+- `BrewResultCard` → StateCardType.SUCCESS / ERROR
+
+#### 2.1.5 BrutalButton（旧有，保留兼容）
+
+> 以下旧按钮组件仍存在于各页面中，与新组件并存。计划逐步迁移至标准组件。
 
 定义：[store/StoreHomeScreen.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/StoreHomeScreen.kt) `BrutalButton`、[settings/SettingsScreen.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/settings/SettingsScreen.kt) `BrutalButton`
 
 | 属性 | 值 |
 |------|-----|
-| 高度 | 52dp |
-| 宽度 | fillMaxWidth |
-| 圆角 | 12dp |
-| 边框 | 1dp, 颜色=模块色 alpha 0.5 |
-| 背景 | 模块色 alpha 0.12 |
-| 文字 | 14sp SemiBold, letterSpacing 1sp, 颜色=模块色 |
-| 按下交互 | 缩放至 98% + 透明度 85% |
+| 高度 | 52dp / compact 32dp |
+| 宽度 | fillMaxWidth / compact wrapContentWidth |
+| 圆角 | BrewShapeStandard / BrewShapeMedium |
+| 边框 | 1dp, 模块色 alpha 0.5→按下 0.7 |
+| 背景 | 模块色 alpha 0.12→按下 0.20 |
+| 文字 | 14sp SemiBold, letterSpacing 1sp, 模块色 |
+| 按下交互 | scale 0.97（无 alpha 变化，仅背景加深） |
 | 动画 | `spring(dampingRatio = MediumBouncy, stiffness = Medium)` |
-| 禁用态 | `enabled=false` 时透明度 45%，不响应点击 |
-
-**变体**：
-- SettingsScreen 版本额外支持 `enabled` 参数控制禁用态
-- StoreHomeScreen 版本额外支持 `compact` 模式（32dp 高，8dp 圆角）
+| 禁用态 | alpha 45%
 
 ### 2.2 ModuleHeader（模块标题）
 

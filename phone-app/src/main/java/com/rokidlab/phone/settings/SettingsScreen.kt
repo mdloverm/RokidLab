@@ -159,7 +159,7 @@ private fun LanguageDialog(
         containerColor = BrewPanel,
         titleContentColor = BrewTextBright,
         textContentColor = BrewText,
-        shape = RoundedCornerShape(16.dp),
+        shape = BrewShapeLarge,
         title = {
             Text(ctx.getString(R.string.select_language), color = BrewTextBright, fontWeight = FontWeight.Bold)
         },
@@ -170,7 +170,7 @@ private fun LanguageDialog(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(BrewShapeMedium)
                             .background(if (selected) BrewPurple.copy(alpha = 0.15f) else Color.Transparent)
                             .clickable { onSelect(locale.code) }
                             .padding(16.dp),
@@ -214,7 +214,7 @@ private fun BrutalButton(label: String, color: Color, enabled: Boolean = true, o
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.98f else 1f,
+        targetValue = if (isPressed) 0.97f else 1f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
         label = "btn-press",
     )
@@ -223,10 +223,10 @@ private fun BrutalButton(label: String, color: Color, enabled: Boolean = true, o
         modifier = Modifier
             .fillMaxWidth()
             .height(52.dp)
-            .graphicsLayer { scaleX = pressScale; scaleY = pressScale; alpha = dimAlpha * if (isPressed) 0.85f else 1f }
-            .clip(RoundedCornerShape(12.dp))
-            .background(color.copy(alpha = if (enabled) 0.12f else 0.05f))
-            .border(width = 1.dp, color = color.copy(alpha = if (enabled) 0.5f else 0.15f), shape = RoundedCornerShape(12.dp))
+            .graphicsLayer { scaleX = pressScale; scaleY = pressScale; alpha = dimAlpha }
+            .clip(BrewShapeStandard)
+            .background(color.copy(alpha = if (isPressed) 0.20f else if (enabled) 0.12f else 0.05f))
+            .border(width = 1.dp, color = color.copy(alpha = if (enabled) 0.5f else 0.15f), shape = BrewShapeStandard)
             .clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.mirror
+package com.rokidlab.phone.mirror
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import com.rokidlab.phone.R
 import android.app.Activity
 import android.app.PendingIntent
 import android.content.Context
@@ -26,7 +27,7 @@ object PhonePackageInstallHelper {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !activity.packageManager.canRequestPackageInstalls()
         ) {
-            onStatus("请允许从 RokidLab 安装应用，然后再次点击安装。")
+            onStatus(activity.getString(R.string.allow_install_app))
             activity.startActivity(
                 Intent(
                     Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
@@ -43,9 +44,9 @@ object PhonePackageInstallHelper {
             activity.startActivity(
                 Intent(Intent.ACTION_DELETE, Uri.parse("package:$packageName")),
             )
-            onStatus("手机卸载页面已打开：$appName。")
+            onStatus(activity.getString(R.string.uninstall_page_opened, appName))
         }.onFailure { error ->
-            onStatus("手机卸载失败：${error.message ?: error.javaClass.simpleName}")
+            onStatus(activity.getString(R.string.phone_uninstall_failed, error.message ?: error.javaClass.simpleName))
         }.isSuccess
     }
 
@@ -75,9 +76,9 @@ object PhonePackageInstallHelper {
                 )
                 session.commit(intent.intentSender)
             }
-            onStatus("手机安装会话已提交。等待确认...")
+            onStatus(context.getString(R.string.install_session_submitted))
         }.onFailure { error ->
-            onStatus("手机 PackageInstaller 失败：${error.message ?: error.javaClass.simpleName}")
+            onStatus(context.getString(R.string.installer_failed, error.message ?: error.javaClass.simpleName))
         }.isSuccess
     }
 }

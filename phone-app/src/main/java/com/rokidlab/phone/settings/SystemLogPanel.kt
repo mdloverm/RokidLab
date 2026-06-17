@@ -63,9 +63,9 @@ internal fun SystemLogPanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(BrewShapeLarge)
             .background(BrewPanel.copy(alpha = 0.94f))
-            .border(1.dp, BrewBorder.copy(alpha = 0.52f), RoundedCornerShape(18.dp))
+            .border(1.dp, BrewBorder.copy(alpha = 0.52f), BrewShapeLarge)
             .clickable(onClick = onToggle)
             .animateContentSize(),
     ) {
@@ -74,7 +74,7 @@ internal fun SystemLogPanel(
                 .padding(top = 7.dp)
                 .width(36.dp)
                 .height(3.dp)
-                .clip(RoundedCornerShape(2.dp))
+                .clip(BrewShapeSmall)
                 .background(BrewMuted.copy(alpha = 0.50f))
                 .align(Alignment.CenterHorizontally),
         )
@@ -132,9 +132,9 @@ internal fun TerminalBadge(size: androidx.compose.ui.unit.Dp, active: Boolean, m
     Box(
         modifier = modifier
             .size(size)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(BrewShapeMedium)
             .background(BrewBg)
-            .border(1.dp, if (active) BrewGreenDim else BrewBorder, RoundedCornerShape(8.dp)),
+            .border(1.dp, if (active) BrewGreenDim else BrewBorder, BrewShapeMedium),
         contentAlignment = Alignment.Center,
     ) {
         Text(">_", color = if (active) BrewGreen else BrewTextBright, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = BrewFont)
@@ -145,7 +145,7 @@ internal fun LogStatusPill(busy: Boolean) {
     val ctx = LocalContext.current
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(7.dp))
+            .clip(BrewShapeSmall)
             .background(if (busy) BrewAmber.copy(alpha = 0.14f) else BrewGreen.copy(alpha = 0.13f))
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {

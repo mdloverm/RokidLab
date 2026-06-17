@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
+import com.rokidlab.phone.R
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -79,7 +80,7 @@ class PhoneMirrorActivity : ComponentActivity() {
         
         // 启动时自动开始连接
         isConnecting = true
-        connectionStatus = "正在连接眼镜..."
+        connectionStatus = getString(R.string.connecting_glasses)
         startConnection()
 
         setContent {
@@ -98,7 +99,7 @@ class PhoneMirrorActivity : ComponentActivity() {
                         onRetry = { 
                             connectionFailed = false
                             isConnecting = true
-                            connectionStatus = "正在连接眼镜..."
+                            connectionStatus = getString(R.string.connecting_glasses)
                             startConnection()
                         },
                         onBack = { finish() }
@@ -113,6 +114,7 @@ class PhoneMirrorActivity : ComponentActivity() {
     
     @Composable
     private fun ConnectingUI(status: String) {
+        val ctx = LocalContext.current
         Column(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -131,7 +133,7 @@ class PhoneMirrorActivity : ComponentActivity() {
             Spacer(Modifier.height(8.dp))
 
             Text(
-                "正在请求屏幕录制权限...",
+                ctx.getString(R.string.requesting_screen_permission),
                 color = BrewMuted,
                 fontSize = 14.sp
             )
@@ -143,6 +145,7 @@ class PhoneMirrorActivity : ComponentActivity() {
         status: String,
         onStop: () -> Unit
     ) {
+        val ctx = LocalContext.current
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -171,7 +174,7 @@ class PhoneMirrorActivity : ComponentActivity() {
                 verticalArrangement = Arrangement.Center
             ) {
                 Text(
-                    "投屏中",
+                    ctx.getString(R.string.projecting_text),
                     color = BrewGreen,
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold
@@ -190,7 +193,7 @@ class PhoneMirrorActivity : ComponentActivity() {
 
                 Button(
                     onClick = onStop,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = BrewShapeStandard,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = BrewCoral,
                         contentColor = BrewTextBright
@@ -199,7 +202,7 @@ class PhoneMirrorActivity : ComponentActivity() {
                         .fillMaxWidth()
                         .height(56.dp)
                 ) {
-                    Text("停止投屏", fontSize = 16.sp)
+                    Text(ctx.getString(R.string.stop_projection_btn), fontSize = 16.sp)
                 }
             }
         }
@@ -213,6 +216,7 @@ class PhoneMirrorActivity : ComponentActivity() {
         onRetry: () -> Unit,
         onBack: () -> Unit
     ) {
+        val ctx = LocalContext.current
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -221,7 +225,7 @@ class PhoneMirrorActivity : ComponentActivity() {
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                "连接失败",
+                ctx.getString(R.string.mirror_connection_failed),
                 color = BrewRed,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
@@ -245,24 +249,24 @@ class PhoneMirrorActivity : ComponentActivity() {
                 OutlinedButton(
                     onClick = onBack,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = BrewShapeStandard,
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = BrewTextBright
                     )
                 ) {
-                    Text("返回")
+                    Text(ctx.getString(R.string.back_btn))
                 }
 
                 Button(
                     onClick = onRetry,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = BrewShapeStandard,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = BrewCoral,
                         contentColor = BrewTextBright
                     )
                 ) {
-                    Text("重试")
+                    Text(ctx.getString(R.string.retry_btn))
                 }
             }
         }
@@ -270,13 +274,13 @@ class PhoneMirrorActivity : ComponentActivity() {
 
     private fun startConnection() {
         if (isConnecting || isStreaming) return
-        Log.i(TAG, "startConnection: 开始连接流程")
+        Log.i(TAG, "startConnection: starting connection")
         isConnecting = true
-        connectionStatus = "正在请求屏幕录制权限..."
+        connectionStatus = getString(R.string.requesting_screen_permission)
 
         // 首先请求屏幕录制权限
         val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        Log.i(TAG, "startConnection: 启动屏幕录制权限请求")
+        Log.i(TAG, "startConnection: requesting screen recording permission")
         startActivityForResult(projectionManager.createScreenCaptureIntent(), REQUEST_MEDIA_PROJECTION)
     }
 
@@ -292,10 +296,10 @@ class PhoneMirrorActivity : ComponentActivity() {
         Log.i(TAG, "onActivityResult: requestCode=$requestCode, resultCode=$resultCode, data=${data != null}")
         if (requestCode == REQUEST_MEDIA_PROJECTION) {
             if (resultCode == Activity.RESULT_OK && data != null) {
-                Log.i(TAG, "onActivityResult: 权限获取成功，启动前台服务")
+                Log.i(TAG, "onActivityResult: permission granted, starting foreground service")
                 isConnecting = false
                 isStreaming = true
-                connectionStatus = "投屏中..."
+                connectionStatus = getString(R.string.project_text_in_progress)
                 
                 // 启动前台服务进行屏幕录制（Android 12+ 要求必须在前台服务中）
                 PhoneMirrorService.startService(
@@ -306,10 +310,10 @@ class PhoneMirrorActivity : ComponentActivity() {
                     data
                 )
             } else {
-                Log.i(TAG, "onActivityResult: 权限获取失败，resultCode=$resultCode")
+                Log.i(TAG, "onActivityResult: permission denied, resultCode=$resultCode")
                 isConnecting = false
                 connectionFailed = true
-                connectionStatus = "屏幕录制权限被拒绝"
+                connectionStatus = getString(R.string.screen_permission_denied)
             }
         }
     }

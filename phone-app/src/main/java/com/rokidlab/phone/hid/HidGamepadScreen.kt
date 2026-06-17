@@ -1,6 +1,7 @@
 package com.rokidlab.phone.hid
 
 import com.rokidlab.phone.design.*
+import com.rokidlab.phone.R
 import android.bluetooth.BluetoothDevice
 import android.content.Intent
 import androidx.compose.foundation.background
@@ -16,6 +17,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -55,23 +58,26 @@ internal fun HidGamepadModule(
     ) {
         // ── 标题 ──
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column {
-                Text("蓝牙手柄", color = BrewGreen, fontSize = 32.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp)
+            Column(Modifier.weight(1f)) {
+                Text(context.getString(R.string.bluetooth_gamepad), color = BrewGreen, fontSize = 28.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp,
+                    maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(4.dp))
-                Text("选择已配对的眼镜设备连接", color = BrewMuted, fontSize = 14.sp)
+                Text(context.getString(R.string.select_paired_device), color = BrewMuted, fontSize = 14.sp,
+                    maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
+            Spacer(Modifier.width(8.dp))
             // 进入手柄控制按钮
             Box(
-                Modifier.clip(RoundedCornerShape(8.dp))
+                Modifier.clip(BrewShapeMedium)
                     .background(if (connectedDevice != null) BrewGreen.copy(alpha = 0.2f) else BrewPanel)
-                    .border(1.dp, if (connectedDevice != null) BrewGreen.copy(alpha = 0.4f) else BrewBorder, RoundedCornerShape(8.dp))
+                    .border(1.dp, if (connectedDevice != null) BrewGreen.copy(alpha = 0.4f) else BrewBorder, BrewShapeMedium)
                     .clickable(enabled = connectedDevice != null) {
                         context.startActivity(Intent(context, GamepadActivity::class.java))
                     }.padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
-                Text(if (connectedDevice != null) "进入控制" else "未连接",
+                Text(if (connectedDevice != null) context.getString(R.string.enter_control) else context.getString(R.string.not_connected),
                     color = if (connectedDevice != null) BrewGreen else BrewMuted,
-                    fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -81,13 +87,13 @@ internal fun HidGamepadModule(
         Spacer(Modifier.height(12.dp))
 
         // ── 已配对设备列表 ──
-        Text("已配对的设备", color = BrewDim, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text(context.getString(R.string.paired_devices), color = BrewDim, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
         if (bondedDevices.isEmpty()) {
-            Text("无已配对的蓝牙设备", color = BrewMuted, fontSize = 12.sp)
+            Text(context.getString(R.string.no_paired_devices), color = BrewMuted, fontSize = 12.sp)
         } else {
             bondedDevices.forEach { device ->
-                val name = device.name ?: device.address ?: "未知"
+                val name = device.name ?: device.address ?: context.getString(R.string.unknown)
                 val isThisConnected = connectionState == BluetoothHidManager.STATE_CONNECTED &&
                     hidManager.connectedDevice?.address == device.address
                 DeviceRow(name, device.address ?: "", isThisConnected, isConnecting) {
@@ -105,17 +111,17 @@ internal fun HidGamepadModule(
 
         // ── 底部进入手柄页面 ──
         Box(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            Modifier.fillMaxWidth().clip(BrewShapeStandard)
                 .background(if (connectedDevice != null) BrewGreen.copy(alpha = 0.2f) else BrewPanel)
-                .border(1.dp, if (connectedDevice != null) BrewGreen.copy(alpha = 0.3f) else BrewBorder, RoundedCornerShape(12.dp))
+                .border(1.dp, if (connectedDevice != null) BrewGreen.copy(alpha = 0.3f) else BrewBorder, BrewShapeStandard)
                 .clickable(enabled = connectedDevice != null) {
                     context.startActivity(Intent(context, GamepadActivity::class.java))
-                }.padding(vertical = 14.dp),
+                }.padding(vertical = 14.dp, horizontal = 16.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text(if (connectedDevice != null) "进入手柄控制" else "请先连接设备",
+            Text(if (connectedDevice != null) context.getString(R.string.enter_gamepad_control) else context.getString(R.string.please_connect_first),
                 color = if (connectedDevice != null) BrewGreen else BrewMuted,
-                fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, textAlign = TextAlign.Center)
         }
     }
 }
@@ -124,43 +130,47 @@ internal fun HidGamepadModule(
 
 @Composable
 private fun DeviceConnectionCard(state: Int, device: BluetoothDevice?, connecting: Boolean) {
+    val ctx = LocalContext.current
     val (label, color) = when {
-        connecting -> "正在连接..." to BrewWarning
-        state == BluetoothHidManager.STATE_CONNECTED -> "已连接" to BrewSuccess
-        state == BluetoothHidManager.STATE_CONNECTING -> "连接中..." to BrewWarning
-        state == BluetoothHidManager.STATE_RETRY_FAILED -> "重连失败，请重启眼镜蓝牙" to BrewRed
-        else -> "未连接" to BrewMuted
+        connecting -> ctx.getString(R.string.connecting_status) to BrewWarning
+        state == BluetoothHidManager.STATE_CONNECTED -> ctx.getString(R.string.connected) to BrewSuccess
+        state == BluetoothHidManager.STATE_CONNECTING -> ctx.getString(R.string.connecting_dots) to BrewWarning
+        state == BluetoothHidManager.STATE_RETRY_FAILED -> ctx.getString(R.string.reconnect_failed_restart) to BrewRed
+        else -> ctx.getString(R.string.not_connected) to BrewMuted
     }
     val devName = device?.name ?: device?.address ?: "—"
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(BrewPanel)
-            .border(1.dp, BrewBorder, RoundedCornerShape(12.dp)).padding(12.dp),
+        Modifier.fillMaxWidth().clip(BrewShapeStandard).background(BrewPanel)
+            .border(1.dp, BrewBorder, BrewShapeStandard).padding(12.dp),
         horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column {
-            Text("连接状态", color = BrewDim, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            Text(devName, color = BrewTextBright, fontSize = 14.sp)
+        Column(Modifier.weight(1f)) {
+            Text(ctx.getString(R.string.connection_status_label), color = BrewDim, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(2.dp))
+            Text(devName, color = BrewTextBright, fontSize = 14.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
         }
-        Box(Modifier.clip(RoundedCornerShape(6.dp)).background(color.copy(alpha = 0.2f)).padding(horizontal = 10.dp, vertical = 4.dp)) {
-            Text(label, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(8.dp))
+        Row(Modifier.clip(BrewShapeSmall).background(color.copy(alpha = 0.2f)).padding(horizontal = 10.dp, vertical = 4.dp)) {
+            Text(label, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
 @Composable
 private fun DeviceRow(name: String, address: String, isConnected: Boolean, connecting: Boolean, onClick: () -> Unit) {
+    val ctx = LocalContext.current
     val actionColor = when {
         isConnected -> BrewGreen
         connecting -> BrewWarning.copy(alpha = 0.5f)
         else -> BrewCyan
     }
     val actionText = when {
-        isConnected -> "已连"
+        isConnected -> ctx.getString(R.string.connected_short)
         connecting -> "..."
-        else -> "连接"
+        else -> ctx.getString(R.string.connect_short)
     }
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+        Modifier.fillMaxWidth().clip(BrewShapeMedium)
             .background(if (isConnected) BrewGreen.copy(alpha = 0.08f) else Color.Transparent)
             .clickable(enabled = !connecting) { onClick() }
             .padding(vertical = 10.dp, horizontal = 6.dp),
@@ -171,7 +181,7 @@ private fun DeviceRow(name: String, address: String, isConnected: Boolean, conne
             Text(address, color = BrewDim, fontSize = 9.sp)
         }
         if (isConnected || !connecting) {
-            Box(Modifier.clip(RoundedCornerShape(4.dp)).background(actionColor.copy(alpha = 0.15f)).padding(horizontal = 10.dp, vertical = 4.dp)) {
+            Box(Modifier.clip(BrewShapeSmall).background(actionColor.copy(alpha = 0.15f)).padding(horizontal = 10.dp, vertical = 4.dp)) {
                 Text(actionText, color = actionColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }

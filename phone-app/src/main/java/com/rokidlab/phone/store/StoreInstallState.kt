@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.store
+package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import com.rokidlab.phone.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,9 +42,10 @@ import kotlinx.coroutines.withContext
 
 @Composable
 internal fun ProgressLine(progress: Int, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
     Column(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("下载中", color = BrewCoral, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text(ctx.getString(R.string.downloading_text), color = BrewCoral, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
             Text("$progress%", color = BrewCoral, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
@@ -52,7 +54,7 @@ internal fun ProgressLine(progress: Int, modifier: Modifier = Modifier) {
                 .fillMaxWidth()
                 .padding(top = 5.dp)
                 .height(5.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .clip(BrewShapeSmall)
                 .background(BrewBorder),
         ) {
             Box(
@@ -76,7 +78,7 @@ internal fun CompactProgressLine(progress: Int, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .weight(1f)
                 .height(5.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .clip(BrewShapeSmall)
                 .background(BrewBorder),
         ) {
             Box(
@@ -167,12 +169,12 @@ internal fun rememberInstallState(app: BrewApp, target: String, installCheckTick
     return state
 }
 
-internal fun installButtonLabel(target: String, state: MainActivity.InstallState): String {
+internal fun installButtonLabel(ctx: android.content.Context, target: String, state: MainActivity.InstallState): String {
     return when (state) {
-        MainActivity.InstallState.INSTALLED -> "已安装"
-        MainActivity.InstallState.INSTALLED_UNKNOWN_VERSION -> if (target == "glasses") "安装最新版" else "安装$target"
-        MainActivity.InstallState.UPDATE_AVAILABLE -> "更新$target"
-        else -> "安装$target"
+        MainActivity.InstallState.INSTALLED -> ctx.getString(R.string.installed_label)
+        MainActivity.InstallState.INSTALLED_UNKNOWN_VERSION -> if (target == "glasses") ctx.getString(R.string.install_latest) else ctx.getString(R.string.install_target, target)
+        MainActivity.InstallState.UPDATE_AVAILABLE -> ctx.getString(R.string.update_target, target)
+        else -> ctx.getString(R.string.install_target, target)
     }
 }
 

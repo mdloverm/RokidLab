@@ -250,7 +250,7 @@ internal fun BrewPhoneApp(
             containerColor = BrewPanel,
             titleContentColor = BrewTextBright,
             textContentColor = BrewText,
-            shape = RoundedCornerShape(12.dp),
+            shape = BrewShapeStandard,
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -293,7 +293,7 @@ internal fun BrewPhoneApp(
                         .width(120.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(BrewBg)
-                        .border(width = 1.dp, color = BrewRed, shape = RoundedCornerShape(12.dp))
+                        .border(width = 1.dp, color = BrewRed, shape = BrewShapeStandard)
                         .clickable {
                             showExitDialog = false
                             actions.onExitApp()
@@ -826,7 +826,7 @@ private fun SysInfoDialog(client: AdbShellClient?, connected: Boolean, scope: Co
         
         Box(
              Modifier.fillMaxWidth().heightIn(max = 500.dp)
-                 .clip(RoundedCornerShape(6.dp)).background(BrewBg)
+                 .clip(BrewShapeSmall).background(BrewBg)
                  .padding(10.dp).verticalScroll(rememberScrollState()),
         ) {
             if (loading) {
@@ -910,9 +910,9 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
                 )
                 Spacer(Modifier.width(6.dp))
                 Box(
-                    Modifier.height(42.dp).clip(RoundedCornerShape(8.dp))
+                    Modifier.height(42.dp).clip(BrewShapeMedium)
                         .background(if (showSystem) BrewGreen.copy(alpha = 0.2f) else Color.Transparent)
-                        .border(1.dp, if (showSystem) BrewGreen else BrewBorder, RoundedCornerShape(8.dp))
+                        .border(1.dp, if (showSystem) BrewGreen else BrewBorder, BrewShapeMedium)
                         .clickable { showSystem = !showSystem; selectedPkg = "" }
                         .padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center,
@@ -927,9 +927,9 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
                     label = "refreshAngle",
                 )
                 Box(
-                    Modifier.size(42.dp).clip(RoundedCornerShape(8.dp))
+                    Modifier.size(42.dp).clip(BrewShapeMedium)
                         .background(BrewGreen.copy(alpha = 0.12f))
-                        .border(1.dp, BrewGreen.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                        .border(1.dp, BrewGreen.copy(alpha = 0.5f), BrewShapeMedium)
                         .clickable { refreshAll("refresh_icon") },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -944,7 +944,7 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
             Spacer(Modifier.height(8.dp))
             
             Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                Modifier.fillMaxWidth().clip(BrewShapeMedium)
                     .background(if (selectedPkg.isNotEmpty()) BrewGreen.copy(alpha = 0.08f) else Color.Transparent)
                     .padding(horizontal = 8.dp, vertical = 6.dp),
             ) {
@@ -1011,7 +1011,7 @@ private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: Cor
                             ) {
                                 Text(pkg, color = if (isSelected) BrewGreen else BrewText, fontSize = 11.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 if (isFrozen) {
-                                    Text(" ❄️", color = Color(0xFF4FC3F7), fontSize = 11.sp)
+                                    Text(" ❄️", color = BrewInfo.copy(alpha = 0.8f), fontSize = 11.sp)
                                     Spacer(Modifier.width(4.dp))
                                 }
                                 if (isSelected) {
@@ -1099,9 +1099,9 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
             // 模块1: 定时消息
             // ========================
             Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                Modifier.fillMaxWidth().clip(BrewShapeMedium)
                     .background(BrewWarning.copy(alpha = 0.06f))
-                    .border(1.dp, BrewWarning.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+                    .border(1.dp, BrewWarning.copy(alpha = 0.2f), BrewShapeMedium)
                     .padding(12.dp),
             ) {
                 Column {
@@ -1140,9 +1140,9 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                     Spacer(Modifier.height(8.dp))
                     // 消息启动/停止按钮
                     Box(
-                        Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(10.dp))
+                        Modifier.fillMaxWidth().height(44.dp).clip(BrewShapeMedium)
                             .background(if (msgRunning) BrewRed.copy(alpha = 0.15f) else BrewWarning.copy(alpha = 0.15f))
-                            .border(1.dp, if (msgRunning) BrewRed else BrewWarning, RoundedCornerShape(10.dp))
+                            .border(1.dp, if (msgRunning) BrewRed else BrewWarning, BrewShapeMedium)
                             .clickable {
                                 if (msgRunning) { msgRunning = false }
                                 else {
@@ -1184,9 +1184,9 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
             // 模块2: 定时打开应用
             // ========================
             Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                Modifier.fillMaxWidth().clip(BrewShapeMedium)
                     .background(BrewInfo.copy(alpha = 0.06f))
-                    .border(1.dp, BrewInfo.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+                    .border(1.dp, BrewInfo.copy(alpha = 0.2f), BrewShapeMedium)
                     .padding(12.dp),
             ) {
                 Column {
@@ -1229,7 +1229,7 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                                     appPackages.forEach { pkg ->
                                         val isSel = pkg == selectedApp
                                         Row(
-                                            Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp))
+                                            Modifier.fillMaxWidth().clip(BrewShapeSmall)
                                                 .background(if (isSel) BrewInfo.copy(alpha = 0.1f) else Color.Transparent)
                                                 .clickable { selectedApp = pkg; showAppPicker = false }
                                                 .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -1268,9 +1268,9 @@ private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                     Spacer(Modifier.height(8.dp))
                     // 应用启动/停止按钮
                     Box(
-                        Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(10.dp))
+                        Modifier.fillMaxWidth().height(44.dp).clip(BrewShapeMedium)
                             .background(if (appRunning) BrewRed.copy(alpha = 0.15f) else BrewInfo.copy(alpha = 0.15f))
-                            .border(1.dp, if (appRunning) BrewRed else BrewInfo, RoundedCornerShape(10.dp))
+                            .border(1.dp, if (appRunning) BrewRed else BrewInfo, BrewShapeMedium)
                             .clickable {
                                 if (appRunning) { appRunning = false }
                                 else {
@@ -1362,20 +1362,20 @@ private fun ShellDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
             // ═══ 输出区（占大部分空间）═══
             Box(
                 Modifier.fillMaxWidth().weight(1f)
-                    .clip(RoundedCornerShape(6.dp)).background(Color(0xFF1E1E1E))
+                    .clip(RoundedCornerShape(6.dp)).background(BrewPanel)
                     .padding(10.dp).verticalScroll(listScrollState),
             ) {
                 Column {
                     entries.forEach { entry ->
                         when (entry.type) {
                             "cmd" -> Row {
-                                Text(entry.time, color = Color(0xFF6A9955), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                Text(entry.time, color = BrewSuccess.copy(alpha = 0.7f), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                                 Spacer(Modifier.width(4.dp))
-                                Text(entry.text, color = Color(0xFF569CD6), fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                Text(entry.text, color = BrewInfo, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                             }
-                            "result" -> Text(entry.text, color = Color(0xFFD4D4D4), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                            "error" -> Text(entry.text, color = Color(0xFFF44747), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                            "info" -> Text(entry.text, color = Color(0xFF6A9955), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            "result" -> Text(entry.text, color = BrewTextBright, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            "error" -> Text(entry.text, color = BrewRed, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                            "info" -> Text(entry.text, color = BrewSuccess.copy(alpha = 0.7f), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                         }
                         Spacer(Modifier.height(4.dp))
                     }
@@ -1390,7 +1390,7 @@ private fun ShellDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                     .background(BrewBg).padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Shell>", color = Color(0xFFE53935), fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                Text("Shell>", color = BrewRed, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 Spacer(Modifier.width(6.dp))
                 BasicTextField(
                     value = cmd,
@@ -1398,7 +1398,7 @@ private fun ShellDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                     modifier = Modifier.weight(1f).heightIn(min = 38.dp),
                     singleLine = true,
                     textStyle = TextStyle(color = BrewText, fontSize = 14.sp, fontFamily = FontFamily.Monospace),
-                     cursorBrush = SolidColor(Color(0xFFE53935)),
+                     cursorBrush = SolidColor(BrewRed),
                      keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { execute(cmd.trim()) }),
                     decorationBox = { innerTextField ->
@@ -1441,7 +1441,7 @@ private fun ShellDialog(client: AdbShellClient?, connected: Boolean, scope: Coro
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(BrewBg).padding(horizontal = 8.dp, vertical = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(if (connected) Color(0xFF4CAF50) else Color(0xFFE53935)))
+                Box(Modifier.size(6.dp).clip(CircleShape).background(if (connected) BrewSuccess else BrewRed))
                 Spacer(Modifier.width(6.dp))
                 Text(status, color = BrewMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                 Spacer(Modifier.weight(1f))
@@ -1513,8 +1513,8 @@ private fun IpAddressInputCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(BrewPanel, RoundedCornerShape(12.dp))
-                .border(width = 1.dp, color = color, shape = RoundedCornerShape(12.dp))
+                .background(BrewPanel, BrewShapeStandard)
+                .border(width = 1.dp, color = color, shape = BrewShapeStandard)
                 .padding(16.dp),
         ) {
             Text(text = label, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(bottom = 8.dp))
@@ -1544,7 +1544,7 @@ private fun UsageInstructionsCard(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(BrewPanel, RoundedCornerShape(12.dp))
+            .background(BrewPanel, BrewShapeStandard)
             .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
             .padding(16.dp),
     ) {
@@ -1600,9 +1600,9 @@ private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(BrewShapeStandard)
             .background(BrewPanel)
-            .border(width = 1.dp, color = statusColor.copy(alpha = 0.3f), shape = RoundedCornerShape(12.dp)),
+            .border(width = 1.dp, color = statusColor.copy(alpha = 0.3f), shape = BrewShapeStandard),
     ) {
         // 顶部状态条
         Box(
@@ -1654,8 +1654,8 @@ private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
-                        .background(BrewPanelAlt, RoundedCornerShape(12.dp))
-                        .border(width = 1.dp, color = BrewCyan.copy(alpha = 0.3f), shape = RoundedCornerShape(12.dp)),
+                        .background(BrewPanelAlt, BrewShapeStandard)
+                        .border(width = 1.dp, color = BrewCyan.copy(alpha = 0.3f), shape = BrewShapeStandard),
                     contentAlignment = Alignment.Center,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1691,20 +1691,20 @@ private fun BrutalButton(label: String, color: Color, onClick: () -> Unit, compa
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.98f else 1f,
+        targetValue = if (isPressed) 0.97f else 1f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
         label = "btn-press",
     )
     val height = if (compact) 32.dp else 52.dp
-    val shape = RoundedCornerShape(if (compact) 8.dp else 12.dp)
+    val btnShape = if (compact) BrewShapeMedium else BrewShapeStandard
     Box(
         modifier = Modifier
             .then(if (compact) Modifier.wrapContentWidth() else Modifier.fillMaxWidth())
             .height(height)
-            .graphicsLayer { scaleX = pressScale; scaleY = pressScale; alpha = if (isPressed) 0.85f else 1f }
-            .clip(shape)
-            .background(color.copy(alpha = 0.12f))
-            .border(width = 1.dp, color = color.copy(alpha = 0.5f), shape = shape)
+            .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
+            .clip(btnShape)
+            .background(color.copy(alpha = if (isPressed) 0.20f else 0.12f))
+            .border(width = 1.dp, color = color.copy(alpha = if (isPressed) 0.7f else 0.5f), shape = btnShape)
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
             .padding(horizontal = if (compact) 12.dp else 0.dp),
         contentAlignment = Alignment.Center,
@@ -2276,8 +2276,8 @@ private fun StoreModule(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(46.dp)
-                        .background(BrewPanel, RoundedCornerShape(12.dp))
-                        .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
+                        .background(BrewPanel, BrewShapeStandard)
+                        .border(width = 1.dp, color = BrewBorder, shape = BrewShapeStandard)
                         .padding(horizontal = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -2387,9 +2387,9 @@ private fun StoreModule(
                         Box(
                             modifier = Modifier
                                 .height(36.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(BrewShapeStandard)
                                 .background(if (categoryFilter == null) BrewGreen else BrewPanel)
-                                .border(width = 2.dp, color = if (categoryFilter == null) BrewGreen else BrewBorder, shape = RoundedCornerShape(12.dp))
+                                .border(width = 2.dp, color = if (categoryFilter == null) BrewGreen else BrewBorder, shape = BrewShapeStandard)
                                 .padding(horizontal = 16.dp)
                                 .clickable { onCategoryFilter(null) },
                             contentAlignment = Alignment.Center,
@@ -2406,9 +2406,9 @@ private fun StoreModule(
                             Box(
                                 modifier = Modifier
                                     .height(36.dp)
-                                    .clip(RoundedCornerShape(12.dp))
+                                    .clip(BrewShapeStandard)
                                     .background(if (isSelected) BrewGreen else BrewPanel)
-                                    .border(width = 2.dp, color = if (isSelected) BrewGreen else BrewBorder, shape = RoundedCornerShape(12.dp))
+                                    .border(width = 2.dp, color = if (isSelected) BrewGreen else BrewBorder, shape = BrewShapeStandard)
                                     .padding(horizontal = 16.dp)
                                     .clickable { onCategoryFilter(category) },
                                 contentAlignment = Alignment.Center,

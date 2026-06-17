@@ -1,20 +1,8 @@
 package com.rokidlab.phone.hid
 
 import com.rokidlab.phone.app.LabApplication
-import com.rokidlab.phone.design.RokidLabTheme
-import com.rokidlab.phone.design.BrewBg
-import com.rokidlab.phone.design.BrewCoral
-import com.rokidlab.phone.design.BrewWarning
-import com.rokidlab.phone.design.BrewPurple
-import com.rokidlab.phone.design.BrewCyan
-import com.rokidlab.phone.design.BrewPanel
-import com.rokidlab.phone.design.BrewPanelHi
-import com.rokidlab.phone.design.BrewGreen
-import com.rokidlab.phone.design.BrewSuccess
-import com.rokidlab.phone.design.BrewMuted
-import com.rokidlab.phone.design.BrewDim
-import com.rokidlab.phone.design.BrewText
-import com.rokidlab.phone.design.BrewBorder
+import com.rokidlab.phone.design.*
+import com.rokidlab.phone.R
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
@@ -45,8 +33,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -104,6 +94,7 @@ private const val TAB_MOUSE   = 1
 // ===== Main Composable =====
 @Composable
 private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreferences, onExit: () -> Unit) {
+    val ctx = LocalContext.current
     var pressedKeys by remember { mutableStateOf(setOf<Int>()) }
     var editMode by remember { mutableStateOf(false) }
     val connectedDevice = hidManager.connectedDevice
@@ -127,17 +118,18 @@ private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreference
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
         ) {
             // 返回按钮
-            Text("← 返回", color = BrewMuted, fontSize = 12.sp,
-                modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(BrewPanel)
+            Text(ctx.getString(R.string.back_label), color = BrewMuted, fontSize = 12.sp,
+                modifier = Modifier.clip(BrewShapeSmall).background(BrewPanel)
                     .clickable { onExit() }.padding(horizontal = 10.dp, vertical = 6.dp))
 
-            Text("${connectedDevice?.name ?: "手柄"} 已连接", color = BrewSuccess, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text(ctx.getString(R.string.controller_connected, connectedDevice?.name ?: ctx.getString(R.string.gamepad_tab)), color = BrewSuccess, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f).padding(horizontal = 4.dp), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
 
             // 编辑/自定义按钮 (仅手柄模式)
             if (activeTab == TAB_GAMEPAD) {
-                Text(if (editMode) "✓ 完成" else "自定义",
+                Text(if (editMode) ctx.getString(R.string.done_edit) else ctx.getString(R.string.customize),
                     color = if (editMode) BrewGreen else BrewCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clip(RoundedCornerShape(6.dp))
+                    modifier = Modifier.clip(BrewShapeSmall)
                         .background(if (editMode) BrewGreen.copy(alpha = 0.15f) else BrewPanel)
                         .clickable { editMode = !editMode }.padding(horizontal = 10.dp, vertical = 6.dp))
             } else {
@@ -150,8 +142,8 @@ private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreference
             Modifier.fillMaxWidth().padding(top = 40.dp).align(Alignment.TopCenter),
             horizontalArrangement = Arrangement.Center,
         ) {
-            TabChip("🎮 手柄", TAB_GAMEPAD, activeTab) { activeTab = TAB_GAMEPAD; editMode = false }
-            TabChip("🖱 鼠标", TAB_MOUSE, activeTab) { activeTab = TAB_MOUSE; editMode = false }
+            TabChip(ctx.getString(R.string.gamepad_tab), TAB_GAMEPAD, activeTab) { activeTab = TAB_GAMEPAD; editMode = false }
+            TabChip(ctx.getString(R.string.mouse_tab), TAB_MOUSE, activeTab) { activeTab = TAB_MOUSE; editMode = false }
         }
 
         // ── 内容区域 ──
@@ -180,7 +172,7 @@ private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreference
                         Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Text("拖拽按键以调整位置", color = BrewCyan, fontSize = 11.sp)
+                        Text(ctx.getString(R.string.drag_to_reposition), color = BrewCyan, fontSize = 11.sp)
                     }
                 }
             }
@@ -200,8 +192,8 @@ private fun TabChip(label: String, tab: Int, activeTab: Int, onClick: () -> Unit
     val bg = if (isActive) BrewPanel else Color.Transparent
     val tc = if (isActive) BrewText else BrewMuted
     Box(
-        Modifier.clip(RoundedCornerShape(10.dp)).background(bg)
-            .border(if (isActive) 1.dp else 0.dp, BrewBorder, RoundedCornerShape(10.dp))
+        Modifier.clip(BrewShapeMedium).background(bg)
+            .border(if (isActive) 1.dp else 0.dp, BrewBorder, BrewShapeMedium)
             .clickable { onClick() }.padding(horizontal = 18.dp, vertical = 7.dp),
     ) {
         Text(label, color = tc, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -212,6 +204,7 @@ private fun TabChip(label: String, tab: Int, activeTab: Int, onClick: () -> Unit
 // ===== 鼠标触控板 =====
 @Composable
 private fun MouseTouchpad(hidManager: BluetoothHidManager) {
+    val ctx = LocalContext.current
     val sensitivity = 2.5f  // 灵敏度: 每像素移动数
 
     Box(Modifier.fillMaxSize()) {
@@ -222,9 +215,9 @@ private fun MouseTouchpad(hidManager: BluetoothHidManager) {
         ) {
             Box(
                 Modifier.fillMaxSize()
-                    .clip(RoundedCornerShape(24.dp))
+                    .clip(BrewShapeXLarge)
                     .background(BrewPanel)
-                    .border(1.dp, BrewBorder, RoundedCornerShape(24.dp))
+                    .border(1.dp, BrewBorder, BrewShapeXLarge)
                     .pointerInput(Unit) {
                         detectDragGestures(
                             onDragStart = { },
@@ -255,9 +248,9 @@ private fun MouseTouchpad(hidManager: BluetoothHidManager) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("🖱", fontSize = 36.sp)
                     Spacer(Modifier.height(8.dp))
-                    Text("触控板区域", color = BrewDim, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(ctx.getString(R.string.touchpad_area), color = BrewDim, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(4.dp))
-                    Text("滑动移动光标 · 点击左键 · 双击双击", color = BrewMuted, fontSize = 11.sp)
+                    Text(ctx.getString(R.string.touchpad_instructions), color = BrewMuted, fontSize = 11.sp)
                 }
             }
         }
@@ -267,13 +260,13 @@ private fun MouseTouchpad(hidManager: BluetoothHidManager) {
             Modifier.fillMaxWidth().padding(bottom = 16.dp).align(Alignment.BottomCenter),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            MouseActionBtn("左键", BrewCyan) {
+            MouseActionBtn(ctx.getString(R.string.left_button), BrewCyan) {
                 hidManager.sendMouseClick(null, button = 1)
             }
-            MouseActionBtn("右键", BrewWarning) {
+            MouseActionBtn(ctx.getString(R.string.right_button), BrewWarning) {
                 hidManager.sendMouseClick(null, button = 2)
             }
-            MouseActionBtn("中键", BrewPurple) {
+            MouseActionBtn(ctx.getString(R.string.middle_button), BrewPurple) {
                 hidManager.sendMouseClick(null, button = 3)
             }
         }
@@ -283,8 +276,8 @@ private fun MouseTouchpad(hidManager: BluetoothHidManager) {
 @Composable
 private fun MouseActionBtn(label: String, color: Color, onClick: () -> Unit) {
     Box(
-        Modifier.clip(RoundedCornerShape(10.dp)).background(color.copy(alpha = 0.15f))
-            .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+        Modifier.clip(BrewShapeMedium).background(color.copy(alpha = 0.15f))
+            .border(1.dp, color.copy(alpha = 0.3f), BrewShapeMedium)
             .clickable { onClick() }
             .padding(horizontal = 20.dp, vertical = 12.dp),
     ) {
@@ -334,14 +327,14 @@ private fun SingleButton(
     offsetX: Int, offsetY: Int, onDown: () -> Unit, onUp: () -> Unit, onDrag: (Float, Float) -> Unit,
 ) {
     val isDpad = label in "↑↓←→"
-    val shape = if (isDpad) RoundedCornerShape(8.dp) else CircleShape
+    val shape = if (isDpad) BrewShapeMedium else CircleShape
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.80f else 1f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh), label = "s",
     )
     val bgA = if (pressed) 0.9f else if (editMode) 0.35f else 0.20f
     val bdA = if (pressed) 1f else if (editMode) 0.7f else 0.35f
-    val tc = if (pressed) Color.White else color
+    val tc = if (pressed) BrewTextBright else color
 
     val interactionSource = remember { MutableInteractionSource() }
     val ip by interactionSource.collectIsPressedAsState()
@@ -364,6 +357,6 @@ private fun SingleButton(
         contentAlignment = Alignment.Center,
     ) {
         Text(label, color = tc, fontSize = if (isDpad) 16.sp else 12.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-        if (editMode) Text("↕", color = Color.White.copy(alpha = 0.4f), fontSize = 8.sp, modifier = Modifier.align(Alignment.TopEnd).padding(2.dp))
+        if (editMode) Text("↕", color = BrewTextBright.copy(alpha = 0.4f), fontSize = 8.sp, modifier = Modifier.align(Alignment.TopEnd).padding(2.dp))
     }
 }

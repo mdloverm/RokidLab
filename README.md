@@ -72,7 +72,7 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
   - 蓝牙 HID Device 协议（手机模拟键盘/鼠标/游戏手柄）
 - **投屏**: MediaProjection API + Socket 传输
 - **统一 HTTP 工具**: `HttpClient` 对象封装（替代裸 `HttpURLConnection`）
-- **全局错误提示**: `BrewErrorCard`/`BrewWarningCard`/`BrewLoadingCard`/`BrewResultCard`
+- **统一交互组件**: `BrewButton`/`BrewOutlineButton`/`BrewCompactButton`/`BrewIconButton` 标准按钮系统、`BrewDialog` 标准对话框、`BrewStatusDot`/`BrewStatusPill`/`BrewStateCard` 标准状态指示器（详见 [UI-DESIGN.md](./UI-DESIGN.md)）
 - **最低版本**: Android 9 (API 28)
 
 ## ADB 自实现协议

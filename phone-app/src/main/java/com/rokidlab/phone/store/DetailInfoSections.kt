@@ -50,15 +50,16 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 internal fun DetailInfoPanel(app: BrewApp, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = BrewShapeStandard,
         colors = CardDefaults.cardColors(containerColor = BrewPanel.copy(alpha = 0.76f)),
         border = BorderStroke(1.dp, BrewBorder.copy(alpha = 0.46f)),
     ) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                DetailSectionTitle("关于")
+                DetailSectionTitle(ctx.getString(R.string.about_section))
                 Spacer(Modifier.weight(1f))
             }
             AboutBody(app.aboutText(), Modifier.padding(top = 11.dp))
@@ -232,7 +233,7 @@ internal fun DetailBulletLine(text: String, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .padding(top = 8.dp)
                 .size(4.dp)
-                .clip(RoundedCornerShape(2.dp))
+                .clip(BrewShapeSmall)
                 .background(BrewGreen),
         )
         Spacer(Modifier.width(10.dp))
@@ -248,18 +249,19 @@ internal fun DetailBulletLine(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 internal fun WhatsNewSection(app: BrewApp, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
     val release = app.releases.firstOrNull()
     Column(modifier = modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            DetailSectionTitle("更新内容")
+            DetailSectionTitle(ctx.getString(R.string.changelog_section_content))
             Spacer(Modifier.weight(1f))
             if (release?.sourceReleaseUrl != null) {
-                Text("查看完整更新日志", color = BrewGreen, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Text(ctx.getString(R.string.view_full_changelog), color = BrewGreen, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
         }
         if (release == null) {
             Text(
-                "当注册表导入 GitHub Release 后，发布说明将显示在此处。",
+                ctx.getString(R.string.changelog_placeholder),
                 color = BrewMuted,
                 fontSize = 13.sp,
                 lineHeight = 19.sp,
@@ -270,7 +272,7 @@ internal fun WhatsNewSection(app: BrewApp, modifier: Modifier = Modifier) {
         val title = buildList {
             release.version?.let { add("v$it") }
             release.date?.take(10)?.let { add(it) }
-        }.joinToString(" / ").ifBlank { "最新版本" }
+        }.joinToString(" / ").ifBlank { ctx.getString(R.string.latest_version_text) }
         Text(
             title,
             color = BrewGreen,
@@ -302,15 +304,15 @@ internal fun SourceLine(app: BrewApp, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .height(50.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(BrewShapeStandard)
             .background(BrewPanelAlt.copy(alpha = 0.88f))
-            .border(1.dp, BrewBorder.copy(alpha = 0.52f), RoundedCornerShape(12.dp))
+            .border(1.dp, BrewBorder.copy(alpha = 0.52f), BrewShapeStandard)
             .clickable(enabled = app.sourceUrl != null) {
                 app.sourceUrl?.let { sourceUrl ->
                     runCatching {
                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(sourceUrl)))
                     }.onFailure { e ->
-                        android.util.Log.w("DetailInfoSections", "打开源 URL 失败", e)
+                        android.util.Log.w("DetailInfoSections", "Failed to open source URL", e)
                     }
                 }
             }
@@ -320,7 +322,7 @@ internal fun SourceLine(app: BrewApp, modifier: Modifier = Modifier) {
         Box(
             modifier = Modifier
                 .size(30.dp)
-                .clip(RoundedCornerShape(17.dp))
+                .clip(BrewShapeLarge)
                 .background(BrewPanel),
             contentAlignment = Alignment.Center,
         ) {

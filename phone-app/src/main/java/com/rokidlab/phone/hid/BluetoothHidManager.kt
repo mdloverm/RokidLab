@@ -46,7 +46,7 @@ class BluetoothHidManager(private val appContext: Context) {
         const val STATE_DISCONNECTED = 0
         const val STATE_CONNECTING   = 1
         const val STATE_CONNECTED    = 2
-        const val STATE_RETRY_FAILED = 3  // 智能重试超过最大次数，需手动重置蓝牙
+        const val STATE_RETRY_FAILED = 3  // Smart retry exceeded max attempts, manual Bluetooth reset required
 
         const val MAX_QUICK_DISCONNECT_RETRIES = 5
 
@@ -327,18 +327,18 @@ class BluetoothHidManager(private val appContext: Context) {
                     if (lastConnectTime > 0 && lastDisconnectTime - lastConnectTime < 2000) {
                         quickDisconnectCount++
                         if (quickDisconnectCount >= MAX_QUICK_DISCONNECT_RETRIES) {
-                            Log.w(TAG, "快速断连已达 $quickDisconnectCount 次，停止重试，请重启眼镜蓝牙")
+                            Log.w(TAG, "Quick disconnects reached $quickDisconnectCount times, stopping retries, please restart glasses Bluetooth")
                             quickDisconnectCount = 0
                             retryRunnable?.let { mainHandler.removeCallbacks(it); retryRunnable = null }
                             updateConnectionState(STATE_RETRY_FAILED, null)
                         } else {
                             val waitMs = minOf(quickDisconnectCount * 3000L, 15000L)
-                            Log.w(TAG, "快速断连 #$quickDisconnectCount，等待 ${waitMs}ms 后重试")
+                            Log.w(TAG, "Quick disconnect #$quickDisconnectCount, waiting ${waitMs}ms before retry")
                             val dev = device
                             retryRunnable?.let { mainHandler.removeCallbacks(it) }
                             retryRunnable = Runnable {
                                 if (dev != null) {
-                                    Log.i(TAG, "智能重试: 连接 $dev")
+                                    Log.i(TAG, "Smart retry: connecting to $dev")
                                     connect(dev)
                                 }
                             }

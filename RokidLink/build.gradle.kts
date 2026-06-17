@@ -43,6 +43,14 @@ android {
     }
 }
 
+// RokidLink 不作为独立应用安装到手机，而是打包进 phone-app assets
+// 因此禁用所有 install 相关任务
+tasks.whenTaskAdded {
+    if (name.startsWith("install")) {
+        enabled = false
+    }
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")

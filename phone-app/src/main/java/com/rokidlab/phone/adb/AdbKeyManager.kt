@@ -42,10 +42,10 @@ object AdbKeyManager {
                 val pubKey = keyFactory.generatePublic(java.security.spec.X509EncodedKeySpec(pubBytes))
                 val kp = KeyPair(pubKey, privKey)
                 cachedKeyPair = kp
-                Log.i(TAG, "ADB 密钥从磁盘加载成功")
+                Log.i(TAG, "ADB key loaded from disk successfully")
                 return kp
             } catch (e: Exception) {
-                Log.w(TAG, "加载 ADB 密钥失败，将重新生成: ${e.message}")
+                Log.w(TAG, "Failed to load ADB key, regenerating: ${e.message}")
             }
         }
 
@@ -56,9 +56,9 @@ object AdbKeyManager {
         try {
             FileOutputStream(privKeyFile).use { it.write(kp.private.encoded) }
             FileOutputStream(pubKeyFile).use { it.write(kp.public.encoded) }
-            Log.i(TAG, "ADB 密钥已生成并持久化")
+            Log.i(TAG, "ADB key generated and persisted")
         } catch (e: Exception) {
-            Log.w(TAG, "ADB 密钥持久化失败（不影响本次连接）: ${e.message}")
+            Log.w(TAG, "ADB key persistence failed (does not affect current connection): ${e.message}")
         }
 
         cachedKeyPair = kp

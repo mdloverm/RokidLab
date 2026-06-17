@@ -1,16 +1,16 @@
 <resources>
     <string name="app_name">RokidLink</string>
     <!-- Status strings -->
-    <string name="status_checking_wifi">检查 WiFi...</string>
-    <string name="status_wifi_disabled">WiFi 未开启</string>
-    <string name="status_wifi_disconnected">WiFi 已断开</string>
-    <string name="status_not_connected_wifi">未连接 WiFi</string>
-    <string name="status_checking_adb">检查 ADB 状态...</string>
-    <string name="status_ready">已就绪</string>
-    <string name="status_enabling_adb">正在开启 ADB...</string>
-    <string name="status_adb_failed">ADB 开启失败，请重启 App</string>
+    <string name="status_checking_wifi">Checking WiFi...</string>
+    <string name="status_wifi_disabled">WiFi is disabled</string>
+    <string name="status_wifi_disconnected">WiFi disconnected</string>
+    <string name="status_not_connected_wifi">Not connected to WiFi</string>
+    <string name="status_checking_adb">Checking ADB status...</string>
+    <string name="status_ready">Ready</string>
+    <string name="status_enabling_adb">Enabling ADB...</string>
+    <string name="status_adb_failed">ADB enable failed, please restart the App</string>
     <!-- Toast messages -->
-    <string name="toast_enable_wifi">请在设置中开启并连接 WiFi</string>
+    <string name="toast_enable_wifi">Please enable and connect to WiFi in Settings</string>
     <!-- Log messages (English only, developer-facing) -->
     <string name="log_network_recovered">Network recovered, rechecking status</string>
     <string name="log_wifi_disconnected">WiFi disconnected</string>

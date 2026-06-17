@@ -265,8 +265,8 @@ private fun SelectMirrorSourceStep(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(BrewGreen, shape = RoundedCornerShape(12.dp))
+                .clip(BrewShapeStandard)
+                .background(BrewGreen, shape = BrewShapeStandard)
                 .clickable { onSelectMirrorSource() },
             contentAlignment = Alignment.Center,
         ) {
@@ -326,8 +326,8 @@ private fun AuthorizeStep(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(BrewGreen, shape = RoundedCornerShape(12.dp))
+                    .clip(BrewShapeStandard)
+                    .background(BrewGreen, shape = BrewShapeStandard)
                     .clickable { onAuthorize() },
                 contentAlignment = Alignment.Center,
             ) {

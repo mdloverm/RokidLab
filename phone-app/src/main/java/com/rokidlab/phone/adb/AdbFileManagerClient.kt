@@ -91,8 +91,8 @@ class AdbFileManagerClient(
 
     fun connect(onStatus: (String) -> Unit): Boolean {
         return try {
-            onStatus("正在连接眼镜 ($ipAddress:$port)...")
-            Log.i(TAG, "正在连接 $ipAddress:$port")
+            onStatus("Connecting to glasses ($ipAddress:$port)...")
+            Log.i(TAG, "Connecting to $ipAddress:$port")
 
             socket = Socket()
             socket?.tcpNoDelay = true
@@ -100,17 +100,17 @@ class AdbFileManagerClient(
             socket?.connect(java.net.InetSocketAddress(ipAddress, port), 10000) // 10秒连接超时
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
-            Log.i(TAG, "TCP 连接已建立")
-            onStatus("正在完成 ADB 认证...")
+            Log.i(TAG, "TCP connection established")
+            onStatus("Completing ADB authentication...")
 
             keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
             doHandshake()
-            Log.i(TAG, "ADB 连接成功")
-            onStatus("连接成功")
+            Log.i(TAG, "ADB connection successful")
+            onStatus("Connected")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "连接失败: ${e.message}", e)
-            onStatus("连接失败: ${e.message}")
+            Log.e(TAG, "Connection failed: ${e.message}", e)
+            onStatus("Connection failed: ${e.message}")
             disconnect()
             false
         }
@@ -169,11 +169,11 @@ class AdbFileManagerClient(
             val result = mutableListOf<FileItem>()
 
             try {
-                Log.d(TAG, "listFiles 开始，路径: $path")
+                Log.d(TAG, "listFiles started, path: $path")
 
                 // 检查连接状态
                 if (!isConnected()) {
-                    Log.e(TAG, "listFiles: ADB 未连接")
+                    Log.e(TAG, "listFiles: ADB not connected")
                     return result
                 }
 
@@ -184,7 +184,7 @@ class AdbFileManagerClient(
                 val cmd = "shell:$sh\u0000"
 
                 val sid = localId.getAndIncrement()
-                Log.d(TAG, "listFiles: 使用 stream ID=$sid, cmd=$cmd")
+                Log.d(TAG, "listFiles: using stream ID=$sid, cmd=$cmd")
 
                 sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
@@ -193,7 +193,7 @@ class AdbFileManagerClient(
 
                 while (true) {
                     val msg = readPacket()
-                    Log.d(TAG, "listFiles: 收到包 cmd=${msg.command.toString(16)}, arg0=${msg.arg0}, arg1=${msg.arg1}")
+                    Log.d(TAG, "listFiles: received packet cmd=${msg.command.toString(16)}, arg0=${msg.arg0}, arg1=${msg.arg1}")
 
                     when (msg.command) {
                         CMD_OKAY -> {
@@ -202,7 +202,7 @@ class AdbFileManagerClient(
                                 remoteId = msg.arg0
                                 Log.d(TAG, "listFiles: CMD_OKAY for stream $sid, remoteId=$remoteId")
                             } else {
-                                Log.d(TAG, "listFiles: 忽略其他 stream 的 OKAY (arg1=${msg.arg1})")
+                                Log.w(TAG, "listFiles: ignoring other stream OKAY (arg1=${msg.arg1})")
                             }
                         }
                         CMD_WRTE -> {
@@ -210,35 +210,35 @@ class AdbFileManagerClient(
                             if (msg.arg1 == sid) {
                                 val chunk = String(msg.payload, Charsets.UTF_8)
                                 output.append(chunk)
-                                Log.d(TAG, "listFiles: CMD_WRTE, 长度=${chunk.length}")
+                                Log.d(TAG, "listFiles: CMD_WRTE, length=${chunk.length}")
                                 sendPacket(CMD_OKAY, sid, msg.arg0, null)
                             } else {
-                                Log.d(TAG, "listFiles: 忽略其他 stream 的 WRTE (arg1=${msg.arg1})")
+                                Log.d(TAG, "listFiles: ignoring other stream WRTE (arg1=${msg.arg1})")
                                 sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
                             }
                         }
                         CMD_CLSE -> {
                             // 只处理针对当前 stream 的 CLSE
                             if (msg.arg1 == sid) {
-                                Log.d(TAG, "listFiles: CMD_CLSE for stream $sid, 关闭")
+                                Log.d(TAG, "listFiles: CMD_CLSE for stream $sid, closing")
                                 sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                 sendPacket(CMD_CLSE, sid, remoteId, null)
                                 break
                             } else {
                                 // 其他 stream 的关闭，回复 OKAY 并继续
-                                Log.d(TAG, "listFiles: 其他 stream 关闭 (arg1=${msg.arg1})，继续等待")
+                                Log.d(TAG, "listFiles: other stream closing (arg1=${msg.arg1}), continue waiting")
                                 sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
                             }
                         }
                         else -> {
-                            Log.w(TAG, "listFiles: 未知命令 ${msg.command.toString(16)}")
+                            Log.w(TAG, "listFiles: unknown command ${msg.command.toString(16)}")
                         }
                     }
                 }
 
                 val outputStr = output.toString()
-                Log.d(TAG, "listFiles: 输出长度=${outputStr.length}")
-                Log.d(TAG, "listFiles 输出:\n$outputStr")
+                Log.d(TAG, "listFiles: output length=${outputStr.length}")
+                Log.d(TAG, "listFiles output:\n$outputStr")
 
                 // 解析 ls -la 输出
                 // 标准格式: 权限 链接数 所有者 组 大小 月 日 时间 文件名
@@ -286,10 +286,10 @@ class AdbFileManagerClient(
                     ))
                 }
 
-                Log.d(TAG, "listFiles 完成，共找到 ${result.size} 个文件")
+                Log.d(TAG, "listFiles completed, found ${result.size} files")
 
             } catch (e: Exception) {
-                Log.e(TAG, "listFiles 异常: ${e.message}", e)
+                Log.e(TAG, "listFiles error: ${e.message}", e)
             }
 
             return result.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { it.name.lowercase() })
@@ -299,12 +299,12 @@ class AdbFileManagerClient(
     fun downloadFile(remotePath: String, localPath: String): Boolean {
         synchronized(lock) {
             return try {
-                Log.d(TAG, "下载文件: $remotePath -> $localPath")
-                Log.d(TAG, "连接状态: socket=${socket != null}, isConnected=${socket?.isConnected}, isClosed=${socket?.isClosed}")
+                Log.d(TAG, "Download file: $remotePath -> $localPath")
+                Log.d(TAG, "Connection state: socket=${socket != null}, isConnected=${socket?.isConnected}, isClosed=${socket?.isClosed}")
 
                 val sid = localId.getAndIncrement()
                 val cmd = "sync:\u0000"
-                Log.d(TAG, "发送 sync 打开命令, sid=$sid")
+                Log.d(TAG, "Sending sync open command, sid=$sid")
                 sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
                 var remoteId = 0
@@ -312,34 +312,34 @@ class AdbFileManagerClient(
                 // 等待 sync 服务打开
                 var retryCount = 0
                 while (retryCount < 10) {
-                    Log.d(TAG, "等待 sync 响应, retry=$retryCount")
+                    Log.d(TAG, "Waiting for sync response, retry=$retryCount")
                     val msg = readPacket()
-                    Log.d(TAG, "收到响应: cmd=${msg.command.toString(16)}, arg0=${msg.arg0}, arg1=${msg.arg1}, payloadLen=${msg.payloadLength}")
+                    Log.d(TAG, "Received response: cmd=${msg.command.toString(16)}, arg0=${msg.arg0}, arg1=${msg.arg1}, payloadLen=${msg.payloadLength}")
                     
                     when (msg.command) {
                         CMD_OKAY -> {
                             remoteId = msg.arg0
-                            Log.d(TAG, "sync 服务已打开, remoteId=$remoteId")
+                            Log.d(TAG, "Sync service opened, remoteId=$remoteId")
                             break
                         }
                         CMD_CLSE -> {
-                            Log.e(TAG, "sync 服务打开失败 - 收到 CLSE，回退到 shell 方式")
+                            Log.e(TAG, "Sync service open failed - CLSE received, falling back to shell")
                             // 检查是否有错误信息
                             if (msg.payload != null) {
                                 val error = String(msg.payload, Charsets.UTF_8)
-                                Log.e(TAG, "错误信息: $error")
+                                Log.e(TAG, "Error: $error")
                             }
                             return downloadFileShell(remotePath, localPath)
                         }
                         else -> {
-                            Log.w(TAG, "收到未知响应: ${msg.command.toString(16)}")
+                            Log.w(TAG, "Received unknown response: ${msg.command.toString(16)}")
                             retryCount++
                         }
                     }
                 }
 
                 if (remoteId == 0) {
-                    Log.e(TAG, "sync 服务打开超时，回退到 shell 方式")
+                    Log.e(TAG, "Sync service open timed out, falling back to shell")
                     return downloadFileShell(remotePath, localPath)
                 }
 
@@ -361,8 +361,8 @@ class AdbFileManagerClient(
                     when (msg.command) {
                         CMD_OKAY -> waitForOkay = false
                         CMD_CLSE -> {
-                            Log.e(TAG, "RECV 命令失败")
-                            throw Exception("RECV 命令失败")
+                            Log.e(TAG, "RECV command failed")
+                            throw Exception("RECV command failed")
                         }
                     }
                 }
@@ -388,10 +388,10 @@ class AdbFileManagerClient(
                                                 val errMsg = if (payload.size >= 8 + errLen) {
                                                     String(payload.copyOfRange(8, 8 + errLen), Charsets.UTF_8)
                                                 } else {
-                                                    "未知错误"
+                                                    "Unknown error"
                                                 }
-                                                Log.e(TAG, "下载失败: $errMsg")
-                                                throw Exception("下载失败: $errMsg")
+                                                Log.e(TAG, "Download failed: $errMsg")
+                                                throw Exception("Download failed: $errMsg")
                                             }
                                             "DATA" -> {
                                                 val dataLen = ((payload[4].toInt() and 0xFF) or
@@ -403,11 +403,11 @@ class AdbFileManagerClient(
                                                     totalReceived += dataLen
                                                 }
                                                 if (totalReceived % (1024 * 1024) == 0L) {
-                                                    Log.d(TAG, "下载进度: $totalReceived 字节")
+                                                    Log.d(TAG, "Download progress: $totalReceived bytes")
                                                 }
                                             }
                                             "DONE" -> {
-                                                Log.d(TAG, "下载完成: $totalReceived 字节")
+                                                Log.d(TAG, "Download complete: $totalReceived bytes")
                                                 sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                                 sendPacket(CMD_CLSE, sid, remoteId, null)
                                                 // 消费服务端的 CLSE 响应（仅消费当前 stream 的）
@@ -433,13 +433,13 @@ class AdbFileManagerClient(
                     }
                     downloadSuccess
                 } catch (e: Exception) {
-                    Log.e(TAG, "下载失败: ${e.message}", e)
+                    Log.e(TAG, "Download failed: ${e.message}", e)
                     // 关闭 sync 流，防止泄漏
                     try { sendPacket(CMD_CLSE, sid, remoteId, ByteArray(0)) } catch (_: Exception) {}
                     false
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "文件操作失败: ${e.message}", e)
+                Log.e(TAG, "File operation failed: ${e.message}", e)
                 false
             }
         }
@@ -447,14 +447,14 @@ class AdbFileManagerClient(
 
     private fun downloadFileShell(remotePath: String, localPath: String): Boolean {
         return try {
-            Log.d(TAG, "使用 shell 方式下载: $remotePath -> $localPath")
+            Log.d(TAG, "Downloading via shell: $remotePath -> $localPath")
 
             // 使用 base64 编码下载文件
             val cmd = "shell:cat \"$remotePath\" | base64\u0000"
             val base64Output = executeShellCommandInternal(cmd)
 
             if (base64Output.isEmpty()) {
-                Log.e(TAG, "shell 下载失败: 输出为空")
+                Log.e(TAG, "Shell download failed: empty output")
                 return false
             }
 
@@ -462,10 +462,10 @@ class AdbFileManagerClient(
             val decoded = android.util.Base64.decode(base64Output.trim(), android.util.Base64.DEFAULT)
             File(localPath).writeBytes(decoded)
 
-            Log.d(TAG, "shell 下载成功: $localPath, 大小: ${decoded.size}")
+            Log.d(TAG, "Shell download success: $localPath, size: ${decoded.size}")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "shell 下载失败: ${e.message}", e)
+            Log.e(TAG, "Shell download failed: ${e.message}", e)
             false
         }
     }
@@ -506,7 +506,7 @@ class AdbFileManagerClient(
                 }
                 true
             } catch (e: Exception) {
-                Log.e(TAG, "删除失败: ${e.message}", e)
+                Log.e(TAG, "Delete failed: ${e.message}", e)
                 false
             }
         }
@@ -548,7 +548,7 @@ class AdbFileManagerClient(
             }
             true
         } catch (e: Exception) {
-            Log.e(TAG, "复制失败: ${e.message}", e)
+            Log.e(TAG, "Copy failed: ${e.message}", e)
             false
         }
         }
@@ -590,7 +590,7 @@ class AdbFileManagerClient(
             }
             true
         } catch (e: Exception) {
-            Log.e(TAG, "重命名失败: ${e.message}", e)
+            Log.e(TAG, "Rename failed: ${e.message}", e)
             false
         }
         }
@@ -632,7 +632,7 @@ class AdbFileManagerClient(
                 }
                 true
             } catch (e: Exception) {
-                Log.e(TAG, "创建文件夹失败: ${e.message}", e)
+                Log.e(TAG, "Create folder failed: ${e.message}", e)
                 false
             }
         }
@@ -645,7 +645,7 @@ class AdbFileManagerClient(
                 // 直接使用 df 获取 /storage/emulated 存储信息
                 return getStorageInfoByDeviceInternal("/storage/emulated")
             } catch (e: Exception) {
-                Log.e(TAG, "获取存储信息失败: ${e.message}", e)
+                Log.e(TAG, "Get storage info failed: ${e.message}", e)
                 return null
             }
         }
@@ -676,7 +676,7 @@ class AdbFileManagerClient(
                         if (msg.arg1 == sid) {
                             val content = String(msg.payload, Charsets.UTF_8)
                             output.append(content)
-                            Log.d(TAG, "getStorageInfoByDeviceInternal: CMD_WRTE, 内容长度=${content.length}")
+                            Log.d(TAG, "getStorageInfoByDeviceInternal: CMD_WRTE, content length=${content.length}")
                             sendPacket(CMD_OKAY, sid, msg.arg0, null)
                         } else {
                             sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
@@ -695,36 +695,36 @@ class AdbFileManagerClient(
                 }
             }
 
-            Log.d(TAG, "df 输出完整内容: [$output]")
+            Log.d(TAG, "df full output: [$output]")
             
             // 解析 df 输出
             val lines = output.toString().trim().split("\n")
-            Log.d(TAG, "df 输出行数: ${lines.size}")
+            Log.d(TAG, "df output lines: ${lines.size}")
             for (line in lines) {
-                Log.d(TAG, "df 行: $line")
+                Log.d(TAG, "df line: $line")
                 if (line.contains(device) || line.contains("/sdcard")) {
                     val parts = line.trim().split(Regex("\\s+"))
-                    Log.d(TAG, "df 行解析: parts.size=${parts.size}, parts=${parts.joinToString(",")}")
+                    Log.d(TAG, "df line parse: parts.size=${parts.size}, parts=${parts.joinToString(",")}")
                     if (parts.size >= 5) {
                         try {
                             // 解析带单位的值 (如 15G, 2.3G, 100M, 50K)
                             val total = parseSize(parts[1])
                             val used = parseSize(parts[2])
                             val free = parseSize(parts[3])
-                            Log.d(TAG, "解析结果: total=$total, used=$used, free=$free")
+                            Log.d(TAG, "Parse result: total=$total, used=$used, free=$free")
                             if (total > 0) {
                                 return StorageInfo(total, used, free)
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "解析存储信息失败: ${e.message}")
+                            Log.e(TAG, "Parse storage info failed: ${e.message}")
                         }
                     }
                 }
             }
-            Log.d(TAG, "未能解析出存储信息")
+            Log.d(TAG, "Could not parse storage info")
             return null
         } catch (e: Exception) {
-            Log.e(TAG, "通过设备获取存储信息失败: ${e.message}", e)
+            Log.e(TAG, "Get storage info from device failed: ${e.message}", e)
             return null
         }
     }
@@ -781,18 +781,18 @@ class AdbFileManagerClient(
             return try {
                 val file = File(localPath)
                 if (!file.exists()) {
-                    Log.e(TAG, "本地文件不存在: $localPath")
+                    Log.e(TAG, "Local file not found: $localPath")
                     return false
                 }
 
-                Log.d(TAG, "上传文件: $localPath -> $remotePath, 文件大小: ${file.length()}")
+                Log.d(TAG, "Upload file: $localPath -> $remotePath, file size: ${file.length()}")
 
                 // 先确保目录存在
                 val remoteDir = remotePath.substringBeforeLast('/', "/")
                 if (remoteDir.isNotEmpty() && remoteDir != "/") {
                     val mkdirCmd = "shell:mkdir -p ${shellEscape(remoteDir)}\u0000"
                     executeShellCommandInternal(mkdirCmd)
-                    Log.d(TAG, "创建目录: $remoteDir")
+                    Log.d(TAG, "Creating directory: $remoteDir")
                 }
 
                 // 使用 sync 服务上传
@@ -808,11 +808,11 @@ class AdbFileManagerClient(
                 when (msg.command) {
                     CMD_OKAY -> {
                         remoteId = msg.arg0
-                        Log.d(TAG, "sync 服务已打开, remoteId=$remoteId")
+                        Log.d(TAG, "Sync service opened, remoteId=$remoteId")
                         break
                     }
                     CMD_CLSE -> {
-                        Log.e(TAG, "sync 服务打开失败，回退到 shell 方式")
+                        Log.e(TAG, "Sync service open failed, falling back to shell")
                         return uploadFileShell(file, remotePath)
                     }
                 }
@@ -839,7 +839,7 @@ class AdbFileManagerClient(
                 when (msg.command) {
                     CMD_OKAY -> waitForOkay = false
                     CMD_CLSE -> {
-                        Log.e(TAG, "SEND 命令失败")
+                        Log.e(TAG, "SEND command failed")
                         return uploadFileShell(file, remotePath)
                     }
                 }
@@ -872,14 +872,14 @@ class AdbFileManagerClient(
                         when (msg.command) {
                             CMD_OKAY -> waitData = false
                             CMD_CLSE -> {
-                                Log.e(TAG, "DATA 命令失败")
+                                Log.e(TAG, "DATA command failed")
                                 return false
                             }
                         }
                     }
                     
                     if (totalSent % (1024 * 1024) == 0L) {
-                        Log.d(TAG, "上传进度: $totalSent / ${file.length()}")
+                        Log.d(TAG, "Upload progress: $totalSent / ${file.length()}")
                     }
                 }
             }
@@ -907,9 +907,9 @@ class AdbFileManagerClient(
                             val cmdStr = String(payload.copyOfRange(0, 4), Charsets.UTF_8)
                             if (cmdStr == "OKAY") {
                                 success = true
-                                Log.d(TAG, "上传成功")
+                                Log.d(TAG, "Upload success")
                             } else if (cmdStr == "FAIL") {
-                                Log.e(TAG, "上传失败: FAIL 响应")
+                                Log.e(TAG, "Upload failed: FAIL response")
                             }
                         }
                         sendPacket(CMD_OKAY, sid, msg.arg0, null)
@@ -926,14 +926,14 @@ class AdbFileManagerClient(
 
             success
         } catch (e: Exception) {
-            Log.e(TAG, "上传失败: ${e.message}", e)
+            Log.e(TAG, "Upload failed: ${e.message}", e)
             false
         }
         }
     }
     
     private fun uploadFileShell(file: File, remotePath: String): Boolean {
-        Log.d(TAG, "使用 shell 方式上传: ${file.name}")
+        Log.d(TAG, "Using shell to upload: ${file.name}")
         
         // shell 路径转义：用单引号包裹，路径内含单引号时用 '\'' 模式
         fun shellEscape(s: String): String = "'${s.replace("'", "'\\''")}'"
@@ -968,7 +968,7 @@ class AdbFileManagerClient(
         val remoteSize = checkResult.toLongOrNull() ?: 0
         val success = remoteSize == file.length()
         
-        Log.d(TAG, "shell 上传${if (success) "成功" else "失败"}, 本地大小: ${file.length()}, 远程大小: $remoteSize")
+        Log.d(TAG, "Shell upload ${if (success) "success" else "failed"}, local size: ${file.length()}, remote size: $remoteSize")
         return success
     }
     
@@ -1052,7 +1052,7 @@ class AdbFileManagerClient(
             }
             installed
         } catch (e: Exception) {
-            Log.e(TAG, "检查应用安装状态失败: ${e.message}", e)
+            Log.e(TAG, "Check app install status failed: ${e.message}", e)
             false
         }
     }
@@ -1085,7 +1085,7 @@ class AdbFileManagerClient(
             }
             true
         } catch (e: Exception) {
-            Log.e(TAG, "启动应用失败: ${e.message}", e)
+            Log.e(TAG, "Launch app failed: ${e.message}", e)
             false
         }
     }
@@ -1141,7 +1141,7 @@ class AdbFileManagerClient(
         var offset = 0
         while (offset < buffer.size) {
             val read = inputStream?.read(buffer, offset, buffer.size - offset) ?: -1
-            if (read < 0) throw java.io.IOException("流已关闭")
+            if (read < 0) throw java.io.IOException("Stream closed")
             offset += read
         }
     }
@@ -1175,7 +1175,7 @@ class AdbFileManagerClient(
             return try {
                 readFileContentInternal(path, maxSize)
             } catch (e: Exception) {
-                Log.e(TAG, "读取文件内容失败: ${e.message}", e)
+                Log.e(TAG, "Read file content failed: ${e.message}", e)
                 null
             }
         }
@@ -1196,10 +1196,10 @@ class AdbFileManagerClient(
                     break
                 }
                 CMD_CLSE -> {
-                    throw Exception("打开 sync 服务失败")
+                    throw Exception("Failed to open sync service")
                 }
                 else -> {
-                    throw Exception("未知响应: ${msg.command}")
+                    throw Exception("Unknown response: ${msg.command}")
                 }
             }
         }
@@ -1221,7 +1221,7 @@ class AdbFileManagerClient(
             val msg = readPacket()
             when (msg.command) {
                 CMD_OKAY -> waitForOkay = false
-                CMD_CLSE -> throw Exception("RECV 命令被拒绝")
+                CMD_CLSE -> throw Exception("RECV command rejected")
             }
         }
 
@@ -1268,9 +1268,9 @@ class AdbFileManagerClient(
                                               ((payload[7].toInt() and 0xFF) shl 24)
                                 val error = if (payload.size >= 8 + errorSize)
                                     String(payload, 8, errorSize, Charsets.UTF_8)
-                                else "未知错误"
-                                Log.e(TAG, "读取文件失败: $error")
-                                throw Exception("读取文件失败: $error")
+                                else "Unknown error"
+                                Log.e(TAG, "Read file failed: $error")
+                                throw Exception("Read file failed: $error")
                             }
                         }
                     }
