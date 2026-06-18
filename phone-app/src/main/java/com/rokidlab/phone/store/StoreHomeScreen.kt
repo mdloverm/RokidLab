@@ -1,6 +1,7 @@
 package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
+import com.rokidlab.phone.adb.AdbShellClient
 import com.rokidlab.phone.adb.*
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.filemanager.*
@@ -346,7 +347,7 @@ private fun ScreenMirrorModule(
         Spacer(modifier = Modifier.height(16.dp))
         
         BrutalButton(
-            label = "▶ ${ctx.getString(R.string.start_mirror)}",
+            label = ctx.getString(R.string.start_mirror),
             color = BrewCyan,
             onClick = actions.onScreenMirrorStart,
         )
@@ -358,7 +359,7 @@ private fun ScreenMirrorModule(
                 "1. ${ctx.getString(R.string.connecting_adb_hint)}",
                 "2. ${String.format(ctx.getString(R.string.notification_content_hint), "RokidLink")}",
                 "3. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
-                "4. ▶ ${ctx.getString(R.string.start_mirror)}",
+                "4. ${ctx.getString(R.string.start_mirror)}",
                 "5. ${ctx.getString(R.string.screen_mirror_subtitle)}",
             ),
             ctx = ctx,
@@ -432,7 +433,7 @@ private fun PhoneMirrorModule(
             Spacer(modifier = Modifier.height(16.dp))
             
             BrutalButton(
-                label = "▶ ${ctx.getString(R.string.start_cast)}",
+                label = ctx.getString(R.string.start_cast),
                 color = BrewPurple,
                 onClick = actions.onPhoneMirrorStart,
             )
@@ -443,7 +444,7 @@ private fun PhoneMirrorModule(
                 instructions = listOf(
                     "1. ${ctx.getString(R.string.connecting_adb_hint)}",
                     "2. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
-                    "3. ▶ ${ctx.getString(R.string.start_cast)}",
+                    "3. ${ctx.getString(R.string.start_cast)}",
                     "4. ${ctx.getString(R.string.phone_mirror_subtitle)}",
                 ),
                 ctx = ctx,
@@ -490,7 +491,7 @@ private fun FileManagerModule(
         Spacer(modifier = Modifier.height(16.dp))
         
         BrutalButton(
-            label = "▶ ${ctx.getString(R.string.open_file_manager)}",
+            label = ctx.getString(R.string.open_file_manager),
             color = BrewAmber,
             onClick = actions.onFileManagerConnect,
         )
@@ -518,7 +519,7 @@ private fun FileManagerModule(
                 "1. ${ctx.getString(R.string.connecting_adb_hint)}（5555）",
                 "2. RokidLink ${ctx.getString(R.string.install)}",
                 "3. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
-                "4. ▶ ${ctx.getString(R.string.open_file_manager)}",
+                "4. ${ctx.getString(R.string.open_file_manager)}",
                 "5. ${ctx.getString(R.string.file_manager_subtitle)}",
             ),
             ctx = ctx,
@@ -546,12 +547,6 @@ private fun AdbToolsModule(
     var connected by remember { mutableStateOf(false) }
     var client by remember { mutableStateOf<AdbShellClient?>(null) }
     val scope = rememberCoroutineScope()
-    
-    // 各功能弹窗状态
-    var showSysInfo by remember { mutableStateOf(false) }
-    var showAppMgr by remember { mutableStateOf(false) }
-    var showTimer by remember { mutableStateOf(false) }
-    var showShell by remember { mutableStateOf(false) }
     
     fun disconnectClient() {
         client?.disconnect()
@@ -589,824 +584,27 @@ private fun AdbToolsModule(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .verticalScroll(rememberScrollState()),
     ) {
-        ModuleHeader(title = ctx.getString(R.string.adb_tools_title), subtitle = ctx.getString(R.string.adb_tools_subtitle), color = BrewInfo)
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        RokidLinkStatusCard(
-            installed = state.fileManagerState.rokidLinkInstalled == true,
-            installing = state.fileManagerState.isInstallingRokidLink,
-            running = state.fileManagerState.rokidLinkRunning,
-            onInstall = actions.onFileManagerInstallRokidLink,
-            onOpen = actions.onFileManagerOpenRokidLink,
-            onStop = actions.onFileManagerStop,
-            ctx = ctx,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        IpAddressInputCard(
-            label = ctx.getString(R.string.ip_address_label),
-            value = app.fileManagerIp,
-            onValueChange = actions.onFileManagerIpChange,
-            color = BrewInfo,
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        // 功能按钮
-        BrutalButton(label = ctx.getString(R.string.system_info), color = BrewInfo, onClick = { showSysInfo = true })
-        Spacer(modifier = Modifier.height(12.dp))
-        BrutalButton(label = ctx.getString(R.string.app_manager), color = BrewGreen, onClick = { showAppMgr = true })
-        Spacer(modifier = Modifier.height(12.dp))
-        BrutalButton(label = ctx.getString(R.string.timer_func), color = BrewWarning, onClick = { showTimer = true })
-        Spacer(modifier = Modifier.height(12.dp))
-        BrutalButton(label = "Shell", color = BrewMagenta, onClick = { showShell = true })
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        UsageInstructionsCard(
-            color = BrewInfo,
-            instructions = listOf(
-                "1. ${ctx.getString(R.string.connecting_adb_hint)}（5555）",
-                "2. ${ctx.getString(R.string.ip_address_label)}",
-                "3. ${ctx.getString(R.string.system_info)}/${ctx.getString(R.string.app_manager)}/${ctx.getString(R.string.timer_func)}",
-                "4. ${ctx.getString(R.string.adb_tools_subtitle)}",
-            ),
-            ctx = ctx,
+        com.rokidlab.phone.adb.ui.AdbToolsScreen(
+            client = client,
+            connected = connected,
+            scope = scope,
+            getOrConnect = { cb -> getOrConnect(cb) },
+            onDisconnect = { disconnectClient() },
+            // RokidLink 状态 — 复用 FileManagerModule 的同一套状态
+            rokidLinkInstalled = state.fileManagerState.rokidLinkInstalled == true,
+            rokidLinkInstalling = state.fileManagerState.isInstallingRokidLink,
+            rokidLinkRunning = state.fileManagerState.rokidLinkRunning,
+            onInstallRokidLink = actions.onFileManagerInstallRokidLink,
+            onOpenRokidLink = actions.onFileManagerOpenRokidLink,
+            onStopRokidLink = actions.onFileManagerStop,
         )
     }
     
-    // ── 弹窗 ──
-    if (showSysInfo) SysInfoDialog(client, connected, scope, { cb -> getOrConnect(cb) }) { showSysInfo = false }
-    if (showAppMgr) AppMgrDialog(client, connected, scope, { cb -> getOrConnect(cb) }) { showAppMgr = false }
-    if (showTimer) TimerDialog(client, connected, scope, { cb -> getOrConnect(cb) }) { showTimer = false }
-    if (showShell) ShellDialog(client, connected, scope, { cb -> getOrConnect(cb) }) { showShell = false }
-}
-
-// ── 弹窗通用连接组件 ──
-@Composable
-private fun AdbDialogContent(
-    title: String,
-    color: Color,
-    client: AdbShellClient?,
-    connected: Boolean,
-    scope: CoroutineScope,
-    getOrConnect: ((AdbShellClient?) -> Unit) -> Unit,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier,
-    titleContent: (@Composable () -> Unit)? = null,
-    content: @Composable (AdbShellClient) -> Unit,
-) {
-    val ctx = LocalContext.current
-    var status by remember { mutableStateOf(if (connected && client != null) "ready" else "connecting") }
-    var errorMsg by remember { mutableStateOf("") }
-    
-    // 自动连接
-    LaunchedEffect(Unit) {
-        if (connected && client != null) {
-            status = "ready"
-        } else {
-            status = "connecting"
-            getOrConnect { c ->
-                if (c != null) {
-                    status = "ready"
-                } else {
-                    status = "error"
-                    errorMsg = ctx.getString(R.string.connection_failed_adb)
-                }
-            }
-        }
-    }
-    
-    BrewDialog(
-        onDismiss = onDismiss,
-        title = title,
-        titleColor = color,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Column {
-            // Connection status handling
-            when (status) {
-                    "connecting" -> {
-                        Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(ctx.getString(R.string.connecting_adb), color = color, fontSize = 14.sp)
-                                Spacer(Modifier.height(8.dp))
-                                Text(ctx.getString(R.string.connecting_adb_hint), color = BrewMuted, fontSize = 11.sp)
-                            }
-                        }
-                    }
-                    "error" -> {
-                        Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(ctx.getString(R.string.connection_failed_adb), color = BrewRed, fontSize = 14.sp)
-                                Spacer(Modifier.height(4.dp))
-                                Text(errorMsg, color = BrewMuted, fontSize = 11.sp)
-                                Spacer(Modifier.height(12.dp))
-                                BrutalButton(label = ctx.getString(R.string.retry), color = color, onClick = {
-                                     status = "connecting"
-                                     getOrConnect { c ->
-                                         if (c != null) { status = "ready" }
-                                         else { status = "error"; errorMsg = ctx.getString(R.string.connection_failed_adb) }
-                                     }
-                                 }, compact = true)
-                            }
-                        }
-                    }
-                    "ready" -> {
-                        val c = client ?: return@Column
-                        content(c)
-                    }
-                }
-        }
-    }
-}
-
-// ── 系统信息弹窗 ──
-@Composable
-private fun SysInfoDialog(client: AdbShellClient?, connected: Boolean, scope: CoroutineScope, getOrConnect: ((AdbShellClient?) -> Unit) -> Unit, onDismiss: () -> Unit) {
-    val ctx = LocalContext.current
-    AdbDialogContent(ctx.getString(R.string.system_info), BrewInfo, client, connected, scope, getOrConnect, onDismiss) { c ->
-        var loading by remember { mutableStateOf(true) }
-        var content by remember { mutableStateOf("") }
-        
-        LaunchedEffect(Unit) {
-            loading = true
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val cmd = """getprop ro.product.manufacturer;getprop ro.product.model;getprop ro.build.version.release;getprop ro.build.version.sdk;getprop ro.serialno;getprop ro.product.board;getprop ro.build.display.id;dumpsys battery 2>/dev/null | grep -E "level:|AC powered:|health:";cat /proc/meminfo 2>/dev/null | grep MemTotal;df /data 2>/dev/null | tail -1"""
-                    val raw = c.executeShellCommand(cmd)
-                    val lines = raw.lines().map { it.trim() }.filter { it.isNotBlank() }
-                    
-                    val manufacturer = lines.getOrNull(0)?.takeIf { it.isNotEmpty() && !it.contains(":") } ?: "?"
-                    val model = lines.getOrNull(1)?.takeIf { it.isNotEmpty() && !it.contains(":") } ?: "?"
-                    val release = lines.getOrNull(2)?.takeIf { it.isNotEmpty() } ?: "?"
-                    val sdk = lines.getOrNull(3)?.takeIf { it.isNotEmpty() } ?: "?"
-                    val serial = lines.getOrNull(4)?.takeIf { it.isNotEmpty() } ?: "?"
-                    val board = lines.getOrNull(5)?.takeIf { it.isNotEmpty() } ?: "?"
-                    val build = lines.getOrNull(6)?.takeIf { it.isNotEmpty() } ?: "?"
-                    
-                    val level = lines.firstOrNull { it.contains("level:") }?.substringAfter(":")?.trim()?.let { "${it}%" } ?: "?"
-                    val charging = lines.firstOrNull { it.contains("AC powered:") }?.let {
-                        if (it.contains("true")) ctx.getString(R.string.charging) else ctx.getString(R.string.not_charging)
-                    } ?: "?"
-                    val health = lines.firstOrNull { it.contains("health:") }?.substringAfter(":")?.trim() ?: "?"
-                    val memTotal = lines.firstOrNull { it.contains("MemTotal") }?.substringAfter(":")?.trim() ?: "?"
-                    val storageParts = lines.firstOrNull { it.contains("/data") || it.startsWith("/dev") }?.split("\\s+".toRegex())
-                    val stTotal = storageParts?.getOrNull(1)?.let { try { "${it.toLong() / 1024 / 1024}GB" } catch (_:Exception) { it } } ?: "?"
-                    val stUsed = storageParts?.getOrNull(2)?.let { try { "${it.toLong() / 1024 / 1024}GB" } catch (_:Exception) { it } } ?: "?"
-                    
-                    withContext(Dispatchers.Main) {
-                        content = buildString {
-                            appendLine("━━━ Device Info ━━━")
-                            appendLine("  Manufacturer: $manufacturer")
-                            appendLine("  Model: $model")
-                            appendLine("  OS: Android $release (API $sdk)")
-                            appendLine("  Processor: $board")
-                            appendLine("  Serial: $serial")
-                            appendLine("  Build: $build")
-                            appendLine("")
-                            appendLine("━━━ Storage ━━━")
-                            appendLine("  RAM: $memTotal")
-                            if (stTotal != "?") appendLine("  Data: $stTotal total / $stUsed used")
-                            appendLine("")
-                            appendLine("━━━ Battery ━━━")
-                            appendLine("  Level: $level")
-                            appendLine("  Power: $charging")
-                            appendLine("  Health: $health")
-                        }
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) { content = "${ctx.getString(R.string.fetch_failed)}: ${e.message}" }
-                }
-                withContext(Dispatchers.Main) { loading = false }
-            }
-        }
-        
-        Box(
-             Modifier.fillMaxWidth().heightIn(max = 500.dp)
-                 .clip(BrewShapeSmall).background(BrewBg)
-                 .padding(10.dp).verticalScroll(rememberScrollState()),
-        ) {
-            if (loading) {
-                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text(ctx.getString(R.string.fetching_sysinfo), color = BrewMuted, fontSize = 13.sp)
-                }
-            } else {
-                Text(content, color = BrewText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-            }
-        }
-    }
-}
-
-// ── 应用管理弹窗 ──
-@Composable
-private fun AppMgrDialog(client: AdbShellClient?, connected: Boolean, scope: CoroutineScope, getOrConnect: ((AdbShellClient?) -> Unit) -> Unit, onDismiss: () -> Unit) {
-    val ctx = LocalContext.current
-    AdbDialogContent(ctx.getString(R.string.app_manager), BrewGreen, client, connected, scope, getOrConnect, onDismiss) { c ->
-        var packages by remember { mutableStateOf(emptyList<String>()) }
-        var disabledPkgs by remember { mutableStateOf(emptySet<String>()) }
-        var showSystem by remember { mutableStateOf(false) }
-        var search by remember { mutableStateOf("") }
-        var loading by remember { mutableStateOf(true) }
-        var selectedPkg by remember { mutableStateOf("") }
-        var statusMsg by remember { mutableStateOf("") }
-        
-        val filtered = if (search.isBlank()) packages else packages.filter { it.contains(search, ignoreCase = true) }
-        val isSelectedFrozen = selectedPkg.isNotEmpty() && (selectedPkg in disabledPkgs)
-        
-        LaunchedEffect(showSystem) {
-            Log.w("AppMgr", "LaunchedEffect start showSystem=$showSystem")
-            loading = true
-            selectedPkg = ""
-            try {
-                val pkgs = withContext(Dispatchers.IO) { c.listPackages(showSystem) }
-                packages = pkgs
-            } catch (e: Exception) { Log.w("AppMgr", "listPackages FAILED: ${e.message}") }
-            try {
-                val disabled = withContext(Dispatchers.IO) { c.listDisabledPackages() }
-                disabledPkgs = disabled
-            } catch (e: Exception) { Log.w("AppMgr", "listDisabled FAILED: ${e.message}") }
-            loading = false
-        }
-
-        fun refreshAll(from: String = "unknown") {
-            scope.launch {
-                loading = true
-                selectedPkg = ""
-                try {
-                    val pkgs = withContext(Dispatchers.IO) { c.listPackages(showSystem) }
-                    packages = pkgs
-                } catch (e: Exception) { Log.w("AppMgr", "refreshAll listPackages FAILED: ${e.message}") }
-                try {
-                    val disabled = withContext(Dispatchers.IO) { c.listDisabledPackages() }
-                    disabledPkgs = disabled
-                } catch (e: Exception) { Log.w("AppMgr", "refreshAll listDisabled FAILED: ${e.message}") }
-                loading = false
-            }
-        }
-        
-        fun doAction(action: suspend (String) -> String, pkg: String, shouldRefresh: Boolean = true) {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val result = action(pkg)
-                    withContext(Dispatchers.Main) {
-                        statusMsg = result.lines().firstOrNull { it.isNotBlank() } ?: ctx.getString(R.string.done_label)
-                        if (shouldRefresh) refreshAll("after_action")
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) { statusMsg = "${ctx.getString(R.string.error_label)}: ${e.message}" }
-                }
-            }
-        }
-        
-        Column(modifier = Modifier.fillMaxWidth().heightIn(max = 580.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                BrutalTextField(
-                    value = search, onValueChange = { search = it },
-                    placeholder = ctx.getString(R.string.search_apps_placeholder), color = BrewGreen,
-                    modifier = Modifier.weight(1f), singleLine = true,
-                )
-                Spacer(Modifier.width(6.dp))
-                Box(
-                    Modifier.height(42.dp).clip(BrewShapeMedium)
-                        .background(if (showSystem) BrewGreen.copy(alpha = 0.2f) else Color.Transparent)
-                        .border(1.dp, if (showSystem) BrewGreen else BrewBorder, BrewShapeMedium)
-                        .clickable { showSystem = !showSystem; selectedPkg = "" }
-                        .padding(horizontal = 14.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(if (showSystem) ctx.getString(R.string.filter_all) else ctx.getString(R.string.filter_third_party), color = if (showSystem) BrewGreen else BrewMuted, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                }
-                Spacer(Modifier.width(6.dp))
-                val refreshTransition = rememberInfiniteTransition(label = "refreshSpin")
-                val refreshAngle by refreshTransition.animateFloat(
-                    initialValue = 0f, targetValue = 360f,
-                    animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing)),
-                    label = "refreshAngle",
-                )
-                Box(
-                    Modifier.size(42.dp).clip(BrewShapeMedium)
-                        .background(BrewGreen.copy(alpha = 0.12f))
-                        .border(1.dp, BrewGreen.copy(alpha = 0.5f), BrewShapeMedium)
-                        .clickable { refreshAll("refresh_icon") },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Outlined.Refresh, contentDescription = ctx.getString(R.string.refresh),
-                        tint = BrewGreen, modifier = Modifier.size(24.dp)
-                            .graphicsLayer { rotationZ = if (loading) refreshAngle else 0f },
-                    )
-                }
-            }
-            
-            Spacer(Modifier.height(8.dp))
-            
-            Box(
-                Modifier.fillMaxWidth().clip(BrewShapeMedium)
-                    .background(if (selectedPkg.isNotEmpty()) BrewGreen.copy(alpha = 0.08f) else Color.Transparent)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-            ) {
-                if (selectedPkg.isNotEmpty()) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        ActionButton(ctx.getString(R.string.launch), BrewSuccess) { doAction({ c.launchApp(it) }, selectedPkg) }
-                        ActionButton(ctx.getString(R.string.uninstall), BrewRed) { doAction({ c.uninstallApp(it) }, selectedPkg) }
-                        ActionButton(
-                             if (isSelectedFrozen) ctx.getString(R.string.unfreeze) else ctx.getString(R.string.freeze),
-                             if (isSelectedFrozen) BrewSuccess else BrewWarning,
-                         ) {
-                             if (isSelectedFrozen) {
-                                 doAction({ c.enableApp(it) }, selectedPkg)
-                             } else {
-                                 doAction({ c.disableApp(it) }, selectedPkg)
-                             }
-                         }
-                        ActionButton(ctx.getString(R.string.extract), BrewMagenta) {
-                            val pkg = selectedPkg
-                            scope.launch(Dispatchers.IO) {
-                                if (pkg.isEmpty()) return@launch
-                                val r = c.extractApkToDownloads(pkg)
-                                Log.i("AppMgr", "extract result: $r")
-                                withContext(Dispatchers.Main) { statusMsg = r }
-                            }
-                        }
-                    }
-                } else {
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text(ctx.getString(R.string.select_app_below), color = BrewMuted.copy(alpha = 0.5f), fontSize = 13.sp)
-                    }
-                }
-            }
-            
-            if (statusMsg.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text("  $statusMsg", color = if (statusMsg.startsWith(ctx.getString(R.string.error_label))) BrewRed else BrewGreen, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            
-            Spacer(Modifier.height(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(String.format(ctx.getString(R.string.app_count_fmt), filtered.size), color = BrewMuted, fontSize = 12.sp)
-                if (loading) { Spacer(Modifier.width(8.dp)); Text(ctx.getString(R.string.updating_dots), color = BrewGreen.copy(alpha = 0.6f), fontSize = 11.sp) }
-            }
-            Spacer(Modifier.height(2.dp))
-            
-            Box(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                if (loading && packages.isEmpty()) {
-                    Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                        Text(ctx.getString(R.string.loading), color = BrewMuted, fontSize = 14.sp)
-                    }
-                } else {
-                    Column {
-                        filtered.forEach { pkg ->
-                            val isSelected = pkg == selectedPkg
-                            val isFrozen = pkg in disabledPkgs
-                            Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
-                                    .background(if (isSelected) BrewGreen.copy(alpha = 0.12f) else BrewBg)
-                                    .border(if (isSelected) 1.dp else 0.dp, BrewGreen.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
-                                    .clickable { selectedPkg = if (isSelected) "" else pkg }
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(pkg, color = if (isSelected) BrewGreen else BrewText, fontSize = 11.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (isFrozen) {
-                                    Text(" ❄️", color = BrewInfo.copy(alpha = 0.8f), fontSize = 11.sp)
-                                    Spacer(Modifier.width(4.dp))
-                                }
-                                if (isSelected) {
-                                    Text("  ✓", color = BrewGreen, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            Spacer(Modifier.height(2.dp))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ── 定时功能弹窗（80% 界面，可滑动） ──
-@Composable
-private fun TimerDialog(client: AdbShellClient?, connected: Boolean, scope: CoroutineScope, getOrConnect: ((AdbShellClient?) -> Unit) -> Unit, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    AdbDialogContent(context.getString(R.string.timer_func), BrewWarning, client, connected, scope, getOrConnect, onDismiss) { c ->
-        // ── 定时消息状态 ──
-        var msgContent by remember { mutableStateOf("") }
-        var msgInterval by remember { mutableStateOf("5") }
-        var msgCount by remember { mutableStateOf("5") }
-        var msgRunning by remember { mutableStateOf(false) }
-        var msgSentCount by remember { mutableStateOf(0) }
-        
-        // ── 定时打开应用状态 ──
-        var appPackages by remember { mutableStateOf(emptyList<String>()) }
-        var selectedApp by remember { mutableStateOf("") }
-        var appInterval by remember { mutableStateOf("10") }
-        var appCount by remember { mutableStateOf("5") }
-        var appRunning by remember { mutableStateOf(false) }
-        var appLaunchCount by remember { mutableStateOf(0) }
-        var appLoading by remember { mutableStateOf(true) }
-        
-        // ── 加载应用列表 ──
-        LaunchedEffect(Unit) {
-            appLoading = true
-            val pkgs = withContext(Dispatchers.IO) { c.listPackages(false) }
-            appPackages = pkgs
-            appLoading = false
-        }
-        
-        // ── 本地通知发送 ──
-        fun postLocalNotification(text: String) {
-            try {
-                val nm = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    val channel = android.app.NotificationChannel(
-                        "timer_notify", context.getString(R.string.timer_notification_channel),
-                        android.app.NotificationManager.IMPORTANCE_HIGH
-                    ).apply { description = context.getString(R.string.timer_notification_channel_desc) }
-                    nm.createNotificationChannel(channel)
-                }
-                val notification = android.app.Notification.Builder(context, "timer_notify")
-                    .setSmallIcon(android.R.drawable.ic_dialog_info)
-                    .setContentTitle("Rokid")
-                    .setContentText(text)
-                    .setAutoCancel(true)
-                    .setPriority(android.app.Notification.PRIORITY_HIGH)
-                    .apply {
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                            setChannelId("timer_notify")
-                        }
-                    }
-                @Suppress("DEPRECATION")
-                if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
-                    notification.setPriority(android.app.Notification.PRIORITY_HIGH)
-                }
-                nm.notify(System.currentTimeMillis().toInt(), notification.build())
-            } catch (e: Exception) {
-                Log.w("AppMgr", "本地通知失败: ${e.message}")
-            }
-        }
-        
-        // 可滚动内容 - 占总高约80%
-        Column(
-            modifier = Modifier.fillMaxWidth()
-                .heightIn(max = 600.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            // ========================
-            // 模块1: 定时消息
-            // ========================
-            Box(
-                Modifier.fillMaxWidth().clip(BrewShapeMedium)
-                    .background(BrewWarning.copy(alpha = 0.06f))
-                    .border(1.dp, BrewWarning.copy(alpha = 0.2f), BrewShapeMedium)
-                    .padding(12.dp),
-            ) {
-                Column {
-                    Text(context.getString(R.string.timer_notification_channel), color = BrewWarning, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    
-                    Text(context.getString(R.string.notification_content_hint), color = BrewMuted, fontSize = 12.sp)
-                    Spacer(Modifier.height(4.dp))
-                    BrutalTextField(
-                        value = msgContent, onValueChange = { msgContent = it },
-                        placeholder = context.getString(R.string.insert_msg_hint), color = BrewWarning,
-                        modifier = Modifier.fillMaxWidth(), singleLine = false,
-                    )
-                    
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(context.getString(R.string.interval_label), color = BrewMuted, fontSize = 12.sp)
-                        Spacer(Modifier.width(6.dp))
-                        BrutalTextField(
-                            value = msgInterval, onValueChange = { msgInterval = it },
-                            placeholder = "5", color = BrewWarning,
-                            modifier = Modifier.width(70.dp), singleLine = true,
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(context.getString(R.string.seconds_x_label), color = BrewMuted, fontSize = 12.sp)
-                        Spacer(Modifier.width(6.dp))
-                        BrutalTextField(
-                            value = msgCount, onValueChange = { msgCount = it },
-                            placeholder = "5", color = BrewWarning,
-                            modifier = Modifier.width(60.dp), singleLine = true,
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(context.getString(R.string.times_label), color = BrewMuted, fontSize = 12.sp)
-                    }
-                    
-                    Spacer(Modifier.height(8.dp))
-                    // 消息启动/停止按钮
-                    Box(
-                        Modifier.fillMaxWidth().height(44.dp).clip(BrewShapeMedium)
-                            .background(if (msgRunning) BrewRed.copy(alpha = 0.15f) else BrewWarning.copy(alpha = 0.15f))
-                            .border(1.dp, if (msgRunning) BrewRed else BrewWarning, BrewShapeMedium)
-                            .clickable {
-                                if (msgRunning) { msgRunning = false }
-                                else {
-                                    if (msgContent.isBlank()) return@clickable
-                                    msgRunning = true
-                                    msgSentCount = 0
-                                    val maxCount = msgCount.toIntOrNull() ?: Int.MAX_VALUE
-                                    scope.launch {
-                                        while (msgRunning && msgSentCount < maxCount) {
-                                            postLocalNotification(msgContent)
-                                            try {
-                                                withContext(Dispatchers.IO) { c.sendNotification("Rokid", msgContent) }
-                                            } catch (_: Exception) { }
-                                            msgSentCount++
-                                            if (msgSentCount >= maxCount) { msgRunning = false; break }
-                                            delay((msgInterval.toLongOrNull() ?: 5) * 1000)
-                                        }
-                                    }
-                                }
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (msgRunning) {
-                                Box(Modifier.size(8.dp).clip(CircleShape).background(BrewRed))
-                                Spacer(Modifier.width(6.dp))
-                                Text("■ 停止 ($msgSentCount)", color = BrewRed, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            } else {
-                                Box(Modifier.size(8.dp).clip(CircleShape).background(BrewWarning))
-                                Spacer(Modifier.width(6.dp))
-                                Text("▶ 开始", color = BrewWarning, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // ========================
-            // 模块2: 定时打开应用
-            // ========================
-            Box(
-                Modifier.fillMaxWidth().clip(BrewShapeMedium)
-                    .background(BrewInfo.copy(alpha = 0.06f))
-                    .border(1.dp, BrewInfo.copy(alpha = 0.2f), BrewShapeMedium)
-                    .padding(12.dp),
-            ) {
-                Column {
-                    Text(context.getString(R.string.timer_scheduled_open_title), color = BrewInfo, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    
-                    // 应用选择
-                    Text(context.getString(R.string.select_app_label), color = BrewMuted, fontSize = 12.sp)
-                    Spacer(Modifier.height(4.dp))
-                    if (appLoading) {
-                        Text(context.getString(R.string.loading_apps), color = BrewMuted, fontSize = 12.sp)
-                    } else {
-                        var showAppPicker by remember { mutableStateOf(false) }
-                        
-                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                            .background(BrewBg).border(1.dp, BrewBorder, RoundedCornerShape(8.dp))
-                            .clickable { showAppPicker = true }
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                if (selectedApp.isEmpty()) context.getString(R.string.tap_to_select_app) else selectedApp,
-                                color = if (selectedApp.isEmpty()) BrewMuted else BrewText,
-                                fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text("▼", color = BrewInfo, fontSize = 11.sp)
-                        }
-                        
-                        // 应用选择列表
-                        if (showAppPicker) {
-                            Box(
-                                Modifier.fillMaxWidth().heightIn(max = 250.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(BrewPanel)
-                                    .border(1.dp, BrewBorder, RoundedCornerShape(8.dp))
-                                    .verticalScroll(rememberScrollState()),
-                            ) {
-                                Column {
-                                    appPackages.forEach { pkg ->
-                                        val isSel = pkg == selectedApp
-                                        Row(
-                                            Modifier.fillMaxWidth().clip(BrewShapeSmall)
-                                                .background(if (isSel) BrewInfo.copy(alpha = 0.1f) else Color.Transparent)
-                                                .clickable { selectedApp = pkg; showAppPicker = false }
-                                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            Text(pkg, color = if (isSel) BrewInfo else BrewText, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            if (isSel) Text("✓", color = BrewInfo, fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(context.getString(R.string.interval_label), color = BrewMuted, fontSize = 12.sp)
-                        Spacer(Modifier.width(6.dp))
-                        BrutalTextField(
-                            value = appInterval, onValueChange = { appInterval = it },
-                            placeholder = "10", color = BrewInfo,
-                            modifier = Modifier.width(70.dp), singleLine = true,
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(context.getString(R.string.seconds_x_label), color = BrewMuted, fontSize = 12.sp)
-                        Spacer(Modifier.width(6.dp))
-                        BrutalTextField(
-                            value = appCount, onValueChange = { appCount = it },
-                            placeholder = "5", color = BrewInfo,
-                            modifier = Modifier.width(60.dp), singleLine = true,
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(context.getString(R.string.times_label), color = BrewMuted, fontSize = 12.sp)
-                    }
-                    
-                    Spacer(Modifier.height(8.dp))
-                    // 应用启动/停止按钮
-                    Box(
-                        Modifier.fillMaxWidth().height(44.dp).clip(BrewShapeMedium)
-                            .background(if (appRunning) BrewRed.copy(alpha = 0.15f) else BrewInfo.copy(alpha = 0.15f))
-                            .border(1.dp, if (appRunning) BrewRed else BrewInfo, BrewShapeMedium)
-                            .clickable {
-                                if (appRunning) { appRunning = false }
-                                else {
-                                    if (selectedApp.isEmpty()) return@clickable
-                                    appRunning = true
-                                    appLaunchCount = 0
-                                    val maxCount = appCount.toIntOrNull() ?: Int.MAX_VALUE
-                                    scope.launch {
-                                        while (appRunning && appLaunchCount < maxCount) {
-                                            try {
-                                                withContext(Dispatchers.IO) { c.launchApp(selectedApp) }
-                                            } catch (_: Exception) { }
-                                            appLaunchCount++
-                                            if (appLaunchCount >= maxCount) { appRunning = false; break }
-                                            delay((appInterval.toLongOrNull() ?: 10) * 1000)
-                                        }
-                                    }
-                                }
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (appRunning) {
-                                Box(Modifier.size(8.dp).clip(CircleShape).background(BrewRed))
-                                Spacer(Modifier.width(6.dp))
-                                Text("■ 停止 ($appLaunchCount)", color = BrewRed, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            } else {
-                                Box(Modifier.size(8.dp).clip(CircleShape).background(BrewInfo))
-                                Spacer(Modifier.width(6.dp))
-                                Text("▶ 开始定时启动", color = BrewInfo, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // 底部留白
-            Spacer(Modifier.height(8.dp))
-        }
-    }
-}
-
-// ── Shell命令弹窗（终端风格） ──
-@Composable
-private fun ShellDialog(client: AdbShellClient?, connected: Boolean, scope: CoroutineScope, getOrConnect: ((AdbShellClient?) -> Unit) -> Unit, onDismiss: () -> Unit) {
-    val ctx = LocalContext.current
-    AdbDialogContent(ctx.getString(R.string.shell_command), BrewMagenta, client, connected, scope, getOrConnect, onDismiss,
-        titleContent = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(ctx.getString(R.string.shell_command), color = BrewMagenta, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-    ) { c ->
-        data class ShellEntry(val type: String, val text: String, val time: String)
-        
-        var entries by remember { mutableStateOf(listOf(ShellEntry("info", ctx.getString(R.string.shell_ready), ""))) }
-        var cmd by remember { mutableStateOf("") }
-        var loading by remember { mutableStateOf(false) }
-        var history by remember { mutableStateOf(listOf<String>()) }
-        val listScrollState = rememberScrollState()
-        val status = if (connected) ctx.getString(R.string.shell_connected) else ctx.getString(R.string.shell_disconnected)
-        val ts = { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()) }
-        
-        fun execute(input: String) {
-            if (input.isBlank() || loading) return
-            cmd = ""
-            loading = true
-            history = (history + input).takeLast(50)
-            entries = entries + ShellEntry("cmd", "Shell> $input", ts())
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val r = c.executeShellCommand(input)
-                    val output = r.trim().ifEmpty { "(空)" }
-                    withContext(Dispatchers.Main) {
-                        entries = entries + ShellEntry("result", output, ts())
-                        loading = false
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        entries = entries + ShellEntry("error", "${ctx.getString(R.string.error_label)}: ${e.message}", ts())
-                        loading = false
-                    }
-                }
-            }
-        }
-        
-        // 整体固定大布局
-        Column(Modifier.fillMaxWidth().height(460.dp)) {
-            // ═══ 输出区（占大部分空间）═══
-            Box(
-                Modifier.fillMaxWidth().weight(1f)
-                    .clip(RoundedCornerShape(6.dp)).background(BrewPanel)
-                    .padding(10.dp).verticalScroll(listScrollState),
-            ) {
-                Column {
-                    entries.forEach { entry ->
-                        when (entry.type) {
-                            "cmd" -> Row {
-                                Text(entry.time, color = BrewSuccess.copy(alpha = 0.7f), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                                Spacer(Modifier.width(4.dp))
-                                Text(entry.text, color = BrewInfo, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                            }
-                            "result" -> Text(entry.text, color = BrewTextBright, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                            "error" -> Text(entry.text, color = BrewRed, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                            "info" -> Text(entry.text, color = BrewSuccess.copy(alpha = 0.7f), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                        }
-                        Spacer(Modifier.height(4.dp))
-                    }
-                }
-            }
-            
-            Spacer(Modifier.height(6.dp))
-            
-            // ═══ 输入区（底部）═══
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
-                    .background(BrewBg).padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Shell>", color = BrewRed, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.width(6.dp))
-                BasicTextField(
-                    value = cmd,
-                    onValueChange = { cmd = it },
-                    modifier = Modifier.weight(1f).heightIn(min = 38.dp),
-                    singleLine = true,
-                    textStyle = TextStyle(color = BrewText, fontSize = 14.sp, fontFamily = FontFamily.Monospace),
-                     cursorBrush = SolidColor(BrewRed),
-                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { execute(cmd.trim()) }),
-                    decorationBox = { innerTextField ->
-                        Box(contentAlignment = Alignment.CenterStart) {
-                            if (cmd.isEmpty()) Text(ctx.getString(R.string.enter_command), color = BrewMuted.copy(alpha = 0.4f), fontSize = 14.sp, fontFamily = FontFamily.Monospace)
-                            innerTextField()
-                        }
-                    },
-                )
-                Spacer(Modifier.width(6.dp))
-                Box(
-                    Modifier.height(34.dp).clip(RoundedCornerShape(6.dp))
-                        .background(if (loading) BrewMuted.copy(alpha = 0.2f) else BrewMagenta.copy(alpha = 0.2f))
-                        .border(1.dp, if (loading) BrewMuted.copy(alpha = 0.3f) else BrewMagenta.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                        .clickable(enabled = !loading) { execute(cmd.trim()) }
-                        .padding(horizontal = 14.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(if (loading) "..." else ctx.getString(R.string.execute_btn), color = if (loading) BrewMuted else BrewInfo, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                }
-            }
-            
-            // ═══ 历史标签 ═══
-            if (history.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Row(Modifier.horizontalScroll(rememberScrollState())) {
-                    history.takeLast(12).reversed().forEach { h ->
-                        Box(
-                            Modifier.clip(RoundedCornerShape(4.dp)).background(BrewMagenta.copy(alpha = 0.1f))
-                                .clickable { cmd = h }.padding(horizontal = 6.dp, vertical = 2.dp),
-                        ) { Text(h, color = BrewMagenta.copy(alpha = 0.7f), fontSize = 9.sp) }
-                        Spacer(Modifier.width(4.dp))
-                    }
-                }
-            }
-            
-            // ═══ 状态栏 ═══
-            Spacer(Modifier.height(4.dp))
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(BrewBg).padding(horizontal = 8.dp, vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(if (connected) BrewSuccess else BrewRed))
-                Spacer(Modifier.width(6.dp))
-                Text(status, color = BrewMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.weight(1f))
-                Text("${entries.size - 1} 条记录", color = BrewMuted.copy(alpha = 0.6f), fontSize = 9.sp, fontFamily = FontFamily.Monospace)
-            }
-        }
+    // cleanup connection when leaving ADB module
+    DisposableEffect(Unit) {
+        onDispose { disconnectClient() }
     }
 }
 
@@ -1636,7 +834,7 @@ private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running
                 )
             } else {
                 BrutalButton(
-                    label = "▶ ${ctx.getString(R.string.launch)} RokidLink",
+                    label = ctx.getString(R.string.launch),
                     color = BrewSuccess,
                     onClick = onOpen,
                 )
@@ -2005,34 +1203,34 @@ private fun MainInterface(
                     onSelectApp = onSelectedAppChange,
                     onUpdateOpen = { onUpdateSheetVisibleChange(true) },
                 )
-                NavPage.SCREEN_MIRROR -> ScreenMirrorModule(
-                    state = state,
-                    actions = actions,
-                    app = app,
-                )
-                NavPage.PHONE_MIRROR -> PhoneMirrorModule(
-                    state = state,
-                    actions = actions,
-                    app = app,
-                )
-                NavPage.FILE_MANAGER -> FileManagerModule(
-                    state = state,
-                    actions = actions,
-                    app = app,
-                )
-                NavPage.ADB_TOOLS -> AdbToolsModule(
-                    state = state,
-                    actions = actions,
-                    app = app,
-                )
-                NavPage.HID_GAMEPAD -> com.rokidlab.phone.hid.HidGamepadModule(
-                    hidManager = (app as com.rokidlab.phone.app.LabApplication).hidManager,
-                )
-                NavPage.SETTINGS -> SettingsModule(
-                    state = state,
-                    actions = actions,
-                )
-                }
+                    NavPage.SCREEN_MIRROR -> ScreenMirrorModule(
+                        state = state,
+                        actions = actions,
+                        app = app,
+                    )
+                    NavPage.PHONE_MIRROR -> PhoneMirrorModule(
+                        state = state,
+                        actions = actions,
+                        app = app,
+                    )
+                    NavPage.FILE_MANAGER -> FileManagerModule(
+                        state = state,
+                        actions = actions,
+                        app = app,
+                    )
+                    NavPage.ADB_TOOLS -> AdbToolsModule(
+                        state = state,
+                        actions = actions,
+                        app = app,
+                    )
+                    NavPage.HID_GAMEPAD -> com.rokidlab.phone.hid.HidGamepadModule(
+                        hidManager = (app as com.rokidlab.phone.app.LabApplication).hidManager,
+                    )
+                    NavPage.SETTINGS -> SettingsModule(
+                        state = state,
+                        actions = actions,
+                    )
+                    }
             }
         }
         

@@ -86,7 +86,7 @@ class AdbScreenMirrorClient(
             socket = Socket()
             socket?.tcpNoDelay = true
             socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
-            socket?.connect(java.net.InetSocketAddress(ipAddress, port), 5000)
+            socket?.connect(java.net.InetSocketAddress(ipAddress, port), AppConfig.ADB_CONNECT_TIMEOUT_MS)
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
             Log.i(TAG, "TCP connected")
@@ -117,7 +117,8 @@ class AdbScreenMirrorClient(
         sendPacket(CMD_CNXN, CONNECT_VERSION, 256 * 1024, cnxnPayload)
         Log.i(TAG, "CNXN sent")
 
-        while (true) {
+        var authAttempts = 0
+        while (authAttempts < 5) {
             val msg = readPacket()
             when (msg.command) {
                 CMD_CNXN -> {
@@ -126,8 +127,9 @@ class AdbScreenMirrorClient(
                 }
                 CMD_AUTH -> {
                     if (msg.arg0 == AUTH_TOKEN) {
+                        authAttempts++
                         if (!sentSignature) {
-                            Log.i(TAG, "AUTH TOKEN -> sending signature")
+                            Log.i(TAG, "AUTH TOKEN -> sending signature attempt=$authAttempts")
                             val sig = Signature.getInstance("SHA1withRSA")
                             sig.initSign(kp.private)
                             sig.update(msg.payload)
@@ -142,6 +144,7 @@ class AdbScreenMirrorClient(
                 }
             }
         }
+        throw RuntimeException("ADB authentication failed ($authAttempts attempts)")
     }
 
     @Throws(Exception::class)
@@ -276,6 +279,7 @@ class AdbScreenMirrorClient(
                     val shellCmd = ("shell:nohup app_process -Djava.class.path=/data/local/tmp/scrcpy-server.jar " +
                             "/ com.genymobile.scrcpy.Server 3.3.4 " +
                             "tunnel_forward=true video_bit_rate=4000000 " +
+                            "max_size=640 " +
                             "video=true audio=false control=false cleanup=false " +
                             "> /dev/null 2>&1 &\nsleep 3\necho ok\n\u0000")
                     sendPacket(CMD_OPEN, shellId, 0, shellCmd.toByteArray(Charsets.UTF_8))
@@ -444,7 +448,7 @@ class AdbScreenMirrorClient(
                             socket = Socket()
                             socket?.tcpNoDelay = true
                             socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
-                            socket?.connect(java.net.InetSocketAddress(ipAddress, port), 5000)
+                            socket?.connect(java.net.InetSocketAddress(ipAddress, port), AppConfig.ADB_CONNECT_TIMEOUT_MS)
                             inputStream = socket?.getInputStream()
                             outputStream = socket?.getOutputStream()
                             doHandshake()
@@ -597,7 +601,29 @@ class AdbScreenMirrorClient(
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "stream read error: ${e.message}")
-                        Thread.sleep(500)
+                        // attempt socket reconnect
+                        if (isRunning) {
+                            try {
+                                socket?.close()
+                                socket = Socket()
+                                socket?.tcpNoDelay = true
+                                socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+                                socket?.connect(java.net.InetSocketAddress(ipAddress, port), AppConfig.ADB_CONNECT_TIMEOUT_MS)
+                                inputStream = socket?.getInputStream()
+                                outputStream = socket?.getOutputStream()
+                                doHandshake()
+                                Log.i(TAG, "continuous stream socket reconnected")
+                                // reopen the screencap stream
+                                continuousStreamId = localId.getAndIncrement()
+                                val dest = "shell:while true; do screencap; done\u0000"
+                                sendPacket(CMD_OPEN, continuousStreamId, 0, dest.toByteArray(Charsets.UTF_8))
+                                streamOpened = false
+                                streamBuffer.reset()
+                            } catch (re: Exception) {
+                                Log.w(TAG, "Reconnect failed: ${re.message}")
+                                Thread.sleep(2000)
+                            }
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -710,8 +736,9 @@ class AdbScreenMirrorClient(
     fun disconnect() {
         isRunning = false
         touchQueue.clear()
-        // 通知眼镜端杀掉 server
+        // 通知眼镜端杀掉 server 并返回桌面
         killServer()
+        goHome()
         try { socket?.close() } catch (_: Exception) {}
         socket = null
         inputStream = null
@@ -725,6 +752,16 @@ class AdbScreenMirrorClient(
         try {
             val sid = localId.getAndIncrement()
             val cmd = "shell:pkill -9 -f scrcpy.Server 2>/dev/null\necho killed\u0000"
+            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+        } catch (_: Exception) {}
+    }
+
+    /** 发送命令让眼镜返回桌面（关闭 RokidLink 显示层） */
+    private fun goHome() {
+        try {
+            Thread.sleep(200)
+            val sid = localId.getAndIncrement()
+            val cmd = "shell:am start -a android.intent.action.MAIN -c android.intent.category.HOME 2>/dev/null\u0000"
             sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
         } catch (_: Exception) {}
     }

@@ -79,7 +79,9 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
     }
 
     override fun onDisconnected() {
-        // 不显示状态文字
+        runOnUiThread {
+            imageView.setImageBitmap(null)
+        }
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

@@ -15,7 +15,9 @@
     <string name="adb_tools_title">ADB 工具</string>
     <string name="adb_tools_subtitle">通过 ADB 管理眼镜/手机</string>
     <string name="system_info">系统信息</string>
+    <string name="system_info_subtitle">查看设备系统信息</string>
     <string name="app_manager">应用管理</string>
+    <string name="app_manager_subtitle">管理设备应用</string>
     <string name="timer_func">定时功能</string>
     <string name="switch_mirror_source">切换商店源</string>
     <string name="exit_app">退出应用</string>
@@ -131,15 +133,10 @@
     <!-- Timer -->
     <string name="timer_title">定时消息</string>
     <string name="timer_content_label">通知内容</string>
-    <string name="timer_interval_label">间隔</string>
-    <string name="timer_count_label">次</string>
     <string name="timer_scheduled_open">定时打开应用</string>
-    <string name="timer_select_app">选择应用</string>
     <string name="timer_command">命令</string>
     <string name="timer_execute">执行</string>
     <string name="notification_content_hint">输入要在眼镜上显示的消息…</string>
-    <string name="timer_connected_status">已连接</string>
-    <string name="timer_disconnected_status">未连接</string>
 
     <!-- File Manager -->
     <string name="file_upload_success">上传成功</string>
@@ -236,6 +233,8 @@
     <string name="open_label">打开</string>
     <string name="app_not_found">未找到应用</string>
     <string name="shell_command">Shell 命令</string>
+    <string name="shell_command_subtitle">执行 ADB Shell 命令</string>
+    <string name="shell_empty_output">(空)</string>
     <string name="select_language">选择语言</string>
     <string name="reinstall_glasses">重装眼镜端</string>
     <string name="ready">就绪</string>
@@ -459,4 +458,58 @@
     <string name="middle_button">中键</string>
     <string name="gamepad_tab">🎮 手柄</string>
     <string name="mouse_tab">🖱 鼠标</string>
+
+    <!-- ADB Tools - Timer -->
+    <string name="adb_tools_timer_subtitle">定时任务 / 组合操作</string>
+    <string name="timer_task_list">定时任务列表</string>
+    <string name="timer_new_task">+ 新建</string>
+    <string name="timer_no_tasks">暂无定时任务</string>
+    <string name="timer_default_name">定时任务 %d</string>
+    <string name="timer_edit_task">编辑任务</string>
+    <string name="timer_new_task_title">新建定时任务</string>
+    <string name="timer_task_name">任务名称</string>
+    <string name="timer_task_name_hint">输入任务名称</string>
+    <string name="timer_schedule_type">定时方式</string>
+    <string name="timer_schedule_interval">间隔执行</string>
+    <string name="timer_schedule_fixed">指定时间</string>
+    <string name="timer_schedule_countdown">倒计时</string>
+    <string name="timer_interval_label">间隔</string>
+    <string name="timer_seconds">秒</string>
+    <string name="timer_count_label">次数</string>
+    <string name="timer_times">次</string>
+    <string name="timer_time_label">时间</string>
+    <string name="timer_repeat_daily">每天重复</string>
+    <string name="timer_countdown_label">倒计时</string>
+    <string name="timer_after_seconds">秒后执行</string>
+    <string name="timer_actions_label">执行操作 (可添加多个)</string>
+    <string name="timer_click_to_delete">点击删除</string>
+    <string name="timer_no_actions">请添加操作步骤</string>
+    <string name="timer_action_notify">发送通知: %s</string>
+    <string name="timer_action_launch">启动应用: %s</string>
+    <string name="timer_action_shell">执行命令</string>
+    <string name="timer_action_tap">点击: (%d, %d)</string>
+    <string name="timer_action_key">按键: %d</string>
+    <string name="timer_action_notify_btn">通知</string>
+    <string name="timer_action_launch_btn">启动应用</string>
+    <string name="timer_action_shell_btn">命令</string>
+    <string name="timer_action_tap_btn">点击</string>
+    <string name="timer_action_key_btn">按键</string>
+    <string name="timer_notify_title_hint">标题</string>
+    <string name="timer_notify_content_hint">内容</string>
+    <string name="timer_select_app">选择应用…</string>
+    <string name="timer_shell_hint">输入 shell 命令</string>
+    <string name="timer_tap_coords">点击坐标</string>
+    <string name="timer_key_code">按键码</string>
+    <string name="timer_save">保存任务</string>
+    <string name="timer_desc_interval">每 %d秒 × %d次</string>
+    <string name="timer_desc_daily">(每天)</string>
+    <string name="timer_desc_countdown">倒计时 %d秒</string>
+    <string name="timer_actions_count">%d个操作</string>
+    <string name="timer_connected_status">已连接</string>
+    <string name="timer_disconnected_status">未连接</string>
+    <string name="timer_executed_count">已执行 %d次</string>
+
+    <!-- ADB 工具 -->
+    <string name="connect">连接</string>
+    <string name="disconnect">断开</string>
 </resources>

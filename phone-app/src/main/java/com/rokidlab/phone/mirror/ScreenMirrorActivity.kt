@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -37,6 +38,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -303,6 +305,16 @@ private fun ScreenMirrorUI(
     var containerHeight by remember { mutableIntStateOf(0) }
     var lastTapTime by remember { mutableLongStateOf(0L) }
     var surfaceReady by remember { mutableStateOf(false) }
+    var localGlassesWidth by remember { mutableIntStateOf(480) }
+    var localGlassesHeight by remember { mutableIntStateOf(640) }
+
+    // 同步 glasses 尺寸到本地
+    LaunchedEffect(glassesWidth, glassesHeight) {
+        if (glassesWidth > 0 && glassesHeight > 0) {
+            localGlassesWidth = glassesWidth
+            localGlassesHeight = glassesHeight
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -310,9 +322,11 @@ private fun ScreenMirrorUI(
             .onSizeChanged { size ->
                 containerWidth = size.width
                 containerHeight = size.height
-            }
+            },
+        contentAlignment = Alignment.Center,
     ) {
-        // TextureView 用于 MediaCodec 零拷贝渲染
+        // 使用 aspectRatio 让 TextureView 按视频比例缩放，自动居中
+        // 避免手动 setTransform 被 graphicsLayer 干扰的问题
         AndroidView(
             factory = { ctx ->
                 TextureView(ctx).apply {
@@ -344,6 +358,12 @@ private fun ScreenMirrorUI(
             },
             modifier = Modifier
                 .fillMaxSize()
+                .aspectRatio(
+                    // 如果本地尺寸无效，默认 480/640 = 0.75
+                    if (localGlassesWidth > 0 && localGlassesHeight > 0)
+                        localGlassesWidth.toFloat() / localGlassesHeight.toFloat()
+                    else 0.75f
+                )
                 .graphicsLayer(
                     scaleX = scale,
                     scaleY = scale,

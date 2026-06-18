@@ -71,7 +71,7 @@ class PhoneMirrorService : Service() {
     private var imageHandler: Handler? = null
     private var imageHandlerThread: HandlerThread? = null
 
-    /** 当前虚拟显示器宽高（屏幕短边缩放到 MIRROR_BASE_SIZE） */
+    /** 当前虚拟显示器宽高（初始方向，不因方向变化重建） */
     private var mirrorWidth = AppConfig.MIRROR_BASE_SIZE
     private var mirrorHeight = AppConfig.MIRROR_BASE_SIZE
     /** 当前屏幕物理尺寸和 DPI（用于计算缩放比例） */
@@ -190,23 +190,13 @@ class PhoneMirrorService : Service() {
                     imageHandlerThread?.start()
                     imageHandler = Handler(imageHandlerThread!!.looper)
 
-                    // 5. 创建初始 VirtualDisplay（内部自动注册 ImageReader 监听器）
+                    // 5. 创建 VirtualDisplay（一次创建，不因方向变化重建）
                     createMirrorSession()
 
-                    // 6. 注册方向监听（Scrcpy 方案：方向变化时重建 VirtualDisplay，带 1 秒防抖）
-                    var lastOrientationChangeMs = 0L
+                    // 6. 注册方向监听（仅记录，不重建 VirtualDisplay，避免 SecurityException）
                     orientationListener = object : OrientationEventListener(this) {
                         override fun onOrientationChanged(orientation: Int) {
-                            if (!isMirrorRunning) return
-                            val now = System.currentTimeMillis()
-                            if (now - lastOrientationChangeMs < 1000) return
-                            val wasLandscape = mirrorWidth > mirrorHeight
-                            val isLandscape = orientation in 60..300
-                            if (wasLandscape != isLandscape) {
-                                lastOrientationChangeMs = now
-                                Log.i(TAG, "Orientation changed: ${if (isLandscape) "landscape" else "portrait"} → recreating VirtualDisplay")
-                                recreateMirrorSession()
-                            }
+                            // VirtualDisplay 只创建一次，方向变化不处理，避免 SecurityException
                         }
                     }
                     orientationListener?.enable()
@@ -251,7 +241,7 @@ class PhoneMirrorService : Service() {
     }
 
     /**
-     * 创建 ImageReader + VirtualDisplay（使用当前 mirrorWidth/mirrorHeight 和真实 DPI）
+     * 创建 ImageReader + VirtualDisplay（使用初始方向尺寸，仅创建一次）
      * 创建后自动注册图像监听器
      */
     private fun createMirrorSession() {
@@ -292,15 +282,7 @@ class PhoneMirrorService : Service() {
     }
 
     /**
-     * 方向变化时重建（Scrcpy/DeskDock 方案）
-     */
-    private fun recreateMirrorSession() {
-        updateMirrorSize(isLandscapeNow())
-        createMirrorSession()
-    }
-
-    /**
-     * 从 RGBA_8888 图像提取灰度数据（动态尺寸）
+     * 从 RGBA_8888 图像提取灰度数据
      * 使用整数运算优化性能，复用缓冲区减少 GC
      */
     private fun processImage(image: Image) {
@@ -320,21 +302,18 @@ class PhoneMirrorService : Service() {
 
         // 复用或创建灰度数据缓冲区
         val grayData = reusableGrayData?.takeIf { it.size == w * h } ?: ByteArray(w * h).also { reusableGrayData = it }
-        var bufferIndex = 0
-        var dataIndex = 0
 
+        // 提取灰度数据
+        var dataIndex = 0
         for (row in 0 until h) {
+            val rowStart = row * stride
             for (col in 0 until w) {
-                val r = buffer.get(bufferIndex).toInt() and 0xFF
-                val g = buffer.get(bufferIndex + 1).toInt() and 0xFF
-                val b = buffer.get(bufferIndex + 2).toInt() and 0xFF
-                // 使用整数运算优化：gray = (299*r + 587*g + 114*b + 500) / 1000
+                val pixelOffset = rowStart + col * pixelStride
+                val r = buffer.get(pixelOffset).toInt() and 0xFF
+                val g = buffer.get(pixelOffset + 1).toInt() and 0xFF
+                val b = buffer.get(pixelOffset + 2).toInt() and 0xFF
                 val gray = ((299 * r + 587 * g + 114 * b + 500) / 1000).toByte()
                 grayData[dataIndex++] = gray
-                bufferIndex += pixelStride
-            }
-            if (stride > w * pixelStride) {
-                bufferIndex += stride - w * pixelStride
             }
         }
         sendFrame(grayData, w, h)

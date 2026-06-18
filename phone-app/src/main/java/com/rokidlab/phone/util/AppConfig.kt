@@ -12,7 +12,7 @@ object AppConfig {
     const val DEFAULT_MIRROR_PORT = 7654
 
     /** 投屏基准分辨率（短边） */
-    const val MIRROR_BASE_SIZE = 480
+    const val MIRROR_BASE_SIZE = 640
 
     /** ADB 连接超时时间（毫秒） */
     const val ADB_CONNECT_TIMEOUT_MS = 10000

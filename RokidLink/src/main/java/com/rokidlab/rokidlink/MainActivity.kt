@@ -117,12 +117,11 @@ class MainActivity : Activity() {
             return
         }
         
-        // 2. 显示 IP（无论是否已连接网络，获取真实 IP 地址）
+        // 3. 检查是否已连接到 WiFi 网络并获取有效 IP
         val ip = getIPAddress()
         ipText.text = ip
         
-        // 3. 检查是否已连接到 WiFi 网络
-        if (!isWifiConnected()) {
+        if (!isWifiConnected() || ip == "0.0.0.0") {
             statusText.text = getString(R.string.status_not_connected_wifi)
             setDotColor(DOT_ERROR)
             openWifiSettings()
@@ -205,7 +204,7 @@ class MainActivity : Activity() {
                     Thread.sleep(1000)
                     if (isAdbTcpListening()) {
                         Handler(Looper.getMainLooper()).post {
-                            setDotColor(0xFF4CAF50.toInt())
+                            setDotColor(DOT_READY)
                             statusText.text = getString(R.string.status_ready)
                         }
                         Log.i(TAG, getString(R.string.log_adb_tcp_enabled, attempt, wait))
@@ -215,7 +214,7 @@ class MainActivity : Activity() {
             }
 
             Handler(Looper.getMainLooper()).post {
-                setDotColor(0xFFFF5722.toInt())
+                setDotColor(DOT_ERROR)
                 statusText.text = getString(R.string.status_adb_failed)
                 Log.w(TAG, getString(R.string.log_retry_failed))
             }
@@ -226,8 +225,9 @@ class MainActivity : Activity() {
         try {
             val p = Runtime.getRuntime().exec(cmd)
             p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+            p.destroy()
         } catch (e: Exception) {
-            Log.d(TAG, "Command failed: ${cmd.joinToString(" ")}: ${e.message}")
+            Log.d(TAG, getString(R.string.log_command_failed, cmd.joinToString(" ")))
         }
     }
 

@@ -15,7 +15,9 @@
     <string name="adb_tools_title">ADB Tools</string>
     <string name="adb_tools_subtitle">Manage glasses/phone via ADB</string>
     <string name="system_info">System Info</string>
+    <string name="system_info_subtitle">View device system info</string>
     <string name="app_manager">App Manager</string>
+    <string name="app_manager_subtitle">Manage device apps</string>
     <string name="timer_func">Timer</string>
     <string name="switch_mirror_source">Switch Mirror</string>
     <string name="exit_app">Exit App</string>
@@ -131,15 +133,10 @@
     <!-- Timer -->
     <string name="timer_title">Timer Message</string>
     <string name="timer_content_label">Message Content</string>
-    <string name="timer_interval_label">Interval</string>
-    <string name="timer_count_label">times</string>
     <string name="timer_scheduled_open">Scheduled Launch</string>
-    <string name="timer_select_app">Select App</string>
     <string name="timer_command">Command</string>
     <string name="timer_execute">Execute</string>
     <string name="notification_content_hint">Enter message to display on glasses…</string>
-    <string name="timer_connected_status">Connected</string>
-    <string name="timer_disconnected_status">Disconnected</string>
 
     <!-- File Manager -->
     <string name="file_upload_success">Upload successful</string>
@@ -236,6 +233,8 @@
     <string name="open_label">Open</string>
     <string name="app_not_found">App not found</string>
     <string name="shell_command">Shell</string>
+    <string name="shell_command_subtitle">Execute ADB Shell commands</string>
+    <string name="shell_empty_output">(empty)</string>
     <string name="select_language">Select Language</string>
     <string name="reinstall_glasses">Reinstall on Glasses</string>
     <string name="ready">Ready</string>
@@ -449,4 +448,54 @@
     <string name="middle_button">Middle</string>
     <string name="gamepad_tab">🎮 Gamepad</string>
     <string name="mouse_tab">🖱 Mouse</string>
+
+    <!-- ADB Tools - Timer -->
+    <string name="adb_tools_timer_subtitle">Timer / Combo Actions</string>
+    <string name="timer_task_list">Timer Tasks</string>
+    <string name="timer_new_task">+ New</string>
+    <string name="timer_no_tasks">No timer tasks</string>
+    <string name="timer_default_name">Task %d</string>
+    <string name="timer_edit_task">Edit Task</string>
+    <string name="timer_new_task_title">New Timer Task</string>
+    <string name="timer_task_name">Task Name</string>
+    <string name="timer_task_name_hint">Enter task name</string>
+    <string name="timer_schedule_type">Schedule</string>
+    <string name="timer_schedule_interval">Interval</string>
+    <string name="timer_schedule_fixed">Fixed Time</string>
+    <string name="timer_schedule_countdown">Countdown</string>
+    <string name="timer_interval_label">Interval</string>
+    <string name="timer_seconds">sec</string>
+    <string name="timer_count_label">Count</string>
+    <string name="timer_times">times</string>
+    <string name="timer_time_label">Time</string>
+    <string name="timer_repeat_daily">Repeat Daily</string>
+    <string name="timer_countdown_label">Countdown</string>
+    <string name="timer_after_seconds">seconds later</string>
+    <string name="timer_actions_label">Actions (add multiple)</string>
+    <string name="timer_click_to_delete">Tap to delete</string>
+    <string name="timer_no_actions">Add action steps</string>
+    <string name="timer_action_notify">Notify: %s</string>
+    <string name="timer_action_launch">Launch: %s</string>
+    <string name="timer_action_shell">Run command</string>
+    <string name="timer_action_tap">Tap: (%d, %d)</string>
+    <string name="timer_action_key">Key: %d</string>
+    <string name="timer_action_notify_btn">Notify</string>
+    <string name="timer_action_launch_btn">Launch App</string>
+    <string name="timer_action_shell_btn">Command</string>
+    <string name="timer_action_tap_btn">Tap</string>
+    <string name="timer_action_key_btn">Key</string>
+    <string name="timer_notify_title_hint">Title</string>
+    <string name="timer_notify_content_hint">Content</string>
+    <string name="timer_select_app">Select app…</string>
+    <string name="timer_shell_hint">Enter shell command</string>
+    <string name="timer_tap_coords">Tap coordinates</string>
+    <string name="timer_key_code">Key code</string>
+    <string name="timer_save">Save Task</string>
+    <string name="timer_desc_interval">Every %ds × %d times</string>
+    <string name="timer_desc_daily">(daily)</string>
+    <string name="timer_desc_countdown">Countdown %ds</string>
+    <string name="timer_actions_count">%d actions</string>
+    <string name="timer_connected_status">Connected</string>
+    <string name="timer_disconnected_status">Disconnected</string>
+    <string name="timer_executed_count">Executed %d times</string>
 </resources>

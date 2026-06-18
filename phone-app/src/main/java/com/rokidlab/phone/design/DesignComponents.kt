@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,7 +21,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -538,5 +542,34 @@ fun BrewResultCard(
                 else LocalContext.current.getString(R.string.failure),
         message = if (detail.isNotBlank()) "$message\n$detail" else message,
         modifier = modifier,
+    )
+}
+
+@Composable
+fun BrutalTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "",
+    color: Color = BrewInfo,
+    enabled: Boolean = true,
+    singleLine: Boolean = false,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.heightIn(min = if (singleLine) 48.dp else 56.dp),
+        placeholder = { Text(placeholder, color = color.copy(alpha = 0.4f), fontSize = 13.sp) },
+        textStyle = TextStyle(color = color, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
+        singleLine = singleLine,
+        enabled = enabled,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = color.copy(alpha = 0.6f),
+            unfocusedBorderColor = color.copy(alpha = 0.2f),
+            disabledBorderColor = BrewBorder,
+            disabledTextColor = BrewMuted,
+            cursorColor = color,
+        ),
+        shape = BrewShapeSmall,
     )
 }

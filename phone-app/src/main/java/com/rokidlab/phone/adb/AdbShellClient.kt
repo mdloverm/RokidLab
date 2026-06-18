@@ -42,9 +42,12 @@ class AdbShellClient(
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
     private var keyPair: KeyPair? = null
-    // 简单的递增 localId，每次 open 自增，close 复用同一个
+    // incrementing localId, increments per open, reused on close
     private var nextLocalId = 0
     private val lock = ReentrantLock()
+    /** tracks whether ADB session is alive beyond TCP level */
+    @Volatile
+    private var adbSessionAlive = false
 
     private data class AdbMessage(val command: Int, val arg0: Int, val arg1: Int, val payload: ByteArray)
 
@@ -60,6 +63,7 @@ class AdbShellClient(
         keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
         nextLocalId = 0
         doHandshake()
+        adbSessionAlive = true
         Log.i(TAG, "ADB connection successful")
         true
     } catch (e: Exception) {
@@ -68,7 +72,7 @@ class AdbShellClient(
         false
     }
 
-    // ── 认证握手 ──
+    // -- Auth handshake --
     private fun doHandshake() {
         val kp = keyPair ?: error("keyPair not initialized")
         val cnxnPayload = "host::\u0000".toByteArray(Charsets.UTF_8)
@@ -104,7 +108,7 @@ class AdbShellClient(
         throw RuntimeException("ADB authentication failed ($authAttempts attempts)")
     }
 
-    // ── 公钥编码 ──
+    // -- Public key encoding --
     private fun getAdbPublicKeyPayload(): ByteArray {
         val kp = keyPair ?: error("keyPair not initialized")
         val pubKey = kp.public as java.security.interfaces.RSAPublicKey
@@ -122,6 +126,7 @@ class AdbShellClient(
     }
 
     fun disconnect() {
+        adbSessionAlive = false
         try { inputStream?.close() } catch (_: Exception) {}
         try { outputStream?.close() } catch (_: Exception) {}
         try { socket?.close() } catch (_: Exception) {}
@@ -130,17 +135,23 @@ class AdbShellClient(
         outputStream = null
     }
 
-    fun isConnected(): Boolean = socket?.isConnected == true && socket?.isClosed == false
+    fun isConnected(): Boolean = adbSessionAlive && socket?.isConnected == true && socket?.isClosed == false
 
-    // ── 公开 API ──
+    // -- Public API --
 
     fun executeShellCommand(command: String, timeoutMs: Int = 15000): String {
         lock.withLock {
             Log.i(TAG, "execute start cmd=[$command] timeout=$timeoutMs")
-            drainStaleMessages()
-            val result = openAndExchange("shell:$command", timeoutMs)
-            Log.i(TAG, "execute end cmd=[$command] result_len=${result.length}")
-            return result
+            try {
+                drainStaleMessages()
+                val result = openAndExchange("shell:$command", timeoutMs)
+                Log.i(TAG, "execute end cmd=[$command] result_len=${result.length}")
+                return result
+            } catch (e: Exception) {
+                Log.w(TAG, "executeShellCommand failed, marking session dead: ${e.message}")
+                adbSessionAlive = false
+                return ""
+            }
         }
     }
 
@@ -172,23 +183,23 @@ class AdbShellClient(
     }
 
     fun launchApp(packageName: String): String {
-        // monkey 在 Android 12 标记废弃但仍可用（兼容所有版本）
+        // monkey is deprecated on Android 12+ but still works across all versions
         val result = executeShellCommand("monkey -p $packageName 1 2>&1")
-        return if (result.contains("Error") || result.contains("Exception") || result.contains("crash")) "启动失败: $packageName" else "已启动 $packageName"
+        return if (result.contains("Error") || result.contains("Exception") || result.contains("crash")) "Failed: $packageName" else "Launched $packageName"
     }
 
     fun uninstallApp(packageName: String): String {
-        // Android 12+ 系统应用需 --user 0
+        // Android 12+ system apps need --user 0
         val result = executeShellCommand("pm uninstall --user 0 $packageName 2>&1")
         if (result.contains("Exception") || result.contains("Error") || result.contains("Failure")) {
             val fallback = executeShellCommand("pm uninstall $packageName 2>&1")
-            return if (fallback.contains("Exception") || fallback.contains("Error") || fallback.contains("Failure")) "卸载失败: $packageName" else "已卸载 $packageName"
+            return if (fallback.contains("Exception") || fallback.contains("Error") || fallback.contains("Failure")) "Uninstall failed: $packageName" else "Uninstalled $packageName"
         }
-        return "已卸载 $packageName"
+        return "Uninstalled $packageName"
     }
 
     fun disableApp(packageName: String): String {
-        // 先尝试 pm disable-user（兼容 Android 12+ / 眼镜系统），失败再试 pm disable
+        // try pm disable-user first (compatible with Android 12+ / glasses), fallback to pm disable
         val cmds = listOf(
             "pm disable-user --user 0 $packageName 2>&1",
             "pm disable $packageName 2>&1",
@@ -197,10 +208,10 @@ class AdbShellClient(
             val result = executeShellCommand(cmd)
             Log.i(TAG, "disableApp cmd=[$cmd] result_len=${result.length} result=${result.take(200)}")
             if (!result.contains("Exception") && !result.contains("Error") && !result.contains("Killed")) {
-                return "已冻结 $packageName"
+                return "Disabled $packageName"
             }
         }
-        return "错误: 冻结失败，可能不允许冻结此应用"
+        return "Error: Cannot disable this app"
     }
 
     fun enableApp(packageName: String): String {
@@ -208,10 +219,10 @@ class AdbShellClient(
         Log.i(TAG, "enableApp cmd=[pm enable --user 0 $packageName] result_len=${result.length} result=${result.take(200)}")
         if (result.contains("Exception") || result.contains("Error")) {
             val fallback = executeShellCommand("pm enable $packageName 2>&1")
-            if (fallback.contains("Exception") || fallback.contains("Error")) return "错误: 解冻失败"
-            return "已解冻 $packageName"
+            if (fallback.contains("Exception") || fallback.contains("Error")) return "Error: Cannot enable this app"
+            return "Enabled $packageName"
         }
-        return "已解冻 $packageName"
+        return "Enabled $packageName"
     }
 
     fun getApkPath(packageName: String): String {
@@ -221,37 +232,37 @@ class AdbShellClient(
 
     fun extractApkToDownloads(packageName: String): String {
         val path = getApkPath(packageName)
-        if (path.isEmpty()) return "未找到 $packageName 的 APK 路径"
-        // 先复制到眼镜的 Download 目录
+        if (path.isEmpty()) return "APK path not found for $packageName"
+        // copy to device Download directory
         val remoteDest = "/sdcard/Download/${packageName}.apk"
         val cpResult = executeShellCommand("cp $path $remoteDest 2>&1 && echo OK")
-        if (!cpResult.trim().endsWith("OK")) return "复制到眼镜失败: $cpResult"
-        // 再通过 ADB sync 协议拉取到手机 Download 目录
+        if (!cpResult.trim().endsWith("OK")) return "Copy to device failed: $cpResult"
+        // pull from device to phone Download directory via ADB sync
         val localDir = File("/sdcard/Download")
         if (!localDir.exists()) localDir.mkdirs()
         val localFile = File(localDir, "${packageName}.apk")
         val pullOk = pullFile(remoteDest, localFile.absolutePath)
-        return if (pullOk) "已下载到手机 Download/${packageName}.apk" else "拉取到手机失败"
+        return if (pullOk) "Downloaded to Download/${packageName}.apk" else "Pull to phone failed"
     }
 
     fun sendNotification(title: String, content: String): String {
         val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
         val logLine = "[$timestamp] $title: $content"
         
-        // 方式1: 尝试在眼镜上发通知
+        // method 1: post notification on device
         executeShellCommand("cmd notification set_dnd off 2>/dev/null")
         val escapedContent = escapeShell(content)
         val escapedTitle = escapeShell(title)
         val result = executeShellCommand("cmd notification post -t $escapedTitle timer_msg $escapedContent 2>&1")
         Log.i(TAG, "sendNotification cmd_notification result_len=${result.length}")
         
-        // 方式2: 尝试在眼镜上弹 Toast
+        // method 2: show toast via intent
         executeShellCommand("am start -a android.intent.action.MAIN --es toast_text ${escapeShell(content)} 2>/dev/null")
         
-        // 方式3: 写入文件（最可靠）
+        // method 3: write to file (most reliable)
         executeShellCommand("echo ${escapeShell(logLine)} >> /sdcard/Download/timer_messages.txt 2>/dev/null")
         
-        return "通知已发送"
+        return "Notification sent"
     }
 
     fun getSystemProperties(): String {
@@ -290,8 +301,7 @@ class AdbShellClient(
     }
 
     // ──────────────────────────────────────────────────
-    // ADB 流协议：open/close localId 必须配对使用
-    // ──────────────────────────────────────────────────
+    // -- ADB stream protocol: open/close localId must be paired --────────────────────────────────────────────────
 
     /** 通过 ADB sync RECV 协议从远程设备拉取文件到本地 */
     fun pullFile(remotePath: String, localPath: String): Boolean {
@@ -361,7 +371,7 @@ class AdbShellClient(
                 return true
             } catch (e: Exception) {
                 Log.e(TAG, "pullFile failed: ${e.message}", e)
-                // 异常时清理 sync 流，防止泄漏
+                // cleanup sync stream on exception to prevent leaks
                 if (closeLocalId > 0 && closeRemoteId > 0) {
                     try { close(closeLocalId, closeRemoteId) } catch (_: Exception) {}
                 }
@@ -399,7 +409,7 @@ class AdbShellClient(
         writeMessage(CMD_OPEN, localId, 0, payload)
         val resp = readMessage()
         return if (resp.command == CMD_OKAY) {
-            // OKAY: arg0=服务器分配的远程ID, arg1=我们的localId(确认)
+            // OKAY: arg0=remoteId assigned by server, arg1=our localId(confirmation)
             Triple(localId, resp.arg0, resp)
         } else {
             Log.w(TAG, "open($service) failed: cmd=0x${resp.command.toString(16)}")
@@ -419,14 +429,14 @@ class AdbShellClient(
         while (System.currentTimeMillis() < deadline) {
             val msg = try { readMessage() } catch (_: Exception) { break }
             when {
-                // WRTE(arg0=remoteId, arg1=localId, data) — 服务器发数据
+                // WRTE(arg0=remoteId, arg1=localId, data) -- server sends data
                 msg.command == CMD_WRTE && msg.arg0 == remoteId -> {
                     baos.write(msg.payload)
-                    // OKAY(localId, remoteId) 确认收到
+                    // OKAY(localId, remoteId) confirm receipt
                     writeMessage(CMD_OKAY, localId, remoteId, ByteArray(0))
                     socket?.soTimeout = (deadline - System.currentTimeMillis()).toInt().coerceAtLeast(2000)
                 }
-                // CLSE(arg0=remoteId) — 服务器关闭流
+                // CLSE(arg0=remoteId) -- server closes stream
                 msg.command == CMD_CLSE && msg.arg0 == remoteId -> break
             }
         }
@@ -434,8 +444,8 @@ class AdbShellClient(
     }
 
     /**
-     * 关闭流，复用 open 时分配的 localId。
-     * 发送 CLSE(localId, remoteId) 并消费所有残留消息。
+     * Close stream using localId from open().
+     * Send CLSE(localId, remoteId) and consume all remaining messages.
      */
     private fun close(localId: Int, remoteId: Int) {
         writeMessage(CMD_CLSE, localId, remoteId, ByteArray(0))
@@ -443,13 +453,13 @@ class AdbShellClient(
             socket?.soTimeout = 3000
             while (true) {
                 val msg = readMessage()
-                // 只退出匹配当前 stream 的 CLSE，其他继续消费
+                // only consume CLSE matching current stream, keep consuming others
                 if (msg.command == CMD_CLSE && msg.arg1 == localId) break
             }
         } catch (_: Exception) { }
     }
 
-    /** 清空 socket 中堆积的残留消息 */
+    /** Drain stale messages from socket buffer */
     private fun drainStaleMessages() {
         try {
             socket?.soTimeout = 500
@@ -457,7 +467,7 @@ class AdbShellClient(
         } catch (_: Exception) { }
     }
 
-    // ── 消息读写 ──
+    // -- Message read/write --
 
     private fun writeMessage(command: Int, arg0: Int, arg1: Int, payload: ByteArray) {
         val totalLen = HEADER_LENGTH + payload.size
