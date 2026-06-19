@@ -117,6 +117,12 @@
     <!-- ADB Dialog -->
     <string name="connecting_adb">Connecting to ADB…</string>
     <string name="connecting_adb_hint">Make sure glasses have ADB over TCP enabled</string>
+    <string name="usage_mirror_step2">Enter glasses IP address</string>
+    <string name="usage_mirror_step3">Tap Start Mirror button</string>
+    <string name="usage_mirror_step4">Wait for connection</string>
+    <string name="usage_filemanager_step2">Install RokidLink to glasses</string>
+    <string name="usage_adb_step2">Tap Connect to establish connection</string>
+    <string name="usage_adb_step3">Select a function to use</string>
     <string name="connection_failed_adb">Connection failed</string>
     <string name="fetching_sysinfo">Fetching system info…</string>
     <string name="search_apps">Search apps…</string>

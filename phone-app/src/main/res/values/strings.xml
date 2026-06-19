@@ -117,6 +117,12 @@
     <!-- ADB Dialog -->
     <string name="connecting_adb">正在连接 ADB…</string>
     <string name="connecting_adb_hint">请确保眼镜已开启 ADB 网络调试</string>
+    <string name="usage_mirror_step2">输入眼镜 IP 地址</string>
+    <string name="usage_mirror_step3">点击开始镜像按钮</string>
+    <string name="usage_mirror_step4">等待连接建立</string>
+    <string name="usage_filemanager_step2">安装 RokidLink 到眼镜</string>
+    <string name="usage_adb_step2">点击连接按钮建立连接</string>
+    <string name="usage_adb_step3">选择所需功能进行操作</string>
     <string name="connection_failed_adb">连接失败</string>
     <string name="fetching_sysinfo">正在获取系统信息…</string>
     <string name="search_apps">搜索应用…</string>

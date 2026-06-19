@@ -351,10 +351,9 @@ private fun ScreenMirrorModule(
             color = BrewCyan,
             instructions = listOf(
                 "1. ${ctx.getString(R.string.connecting_adb_hint)}",
-                "2. ${String.format(ctx.getString(R.string.notification_content_hint), "RokidLink")}",
-                "3. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
-                "4. ${ctx.getString(R.string.start_mirror)}",
-                "5. ${ctx.getString(R.string.screen_mirror_subtitle)}",
+                "2. ${ctx.getString(R.string.usage_mirror_step2)}（192.168.1.168）",
+                "3. ${ctx.getString(R.string.usage_mirror_step3)}",
+                "4. ${ctx.getString(R.string.usage_mirror_step4)}",
             ),
             ctx = ctx,
         )
@@ -511,7 +510,7 @@ private fun FileManagerModule(
             color = BrewAmber,
             instructions = listOf(
                 "1. ${ctx.getString(R.string.connecting_adb_hint)}（5555）",
-                "2. RokidLink ${ctx.getString(R.string.install)}",
+                "2. ${ctx.getString(R.string.usage_filemanager_step2)}",
                 "3. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
                 "4. ${ctx.getString(R.string.open_file_manager)}",
                 "5. ${ctx.getString(R.string.file_manager_subtitle)}",

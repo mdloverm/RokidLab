@@ -112,9 +112,8 @@ fun AdbToolsScreen(
             instructions = listOf(
                 "1. ${ctx.getString(R.string.connecting_adb_hint)}（5555）",
                 "2. ${ctx.getString(R.string.ip_address_label)}（${ip}）",
-                "3. ${ctx.getString(R.string.system_info)} / ${ctx.getString(R.string.app_manager)} / ${ctx.getString(R.string.timer_func)}",
-                "4. ${ctx.getString(R.string.shell_command)}",
-                "5. ${ctx.getString(R.string.adb_tools_subtitle)}",
+                "3. ${ctx.getString(R.string.usage_adb_step2)}",
+                "4. ${ctx.getString(R.string.usage_adb_step3)}",
             ),
             ctx = ctx,
         )
