@@ -123,7 +123,7 @@ fun TimerDialog(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             // ── 新建任务按钮 ──
             Box(Modifier.fillMaxWidth().clip(BrewShapeSmall).background(BrewWarning.copy(alpha = 0.1f)).border(1.dp, BrewWarning.copy(alpha = 0.3f), BrewShapeSmall).clickable { showTaskEditor = true; resetEditor() }.padding(horizontal = 16.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("+", color = BrewWarning, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 8.dp)); Text(context.getString(R.string.timer_new_task), color = BrewWarning, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text(context.getString(R.string.timer_new_task), color = BrewWarning, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
             }
 
             // ── 任务列表 ──

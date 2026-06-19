@@ -521,11 +521,11 @@
     <string name="timer_actions_label">Actions (add multiple)</string>
     <string name="timer_click_to_delete">Tap to delete</string>
     <string name="timer_no_actions">Add action steps</string>
-    <string name="timer_action_notify">Notify: %s</string>
-    <string name="timer_action_launch">Launch: %s</string>
-    <string name="timer_action_shell">Run command</string>
-    <string name="timer_action_tap">Tap: (%d, %d)</string>
-    <string name="timer_action_key">Key: %d</string>
+    <string name="timer_action_notify">Notify</string>
+    <string name="timer_action_launch">Launch App</string>
+    <string name="timer_action_shell">Run Command</string>
+    <string name="timer_action_tap">Screen Tap</string>
+    <string name="timer_action_key">Key Event</string>
     <string name="timer_action_notify_btn">Notify</string>
     <string name="timer_action_launch_btn">Launch App</string>
     <string name="timer_action_shell_btn">Command</string>

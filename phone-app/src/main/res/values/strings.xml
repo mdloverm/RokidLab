@@ -519,11 +519,11 @@
     <string name="timer_actions_label">执行操作 (可添加多个)</string>
     <string name="timer_click_to_delete">点击删除</string>
     <string name="timer_no_actions">请添加操作步骤</string>
-    <string name="timer_action_notify">发送通知: %s</string>
-    <string name="timer_action_launch">启动应用: %s</string>
+    <string name="timer_action_notify">发送通知</string>
+    <string name="timer_action_launch">启动应用</string>
     <string name="timer_action_shell">执行命令</string>
-    <string name="timer_action_tap">点击: (%d, %d)</string>
-    <string name="timer_action_key">按键: %d</string>
+    <string name="timer_action_tap">屏幕点击</string>
+    <string name="timer_action_key">按键事件</string>
     <string name="timer_action_notify_btn">通知</string>
     <string name="timer_action_launch_btn">启动应用</string>
     <string name="timer_action_shell_btn">命令</string>
