@@ -155,17 +155,53 @@
 | 内边距 | 7dp |
 | 按下交互 | scale 0.90 |
 
-#### 2.1.2 标准对话框
+#### 2.1.2 标准对话框（BrewDialog — RokidLink 卡片样式）
 
-**BrewDialog + BrewDialogTitle + BrewDialogActions**
+**BrewDialog — 统一对话框模板，所有弹窗均使用此样式**
 
 | 属性 | 值 |
 |------|-----|
 | 容器形状 | BrewShapeLarge (16dp) |
 | 背景色 | BrewPanelAlt |
-| 边框 | 1dp BrewBorder |
-| 标题 | 18sp Bold, BrewTextBright, padding 24dp |
+| 边框 | 1dp `color`（模块色） |
+| 标题栏背景 | `color`（模块色） |
+| 标题栏高度 | 56dp |
+| 标题文字 | 18sp Bold, BrewBg, letterSpacing 2sp |
+| 装饰分隔线 | 48×4dp, BrewBg, 位于标题与内容之间 |
+| 内容区内边距 | 24dp |
 | 操作行 | Row, Arrangement.End, padding 16dp |
+
+**标题栏结构（从左到右）：**
+```
+┌──────────────────────────────────────┐
+│ ■ 标题文字                        [X] │  ← 模块色背景，BrewBg 文字
+├──────────────────────────────────────┤
+│ ████                                  │  ← 48×4dp 装饰线，BrewBg
+├──────────────────────────────────────┤
+│                                      │
+│           内容区域                    │
+│                                      │
+│                      [取消]  [确认]   │
+└──────────────────────────────────────┘
+```
+
+**四种模块色边框配色：**
+
+| 模块 | color | 用途 |
+|------|-------|------|
+| 商店 | `#E85D3F` | 应用安装/更新对话框 |
+| 屏幕镜像 / ADB工具 | `#5B8FB9` | 镜像状态/SysInfo/Timer/Shell/AppMgr |
+| 文件管理 | `#A78BFA` | 文件操作确认 |
+| 设置 | `#8A8780` | 退出确认/语言切换 |
+
+**BrewDialogTitle — 标题栏组件**
+
+| 属性 | 值 |
+|------|-----|
+| 背景色 | `color`（模块色） |
+| 标题文字 | 18sp Bold, BrewBg, letterSpacing 2sp |
+| 关闭按钮 | ✕ 18sp, BrewBg, 右侧 16dp padding |
+| 关闭按钮形状 | 32×32dp, 圆角 8dp, 按下时 alpha 0.7 |
 
 #### 2.1.3 标准状态指示器
 

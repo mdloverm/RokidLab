@@ -27,6 +27,7 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - **系统信息**：查看眼镜设备属性、电量信息
 - **输入模拟**：发送文本、按键、点击、滑动事件
 - **资源管理优化**：修复 ADB Shell Client 的流泄漏问题，确保连接断开时正确释放所有资源
+- **统一对话框样式**：所有 ADB 工具弹窗（系统信息/定时器/Shell/应用管理）均使用 BrewDialog RokidLink 卡片样式，无图标
 
 ### 应用商店
 - 浏览和搜索 Rokid 眼镜应用
@@ -60,6 +61,8 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - 新建文件夹、复制/剪切/粘贴
 - 支持图片预览和文本查看（shell cat / 本地缓存）
 - **APK 安装功能**：支持直接从文件管理器安装 APK 到眼镜，集成安装状态显示
+- **排序功能**：支持按名称/大小/日期排序，点击切换升序/降序，带 ↑↓ 指示器
+- **刷新动画**：刷新按钮点击时带旋转动画反馈
 - **配置集中管理**：通过 `AppConfig` 统一管理 ADB 端口、连接超时等配置参数
 
 ### 设置
@@ -82,7 +85,14 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
   - 蓝牙 HID Device 协议（手机模拟键盘/鼠标/游戏手柄）
 - **投屏**: MediaProjection API + Socket 传输
 - **统一 HTTP 工具**: `HttpClient` 对象封装（替代裸 `HttpURLConnection`）
-- **统一交互组件**: `BrewButton`/`BrewOutlineButton`/`BrewCompactButton`/`BrewIconButton` 标准按钮系统、`BrewDialog` 标准对话框、`BrewStatusDot`/`BrewStatusPill`/`BrewStateCard` 标准状态指示器（详见 [UI-DESIGN.md](./UI-DESIGN.md)）
+- **统一交互组件**: `BrewButton`/`BrewOutlineButton`/`BrewCompactButton`/`BrewIconButton` 标准按钮系统、`BrewDialog` 标准对话框（RokidLink 卡片样式：彩色标题栏 + 装饰分隔线 + 彩色边框）、`BrewStatusDot`/`BrewStatusPill`/`BrewStateCard` 标准状态指示器（详见 [UI-DESIGN.md](./UI-DESIGN.md)）
+
+### 国际化（i18n）
+
+- **完整中英文支持**: 所有用户可见文本均使用 `values/strings.xml`（中文）和 `values-en/strings.xml`（英文）管理，无硬编码字符串
+- **运行时语言切换**: 通过 `LocalizationManager` + `AppCompatDelegate.setApplicationLocales()` 实现无需重启的语言切换
+- **首次启动自动检测**: 自动检测系统语言并应用对应翻译
+- **例外**: 品牌名（ROKIDLAB、ROKIDLINK）、技术术语（ADB、TCP、HTTP）、作者信息等保持原文
 - **最低版本**: Android 9 (API 28)
 
 ## 代码质量与安全
@@ -216,6 +226,15 @@ RokidLab/
 ├── UI-DESIGN.md                            UI 设计参考文档
 └── apps/                                   应用数据示例
 ```
+
+## 工作区规范
+
+项目遵循 `.trae/rules/workspace_rules.md` 中的开发规范，包括：
+
+- **多语种规则**: 所有用户可见文本必须使用 `R.string.xxx` 引用语言包，禁止硬编码（例外：品牌名、技术术语、作者信息）
+- **弹窗样式规范**: 所有弹窗统一使用 `BrewDialog`，传入模块色 `color` 参数，自动应用彩色标题栏 + 装饰线 + 彩色边框
+- **Gradle 配置**: `settings.gradle.kts` 中模块路径为 `include(":cxrl:RokidLab:phone-app")` 和 `include(":RokidLink")`
+- **资源管理**: 定期清理未使用的资源文件，避免打包冗余
 
 ## 构建
 
