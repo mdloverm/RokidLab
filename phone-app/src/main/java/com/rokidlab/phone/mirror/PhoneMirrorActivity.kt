@@ -1,4 +1,4 @@
-package com.rokidlab.phone.mirror
+﻿package com.rokidlab.phone.mirror
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -175,7 +175,7 @@ class PhoneMirrorActivity : ComponentActivity() {
             ) {
                 Text(
                     ctx.getString(R.string.projecting_text),
-                    color = BrewGreen,
+                    color = BrewCoral,
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold
                 )

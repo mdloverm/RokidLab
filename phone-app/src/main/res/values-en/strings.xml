@@ -251,6 +251,12 @@
     <string name="shell_command_subtitle">Execute ADB Shell commands</string>
     <string name="shell_empty_output">(empty)</string>
     <string name="select_language">Select Language</string>
+    <string name="theme">Theme</string>
+    <string name="select_theme">Select Theme</string>
+    <string name="theme_velvet_dark">Velvet Dark</string>
+    <string name="theme_velvet_dark_desc">Warm dark default theme</string>
+    <string name="theme_cool_blue">Ice Blue</string>
+    <string name="theme_cool_blue_desc">Cool light blue theme</string>
     <string name="reinstall_glasses">Reinstall on Glasses</string>
     <string name="ready">Ready</string>
     <string name="system_log">System Log</string>

@@ -1,4 +1,4 @@
-package com.rokidlab.phone.store
+﻿package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -216,7 +216,7 @@ internal fun DetailHeroHeader(app: BrewApp, iconLoader: IconLoader, mediaLoader:
             )
             Text(
                 app.category,
-                color = BrewGreen,
+                color = BrewCoral,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.padding(top = 6.dp),

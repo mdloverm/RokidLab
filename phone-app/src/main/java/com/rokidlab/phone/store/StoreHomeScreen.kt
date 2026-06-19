@@ -1,4 +1,4 @@
-package com.rokidlab.phone.store
+﻿package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.AdbShellClient
@@ -388,7 +388,7 @@ private fun PhoneMirrorModule(
             ) {
                 Text(
                     ctx.getString(R.string.mirroring),
-                    color = BrewGreen,
+                    color = BrewCoral,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -969,7 +969,7 @@ private fun LazyListScope.appListItems(
             ) {
                 Text(
                     text = if (expanded) "SHOW LESS" else "SHOW ALL (${apps.size})",
-                    color = BrewGreen,
+                    color = BrewCoral,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 2.sp,
@@ -1064,7 +1064,7 @@ private fun AppListItem(
                                         else -> "PHONE"
                                     },
                                     color = when (phoneInstallState) {
-                                        MainActivity.InstallState.INSTALLED -> BrewGreen
+                                        MainActivity.InstallState.INSTALLED -> BrewCoral
                                         MainActivity.InstallState.UPDATE_AVAILABLE -> BrewWarning
                                         else -> BrewText
                                     },
@@ -1103,7 +1103,7 @@ private fun AppListItem(
                                         else -> "GLASSES"
                                     },
                                     color = when (glassesInstallState) {
-                                        MainActivity.InstallState.INSTALLED -> BrewGreen
+                                        MainActivity.InstallState.INSTALLED -> BrewCoral
                                         MainActivity.InstallState.UPDATE_AVAILABLE -> BrewWarning
                                         else -> BrewText
                                     },
@@ -1309,7 +1309,7 @@ private fun BottomNavigationBar(
             navItems.forEach { (page, label) ->
                 val isSelected = currentPage == page
                 val color = when (page) {
-                    NavPage.STORE -> BrewGreen
+                    NavPage.STORE -> BrewCoral
                     NavPage.SCREEN_MIRROR -> BrewCyan
                     NavPage.PHONE_MIRROR -> BrewPurple
                     NavPage.FILE_MANAGER -> BrewAmber
@@ -1380,7 +1380,7 @@ private fun StoreModule(
                     ) {
                         Text(
                             text = ctx.getString(R.string.featured_apps),
-                            color = BrewGreen,
+                            color = BrewCoral,
                             fontSize = 24.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 2.sp,
@@ -1422,7 +1422,7 @@ private fun StoreModule(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "Rokid",
-                            color = BrewGreen,
+                            color = BrewCoral,
                             fontSize = 36.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 4.sp,
@@ -1560,8 +1560,8 @@ private fun StoreModule(
                             modifier = Modifier
                                 .height(36.dp)
                                 .clip(BrewShapeStandard)
-                                .background(if (categoryFilter == null) BrewGreen else BrewPanel)
-                                .border(width = 2.dp, color = if (categoryFilter == null) BrewGreen else BrewBorder, shape = BrewShapeStandard)
+                                .background(if (categoryFilter == null) BrewCoral else BrewPanel)
+                                .border(width = 2.dp, color = if (categoryFilter == null) BrewCoral else BrewBorder, shape = BrewShapeStandard)
                                 .padding(horizontal = 16.dp)
                                 .clickable { onCategoryFilter(null) },
                             contentAlignment = Alignment.Center,
@@ -1579,8 +1579,8 @@ private fun StoreModule(
                                 modifier = Modifier
                                     .height(36.dp)
                                     .clip(BrewShapeStandard)
-                                    .background(if (isSelected) BrewGreen else BrewPanel)
-                                    .border(width = 2.dp, color = if (isSelected) BrewGreen else BrewBorder, shape = BrewShapeStandard)
+                                    .background(if (isSelected) BrewCoral else BrewPanel)
+                                    .border(width = 2.dp, color = if (isSelected) BrewCoral else BrewBorder, shape = BrewShapeStandard)
                                     .padding(horizontal = 16.dp)
                                     .clickable { onCategoryFilter(category) },
                                 contentAlignment = Alignment.Center,

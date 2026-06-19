@@ -1,4 +1,4 @@
-package com.rokidlab.phone.hid
+﻿package com.rokidlab.phone.hid
 
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.design.*
@@ -128,9 +128,9 @@ private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreference
             // 编辑/自定义按钮 (仅手柄模式)
             if (activeTab == TAB_GAMEPAD) {
                 Text(if (editMode) ctx.getString(R.string.done_edit) else ctx.getString(R.string.customize),
-                    color = if (editMode) BrewGreen else BrewCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                    color = if (editMode) BrewCoral else BrewCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.clip(BrewShapeSmall)
-                        .background(if (editMode) BrewGreen.copy(alpha = 0.15f) else BrewPanel)
+                        .background(if (editMode) BrewCoral.copy(alpha = 0.15f) else BrewPanel)
                         .clickable { editMode = !editMode }.padding(horizontal = 10.dp, vertical = 6.dp))
             } else {
                 Spacer(Modifier.width(1.dp)) // 占位

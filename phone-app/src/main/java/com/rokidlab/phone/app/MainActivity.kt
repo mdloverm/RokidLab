@@ -2,6 +2,7 @@ package com.rokidlab.phone.app
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
+import com.rokidlab.phone.design.theme.BrewThemeManager
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.filemanager.*
 import com.rokidlab.phone.glasses.*
@@ -227,6 +228,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        BrewThemeManager.init(this)
         preferHighRefreshRate()
 
         BrewIndex.initMirror(this)
@@ -1367,7 +1369,7 @@ internal fun MirrorSourceDialog(
     onDismiss: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.switch_source_btn), color = BrewGreen) {
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.switch_source_btn), color = BrewCoral) {
         BrewDialogContent {
             BrewIndex.MIRRORS.forEachIndexed { index, mirror ->
                 val isSelected = currentIndex == index
@@ -1375,7 +1377,7 @@ internal fun MirrorSourceDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .background(if (isSelected) BrewGreen.copy(alpha = 0.12f) else Color.Transparent)
+                        .background(if (isSelected) BrewCoral.copy(alpha = 0.12f) else Color.Transparent)
                         .border(
                             if (isSelected) 1.dp else 0.dp,
                             if (isSelected) BrewGreenDim else Color.Transparent,
@@ -1406,7 +1408,7 @@ internal fun MirrorSourceDialog(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             mirror.name,
-                            color = if (isSelected) BrewGreen else BrewTextBright,
+                            color = if (isSelected) BrewCoral else BrewTextBright,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -1421,7 +1423,7 @@ internal fun MirrorSourceDialog(
                         Icon(
                             Icons.Outlined.CheckCircle,
                             null,
-                            tint = BrewGreen,
+                            tint = BrewCoral,
                             modifier = Modifier.size(20.dp),
                         )
                     }

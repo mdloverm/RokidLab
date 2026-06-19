@@ -1,4 +1,4 @@
-package com.rokidlab.phone.settings
+﻿package com.rokidlab.phone.settings
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -137,7 +137,7 @@ internal fun TerminalBadge(size: androidx.compose.ui.unit.Dp, active: Boolean, m
             .border(1.dp, if (active) BrewGreenDim else BrewBorder, BrewShapeMedium),
         contentAlignment = Alignment.Center,
     ) {
-        Text(">_", color = if (active) BrewGreen else BrewTextBright, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = BrewFont)
+        Text(">_", color = if (active) BrewCoral else BrewTextBright, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, fontFamily = BrewFont)
     }
 }
 @Composable
@@ -146,12 +146,12 @@ internal fun LogStatusPill(busy: Boolean) {
     Box(
         modifier = Modifier
             .clip(BrewShapeSmall)
-            .background(if (busy) BrewAmber.copy(alpha = 0.14f) else BrewGreen.copy(alpha = 0.13f))
+            .background(if (busy) BrewAmber.copy(alpha = 0.14f) else BrewCoral.copy(alpha = 0.13f))
             .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Text(
             if (busy) ctx.getString(R.string.running) else ctx.getString(R.string.ready),
-            color = if (busy) BrewAmber else BrewGreen,
+            color = if (busy) BrewAmber else BrewCoral,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
         )

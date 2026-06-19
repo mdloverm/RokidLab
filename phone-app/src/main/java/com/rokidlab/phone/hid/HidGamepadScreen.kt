@@ -1,4 +1,4 @@
-package com.rokidlab.phone.hid
+﻿package com.rokidlab.phone.hid
 
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.R
@@ -69,14 +69,14 @@ internal fun HidGamepadModule(
             // 进入手柄控制按钮
             Box(
                 Modifier.clip(BrewShapeMedium)
-                    .background(if (connectedDevice != null) BrewGreen.copy(alpha = 0.2f) else BrewPanel)
-                    .border(1.dp, if (connectedDevice != null) BrewGreen.copy(alpha = 0.4f) else BrewBorder, BrewShapeMedium)
+                    .background(if (connectedDevice != null) BrewCoral.copy(alpha = 0.2f) else BrewPanel)
+                    .border(1.dp, if (connectedDevice != null) BrewCoral.copy(alpha = 0.4f) else BrewBorder, BrewShapeMedium)
                     .clickable(enabled = connectedDevice != null) {
                         context.startActivity(Intent(context, GamepadActivity::class.java))
                     }.padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Text(if (connectedDevice != null) context.getString(R.string.enter_control) else context.getString(R.string.not_connected),
-                    color = if (connectedDevice != null) BrewGreen else BrewMuted,
+                    color = if (connectedDevice != null) BrewCoral else BrewMuted,
                     fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             }
         }
@@ -112,15 +112,15 @@ internal fun HidGamepadModule(
         // ── 底部进入手柄页面 ──
         Box(
             Modifier.fillMaxWidth().clip(BrewShapeStandard)
-                .background(if (connectedDevice != null) BrewGreen.copy(alpha = 0.2f) else BrewPanel)
-                .border(1.dp, if (connectedDevice != null) BrewGreen.copy(alpha = 0.3f) else BrewBorder, BrewShapeStandard)
+                .background(if (connectedDevice != null) BrewCoral.copy(alpha = 0.2f) else BrewPanel)
+                .border(1.dp, if (connectedDevice != null) BrewCoral.copy(alpha = 0.3f) else BrewBorder, BrewShapeStandard)
                 .clickable(enabled = connectedDevice != null) {
                     context.startActivity(Intent(context, GamepadActivity::class.java))
                 }.padding(vertical = 14.dp, horizontal = 16.dp),
             contentAlignment = Alignment.Center,
         ) {
             Text(if (connectedDevice != null) context.getString(R.string.enter_gamepad_control) else context.getString(R.string.please_connect_first),
-                color = if (connectedDevice != null) BrewGreen else BrewMuted,
+                color = if (connectedDevice != null) BrewCoral else BrewMuted,
                 fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, textAlign = TextAlign.Center)
         }
     }
@@ -160,7 +160,7 @@ private fun DeviceConnectionCard(state: Int, device: BluetoothDevice?, connectin
 private fun DeviceRow(name: String, address: String, isConnected: Boolean, connecting: Boolean, onClick: () -> Unit) {
     val ctx = LocalContext.current
     val actionColor = when {
-        isConnected -> BrewGreen
+        isConnected -> BrewCoral
         connecting -> BrewWarning.copy(alpha = 0.5f)
         else -> BrewCyan
     }
@@ -171,7 +171,7 @@ private fun DeviceRow(name: String, address: String, isConnected: Boolean, conne
     }
     Row(
         Modifier.fillMaxWidth().clip(BrewShapeMedium)
-            .background(if (isConnected) BrewGreen.copy(alpha = 0.08f) else Color.Transparent)
+            .background(if (isConnected) BrewCoral.copy(alpha = 0.08f) else Color.Transparent)
             .clickable(enabled = !connecting) { onClick() }
             .padding(vertical = 10.dp, horizontal = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,

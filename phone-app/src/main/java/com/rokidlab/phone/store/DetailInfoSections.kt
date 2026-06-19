@@ -1,4 +1,4 @@
-package com.rokidlab.phone.store
+﻿package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -234,7 +234,7 @@ internal fun DetailBulletLine(text: String, modifier: Modifier = Modifier) {
                 .padding(top = 8.dp)
                 .size(4.dp)
                 .clip(BrewShapeSmall)
-                .background(BrewGreen),
+                .background(BrewCoral),
         )
         Spacer(Modifier.width(10.dp))
         Text(
@@ -256,7 +256,7 @@ internal fun WhatsNewSection(app: BrewApp, modifier: Modifier = Modifier) {
             DetailSectionTitle(ctx.getString(R.string.changelog_section_content))
             Spacer(Modifier.weight(1f))
             if (release?.sourceReleaseUrl != null) {
-                Text(ctx.getString(R.string.view_full_changelog), color = BrewGreen, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Text(ctx.getString(R.string.view_full_changelog), color = BrewCoral, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
         }
         if (release == null) {
@@ -275,7 +275,7 @@ internal fun WhatsNewSection(app: BrewApp, modifier: Modifier = Modifier) {
         }.joinToString(" / ").ifBlank { ctx.getString(R.string.latest_version_text) }
         Text(
             title,
-            color = BrewGreen,
+            color = BrewCoral,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(top = 12.dp),
@@ -347,7 +347,7 @@ internal fun SourceLine(app: BrewApp, modifier: Modifier = Modifier) {
             Spacer(Modifier.width(8.dp))
             Text(
                 sourceHost,
-                color = BrewGreen,
+                color = BrewCoral,
                 fontSize = 11.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

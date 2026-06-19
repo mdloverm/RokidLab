@@ -4,11 +4,18 @@
 
 ### 1.1 设计风格
 
-**Velvet Dark（丝绒暗调）** — 画廊暗室 × 油画颜料
+双主题配色系统，可在设置页面随时切换：
 
+**丝绒炭黑（Velvet Dark）** — 画廊暗室 × 油画颜料（默认主题）
 - 底画布：温暖的丝绒暗色（`#0B0B0E`），绝非纯黑
 - 配色理念：每个颜色都从油画色板取色，带温度和深度
 - 克制而有质感的对比，不使用纯三原色
+
+**冰蓝冰川（Cool Blue）** — 北极冰川 × 浅蓝天光
+- 底画布：天光白蓝（`#F0F5FF`），清新明亮
+- 配色理念：浅蓝基底 + 高饱和度撞色点缀
+
+**共同规范：**
 - 全站统一 12dp 圆角，柔和而不失几何感
 - 统一 1dp 边框宽度
 - 无硬阴影、无装饰性底纹线条
@@ -16,52 +23,80 @@
 
 ### 1.2 配色方案
 
+配色接口 `BrewColors` 定义 **14 色**，新增主题只需实现此接口：
+
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  底色系统 — 丝绒暗调（温暖暗底）                                      │
-├────────────┬──────────────────────────────────────────────────────┤
-│  BrewBg        │  #0B0B0E   丝绒炭黑（微微偏暖）                      │
-│  BrewPanel     │  #151518   暗灰板                                  │
-│  BrewPanelAlt  │  #1C1C21   亮灰板                                  │
-│  BrewPanelHi   │  #24242A   高亮面板                                │
-├────────────┼──────────────────────────────────────────────────────┤
-│  文字系统 — 暖白至冷灰（画廊标牌）                                     │
-├────────────┼──────────────────────────────────────────────────────┤
-│  BrewTextBright│  #F2EFEA   暖羊皮白 — 主正文                       │
-│  BrewText      │  #D4D0CA   沙石灰 — 次要文字                       │
-│  BrewMuted     │  #8A8780   风化石 — 辅助文字                        │
-│  BrewDim       │  #5C5952   深石色 — 禁用/淡出                      │
-├────────────┼──────────────────────────────────────────────────────┤
-│  七模块七色 — 取自油画色板                                             │
-├────────────┼──────────────────────────────────────────────────────┤
-│  BrewGreen     │  #E85D3F   商店 — 朱砂红（温暖主导）                  │
-│  BrewCyan      │  #5B8FB9   屏幕镜像 — 静谧蓝（冷调克制）              │
-│  BrewPurple    │  #D4A85C   手机投屏 — 画廊金（暖而有质感）             │
-│  BrewAmber     │  #A78BFA   文件管理 — 雾紫（柔和区分）                │
-│  BrewInfo      │  #5B8FB9   ADB工具 — 静谧蓝（与Cyan同值）            │
-│  BrewSuccess   │  #4ADE80   蓝牙手柄 — 翡翠绿                        │
-│  BrewMagenta   │  #8A8780   设置 — 石灰色（最低调）                   │
-├────────────┼──────────────────────────────────────────────────────┤
-│  功能色                                                             │
-├────────────┼──────────────────────────────────────────────────────┤
-│  BrewSuccess   │  #4ADE80   成功 — 翡翠绿                            │
-│  BrewWarning   │  #F0A050   警告 — 暖琥珀                            │
-│  BrewInfo      │  #5B8FB9   信息 — 静谧蓝                            │
-│  BrewError     │  #E85D3F   错误 — 朱砂红                            │
-│  BrewCoral     │  #E85D3F   主强调色（与 Green 同值）                 │
-├────────────┼──────────────────────────────────────────────────────┤
-│  边框（几乎融入背景）                                                  │
-├────────────┼──────────────────────────────────────────────────────┤
-│  BrewBorder    │  #2C2C33                                          │
-│  BrewBorderHi  │  #3F3F49                                          │
-└────────────┴──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  底色系统 — 4 色                                                      │
+├────────────┬─────────────────────────┬───────────────────────────────┤
+│  属性         │  Velvet Dark           │  Cool Blue                     │
+├────────────┼─────────────────────────┼───────────────────────────────┤
+│  bg         │  #0B0B0E   丝绒炭黑       │  #F0F5FF   天光白蓝              │
+│  panel      │  #151518   暗灰板         │  #E6EEFA   浅蓝灰板              │
+│  panelAlt   │  #1C1C21   亮灰板         │  #DCE5F5   中蓝灰板              │
+│  panelHi    │  #24242A   高亮面板       │  #CCD8EE   冰蓝高亮              │
+├────────────┼─────────────────────────┼───────────────────────────────┤
+│  文字系统 — 4 色                                                      │
+├────────────┼─────────────────────────┼───────────────────────────────┤
+│  textBright │  #F2EFEA   暖羊皮白       │  #1A2332   深蓝黑                 │
+│  text       │  #D4D0CA   沙石灰         │  #3D4F6A   靛蓝灰                 │
+│  muted      │  #8A8780   风化石         │  #6B7BA0   雾蓝灰                 │
+│  dim        │  #5C5952   深石色         │  #9AABCA   淡蓝灰                 │
+├────────────┼─────────────────────────┼───────────────────────────────┤
+│  五模块五色 — 撞色方案                                                │
+├────────────┼─────────────────────────┼───────────────────────────────┤
+│  store      │  #E85D3F   珊瑚红         │  #E85D3F   珊瑚红 (撞色)          │
+│  mirror     │  #5B8FB9   静谧蓝         │  #00B894   翡翠绿                 │
+│  projection │  #D4A85C   画廊金         │  #6C5CE7   明媚紫                 │
+│  fileManager│  #A78BFA   雾紫           │  #F39C12   琥珀金                 │
+│  settings   │  #7D7A70   暖灰褐         │  #5A7BA0   钢灰蓝                 │
+├────────────┼─────────────────────────┼───────────────────────────────┤
+│  边框 — 1 色                                                         │
+├────────────┼─────────────────────────┼───────────────────────────────┤
+│  border     │  #2C2C33                │  #C8D4E8                       │
+└────────────┴─────────────────────────┴───────────────────────────────┘
 ```
+
+**功能色映射：** 功能语义色复用模块色，避免色值冗余。
+
+| 全局别名 | 映射到 | 语义 |
+|---------|--------|------|
+| `BrewRed` | → `store` | 错误/停止 |
+| `BrewSuccess` | → `mirror` | 成功 |
+| `BrewWarning` | → `fileManager` | 警告 |
+| `BrewInfo` | → `settings` | 信息 |
+| `BrewGreenDim` | → `panelHi` | 次要成功 |
+
+**全局颜色别名（代码中使用，自动感知当前主题）：**
+
+| 别名 | 来源属性 | 说明 |
+|------|---------|------|
+| `BrewBg` | bg | 主背景 |
+| `BrewPanel` | panel | 面板底色 |
+| `BrewPanelAlt` | panelAlt | 次要面板 |
+| `BrewPanelHi` | panelHi | 高亮面板 |
+| `BrewTextBright` | textBright | 正文/标题 |
+| `BrewText` | text | 次要文字 |
+| `BrewMuted` | muted | 辅助文字 |
+| `BrewDim` | dim | 禁用文字 |
+| `BrewBorder` | border | 边框 |
+| `BrewCoral` | store | 商店 |
+| `BrewCyan` | mirror | 屏幕镜像 |
+| `BrewPurple` | projection | 手机投屏 |
+| `BrewAmber` | fileManager | 文件管理 |
+| `BrewMagenta` | settings | 设置 |
+| `BrewRed` | → store | 错误 |
+| `BrewSuccess` | → mirror | 成功 |
+| `BrewWarning` | → fileManager | 警告 |
+| `BrewInfo` | → settings | 信息 |
+
+> 加新主题：在 `theme/` 下新建 `XxxColors.kt` 实现 `BrewColors` 接口，在 `BrewThemeManager.switchTheme` 中添加映射即可。
 
 ### 1.3 字体系统
 
 | 层级 | 字体 | 字重 | 大小 | 颜色 | 用途 |
 |------|------|------|------|------|------|
-| H0 | JetBrains Mono | Bold(700) | 36sp | BrewGreen+Cyan | Store 页面大标题 "Rokid Lab" |
+| H0 | JetBrains Mono | Bold(700) | 36sp | BrewCoral+Cyan | Store 页面大标题 "Rokid Lab" |
 | H1 | JetBrains Mono | Black(900) | 32sp | 模块色 | 模块标题 (ModuleHeader) |
 | H2 | JetBrains Mono | Bold(700) | 24sp | 模块色 | 精选标题 / 开发者名 |
 | H3 | JetBrains Mono | Bold(700) | 20sp | 状态色 | 退出对话框标题 |
@@ -93,14 +128,13 @@
 
 | 模块 | 主色 | 互补/辅助色 | 说明 |
 |------|------|------------|------|
-| 商店 (朱砂红) | `BrewGreen=#E85D3F` 珊瑚红 | `BrewInfo=#5B8FB9` 静谧蓝 | 暖红 ↔ 冷蓝 |
+| 商店 (珊瑚红) | `BrewCoral=#E85D3F` 珊瑚红 | `BrewCyan=#5B8FB9` 静谧蓝 | 暖红 ↔ 冷蓝 |
 | 屏幕镜像 | `BrewCyan=#5B8FB9` 静谧蓝 | 暖琥珀 | 冷调主色 |
 | 手机投屏 | `BrewPurple=#D4A85C` 画廊金 | 紫色调 | 暖而有质感 |
 | 文件管理 | `BrewAmber=#A78BFA` 雾紫 | 金色调 | 柔和区分 |
-| 蓝牙手柄 | `BrewSuccess=#4ADE80` 翡翠绿 | 朱砂红 | 绿 ↔ 红 |
-| 设置 | `BrewMagenta=#8A8780` 石灰色 | — | 最低调中性色 |
+| 设置 | `BrewMagenta=#7D7A70` 暖灰褐 | — | 最低调中性色 |
 
-**按压态色彩规则**：所有交互元素按下时，背景色向互补色方向偏移（主色 alpha 加深 0.08→0.20），缩放至 0.95~0.97。
+> 浅色主题（Cool Blue）中模块色为撞色点缀，底色为浅蓝白。
 
 ---
 
@@ -357,7 +391,7 @@
 | 高度 | 34dp |
 | 最小宽度 | 64dp |
 | 圆角 | 12dp |
-| 选中态 | 背景 BrewGreen, 文字 BrewBg, 边框 1dp BrewGreen |
+| 选中态 | 背景 模块色, 文字 BrewBg, 边框 1dp 模块色 |
 | 未选中态 | 背景 BrewPanelAlt alpha 0.86, 文字 BrewTextBright, 边框 1dp BrewBorderHi alpha 0.44 |
 | 文字 | 13sp SemiBold (fixedSp) |
 | 选中动画 | spring 弹性放大至 1.04x (MediumBouncy + Low stiffness) |
@@ -384,7 +418,7 @@
 | 应用图标 | 64×64dp AppIcon |
 | 应用名 | 14sp Bold BrewTextBright |
 | 描述 | 12sp BrewMuted, maxLines=2 |
-| 安装目标标签 | 10sp Bold, INSTALLED→BrewGreen / UPDATE→BrewWarning / else→BrewText |
+| 安装目标标签 | 10sp Bold, INSTALLED→BrewSuccess / UPDATE→BrewWarning / else→BrewText |
 | 进度条 | LinearProgressIndicator, 4dp 高, BrewCoral, track=BrewBorder |
 | 取消下载 | "✕" BrewCoral 14sp Bold |
 | 展开/收起按钮 | 高 48dp, "SHOW ALL (N)" / "SHOW LESS", 12sp Bold, letterSpacing 2sp |
@@ -406,7 +440,7 @@
 
 | 页面 | label | color |
 |------|-------|-------|
-| STORE | "应用商店" | BrewGreen |
+| STORE | "应用商店" | BrewCoral |
 | SCREEN_MIRROR | "屏幕镜像" | BrewCyan |
 | PHONE_MIRROR | "手机投屏" | BrewPurple |
 | FILE_MANAGER | "文件管理" | BrewAmber |
@@ -424,13 +458,13 @@
 | 背景 | BrewPanel alpha 0.78 |
 | 边框 | BorderStroke 1dp BrewBorderHi alpha 0.46 |
 | 内边距 | horizontal 12dp, vertical 11dp |
-| 标题行 | 图标 Icons.Outlined.Visibility 20dp BrewGreen + "眼镜连接" 15sp SemiBold |
+| 标题行 | 图标 Icons.Outlined.Visibility 20dp BrewSuccess + "眼镜连接" 15sp SemiBold |
 | 状态圆点 | 6×6dp, clip 4dp, 已连接时脉冲缩放至 1.6x + alpha 混合, 400ms tween |
 | 链路信息 | "CXR-L 链路 / {status}" 11sp Medium BrewMuted/状态色 |
 | HostApp 图标 | 45×45dp, RoundedCornerShape(13dp) |
 | HostApp 名称 | 14sp SemiBold BrewTextBright |
 | HostApp 版本 | 11sp Medium BrewMuted |
-| HostApp 选择器 | 水平滚动 Row, 选中色 BrewGreen |
+| HostApp 选择器 | 水平滚动 Row, 选中色 BrewCoral |
 
 ### 2.13 退出确认对话框
 
@@ -466,7 +500,7 @@ ADB 工具页面的眼镜连接信息卡片。
 | 边框 | 1dp BrewBorder |
 | 内边距 | 12dp |
 | 包名 | 14sp Bold BrewTextBright, fontFamily=JetBrains Mono |
-| 选中标记 | 左侧 ✓ 图标 14sp Bold BrewGreen 或选中背景色 |
+| 选中标记 | 左侧 ✓ 图标 14sp Bold BrewSuccess 或选中背景色 |
 | 冻结标记 | ❄️ 14sp 尾缀 |
 | 行高 | 约 44dp，多行自动折叠 |
 | 列表最大高度 | 420dp，超出可滚动 |
@@ -486,7 +520,7 @@ ADB 工具页面的眼镜连接信息卡片。
 | 图标 | 19dp, 根据 sourceUrl 动态选择 Gitee（ic_gitee_mark）或 GitHub（ic_github_mark） |
 | 来源名称 | "Gitee" / "GitHub", 15sp SemiBold BrewTextBright |
 | 作者 | 12sp BrewMuted, maxLines=1 |
-| 域名 | 11sp BrewGreen, maxLines=1, 仅显示域名部分（移除 https://） |
+| 域名 | 11sp BrewCoral, maxLines=1, 仅显示域名部分（移除 https://） |
 | 箭头 | Icons.Outlined.KeyboardArrowRight, 21dp BrewMuted |
 
 **动态判断逻辑**：当 `app.sourceUrl` 包含 `gitee.com` 时显示 Gitee 图标 + 文字，否则显示 GitHub 图标 + 文字。
@@ -502,10 +536,10 @@ ADB 工具页面的眼镜连接信息卡片。
 | 内边距 | 24dp |
 | 标题 | "切换源" 20sp Bold BrewTextBright |
 | 源列表项 | 每项高约 60dp, RoundedCornerShape(12dp) |
-| 选中态 | 背景 BrewGreen alpha 0.12, 边框 1dp BrewGreenDim, 附加 ✓ 图标 |
+| 选中态 | 背景 BrewCoral alpha 0.12, 边框 1dp BrewCoral, 附加 ✓ 图标 |
 | 未选中态 | 背景透明 |
 | 源图标 | 28×28dp 圆角 6dp, 半透明白色背景 |
-| 源名称 | 16sp SemiBold, 选中=BrewGreen / 未选中=BrewTextBright |
+| 源名称 | 16sp SemiBold, 选中=BrewCoral / 未选中=BrewTextBright |
 | 源描述 | 13sp BrewMuted |
 
 **源列表**：
@@ -576,7 +610,7 @@ ADB 工具页面的眼镜连接信息卡片。
 ### 3.1 Store 页面（应用商店）
 
 ```
-Rokid Lab（36sp Bold BrewGreen） + Lab（36sp Bold BrewCyan）
+Rokid Lab（36sp Bold BrewCoral） + Lab（36sp Bold BrewCyan）
 by DLOVER（12sp BrewMuted）
 
 → [搜索栏 直接输入 BasicTextField]
@@ -606,7 +640,7 @@ ModuleHeader "屏幕镜像" / "眼镜屏幕实时同步到手机" [BrewCyan #5B8
 ModuleHeader "手机投屏" / "手机屏幕投射到眼镜" [BrewPurple #D4A85C]
 
 投屏中时:
-  "投屏中" 20sp Bold BrewGreen
+  "投屏中" 20sp Bold BrewSuccess
   连接状态 14sp BrewMuted
   BrutalButton "■ 停止投屏" [BrewRed]
 
@@ -705,9 +739,9 @@ ModuleHeader "蓝牙手柄" / "通过蓝牙控制眼镜光标和按键" [BrewSuc
 ```
 ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 
-→ SettingCard "应用版本" [BrewGreen #E85D3F]
-→ SettingCard "主机应用" [BrewCyan #5B8FB9] 可点击跳引导
-→ SettingCard "更新状态" / BrutalButton "有更新可用" [BrewGreen]
+→ SettingCard "应用版本" [BrewCoral]
+→ SettingCard "主机应用" [BrewCyan] 可点击跳引导
+→ SettingCard "更新状态" / BrutalButton "有更新可用" [BrewCoral]
 → BrutalButton "切换商店源" [BrewCyan]
 
   → ── 眼镜端服务 ──
@@ -725,14 +759,14 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
         Dialog RoundedCornerShape(16dp), 背景 BrewPanel
         标题 "选择语言" 18sp Bold BrewTextBright
         选项: "简体中文" / "English"
-        选中项 → ✓ 图标 BrewGreen + 文字 BrewGreen
+        选中项 → ✓ 图标 BrewSuccess + 文字 BrewCoral
         未选中 → 文字 BrewTextBright
         点击后立即切换语言，对话框自动关闭，界面即时刷新
 
   → 开发者卡片: BrewPanel + 1dp BrewBorder 12dp 内 16dp padding
     标签 "开发者" 10sp Bold BrewDim letterSpacing 2sp
-    装饰线 32×3dp BrewGreen
-    文字 "DLOVER" 24sp Bold BrewGreen
+    装饰线 32×3dp BrewCoral
+    文字 "DLOVER" 24sp Bold BrewCoral
 ```
 
 ---
@@ -743,12 +777,12 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 
 | 组件 | 规格 |
 |------|------|
-| 主标题 | "欢迎使用 Rokid Lab" 32sp Black(900) BrewGreen letterSpacing 2sp |
+| 主标题 | "欢迎使用 Rokid Lab" 32sp Black(900) BrewCoral letterSpacing 2sp |
 | 副标题 | "by DLOVER" 14sp BrewMuted |
-| 进度指示器 | 水平 Row, 四个圆点 12dp, 已完成→BrewSuccess/当前→BrewGreen/未完成→BrewDim |
-| HostApp 选择卡片 | 56dp 高, 12dp 圆角, 选中→BrewGreen 背景 文字 BrewBg, 未选中→BrewPanel 文字 BrewText, 边框 1dp |
-| 商店源按钮 | 56dp 高, BrewGreen 背景 12dp 圆角, "选择商店源" 16sp Bold BrewBg |
-| 授权按钮 | 56dp 高, BrewGreen/BrewSuccess 背景 12dp 圆角, "点击授权"/"已授权 ✓" 16sp Bold BrewBg |
+| 进度指示器 | 水平 Row, 四个圆点 12dp, 已完成→BrewSuccess/当前→BrewCoral/未完成→BrewDim |
+| HostApp 选择卡片 | 56dp 高, 12dp 圆角, 选中→BrewCoral 背景 文字 BrewBg, 未选中→BrewPanel 文字 BrewText, 边框 1dp |
+| 商店源按钮 | 56dp 高, BrewCoral 背景 12dp 圆角, "选择商店源" 16sp Bold BrewBg |
+| 授权按钮 | 56dp 高, BrewCoral/BrewSuccess 背景 12dp 圆角, "点击授权"/"已授权 ✓" 16sp Bold BrewBg |
 | 步骤说明 | BrewPanel 背景 12dp 圆角, 1dp BrewBorder, 16dp padding, 提示文字 14sp BrewMuted |
 
 ### 4.2 UpdateDialog（更新对话框）
@@ -758,12 +792,12 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 | 形状 | Card RoundedCornerShape(20dp) |
 | 容器色 | BrewPanelAlt |
 | 边框 | BorderStroke 1dp BrewBorderHi |
-| 标题 | "有可用更新" / "下载中..." titleLarge, BrewGreen |
+| 标题 | "有可用更新" / "下载中..." titleLarge, BrewCoral |
 | 内容 | "RokidLab {version} 已准备好安装。" / "RokidLab {version}（{percent}%）", bodyMedium, BrewText |
 | 进度条 | LinearProgressIndicator, BrewCoral, track=BrewPanel |
 | 取消按钮 | TextButton "取消" BrewCoral 12sp |
 | 稍后按钮 | TextButton "稍后" BrewDim |
-| 更新按钮 | Button containerColor=BrewGreen, 文字 "更新" BrewBg |
+| 更新按钮 | Button containerColor=BrewCoral, 文字 "更新" BrewBg |
 
 ### 4.3 DetailInfoPanel（应用详情面板）
 
@@ -781,7 +815,7 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 | 主题 | RokidLabTheme |
 | 连接中 | CircularProgressIndicator BrewCoral + 状态文字 16sp BrewTextBright |
 | 连接失败 | "连接失败" 20sp Bold BrewRed + 状态 14sp BrewMuted + 重试/返回按钮 |
-| 投屏中 | "投屏中" 24sp Bold BrewGreen + 状态 16sp BrewTextBright + "停止投屏" Button BrewCoral |
+| 投屏中 | "投屏中" 24sp Bold BrewSuccess + 状态 16sp BrewTextBright + "停止投屏" Button BrewCoral |
 
 ### 4.5 StoreComponents Header（商店页顶栏）
 

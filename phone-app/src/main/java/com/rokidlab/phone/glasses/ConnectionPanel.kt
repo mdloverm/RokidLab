@@ -1,4 +1,4 @@
-package com.rokidlab.phone.glasses
+﻿package com.rokidlab.phone.glasses
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -89,7 +89,7 @@ internal fun ConnectionPanel(
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 11.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.Visibility, null, tint = BrewGreen, modifier = Modifier.size(20.dp))
+                Icon(Icons.Outlined.Visibility, null, tint = BrewCoral, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
                 Text(ctx.getString(R.string.glasses_connection), color = BrewTextBright, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
@@ -147,13 +147,13 @@ internal fun ConnectionPanel(
                         Icon(
                             Icons.Outlined.CheckCircle,
                             null,
-                            tint = if (hostAppInstalled) BrewGreen else BrewWarning,
+                            tint = if (hostAppInstalled) BrewCoral else BrewWarning,
                             modifier = Modifier.size(15.dp),
                         )
                         Spacer(Modifier.width(5.dp))
                         Text(
                             if (hostAppInstalled) ctx.getString(R.string.installed) else ctx.getString(R.string.not_installed),
-                            color = if (hostAppInstalled) BrewGreen else BrewWarning,
+                            color = if (hostAppInstalled) BrewCoral else BrewWarning,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Medium,
                         )
@@ -187,7 +187,7 @@ internal fun connectionStatus(
     connection.connected -> ConnectionStatus(ctx?.getString(R.string.connected) ?: "Connected", BrewCyan)
     busy && connection.authorized -> ConnectionStatus(ctx?.getString(R.string.connecting) ?: "Connecting", BrewCyan)
     connection.connecting -> ConnectionStatus(ctx?.getString(R.string.connecting) ?: "Connecting", BrewCyan)
-    connection.authorized -> ConnectionStatus(ctx?.getString(R.string.authorized) ?: "Authorized", BrewGreen)
+    connection.authorized -> ConnectionStatus(ctx?.getString(R.string.authorized) ?: "Authorized", BrewCoral)
     else -> ConnectionStatus(ctx?.getString(R.string.need_authorize) ?: "Needs authorization", BrewMuted)
 }
 @Composable
@@ -303,8 +303,8 @@ internal fun HostAppSegment(
         modifier = modifier
             .fillMaxHeight()
             .clip(RoundedCornerShape(11.dp))
-            .background(if (selected) BrewGreen.copy(alpha = 0.10f) else BrewPanelAlt.copy(alpha = 0.72f))
-            .border(1.dp, if (selected) BrewGreen else BrewBorder.copy(alpha = 0.40f), RoundedCornerShape(11.dp))
+            .background(if (selected) BrewCoral.copy(alpha = 0.10f) else BrewPanelAlt.copy(alpha = 0.72f))
+            .border(1.dp, if (selected) BrewCoral else BrewBorder.copy(alpha = 0.40f), RoundedCornerShape(11.dp))
             .clickable(enabled = enabled && !selected, onClick = onClick)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,

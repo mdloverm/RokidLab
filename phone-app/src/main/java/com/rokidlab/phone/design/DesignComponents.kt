@@ -1,4 +1,4 @@
-package com.rokidlab.phone.design
+﻿package com.rokidlab.phone.design
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -346,7 +346,7 @@ internal fun BrewDialogSelectItem(
     isSelected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    selectedColor: Color = BrewGreen,
+    selectedColor: Color = BrewCoral,
 ) {
     Box(
         modifier = modifier
@@ -477,7 +477,7 @@ internal enum class StateCardType { SUCCESS, ERROR, WARNING, INFO }
 // ═══════════════════════════════════════════════════
 
 // ── 商店模块：珊瑚红 ↔ 静谧蓝 (互补) ──
-//   BrewGreen(已定义为0xFFE85D3F) + 补色 BrewInfo(0xFF5B8FB9)
+//   BrewCoral(已定义为0xFFE85D3F) + 补色 BrewInfo(0xFF5B8FB9)
 
 // ── 屏幕镜像：静谧蓝为主 ── 
 //   BrewCyan(0xFF5B8FB9) — 冷调，对应"镜像"的冷静感

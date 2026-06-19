@@ -1,4 +1,4 @@
-package com.rokidlab.phone.store
+﻿package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -116,7 +116,7 @@ internal fun Header(
             Icon(
                 Icons.Outlined.Search,
                 null,
-                tint = if (searchActive) BrewGreen else BrewTextBright,
+                tint = if (searchActive) BrewCoral else BrewTextBright,
                 modifier = Modifier.size(24.dp),
             )
         }
@@ -165,7 +165,7 @@ internal fun Header(
             Icon(
                 Icons.Outlined.Refresh,
                 null,
-                tint = if (refreshing) BrewGreen else BrewTextBright,
+                tint = if (refreshing) BrewCoral else BrewTextBright,
                 modifier = Modifier.size(25.dp).graphicsLayer { rotationZ = rotation },
             )
         }
@@ -224,7 +224,7 @@ internal fun BrandTitle(fontSize: Int, modifier: Modifier = Modifier) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         Text(
             "Rokid",
-            color = BrewGreen,
+            color = BrewCoral,
             fontSize = fontSize.sp,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -307,8 +307,8 @@ internal fun CategoryChip(
             .widthIn(min = 64.dp)
             .graphicsLayer { scaleX = chipScale; scaleY = chipScale }
             .clip(BrewShapeStandard)
-            .background(if (selected) BrewGreen else BrewPanelAlt.copy(alpha = 0.86f))
-            .border(1.dp, if (selected) BrewGreen else BrewBorder.copy(alpha = 0.44f), BrewShapeStandard)
+            .background(if (selected) BrewCoral else BrewPanelAlt.copy(alpha = 0.86f))
+            .border(1.dp, if (selected) BrewCoral else BrewBorder.copy(alpha = 0.44f), BrewShapeStandard)
             .clickable(onClick = onClick)
             .padding(horizontal = 13.dp),
         contentAlignment = Alignment.Center,
@@ -351,9 +351,9 @@ internal fun SectionHeader(title: String, action: String? = null, onAction: (() 
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.clickable(enabled = onAction != null) { onAction?.invoke() },
             ) {
-                Text(action, color = BrewGreen, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text(action, color = BrewCoral, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.width(6.dp))
-                Icon(Icons.Outlined.KeyboardArrowRight, null, tint = BrewGreen, modifier = Modifier.size(18.dp))
+                Icon(Icons.Outlined.KeyboardArrowRight, null, tint = BrewCoral, modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -368,7 +368,7 @@ internal fun StoreActionButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val accent = if (destructive) BrewRed else BrewGreen
+    val accent = if (destructive) BrewRed else BrewCoral
     val border = accent
     val background = if (primary) accent else Color.Transparent
     val contentColor = if (primary) BrewBg else accent

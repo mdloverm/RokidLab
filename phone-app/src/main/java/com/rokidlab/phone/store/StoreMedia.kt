@@ -109,12 +109,12 @@ internal fun FallbackVisual(label: String, modifier: Modifier = Modifier) {
     ) {
         Text(
             initials,
-            color = BrewGreen,
+            color = BrewCoral,
             fontSize = fontSize,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             softWrap = false,
-            style = TextStyle(shadow = Shadow(BrewGreen, blurRadius = 12f)),
+            style = TextStyle(shadow = Shadow(BrewCoral, blurRadius = 12f)),
         )
     }
 }

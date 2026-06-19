@@ -1,4 +1,4 @@
-package com.rokidlab.phone.adb.ui
+﻿package com.rokidlab.phone.adb.ui
 
 import com.rokidlab.phone.adb.AdbShellClient
 import com.rokidlab.phone.design.*
@@ -109,7 +109,7 @@ fun SysInfoDialog(
                         InfoRow(ctx.getString(R.string.label_serial), data.serial)
                         InfoRow(ctx.getString(R.string.label_build), data.build)
                     }
-                    InfoSection(ctx.getString(R.string.section_storage), BrewGreen) {
+                    InfoSection(ctx.getString(R.string.section_storage), BrewCoral) {
                         InfoRow(ctx.getString(R.string.label_ram), data.memTotal)
                         if (data.stTotal != "?") InfoRow(ctx.getString(R.string.label_data), "${data.stTotal} total / ${data.stUsed} used")
                     }

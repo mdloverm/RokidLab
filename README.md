@@ -78,7 +78,7 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - **语言**: Kotlin
 - **UI**: Jetpack Compose (Material 3)
 - **本地化**: Android 原生资源系统（`values/` + `values-en/`），运行时 `AppCompatDelegate.setApplicationLocales()` 切换，Crowdin 云端翻译管理
-- **设计风格**: Velvet Dark — 丝绒暗调 × 油画色板（详见 [UI-DESIGN.md](./UI-DESIGN.md)）
+- **设计风格**: 双主题配色系统 — 丝绒炭黑（Velvet Dark，暖暗调） + 冰蓝冰川（Cool Blue，浅蓝冷调），详见 [UI-DESIGN.md](./UI-DESIGN.md)
 - **通信**:
   - CXR-L SDK（手机-眼镜通信，用于安装/启动/卸载应用）
   - ADB over TCP（自定义协议实现，无需 adb.exe，用于文件管理、ADB工具和屏幕镜像）
@@ -157,9 +157,14 @@ RokidLab/
 │   │   │   │   ├── AdbFileManagerClient.kt   文件管理 ADB 客户端
 │   │   │   │   └── AdbScreenMirrorClient.kt  屏幕镜像 ADB 客户端
 │   │   │   ├── design/      设计系统
-│   │   │   │   ├── StoreTheme.kt      配色/字体/主题（Velvet Dark）
-│   │   │   │   ├── DesignComponents.kt 全局 UI 组件（错误/警告/加载/结果卡片）
-│   │   │   │   └── RokidHostApp.kt    HostApp 枚举
+│   │   │   ├── StoreTheme.kt      配色/字体/主题（主入口，主题管理 + 全局颜色）
+│   │   │   ├── DesignComponents.kt 全局 UI 组件（错误/警告/加载/结果卡片）
+│   │   │   ├── theme/              主题目录
+│   │   │   │   ├── BrewColors.kt         配色接口定义（14色）
+│   │   │   │   ├── BrewThemeManager.kt   主题管理器（mutableStateOf）
+│   │   │   │   ├── VelvetDarkColors.kt   默认主题（丝绒炭黑）
+│   │   │   │   └── CoolBlueColors.kt     第二主题（冰蓝冰川）
+│   │   │   └── RokidHostApp.kt    HostApp 枚举
 │   │   │   ├── filemanager/  文件管理
 │   │   │   │   └── FileManagerActivity.kt  文件管理器界面/组件
 │   │   │   ├── glasses/     眼镜通信/UI
@@ -294,11 +299,13 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 
 详见 [UI-DESIGN.md](./UI-DESIGN.md)
 
-设计风格：**Velvet Dark**（丝绒暗调 × 油画色板）
-- 暗色画布温暖不刺眼（`#0B0B0E` 底色）
+设计风格：**双主题配色系统**
+- **丝绒炭黑（Velvet Dark）**：暖暗调默认主题（`#0B0B0E` 底色）
+- **冰蓝冰川（Cool Blue）**：浅蓝冷调主题（`#F0F5FF` 底色）
 - 全站 JetBrains Mono 等宽字体
 - 统一 12dp 圆角、1dp 边框
-- 七模块七色取自油画色板
+- 五模块五色撞色方案
+- 设置中可随时切换主题
 
 ## 许可
 

@@ -78,7 +78,7 @@ internal fun TargetTags(app: BrewApp, modifier: Modifier = Modifier) {
 }
 
 @Composable
-internal fun TargetTag(label: String, icon: String? = null, color: Color = BrewGreen) {
+internal fun TargetTag(label: String, icon: String? = null, color: Color = BrewCoral) {
     val tagWidth = when (label) {
         "NEW" -> 68.dp
         "PHONE" -> 78.dp

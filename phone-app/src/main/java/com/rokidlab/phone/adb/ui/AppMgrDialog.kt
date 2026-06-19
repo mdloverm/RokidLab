@@ -1,4 +1,4 @@
-package com.rokidlab.phone.adb.ui
+﻿package com.rokidlab.phone.adb.ui
 
 import com.rokidlab.phone.adb.AdbShellClient
 import com.rokidlab.phone.design.*
@@ -45,7 +45,7 @@ fun AppMgrDialog(
 ) {
     val ctx = LocalContext.current
     AdbDialogContent(
-        ctx.getString(R.string.app_manager), BrewGreen, client, connected, scope, getOrConnect, onDismiss,
+        ctx.getString(R.string.app_manager), BrewCoral, client, connected, scope, getOrConnect, onDismiss,
         icon = null,
         subtitle = ctx.getString(R.string.app_manager_subtitle),
     ) { c ->
@@ -108,41 +108,41 @@ fun AppMgrDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BrutalTextField(
                     value = search, onValueChange = { search = it },
-                    placeholder = ctx.getString(R.string.search_apps_placeholder), color = BrewGreen,
+                    placeholder = ctx.getString(R.string.search_apps_placeholder), color = BrewCoral,
                     modifier = Modifier.weight(1f), singleLine = true,
                 )
                 Spacer(Modifier.width(6.dp))
                 Box(
                     Modifier.height(38.dp).clip(BrewShapeMedium)
-                        .background(if (showSystem) BrewGreen.copy(alpha = 0.2f) else Color.Transparent)
-                        .border(1.dp, if (showSystem) BrewGreen else BrewBorder, BrewShapeMedium)
+                        .background(if (showSystem) BrewCoral.copy(alpha = 0.2f) else Color.Transparent)
+                        .border(1.dp, if (showSystem) BrewCoral else BrewBorder, BrewShapeMedium)
                         .clickable { showSystem = !showSystem; selectedPkg = "" }
                         .padding(horizontal = 10.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text(if (showSystem) ctx.getString(R.string.filter_all) else ctx.getString(R.string.filter_third_party), color = if (showSystem) BrewGreen else BrewMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+                ) { Text(if (showSystem) ctx.getString(R.string.filter_all) else ctx.getString(R.string.filter_third_party), color = if (showSystem) BrewCoral else BrewMuted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
                 Spacer(Modifier.width(6.dp))
                 val refreshTransition = rememberInfiniteTransition(label = "refreshSpin")
                 val refreshAngle by refreshTransition.animateFloat(initialValue = 0f, targetValue = 360f, animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing)), label = "refreshAngle")
                 Box(
                     Modifier.size(38.dp).clip(BrewShapeMedium)
-                        .background(BrewGreen.copy(alpha = 0.12f))
-                        .border(1.dp, BrewGreen.copy(alpha = 0.5f), BrewShapeMedium)
+                        .background(BrewCoral.copy(alpha = 0.12f))
+                        .border(1.dp, BrewCoral.copy(alpha = 0.5f), BrewShapeMedium)
                         .clickable { refreshAll("refresh_icon") },
                     contentAlignment = Alignment.Center,
-                ) { Icon(Icons.Outlined.Refresh, contentDescription = ctx.getString(R.string.refresh), tint = BrewGreen, modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = if (loading) refreshAngle else 0f }) }
+                ) { Icon(Icons.Outlined.Refresh, contentDescription = ctx.getString(R.string.refresh), tint = BrewCoral, modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = if (loading) refreshAngle else 0f }) }
             }
             Spacer(Modifier.height(8.dp))
 
             // ── 选中应用操作区 ──
             Box(
                 Modifier.fillMaxWidth().clip(BrewShapeMedium)
-                    .background(if (selectedPkg.isNotEmpty()) BrewGreen.copy(alpha = 0.06f) else Color.Transparent)
-                    .border(if (selectedPkg.isNotEmpty()) 1.dp else 0.dp, BrewGreen.copy(alpha = 0.15f), BrewShapeMedium)
+                    .background(if (selectedPkg.isNotEmpty()) BrewCoral.copy(alpha = 0.06f) else Color.Transparent)
+                    .border(if (selectedPkg.isNotEmpty()) 1.dp else 0.dp, BrewCoral.copy(alpha = 0.15f), BrewShapeMedium)
                     .padding(12.dp),
             ) {
                 if (selectedPkg.isNotEmpty()) {
                     Column {
-                        Text(selectedPkg, color = BrewGreen, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(selectedPkg, color = BrewCoral, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Spacer(Modifier.height(6.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             ActionButton(ctx.getString(R.string.launch), BrewSuccess) { doAction({ c.launchApp(it) }, selectedPkg) }
@@ -161,13 +161,13 @@ fun AppMgrDialog(
             }
 
             // ── 状态消息 ──
-            if (statusMsg.isNotEmpty()) { Spacer(Modifier.height(4.dp)); Text("  $statusMsg", color = if (statusMsg.startsWith(ctx.getString(R.string.error_label))) BrewRed else BrewGreen, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            if (statusMsg.isNotEmpty()) { Spacer(Modifier.height(4.dp)); Text("  $statusMsg", color = if (statusMsg.startsWith(ctx.getString(R.string.error_label))) BrewRed else BrewCoral, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
 
             // ── 计数 ──
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
                 Text(String.format(ctx.getString(R.string.app_count_fmt), filtered.size), color = BrewMuted, fontSize = 12.sp)
-                if (loading) { Spacer(Modifier.width(8.dp)); Text(ctx.getString(R.string.updating_dots), color = BrewGreen.copy(alpha = 0.6f), fontSize = 11.sp) }
+                if (loading) { Spacer(Modifier.width(8.dp)); Text(ctx.getString(R.string.updating_dots), color = BrewCoral.copy(alpha = 0.6f), fontSize = 11.sp) }
             }
             Spacer(Modifier.height(6.dp))
 
@@ -182,15 +182,15 @@ fun AppMgrDialog(
                             val isFrozen = pkg in disabledPkgs
                             Row(
                                 Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) BrewGreen.copy(alpha = 0.1f) else BrewBg)
-                                    .border(if (isSelected) 1.dp else 0.dp, BrewGreen.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) BrewCoral.copy(alpha = 0.1f) else BrewBg)
+                                    .border(if (isSelected) 1.dp else 0.dp, BrewCoral.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
                                     .clickable { selectedPkg = if (isSelected) "" else pkg }
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(pkg, color = if (isSelected) BrewGreen else BrewText, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(pkg, color = if (isSelected) BrewCoral else BrewText, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 if (isFrozen) { Text(" ❄️", color = BrewInfo.copy(alpha = 0.8f), fontSize = 12.sp); Spacer(Modifier.width(4.dp)) }
-                                if (isSelected) Text("  ✓", color = BrewGreen, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                if (isSelected) Text("  ✓", color = BrewCoral, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                             }
                             Spacer(Modifier.height(3.dp))
                         }

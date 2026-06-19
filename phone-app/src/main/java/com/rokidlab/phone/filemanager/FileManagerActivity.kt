@@ -135,7 +135,7 @@ fun DeleteConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit
     val ctx = LocalContext.current
     BrewDialog(onDismiss = onDismiss, color = BrewRed) {
         BrewDialogContent {
-            Icon(Icons.Outlined.Warning, contentDescription = "Warning", tint = BrewOrange, modifier = Modifier.size(48.dp))
+            Icon(Icons.Outlined.Warning, contentDescription = "Warning", tint = BrewWarning, modifier = Modifier.size(48.dp))
             Spacer(modifier = Modifier.height(16.dp))
             Text(ctx.getString(R.string.confirm_delete_files, count), fontWeight = FontWeight.Bold, color = BrewTextBright)
             Text(ctx.getString(R.string.cannot_undo), color = BrewMuted)

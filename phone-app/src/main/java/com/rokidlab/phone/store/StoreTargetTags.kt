@@ -44,7 +44,7 @@ internal fun AppTargetTags(app: BrewApp, modifier: Modifier = Modifier) {
 }
 
 @Composable
-internal fun MiniTargetTag(label: String, minWidth: androidx.compose.ui.unit.Dp, color: Color = BrewGreen) {
+internal fun MiniTargetTag(label: String, minWidth: androidx.compose.ui.unit.Dp, color: Color = BrewCoral) {
     val fontScale = LocalDensity.current.fontScale
     fun fixedSp(value: Float) = (value / fontScale.coerceAtLeast(1f)).sp
     Box(

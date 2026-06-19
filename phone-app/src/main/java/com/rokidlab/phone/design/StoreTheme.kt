@@ -1,8 +1,13 @@
-package com.rokidlab.phone.design
+﻿package com.rokidlab.phone.design
 
+import android.util.Log
+import android.view.View
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
 import com.rokidlab.phone.design.*
+import com.rokidlab.phone.design.theme.BrewColors
+import com.rokidlab.phone.design.theme.LocalBrewColors
+import com.rokidlab.phone.design.theme.BrewThemeManager
 import com.rokidlab.phone.filemanager.*
 import com.rokidlab.phone.glasses.*
 import com.rokidlab.phone.mirror.*
@@ -13,13 +18,18 @@ import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
 import com.rokidlab.phone.R
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -31,24 +41,53 @@ import androidx.compose.ui.unit.dp
 internal const val NEW_CATEGORY = "New"
 
 @Composable
-internal fun RokidLabTheme(content: @Composable () -> Unit) {
+internal fun RokidLabTheme(
+    colors: BrewColors? = null,
+    content: @Composable () -> Unit
+) {
     val density = LocalDensity.current
+    // 读取当前主题（BrewThemeManager 使用 mutableStateOf，自动触发重组）
+    val currentTheme = BrewThemeManager.currentTheme
+    // 获取当前配色
+    val activeColors = colors ?: BrewThemeManager.currentColors
+    Log.d("BrewThemeManager", "RokidLabTheme: theme=${currentTheme.name}, bg=${Integer.toHexString(activeColors.bg.hashCode())}")
+
+    // 动态更新窗口系统栏颜色
+    val context = LocalContext.current
+    val window = (context as? android.app.Activity)?.window
+    if (window != null) {
+        window.statusBarColor = activeColors.bg.toArgb()
+        window.navigationBarColor = activeColors.bg.toArgb()
+
+        // 根据背景明暗决定状态栏图标颜色
+        val luminance = activeColors.bg.red * 0.299f + activeColors.bg.green * 0.587f + activeColors.bg.blue * 0.114f
+        val flags = window.decorView.systemUiVisibility
+        window.decorView.systemUiVisibility = if (luminance > 0.5f) {
+            flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        } else {
+            flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+        }
+    }
+
     MaterialTheme(
         colorScheme = darkColorScheme(
-            background = BrewBg,
-            surface = BrewPanel,
-            primary = BrewCoral,
-            onPrimary = BrewBg,
-            onSurface = BrewText,
+            background = activeColors.bg,
+            surface = activeColors.panel,
+            primary = activeColors.store,
+            onPrimary = activeColors.bg,
+            onSurface = activeColors.text,
         ),
         content = {
             CompositionLocalProvider(
+                LocalBrewColors provides activeColors,
                 LocalDensity provides Density(
                     density = density.density,
                     fontScale = density.fontScale.coerceAtMost(1.0f),
                 ),
             ) {
-                Surface(color = BrewBg, content = content)
+                Box(modifier = Modifier.fillMaxSize().background(activeColors.bg)) {
+                    content()
+                }
             }
         },
     )
@@ -67,30 +106,7 @@ internal val TabularNumbersStyle = TextStyle(
 )
 
 // ═══════════════════════════════════════════════════
-// 配色方案：「Velvet Dark」丝绒暗调
-// 灵感：画廊暗室 × 油画颜料 × 温暖暗色空间
-// 关键：不用纯原色/纯黑白 — 每色都带温度和深度
-// ═══════════════════════════════════════════════════
-
-// ── 底色系统：丝绒暗调（温暖暗底，非纯黑）──
-val BrewBg = Color(0xFF0B0B0E)         // 丝绒炭黑 — 微微偏暖
-val BrewPanel = Color(0xFF151518)       // 暗灰板
-val BrewPanelAlt = Color(0xFF1C1C21)    // 亮灰板
-val BrewPanelHi = Color(0xFF24242A)     // 高亮面板
-
-// ── 文字系统：暖白至冷灰（画廊标牌）──
-val BrewTextBright = Color(0xFFF2EFEA)  // 暖羊皮白 — 正文
-val BrewText = Color(0xFFD4D0CA)        // 沙石灰 — 次要文字
-val BrewMuted = Color(0xFF8A8780)       // 风化石 — 辅助文字
-val BrewDim = Color(0xFF5C5952)         // 深石色 — 禁/淡出
-
-// ── 强调色：油画颜料走色（饱和度克制，明度有层次）──
-val BrewCoral = Color(0xFFE85D3F)       // 朱砂红 — 温暖的强调
-// ── 边框：几乎融入背景 ──
-val BrewBorder = Color(0xFF2C2C33)
-
-// ═══════════════════════════════════════════════════
-// 标准圆角系统
+// 标准圆角系统（保留，不走主题）
 // ═══════════════════════════════════════════════════
 val BrewRadiusSmall = 4.dp
 val BrewRadiusMedium = 8.dp
@@ -105,19 +121,39 @@ val BrewShapeLarge = RoundedCornerShape(BrewRadiusLarge)
 val BrewShapeXLarge = RoundedCornerShape(BrewRadiusXLarge)
 
 // ═══════════════════════════════════════════════════
-// 五模块五色：取自油画色板
+// 全局颜色快捷访问（兼容旧代码）
+// 从 BrewThemeManager.currentColors 读取，在 @Composable 中读取会自动重组
 // ═══════════════════════════════════════════════════
-val BrewGreen   = Color(0xFFE85D3F) // 商店 — 朱砂红（温暖主导）
-val BrewCyan    = Color(0xFF5B8FB9) // 屏幕镜像 — 静谧蓝（冷调克制）
-val BrewPurple  = Color(0xFFD4A85C) // 手机投屏 — 画廊金（暖而有质感）
-val BrewAmber   = Color(0xFFA78BFA) // 文件管理 — 雾紫（柔和区分）
-val BrewMagenta = Color(0xFF8A8780) // 设置 — 石灰色（最低调）
 
-// ── 功能色 ──
-val BrewRed     = Color(0xFFE85D3F) // 错误/停止 — 朱砂红
-val BrewGreenDim = Color(0xFF3A8070) // 次要 — 暗青绿
-val BrewSuccess = Color(0xFF4ADE80) // 成功 — 翡翠绿
+// 底色
+val BrewBg: Color get() = BrewThemeManager.currentColors.bg
+val BrewPanel: Color get() = BrewThemeManager.currentColors.panel
+val BrewPanelAlt: Color get() = BrewThemeManager.currentColors.panelAlt
+val BrewPanelHi: Color get() = BrewThemeManager.currentColors.panelHi
 
-val BrewWarning = Color(0xFFF0A050) // 警告 — 暖琥珀
-val BrewInfo    = Color(0xFF5B8FB9) // 信息 — 静谧蓝
-val BrewOrange  = Color(0xFFF0A050) // 兼容别名
+// 文字
+val BrewTextBright: Color get() = BrewThemeManager.currentColors.textBright
+val BrewText: Color get() = BrewThemeManager.currentColors.text
+val BrewMuted: Color get() = BrewThemeManager.currentColors.muted
+val BrewDim: Color get() = BrewThemeManager.currentColors.dim
+
+// 边框
+val BrewBorder: Color get() = BrewThemeManager.currentColors.border
+
+// 五模块五色（固定用途）
+val BrewCoral: Color get() = BrewThemeManager.currentColors.store      // 商店
+val BrewCyan: Color get() = BrewThemeManager.currentColors.mirror      // 屏幕镜像
+val BrewPurple: Color get() = BrewThemeManager.currentColors.projection // 手机投屏
+val BrewAmber: Color get() = BrewThemeManager.currentColors.fileManager  // 文件管理
+val BrewMagenta: Color get() = BrewThemeManager.currentColors.settings  // 设置
+
+// 功能色（映射到模块色，每套主题只需配 5 个模块色即可）
+//   错误 → 商店色 (暖/醒目)
+//   成功 → 镜像色 (冷/平静)
+//   警告 → 文件管理色 (暖橙/注意)
+//   信息 → 设置色 (中性/低调)
+val BrewRed: Color get() = BrewThemeManager.currentColors.store         // 错误
+val BrewSuccess: Color get() = BrewThemeManager.currentColors.mirror    // 成功
+val BrewGreenDim: Color get() = BrewThemeManager.currentColors.panelHi  // 次要成功
+val BrewWarning: Color get() = BrewThemeManager.currentColors.fileManager // 警告
+val BrewInfo: Color get() = BrewThemeManager.currentColors.settings     // 信息

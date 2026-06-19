@@ -1,4 +1,4 @@
-package com.rokidlab.phone.store
+﻿package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -85,12 +85,12 @@ internal fun CompactProgressLine(progress: Int, modifier: Modifier = Modifier) {
                 modifier = Modifier
                     .fillMaxWidth((progress.coerceIn(0, 100) / 100f).coerceAtLeast(0.02f))
                     .height(5.dp)
-                    .background(BrewGreen),
+                    .background(BrewCoral),
             )
         }
         Text(
             "$progress%",
-            color = BrewGreen,
+            color = BrewCoral,
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,

@@ -1,6 +1,8 @@
 package com.rokidlab.phone.settings
 
 import com.rokidlab.phone.design.*
+import com.rokidlab.phone.design.theme.BrewTheme
+import com.rokidlab.phone.design.theme.BrewThemeManager
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.LocalizationManager
 import androidx.compose.animation.core.animateFloatAsState
@@ -48,6 +50,8 @@ internal fun SettingsScreen(
 ) {
     val ctx = LocalContext.current
     var showLangDialog by remember { mutableStateOf(false) }
+    var showThemeDialog by remember { mutableStateOf(false) }
+    val currentTheme = BrewThemeManager.currentTheme
 
     Column(
         modifier = Modifier
@@ -59,7 +63,7 @@ internal fun SettingsScreen(
         ModuleHeader(title = ctx.getString(R.string.nav_settings), subtitle = ctx.getString(R.string.settings_subtitle), color = BrewMagenta)
         Spacer(modifier = Modifier.height(24.dp))
 
-        SettingCard(title = ctx.getString(R.string.app_version), content = state.selfUpdateState.currentVersion, color = BrewGreen)
+        SettingCard(title = ctx.getString(R.string.app_version), content = state.selfUpdateState.currentVersion, color = BrewCoral)
         Spacer(modifier = Modifier.height(16.dp))
         SettingCard(
             title = ctx.getString(R.string.host_app),
@@ -81,8 +85,17 @@ internal fun SettingsScreen(
         )
         Spacer(modifier = Modifier.height(16.dp))
 
+        // 主题选择
+        SettingCard(
+            title = ctx.getString(R.string.theme),
+            content = ctx.getString(currentTheme.displayNameResId),
+            color = BrewAmber,
+            onClick = { showThemeDialog = true },
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
         if (state.selfUpdateState.available) {
-            BrutalButton(label = ctx.getString(R.string.update_available), color = BrewGreen, onClick = actions.onSelfUpdate)
+            BrutalButton(label = ctx.getString(R.string.update_available), color = BrewCoral, onClick = actions.onSelfUpdate)
         } else {
             SettingCard(title = ctx.getString(R.string.update_status), content = ctx.getString(R.string.no_update), color = BrewMuted)
         }
@@ -101,7 +114,7 @@ internal fun SettingsScreen(
             SettingCard(
                 title = "RokidLink",
                 content = if (state.screenMirrorState.rokidLinkInstalled == true) ctx.getString(R.string.installed) else ctx.getString(R.string.not_installed),
-                color = if (state.screenMirrorState.rokidLinkInstalled == true) BrewGreen else BrewWarning,
+                color = if (state.screenMirrorState.rokidLinkInstalled == true) BrewCoral else BrewWarning,
             )
             Spacer(modifier = Modifier.height(12.dp))
             BrutalButton(
@@ -126,10 +139,10 @@ internal fun SettingsScreen(
                     modifier = Modifier
                         .width(32.dp)
                         .height(3.dp)
-                        .background(BrewGreen)
+                        .background(BrewCoral)
                         .padding(bottom = 8.dp),
                 )
-                Text(text = "DLOVER", color = BrewGreen, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Text(text = "DLOVER", color = BrewCoral, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -143,6 +156,14 @@ internal fun SettingsScreen(
                 showLangDialog = false
             },
             onDismiss = { showLangDialog = false },
+        )
+    }
+
+    if (showThemeDialog) {
+        ThemeDialog(
+            currentTheme = currentTheme,
+            onSelect = { BrewThemeManager.switchTheme(it) },
+            onDismiss = { showThemeDialog = false },
         )
     }
 }
@@ -164,6 +185,30 @@ private fun LanguageDialog(
                     isSelected = selected,
                     onClick = { onSelect(locale.code) },
                     selectedColor = BrewPurple,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ThemeDialog(
+    currentTheme: BrewTheme,
+    onSelect: (BrewTheme) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.select_theme), color = BrewAmber) {
+        BrewDialogContent {
+            BrewThemeManager.getAllThemes().forEach { theme ->
+                val selected = theme == currentTheme
+                BrewDialogSelectItem(
+                    primaryText = ctx.getString(theme.displayNameResId),
+                    secondaryText = ctx.getString(theme.descriptionResId),
+                    isSelected = selected,
+                    onClick = { onSelect(theme) },
+                    selectedColor = BrewAmber,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
             }

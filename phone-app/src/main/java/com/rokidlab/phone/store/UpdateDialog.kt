@@ -1,4 +1,4 @@
-package com.rokidlab.phone.store
+﻿package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -73,7 +73,7 @@ internal fun UpdateDialog(
     BrewDialog(
         onDismiss = onDismiss,
         title = if (downloading) ctx.getString(R.string.download_in_progress) else ctx.getString(R.string.update_available_short),
-        color = BrewGreen,
+        color = BrewCoral,
     ) {
         Column(modifier = Modifier.padding(24.dp)) {
                 Text(
@@ -111,7 +111,7 @@ internal fun UpdateDialog(
                     Button(
                         onClick = onUpdate,
                         enabled = !downloading,
-                        colors = ButtonDefaults.buttonColors(containerColor = BrewGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = BrewCoral),
                     ) {
                         Text(ctx.getString(R.string.update_now), color = BrewBg)
                     }
@@ -192,7 +192,7 @@ private fun UpdateHero(state: BrewSelfUpdateState, modifier: Modifier = Modifier
             Icon(
                 if (state.available) Icons.Outlined.SystemUpdateAlt else Icons.Outlined.CheckCircle,
                 null,
-                tint = if (state.available) BrewAmber else BrewGreen,
+                tint = if (state.available) BrewAmber else BrewCoral,
                 modifier = Modifier.size(34.dp),
             )
         }

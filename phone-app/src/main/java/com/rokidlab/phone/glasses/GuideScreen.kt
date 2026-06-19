@@ -1,4 +1,4 @@
-package com.rokidlab.phone.glasses
+﻿package com.rokidlab.phone.glasses
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -51,7 +51,7 @@ internal fun GuideScreen(
     ) {
         Text(
             text = ctx.getString(R.string.guide_welcome),
-            color = BrewGreen,
+            color = BrewCoral,
             fontSize = 32.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 2.sp,
@@ -108,7 +108,7 @@ private fun GuideProgressIndicator(currentStep: GuideStep, ctx: android.content.
                 val stepDotColor = when {
                     isCompleted -> BrewSuccess
                     isCurrent -> when (step) {
-                        GuideStep.SELECT_HOST_APP -> BrewGreen
+                        GuideStep.SELECT_HOST_APP -> BrewCoral
                         GuideStep.SELECT_MIRROR_SOURCE -> BrewCyan
                         GuideStep.AUTHORIZE -> BrewMagenta
                         GuideStep.READY -> BrewSuccess
@@ -213,12 +213,12 @@ private fun SelectHostAppStep(
                     .height(56.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(
-                        color = if (isSelected) BrewGreen else BrewPanel,
+                        color = if (isSelected) BrewCoral else BrewPanel,
                         shape = RoundedCornerShape(12.dp),
                     )
                     .border(
                         width = 1.dp,
-                        color = if (isSelected) BrewGreen else BrewBorder,
+                        color = if (isSelected) BrewCoral else BrewBorder,
                         shape = RoundedCornerShape(12.dp),
                     )
                     .clickable { onSelectHostApp(hostApp) },
@@ -266,7 +266,7 @@ private fun SelectMirrorSourceStep(
                 .fillMaxWidth()
                 .height(56.dp)
                 .clip(BrewShapeStandard)
-                .background(BrewGreen, shape = BrewShapeStandard)
+                .background(BrewCoral, shape = BrewShapeStandard)
                 .clickable { onSelectMirrorSource() },
             contentAlignment = Alignment.Center,
         ) {
@@ -327,7 +327,7 @@ private fun AuthorizeStep(
                     .fillMaxWidth()
                     .height(56.dp)
                     .clip(BrewShapeStandard)
-                    .background(BrewGreen, shape = BrewShapeStandard)
+                    .background(BrewCoral, shape = BrewShapeStandard)
                     .clickable { onAuthorize() },
                 contentAlignment = Alignment.Center,
             ) {

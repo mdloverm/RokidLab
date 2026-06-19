@@ -251,6 +251,12 @@
     <string name="shell_command_subtitle">执行 ADB Shell 命令</string>
     <string name="shell_empty_output">(空)</string>
     <string name="select_language">选择语言</string>
+    <string name="theme">主题</string>
+    <string name="select_theme">选择主题</string>
+    <string name="theme_velvet_dark">丝绒炭黑</string>
+    <string name="theme_velvet_dark_desc">暖暗调默认主题</string>
+    <string name="theme_cool_blue">冰蓝冰川</string>
+    <string name="theme_cool_blue_desc">浅蓝冷调主题</string>
     <string name="reinstall_glasses">重装眼镜端</string>
     <string name="ready">就绪</string>
     <string name="system_log">系统日志</string>

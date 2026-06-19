@@ -1,4 +1,4 @@
-package com.rokidlab.phone.adb.ui
+﻿package com.rokidlab.phone.adb.ui
 
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.R
@@ -86,7 +86,7 @@ fun AdbToolsScreen(
 
         BrutalButton(
             label = ctx.getString(R.string.app_manager),
-            color = BrewGreen,
+            color = BrewCoral,
             onClick = { showAppMgr = true },
         )
         Spacer(modifier = Modifier.height(8.dp))
