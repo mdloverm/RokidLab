@@ -12,6 +12,7 @@ import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
 import com.rokidlab.phone.util.AppConfig
+import com.rokidlab.phone.R
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Base64
@@ -80,7 +81,7 @@ class AdbScreenMirrorClient(
 
     fun connect(onStatus: (String) -> Unit): Boolean {
         return try {
-            onStatus("Connecting glasses ($ipAddress:$port)...")
+            onStatus(context.getString(R.string.mirror_connecting_glasses, ipAddress, port))
             Log.i(TAG, "Connecting $ipAddress:$port")
 
             socket = Socket()
@@ -90,16 +91,16 @@ class AdbScreenMirrorClient(
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
             Log.i(TAG, "TCP connected")
-            onStatus("ADB auth in progress...")
+            onStatus(context.getString(R.string.mirror_adb_auth))
 
             loadOrCreateKeys()
             doHandshake()
             Log.i(TAG, "ADB connected")
-            onStatus("Connected")
+            onStatus(context.getString(R.string.mirror_connected_short))
             true
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed: ${e.message}", e)
-            onStatus("Connection failed: ${e.message}")
+            onStatus(context.getString(R.string.mirror_connection_failed_msg, e.message))
             disconnect()
             false
         }
@@ -274,7 +275,7 @@ class AdbScreenMirrorClient(
                     } catch (_: Exception) {}
 
                     // Step 1: 启动新 server（nohup 保护进程不被 shell 退出杀死）
-                    onStatus("Starting scrcpy-server...")
+                    onStatus(context.getString(R.string.mirror_starting_server))
                     val shellId = localId.getAndIncrement()
                     val shellCmd = ("shell:nohup app_process -Djava.class.path=/data/local/tmp/scrcpy-server.jar " +
                             "/ com.genymobile.scrcpy.Server 3.3.4 " +
@@ -315,7 +316,7 @@ class AdbScreenMirrorClient(
                     }
 
                     // Step 2: 通过 ADB 隧道连接 localabstract:scrcpy
-                    onStatus("Connecting scrcpy tunnel...")
+                    onStatus(context.getString(R.string.mirror_connecting_tunnel))
                     Thread.sleep(500)
                     streamId = localId.getAndIncrement()
                     val connectCmd = "localabstract:scrcpy\u0000"
@@ -367,7 +368,7 @@ class AdbScreenMirrorClient(
                     // 设置 socket 超时 80ms 以便及时处理触控
                     try { socket?.soTimeout = AppConfig.SCRCPY_STREAM_TIMEOUT_MS } catch (_: Exception) {}
 
-                    onStatus("Streaming...")
+                    onStatus(context.getString(R.string.mirror_streaming))
                     Log.i(TAG, "Starting H.264 stream reading...")
 
                     // Step 5: 循环读取 WRTE 包，喂给解码器
@@ -437,7 +438,7 @@ class AdbScreenMirrorClient(
                 if (isRunning) {
                     decoder.stop()
                     decoder.start()
-                    onStatus("Reconnecting...")
+                    onStatus(context.getString(R.string.mirror_reconnecting))
                     // 重新建立 ADB 连接
                     var reconnected = false
                     for (retry in 1..3) {

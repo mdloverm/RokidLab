@@ -70,17 +70,15 @@ internal fun UpdateDialog(
     onCancelDownload: (() -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
-    BrewDialog(onDismiss = onDismiss) {
+    BrewDialog(
+        onDismiss = onDismiss,
+        title = if (downloading) ctx.getString(R.string.download_in_progress) else ctx.getString(R.string.update_available_short),
+        color = BrewGreen,
+    ) {
         Column(modifier = Modifier.padding(24.dp)) {
                 Text(
-                    if (downloading) ctx.getString(R.string.download_in_progress) else ctx.getString(R.string.update_available_short),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = BrewGreen,
-                    fontFamily = BrewFont,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    if (downloading) "RokidLab $version（$downloadPercent%）" else "RokidLab $version is ready to install.",
+                    if (downloading) ctx.getString(R.string.update_downloading_status, version, downloadPercent)
+                    else ctx.getString(R.string.update_ready_status, version),
                     style = MaterialTheme.typography.bodyMedium,
                     color = BrewText,
                 )
@@ -333,7 +331,7 @@ private fun UpdateChangelog(state: BrewSelfUpdateState, modifier: Modifier = Mod
     Column(modifier = modifier.fillMaxWidth()) {
         if (state.changes.isEmpty() && state.notes.isBlank()) {
             Text(
-                "Release notes will appear here after the registry imports RokidLab GitHub releases.",
+                ctx.getString(R.string.update_no_release_notes),
                 color = BrewMuted,
                 fontSize = 13.sp,
                 lineHeight = 19.sp,

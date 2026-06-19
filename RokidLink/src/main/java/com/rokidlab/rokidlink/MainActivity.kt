@@ -30,7 +30,10 @@ class MainActivity : Activity() {
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             Log.i(TAG, getString(R.string.log_network_recovered))
-            Handler(Looper.getMainLooper()).post { startSetup() }
+            Handler(Looper.getMainLooper()).post {
+                // 重新检查 WiFi 状态和连接状态
+                startSetup()
+            }
         }
 
         override fun onLost(network: Network) {
@@ -38,7 +41,8 @@ class MainActivity : Activity() {
             Handler(Looper.getMainLooper()).post {
                 setDotColor(DOT_ERROR)
                 statusText.text = getString(R.string.status_wifi_disconnected)
-                ipText.text = getIPAddress()
+                ipText.text = "0.0.0.0"
+                openWifiSettings()
             }
         }
 
@@ -49,6 +53,8 @@ class MainActivity : Activity() {
                 Handler(Looper.getMainLooper()).post {
                     setDotColor(DOT_ERROR)
                     statusText.text = getString(R.string.status_wifi_disconnected)
+                    ipText.text = "0.0.0.0"
+                    openWifiSettings()
                 }
             }
         }

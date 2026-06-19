@@ -72,14 +72,20 @@ class PhoneMirrorService : Service() {
     private var imageHandlerThread: HandlerThread? = null
 
     /** 当前虚拟显示器宽高（初始方向，不因方向变化重建） */
-    private var mirrorWidth = AppConfig.MIRROR_BASE_SIZE
-    private var mirrorHeight = AppConfig.MIRROR_BASE_SIZE
+    private var mirrorWidth = 480
+    private var mirrorHeight = 640
     /** 当前屏幕物理尺寸和 DPI（用于计算缩放比例） */
     private var screenWidth = 0
     private var screenHeight = 0
     private var screenDensity = DisplayMetrics.DENSITY_DEFAULT
     /** 复用灰度数据缓冲区，避免每帧创建新数组 */
     private var reusableGrayData: ByteArray? = null
+    /** 复用发送缓冲区，避免每帧创建新数组 */
+    private var reusableSendBuffer: ByteArray? = null
+    /** 帧率控制：上次发送时间 */
+    private var lastFrameTime = 0L
+    /** 目标帧率（fps） */
+    private val TARGET_FPS = 30
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -161,7 +167,6 @@ class PhoneMirrorService : Service() {
                     screenWidth = metrics.widthPixels
                     screenHeight = metrics.heightPixels
                     screenDensity = metrics.densityDpi
-                    updateMirrorSize(isLandscapeNow())
                     Log.i(TAG, "Screen size: ${screenWidth}x${screenHeight}, Mirror size: ${mirrorWidth}x${mirrorHeight}")
 
                     // 2. 连接眼镜（使用配置的超时时间）
@@ -190,13 +195,32 @@ class PhoneMirrorService : Service() {
                     imageHandlerThread?.start()
                     imageHandler = Handler(imageHandlerThread!!.looper)
 
-                    // 5. 创建 VirtualDisplay（一次创建，不因方向变化重建）
+                    // 5. 创建 VirtualDisplay（固定 480x640，不因方向变化重建）
                     createMirrorSession()
 
-                    // 6. 注册方向监听（仅记录，不重建 VirtualDisplay，避免 SecurityException）
+                    // 6. 注册方向监听（仅用于更新发送帧的方向标志）
                     orientationListener = object : OrientationEventListener(this) {
+                        private var lastOrientation = -1
+                        private var lastChangeTime = 0L
+                        private val DEBOUNCE_MS = 500L
                         override fun onOrientationChanged(orientation: Int) {
-                            // VirtualDisplay 只创建一次，方向变化不处理，避免 SecurityException
+                            val normalized = when {
+                                orientation >= 315 || orientation < 45 -> 0
+                                orientation in 45..135 -> 90
+                                orientation in 135..225 -> 180
+                                else -> 270
+                            }
+                            if (lastOrientation == -1) {
+                                lastOrientation = normalized
+                                lastChangeTime = System.currentTimeMillis()
+                                return
+                            }
+                            val now = System.currentTimeMillis()
+                            if (lastOrientation != normalized && now - lastChangeTime > DEBOUNCE_MS) {
+                                lastOrientation = normalized
+                                lastChangeTime = now
+                                Log.i(TAG, "Orientation changed to $normalized")
+                            }
                         }
                     }
                     orientationListener?.enable()
@@ -228,20 +252,7 @@ class PhoneMirrorService : Service() {
     }
 
     /**
-     * 根据方向计算镜像尺寸（短边缩放到 MIRROR_BASE_SIZE，长边等比）
-     */
-    private fun updateMirrorSize(isLandscape: Boolean) {
-        if (isLandscape) {
-            mirrorWidth = AppConfig.MIRROR_BASE_SIZE
-            mirrorHeight = (AppConfig.MIRROR_BASE_SIZE * screenHeight.toFloat() / screenWidth).toInt()
-        } else {
-            mirrorHeight = AppConfig.MIRROR_BASE_SIZE
-            mirrorWidth = (AppConfig.MIRROR_BASE_SIZE * screenWidth.toFloat() / screenHeight).toInt()
-        }
-    }
-
-    /**
-     * 创建 ImageReader + VirtualDisplay（使用初始方向尺寸，仅创建一次）
+     * 创建 ImageReader + VirtualDisplay（固定 480x640，仅创建一次）
      * 创建后自动注册图像监听器
      */
     private fun createMirrorSession() {
@@ -326,6 +337,14 @@ class PhoneMirrorService : Service() {
      */
     private fun sendFrame(data: ByteArray, w: Int, h: Int) {
         try {
+            // 帧率控制：限制发送频率，避免网络拥塞
+            val now = System.currentTimeMillis()
+            val minInterval = 1000L / TARGET_FPS
+            if (now - lastFrameTime < minInterval) {
+                return
+            }
+            lastFrameTime = now
+
             if (socket == null || !socket!!.isConnected) {
                 reconnectSocket()
             }
@@ -337,12 +356,13 @@ class PhoneMirrorService : Service() {
                 (h and 0xFF).toByte(),
                 ((h shr 8) and 0xFF).toByte()
             )
-            // 合并 header + data 为一次 write，确保原子写入
-            val combined = ByteArray(header.size + data.size)
-            System.arraycopy(header, 0, combined, 0, header.size)
-            System.arraycopy(data, 0, combined, header.size, data.size)
-            outputStream?.write(combined)
-            outputStream?.flush()
+            // 复用发送缓冲区，避免每帧创建新数组
+            val totalSize = header.size + data.size
+            val sendBuffer = reusableSendBuffer?.takeIf { it.size >= totalSize } ?: ByteArray(totalSize).also { reusableSendBuffer = it }
+            System.arraycopy(header, 0, sendBuffer, 0, header.size)
+            System.arraycopy(data, 0, sendBuffer, header.size, data.size)
+            // 不调用 flush()，让 TCP 自动合并发送，减少网络开销
+            outputStream?.write(sendBuffer, 0, totalSize)
         } catch (e: Exception) {
             Log.w(TAG, "Send frame failed: ${e.message}")
             try { outputStream?.close() } catch (_: Exception) {}

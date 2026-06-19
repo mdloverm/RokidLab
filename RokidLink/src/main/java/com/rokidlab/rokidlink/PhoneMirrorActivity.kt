@@ -38,7 +38,7 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
         imageView = ImageView(this).apply {
             // FIT_CENTER 保持画面比例不变形
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(Color.BLACK)
+            setBackgroundColor(Color.TRANSPARENT)
             // 双击退出
             setOnClickListener {
                 val now = System.currentTimeMillis()
@@ -81,6 +81,8 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
     override fun onDisconnected() {
         runOnUiThread {
             imageView.setImageBitmap(null)
+            stopServer()
+            finish()
         }
     }
 

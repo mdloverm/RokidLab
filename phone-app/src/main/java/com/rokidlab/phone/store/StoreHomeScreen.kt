@@ -13,6 +13,7 @@ import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
 import com.rokidlab.phone.R
+import androidx.compose.ui.res.stringResource
 import android.util.Log
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.BackHandler
@@ -253,16 +254,9 @@ internal fun BrewPhoneApp(
         BrewDialog(
             onDismiss = { showExitDialog = false },
             title = ctx.getString(R.string.exit_app),
-            titleColor = BrewRed,
+            color = BrewRed,
         ) {
             BrewDialogContent {
-                Box(
-                    modifier = Modifier
-                        .width(48.dp)
-                        .height(4.dp)
-                        .background(BrewRed),
-                )
-                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = ctx.getString(R.string.exit_confirm),
                     color = BrewText,
@@ -637,7 +631,7 @@ private fun MiniButton(label: String, color: Color, onClick: () -> Unit) {
 
 // ===== 模块通用组件 =====
 @Composable
-private fun ModuleHeader(title: String, subtitle: String, color: Color) {
+internal fun ModuleHeader(title: String, subtitle: String, color: Color) {
     Column {
         Text(text = title, color = color, fontSize = 32.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp)
         Spacer(modifier = Modifier.height(8.dp))
@@ -658,7 +652,7 @@ private fun FeaturedAppItem(app: BrewApp, iconLoader: IconLoader, mediaLoader: M
 }
 
 @Composable
-private fun IpAddressInputCard(
+internal fun IpAddressInputCard(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
@@ -693,7 +687,7 @@ private fun IpAddressInputCard(
 }
 
 @Composable
-private fun UsageInstructionsCard(
+internal fun UsageInstructionsCard(
     color: Color = BrewAmber,
     instructions: List<String>,
     ctx: android.content.Context,
@@ -717,7 +711,7 @@ private fun UsageInstructionsCard(
 // ===== Neo Brutalist 组件 =====
 
 @Composable
-private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running: Boolean = false, onInstall: () -> Unit, onOpen: () -> Unit, onStop: (() -> Unit)? = null, ctx: android.content.Context) {
+internal fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running: Boolean = false, onInstall: () -> Unit, onOpen: () -> Unit, onStop: (() -> Unit)? = null, ctx: android.content.Context) {
     val statusColor = when {
         running -> BrewWarning
         installing -> BrewCyan
@@ -822,19 +816,19 @@ private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running
                 }
             } else if (running) {
                 BrutalButton(
-                    label = "● ${ctx.getString(R.string.stop_mirror)} RokidLink",
+                    label = ctx.getString(R.string.stop_rokid_link),
                     color = BrewRed,
                     onClick = onStop ?: {},
                 )
             } else if (!installed) {
                 BrutalButton(
-                    label = "● ${ctx.getString(R.string.install)} RokidLink",
+                    label = ctx.getString(R.string.install_rokid_link),
                     color = BrewAmber,
                     onClick = onInstall,
                 )
             } else {
                 BrutalButton(
-                    label = ctx.getString(R.string.launch),
+                    label = ctx.getString(R.string.launch_rokid_link),
                     color = BrewSuccess,
                     onClick = onOpen,
                 )
@@ -844,7 +838,7 @@ private fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running
 }
 
 @Composable
-private fun BrutalButton(
+internal fun BrutalButton(
     label: String, 
     color: Color, 
     onClick: () -> Unit, 
@@ -1288,7 +1282,6 @@ private fun BottomNavigationBar(
     onNavigate: (NavPage) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val ctx = LocalContext.current
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -1305,13 +1298,13 @@ private fun BottomNavigationBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val navItems = listOf(
-                NavPage.STORE to ctx.getString(R.string.nav_store),
-                NavPage.SCREEN_MIRROR to ctx.getString(R.string.nav_screen_mirror),
-                NavPage.PHONE_MIRROR to ctx.getString(R.string.nav_phone_mirror),
-                NavPage.FILE_MANAGER to ctx.getString(R.string.nav_file_manager),
-                NavPage.ADB_TOOLS to ctx.getString(R.string.nav_adb_tools),
-                NavPage.HID_GAMEPAD to ctx.getString(R.string.nav_hid_gamepad),
-                NavPage.SETTINGS to ctx.getString(R.string.nav_settings),
+                NavPage.STORE to stringResource(R.string.nav_store),
+                NavPage.SCREEN_MIRROR to stringResource(R.string.nav_screen_mirror),
+                NavPage.PHONE_MIRROR to stringResource(R.string.nav_phone_mirror),
+                NavPage.FILE_MANAGER to stringResource(R.string.nav_file_manager),
+                NavPage.ADB_TOOLS to stringResource(R.string.nav_adb_tools),
+                NavPage.HID_GAMEPAD to stringResource(R.string.nav_hid_gamepad),
+                NavPage.SETTINGS to stringResource(R.string.nav_settings),
             )
             
             navItems.forEach { (page, label) ->

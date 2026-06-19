@@ -41,6 +41,12 @@
     <string name="install_to_glasses">安装到眼镜</string>
     <string name="more">更多</string>
     <string name="refresh">刷新</string>
+    <string name="sort">排序</string>
+    <string name="sort_by_name">按名称</string>
+    <string name="sort_by_size">按大小</string>
+    <string name="sort_by_date">按日期</string>
+    <string name="sort_ascending">升序</string>
+    <string name="sort_descending">降序</string>
     <string name="select_app_hint">点击下方应用选择操作</string>
     <string name="all_apps">全部</string>
     <string name="third_party">第三方</string>
@@ -71,6 +77,9 @@
     <string name="rokid_link_not_installed">未安装</string>
     <string name="reinstall_rokid_link">重装眼镜端</string>
     <string name="installing_rokid_link">正在安装中…</string>
+    <string name="install_rokid_link">● 安装 RokidLink</string>
+    <string name="launch_rokid_link">启动 RokidLink</string>
+    <string name="stop_rokid_link">● 停止 RokidLink</string>
 
     <!-- Mirror -->
     <string name="connecting">正在连接…</string>
@@ -266,6 +275,7 @@
     <string name="cancel_btn">取消</string>
     <string name="connection_failed">连接失败: %s</string>
     <string name="streaming_screen">画面传输中...</string>
+    <string name="reconnect">重新连接</string>
     <string name="reconnecting">重新连接...</string>
 
     <!-- UpdateDialog -->
@@ -273,6 +283,9 @@
     <string name="update_available_short">有可用更新</string>
     <string name="later">稍后</string>
     <string name="update_now">更新</string>
+    <string name="update_downloading_status">RokidLab %1$s（%2$d%%）</string>
+    <string name="update_ready_status">RokidLab %1$s 已准备好安装。</string>
+    <string name="update_no_release_notes">注册表导入 RokidLab GitHub 版本后，此处将显示发布说明。</string>
     <string name="download_install">下载/安装</string>
     <string name="already_latest">已是最新</string>
     <string name="release_page">发布页</string>
@@ -312,6 +325,22 @@
     <string name="stop_projection_btn">停止投屏</string>
     <string name="project_text_in_progress">投屏中...</string>
     <string name="mirror_connection_failed">连接失败</string>
+    <string name="mirror_starting">开始投屏...</string>
+    <string name="mirror_connected">已连接，正在接收画面...</string>
+    <string name="mirror_waiting_stream">等待 H.264 画面流...</string>
+    <string name="mirror_check_list">请检查：\n1. 眼镜已连接到同一 WiFi\n2. 已启用 WiFi ADB（绿色 LED）\n3. IP 地址正确\n4. 眼镜端已授予屏幕录制权限</string>
+    <string name="mirror_connecting_glasses">正在连接眼镜 (%s:%d)...</string>
+    <string name="mirror_adb_auth">ADB 认证中...</string>
+    <string name="mirror_connected_short">已连接</string>
+    <string name="mirror_connection_failed_msg">连接失败：%s</string>
+    <string name="mirror_starting_server">正在启动 scrcpy-server...</string>
+    <string name="mirror_connecting_tunnel">正在连接 scrcpy 隧道...</string>
+    <string name="mirror_streaming">画面传输中...</string>
+    <string name="mirror_reconnecting">正在重连...</string>
+    <string name="file_manager_connecting">正在连接眼镜 (%s:%d)...</string>
+    <string name="file_manager_auth">ADB 认证完成...</string>
+    <string name="file_manager_connected">已连接</string>
+    <string name="file_manager_connection_failed">连接失败：%s</string>
 
     <!-- CxrLHiRokidSession - onStatus messages -->
     <string name="install_glasses_host_first">请先安装 %s。</string>
@@ -508,6 +537,82 @@
     <string name="timer_connected_status">已连接</string>
     <string name="timer_disconnected_status">未连接</string>
     <string name="timer_executed_count">已执行 %d次</string>
+    <string name="timer_action_type">操作类型</string>
+    <string name="timer_command_hint">输入 shell 命令</string>
+    <string name="timer_keycode_hint">输入按键码</string>
+    <string name="timer_package_hint">输入包名</string>
+    <string name="timer_coord_x">X:</string>
+    <string name="timer_coord_y">Y:</string>
+    <string name="timer_create_task">创建任务</string>
+    <string name="timer_update_task">更新任务</string>
+
+    <!-- 系统信息 -->
+    <string name="section_device_info">设备信息</string>
+    <string name="label_manufacturer">制造商</string>
+    <string name="label_model">型号</string>
+    <string name="label_os">系统</string>
+    <string name="label_processor">处理器</string>
+    <string name="label_serial">序列号</string>
+    <string name="label_build">版本</string>
+    <string name="section_storage">存储</string>
+    <string name="label_ram">内存</string>
+    <string name="label_data">数据</string>
+    <string name="section_battery">电池</string>
+    <string name="label_level">电量</string>
+    <string name="label_power">电源</string>
+    <string name="label_health">健康</string>
+
+    <!-- 日志消息 -->
+    <string name="log_bluetooth_permission_denied">蓝牙权限被拒绝</string>
+    <string name="log_notification_permission_granted">通知权限已授权</string>
+    <string name="log_notification_permission_denied">通知权限被拒绝，可在系统设置中开启</string>
+    <string name="log_bluetooth_not_enabled">蓝牙仍未开启</string>
+    <string name="log_mediaprojection_denied">屏幕录制权限被拒绝</string>
+    <string name="log_mediaprojection_granted">屏幕录制权限已授权，正在启动投屏服务</string>
+    <string name="log_loaded_apps">已加载 %d 个应用（使用离线缓存）</string>
+    <string name="log_ready_authorize">准备就绪。安装眼镜应用前请先授权 %s。</string>
+    <string name="log_requesting_notification_permission">正在请求通知权限...</string>
+    <string name="log_notification_permission_guide">通知权限未授权，正在引导用户前往设置</string>
+    <string name="log_cannot_open_settings">无法打开通知设置：%s</string>
+    <string name="log_refreshing_registry">正在刷新应用商店列表...</string>
+    <string name="log_registry_updated">应用商店列表已更新（%d 个应用）</string>
+    <string name="log_registry_unavailable">远程注册表不可用：%s</string>
+    <string name="log_update_available">发现更新：RokidLab %s</string>
+    <string name="log_update_check_failed">自更新检查失败：%s</string>
+    <string name="log_switched_mirror">已切换到 %s</string>
+    <string name="log_update_failed_no_url">更新失败：缺少 RokidLab APK 下载地址</string>
+    <string name="log_downloading_rokidlab">正在下载 RokidLab %s...</string>
+    <string name="log_downloaded_bytes">已下载 %d 字节</string>
+    <string name="log_update_failed">更新失败：%s</string>
+    <string name="log_glasses_install_refreshed">眼镜安装状态已刷新</string>
+    <string name="log_launched_glasses">已在眼镜上启动 %s</string>
+    <string name="log_launched_phone">已在手机上启动 %s</string>
+    <string name="log_downloading_apk">正在下载 %s 版 %s APK...</string>
+    <string name="log_download_progress">正在下载 %s：%d%%</string>
+    <string name="log_downloaded_kb">已下载 %s（%d KB）</string>
+    <string name="log_install_failed">安装失败：%s</string>
+    <string name="log_download_cancelled">下载已取消：%s</string>
+    <string name="log_installing_rokidlink">正在安装 RokidLink 到眼镜...</string>
+    <string name="log_rokidlink_installed">RokidLink 安装成功</string>
+    <string name="log_rokidlink_install_failed">RokidLink 安装失败</string>
+    <string name="log_opening_rokidlink">正在打开眼镜上的 RokidLink...</string>
+    <string name="log_rokidlink_launched">RokidLink 启动成功</string>
+    <string name="log_rokidlink_launch_failed">RokidLink 启动失败</string>
+    <string name="log_closing_rokidlink">正在关闭眼镜上的 RokidLink...</string>
+    <string name="log_rokidlink_closed">RokidLink 已关闭</string>
+    <string name="log_rokidlink_close_failed">RokidLink 关闭失败</string>
+    <string name="log_host_set">CXR-L 主机已设置为 %s。安装眼镜应用前请重新授权。</string>
+    <string name="log_guide_step">用户导航到引导步骤 1</string>
+    <string name="log_starting_glasses_mirror">正在启动眼镜投屏服务...</string>
+    <string name="log_glasses_mirror_started">眼镜投屏服务已启动</string>
+    <string name="log_glasses_start_failed">眼镜启动失败</string>
+    <string name="log_starting_phone_mirror">正在启动手机投屏</string>
+    <string name="log_glasses_started_request_permission">眼镜已启动，正在请求屏幕录制权限</string>
+    <string name="log_stopping_phone_mirror">正在停止手机投屏</string>
+
+    <!-- Toast 消息 -->
+    <string name="toast_rokidlink_installed">RokidLink 安装成功</string>
+    <string name="toast_rokidlink_install_failed">RokidLink 安装失败</string>
 
     <!-- ADB 工具 -->
     <string name="connect">连接</string>

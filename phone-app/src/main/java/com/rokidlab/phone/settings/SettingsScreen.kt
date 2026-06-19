@@ -154,7 +154,7 @@ private fun LanguageDialog(
     onDismiss: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.select_language)) {
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.select_language), color = BrewPurple) {
         BrewDialogContent {
             LocalizationManager.AppLocale.entries.forEach { locale ->
                 val selected = locale.code == currentCode

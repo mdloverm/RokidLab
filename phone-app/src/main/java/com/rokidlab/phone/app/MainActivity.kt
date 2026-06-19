@@ -142,7 +142,7 @@ class MainActivity : AppCompatActivity() {
             if (permissions.all(::hasPermission)) {
                 consumePendingAction()
             } else {
-                log("Bluetooth permission denied.")
+                log(getString(R.string.log_bluetooth_permission_denied))
                 Toast.makeText(this, this.getString(R.string.bluetooth_permission_denied), Toast.LENGTH_LONG).show()
             }
         }
@@ -150,20 +150,20 @@ class MainActivity : AppCompatActivity() {
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             if (it) {
-                log("Notification permission granted")
+                log(getString(R.string.log_notification_permission_granted))
                 // 授予后强制设置 appops 为 allow
                 runCatching {
                     val pm = packageManager
                     // Nothing extra needed - system handles it
                 }
             } else {
-                log("Notification permission denied, can be enabled in system settings")
+                log(getString(R.string.log_notification_permission_denied))
             }
         }
 
     private val enableBluetoothLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            if (isBluetoothEnabled()) consumePendingAction() else log("Bluetooth still not enabled.")
+            if (isBluetoothEnabled()) consumePendingAction() else log(getString(R.string.log_bluetooth_not_enabled))
         }
 
     private val phoneInstallStatusReceiver = object : BroadcastReceiver() {
@@ -187,7 +187,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val data = result.data ?: run {
-            log("MediaProjection permission denied")
+            log(getString(R.string.log_mediaprojection_denied))
             phoneMirrorState = phoneMirrorState.copy(
                 isMirroring = false,
                 connectionStatus = this@MainActivity.getString(R.string.permission_denied)
@@ -200,7 +200,7 @@ class MainActivity : AppCompatActivity() {
         }
         isStartingPhoneMirror = false
         if (result.resultCode == Activity.RESULT_OK) {
-            log("MediaProjection permission granted, starting screen mirror service")
+            log(getString(R.string.log_mediaprojection_granted))
             val app = application as LabApplication
             phoneMirrorState = phoneMirrorState.copy(
                 isMirroring = true,
@@ -214,7 +214,7 @@ class MainActivity : AppCompatActivity() {
                 data
             )
         } else {
-            log("MediaProjection permission denied")
+            log(getString(R.string.log_mediaprojection_denied))
             phoneMirrorState = phoneMirrorState.copy(
                 isMirroring = false,
                 connectionStatus = this@MainActivity.getString(R.string.permission_denied)
@@ -280,7 +280,7 @@ class MainActivity : AppCompatActivity() {
         // 启动时同步 RokidLink 安装状态（含缓存命中 + SDK 查询两种路径）
         checkRokidLinkInstallation()
         apps = runCatching { BrewIndex.loadInitial(this) }.getOrDefault(emptyList())
-        log("Loaded ${apps.size} apps (with offline cache)")
+        log(getString(R.string.log_loaded_apps, apps.size))
         refreshCachedGlassesInstallStates(apps)
         refreshPhoneInstallStates(apps)
 
@@ -412,8 +412,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
         refreshStoreIndex(manual = false)
-        log("Ready. Please authorize ${selectedHostApp.displayName} before installing glasses APK.")
-        
+        log(getString(R.string.log_ready_authorize, selectedHostApp.displayName))
+
         // Android 13+ 请求通知权限（用于定时消息推送到眼镜）
         requestNotificationPermission()
     }
@@ -421,13 +421,13 @@ class MainActivity : AppCompatActivity() {
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (hasPermission(Manifest.permission.POST_NOTIFICATIONS)) return
-        log("Requesting notification permission...")
+        log(getString(R.string.log_requesting_notification_permission))
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         // MIUI 可能静默拒绝，启动后再次尝试打开设置页引导用户
         lifecycleScope.launch {
             delay(2000)
             if (!hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
-                log("Notification permission not granted, guiding user to settings")
+                log(getString(R.string.log_notification_permission_guide))
                 openAppNotificationSettings()
             }
         }
@@ -441,7 +441,7 @@ class MainActivity : AppCompatActivity() {
             }
             startActivity(intent)
         } catch (e: Exception) {
-            log("Cannot open notification settings: ${e.message}")
+            log(getString(R.string.log_cannot_open_settings, e.message))
         }
     }
 
@@ -511,7 +511,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             refreshing = true
             val started = System.currentTimeMillis()
-            if (manual) log("Refreshing store registry...")
+            if (manual) log(getString(R.string.log_refreshing_registry))
             runCatching {
                 BrewIndex.refresh(this@MainActivity)
             }.onSuccess { refresh ->
@@ -521,9 +521,9 @@ class MainActivity : AppCompatActivity() {
                 installCheckTick += 1
                 // 单独检查 RokidLab 自身更新（固定从 Gitee 获取）
                 checkRokidLabUpdate()
-                log("Store registry updated (${refresh.apps.size} apps).")
+                log(getString(R.string.log_registry_updated, refresh.apps.size))
             }.onFailure { error ->
-                log("Remote registry unavailable: ${error.message ?: error.javaClass.simpleName}")
+                log(getString(R.string.log_registry_unavailable, error.message ?: error.javaClass.simpleName))
                 Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.registry_unavailable, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
             }
             val elapsed = System.currentTimeMillis() - started
@@ -553,19 +553,19 @@ class MainActivity : AppCompatActivity() {
                     available = true,
                 )
                 if (!wasUpdateAvailable) showUpdatePrompt = true
-                log("Update available: RokidLab ${updateVersionLabel(update.version)}.")
+                log(getString(R.string.log_update_available, updateVersionLabel(update.version)))
             } else {
                 selfUpdateState = selfUpdateState.copy(available = false)
             }
         }.onFailure { error ->
-            log("Self-update check failed: ${error.message ?: error.javaClass.simpleName}")
+            log(getString(R.string.log_update_check_failed, error.message ?: error.javaClass.simpleName))
         }
     }
 
     private fun switchMirror(index: Int) {
         BrewIndex.setMirror(this, index)
         prerequisitesState = prerequisitesState.copy(mirrorSourceSelected = true)
-        log("Switched to ${BrewIndex.getCurrentMirror().name}")
+        log(getString(R.string.log_switched_mirror, BrewIndex.getCurrentMirror().name))
         refreshStoreIndex(manual = true)
     }
 
@@ -632,7 +632,7 @@ class MainActivity : AppCompatActivity() {
         if (selfUpdateState.downloading) return
         val url = selfUpdateState.apkUrl
         if (url.isBlank()) {
-            log("Update failed: missing RokidLab APK download URL.")
+            log(getString(R.string.log_update_failed_no_url))
             return
         }
         // 清理旧更新 APK
@@ -642,7 +642,7 @@ class MainActivity : AppCompatActivity() {
         val version = selfUpdateState.latestVersion.ifBlank { "latest" }
         val job = lifecycleScope.launch {
             runCatching {
-                log("Downloading RokidLab $version...")
+                log(getString(R.string.log_downloading_rokidlab, version))
                 val file = downloader.download(url, "RokidLab-update.apk") { percent ->
                     runOnUiThread {
                         downloadProgress["brew-self-update"] = percent
@@ -651,7 +651,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 downloadProgress["brew-self-update"] = 100
                 selfUpdateState = selfUpdateState.copy(downloading = false, downloadPercent = 100)
-                log("Downloaded ${file.length()} bytes.")
+                log(getString(R.string.log_downloaded_bytes, file.length()))
                 val ok = PhonePackageInstallHelper.requestInstall(this@MainActivity, file, ::log)
                 if (!ok) {
                     selfUpdateState = selfUpdateState.copy(downloading = false)
@@ -659,7 +659,7 @@ class MainActivity : AppCompatActivity() {
                 downloadProgress.remove("brew-self-update")
                 downloadCancelJobs.remove("brew-self-update")
             }.onFailure { error ->
-                log("Update failed: ${error.message ?: error.javaClass.simpleName}")
+                log(getString(R.string.log_update_failed, error.message ?: error.javaClass.simpleName))
                 downloadProgress.remove("brew-self-update")
                 downloadCancelJobs.remove("brew-self-update")
                 selfUpdateState = selfUpdateState.copy(downloading = false)
@@ -786,7 +786,7 @@ class MainActivity : AppCompatActivity() {
             },
             onComplete = {
                 if (generation == glassesInstallRefreshGeneration) {
-                    log("Glasses install state refreshed.")
+                    log(getString(R.string.log_glasses_install_refreshed))
                 }
             },
         )
@@ -832,7 +832,7 @@ class MainActivity : AppCompatActivity() {
             runWithPrerequisites {
                 cxrL.launchApp(packageName) { launched ->
                     if (launched) {
-                        log("Launched ${app.name} on glasses")
+                        log(getString(R.string.log_launched_glasses, app.name))
                     } else {
                         Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.cannot_launch_glasses, app.name), Toast.LENGTH_SHORT).show()
                     }
@@ -843,7 +843,7 @@ class MainActivity : AppCompatActivity() {
                 val intent = packageManager.getLaunchIntentForPackage(packageName)
                 if (intent != null) {
                     startActivity(intent)
-                    log("Launched ${app.name} on phone")
+                    log(getString(R.string.log_launched_phone, app.name))
                 } else {
                     Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.app_not_installed_on_phone, app.name), Toast.LENGTH_SHORT).show()
                 }
@@ -868,13 +868,13 @@ class MainActivity : AppCompatActivity() {
             downloadProgress[progressKey] = 0
             runCatching {
                 val fileName = "${app.id}-${target}-${app.version}.apk"
-                log("Downloading $target APK for ${app.name}...")
+                log(getString(R.string.log_downloading_apk, target, app.name))
                 val file = downloader.download(artifact.url, fileName, artifact.sha256) { progress ->
                     downloadProgress[progressKey] = progress
-                    if (progress % 25 == 0) log("Downloading $target: $progress%")
+                    if (progress % 25 == 0) log(getString(R.string.log_download_progress, target, progress))
                 }
                 downloadProgress[progressKey] = 100
-                log("Downloaded ${file.name} (${file.length() / 1024} KB).")
+                log(getString(R.string.log_downloaded_kb, file.name, file.length() / 1024))
                 if (target == "glasses") {
                     cxrL.installApk(file) { installed ->
                         artifact.packageName?.takeIf { it.isNotBlank() }?.let { packageName ->
@@ -903,7 +903,7 @@ class MainActivity : AppCompatActivity() {
                     PhonePackageInstallHelper.requestInstall(this@MainActivity, file, ::log)
                 }
             }.onFailure { error ->
-                log("Installation failed: ${error.message ?: error.javaClass.simpleName}")
+                log(getString(R.string.log_install_failed, error.message ?: error.javaClass.simpleName))
                 Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.install_failed, app.name, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
                 downloadProgress.remove(progressKey)
                 downloadCancelJobs.remove(progressKey)
@@ -952,7 +952,7 @@ class MainActivity : AppCompatActivity() {
         if (key == "brew-self-update") {
             selfUpdateState = selfUpdateState.copy(downloading = false)
         }
-        log("Download cancelled: $key")
+        log(getString(R.string.log_download_cancelled, key))
     }
 
     private fun checkRokidLinkInstallation() {
@@ -998,6 +998,11 @@ class MainActivity : AppCompatActivity() {
                         phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
                         fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
                         startRokidLinkHealthCheck()
+                    } else if (!installed) {
+                        // 未安装时也要重置 running 状态
+                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
+                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
+                        fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
                     }
                 },
                 onComplete = {
@@ -1032,11 +1037,11 @@ class MainActivity : AppCompatActivity() {
         runWithPrerequisites {
             lifecycleScope.launch {
                 updateBusy(true)
-                log("Installing RokidLink to glasses...")
+                log(getString(R.string.log_installing_rokidlink))
                 screenMirrorState = screenMirrorState.copy(isInstallingRokidLink = true)
                 phoneMirrorState = phoneMirrorState.copy(isInstallingRokidLink = true)
                 fileManagerState = fileManagerState.copy(isInstallingRokidLink = true)
-                
+
                 runCatching {
                     val apkInputStream = assets.open("RokidLink.apk")
                     val tempFile = File(cacheDir, "RokidLink.apk")
@@ -1063,12 +1068,12 @@ class MainActivity : AppCompatActivity() {
                             updateBusy(false)
                             if (installed) {
                                 settingsReinstallError = null
-                                log("RokidLink installed successfully")
-                                Toast.makeText(this@MainActivity, "RokidLink installed successfully", Toast.LENGTH_SHORT).show()
+                                log(getString(R.string.log_rokidlink_installed))
+                                Toast.makeText(this@MainActivity, getString(R.string.toast_rokidlink_installed), Toast.LENGTH_SHORT).show()
                             } else {
-                                settingsReinstallError = "RokidLink installation failed, please check glasses connection and retry"
+                                settingsReinstallError = getString(R.string.log_rokidlink_install_failed)
                                 log(settingsReinstallError!!)
-                                Toast.makeText(this@MainActivity, "RokidLink installation failed", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(this@MainActivity, getString(R.string.toast_rokidlink_install_failed), Toast.LENGTH_SHORT).show()
                             }
                         }
                         tempFile.delete()
@@ -1092,20 +1097,24 @@ class MainActivity : AppCompatActivity() {
         if (isOpeningRokidLink) return
         isOpeningRokidLink = true
         runWithPrerequisites {
-            log("Opening RokidLink on glasses...")
+            log(getString(R.string.log_opening_rokidlink))
             cxrL.launchApp(
                 packageName = "com.rokidlab.rokidlink",
                 activityClass = ".MainActivity",
                 onLaunchResult = { success ->
                     isOpeningRokidLink = false
                     if (success) {
-                        log("RokidLink launched successfully")
+                        log(getString(R.string.log_rokidlink_launched))
                         screenMirrorState = screenMirrorState.copy(rokidLinkRunning = true)
                         phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
                         fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
                         startRokidLinkHealthCheck()
                     } else {
-                        log("RokidLink launch failed")
+                        log(getString(R.string.log_rokidlink_launch_failed))
+                        // 启动失败，重置 running 状态
+                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
+                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
+                        fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
                     }
                 }
             )
@@ -1114,16 +1123,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopRokidLinkOnGlasses() {
         runWithPrerequisites {
-            log("Closing RokidLink on glasses...")
+            log(getString(R.string.log_closing_rokidlink))
             rokidLinkHealthJob?.cancel()
             rokidLinkHealthJob = null
             cxrL.stopApp(
                 packageName = "com.rokidlab.rokidlink",
                 onStopResult = { success ->
                     if (success) {
-                        log("RokidLink closed")
+                        log(getString(R.string.log_rokidlink_closed))
                     } else {
-                        log("RokidLink close failed")
+                        log(getString(R.string.log_rokidlink_close_failed))
                     }
                     screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
                     phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
@@ -1138,11 +1147,11 @@ class MainActivity : AppCompatActivity() {
         runWithPrerequisites {
             lifecycleScope.launch {
                 // 先停止运行中的 RokidLink
-                log("Closing RokidLink on glasses...")
+                log(getString(R.string.log_closing_rokidlink))
                 cxrL.stopApp(
                     packageName = "com.rokidlab.rokidlink",
                     onStopResult = { success ->
-                        log(if (success) "RokidLink closed" else "RokidLink close failed")
+                        log(if (success) getString(R.string.log_rokidlink_closed) else getString(R.string.log_rokidlink_close_failed))
                         screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
                         phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
                         fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
@@ -1173,7 +1182,7 @@ class MainActivity : AppCompatActivity() {
         glassesInstallStateSources.clear()
         installCheckTick += 1
         prerequisitesState = prerequisitesState.copy(hostApp = hostApp, authorized = false)
-        log("CXR-L host set to ${hostApp.displayName}. Please re-authorize before installing glasses apps.")
+        log(getString(R.string.log_host_set, hostApp.displayName))
     }
 
     private fun goToGuideStep1() {
@@ -1185,7 +1194,7 @@ class MainActivity : AppCompatActivity() {
             mirrorSourceSelected = false,
             authorized = false
         )
-        log("User navigated to guide step 1")
+        log(getString(R.string.log_guide_step))
         Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.reset_guide), Toast.LENGTH_SHORT).show()
     }
 
@@ -1232,15 +1241,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun startScreenMirror() {
         // 先通过 CXR-L 启动眼镜端的 ScreenMirrorIntentActivity（触发 MediaProjection 权限）
-        log("Starting glasses screen mirror service...")
+        log(getString(R.string.log_starting_glasses_mirror))
         screenMirrorState = screenMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses))
         cxrL.launchApp("com.rokidlab.rokidlink", activityClass = ".ScreenMirrorIntentActivity") { launched ->
             if (launched) {
-                log("Glasses screen mirror service started")
+                log(getString(R.string.log_glasses_mirror_started))
                 // 打开手机端 ScreenMirrorActivity，它会连接眼镜端口 6556 接收画面
                 startActivity(ScreenMirrorActivity.createIntent(this))
             } else {
-                log("Glasses start failed")
+                log(getString(R.string.log_glasses_start_failed))
                 screenMirrorState = screenMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses_failed))
             }
         }
@@ -1249,14 +1258,14 @@ class MainActivity : AppCompatActivity() {
     private fun startPhoneMirror() {
         if (isStartingPhoneMirror) return
         isStartingPhoneMirror = true
-        log("Starting phone screen mirror")
+        log(getString(R.string.log_starting_phone_mirror))
         phoneMirrorState = phoneMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses))
         // 先提示用户权限用途
         Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.screen_record_permission), Toast.LENGTH_LONG).show()
         // 通过 CXR-L 直接启动眼镜端投屏接收页（PhoneMirrorActivity 启动后自动监听 7654 端口）
         cxrL.launchApp("com.rokidlab.rokidlink", activityClass = ".PhoneMirrorActivity") { launched ->
             if (launched) {
-                log("Glasses started, requesting screen recording permission")
+                log(getString(R.string.log_glasses_started_request_permission))
                 phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
                 // 眼镜端 PhoneMirrorServer 已自动启动监听 7654 端口
                 // 用户授权后 PhoneMirrorService 会直接 Socket 连接
@@ -1264,7 +1273,7 @@ class MainActivity : AppCompatActivity() {
                 phoneMirrorProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
             } else {
                 isStartingPhoneMirror = false
-                log("Glasses start failed")
+                log(getString(R.string.log_glasses_start_failed))
                 phoneMirrorState = phoneMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses_failed))
             }
         }
@@ -1272,7 +1281,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopPhoneMirror() {
         isStartingPhoneMirror = false
-        log("Stopping phone screen mirror")
+        log(getString(R.string.log_stopping_phone_mirror))
         // 1. 停止投屏服务
         stopService(Intent(this, PhoneMirrorService::class.java))
         // 2. 通过 CXR-L 关闭眼镜端投屏
@@ -1358,7 +1367,7 @@ internal fun MirrorSourceDialog(
     onDismiss: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.switch_source_btn)) {
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.switch_source_btn), color = BrewGreen) {
         BrewDialogContent {
             BrewIndex.MIRRORS.forEachIndexed { index, mirror ->
                 val isSelected = currentIndex == index

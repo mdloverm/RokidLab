@@ -3,6 +3,7 @@ package com.rokidlab.phone.mirror
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
 import com.rokidlab.phone.design.*
+import com.rokidlab.phone.R
 import android.graphics.SurfaceTexture
 import android.os.Bundle
 import android.util.Log
@@ -54,6 +55,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -91,7 +93,7 @@ class ScreenMirrorActivity : ComponentActivity() {
         ipAddress = app.screenMirrorIp
 
         isStreaming = true
-        connectionStatus = "Starting mirror..."
+        connectionStatus = getString(R.string.mirror_starting)
 
         setContent {
             RokidLabTheme {
@@ -102,7 +104,7 @@ class ScreenMirrorActivity : ComponentActivity() {
                             onRetry = {
                                 // Just reset flags and wait for TextureView to recreate → onSurfaceReady
                                 connectionFailed = false
-                                connectionStatus = "Starting mirror..."
+                                connectionStatus = getString(R.string.mirror_starting)
                                 isStreaming = true
                                 // connectToGlasses() will be called by onSurfaceReady
                                 // when the new TextureView's Surface is available
@@ -142,7 +144,7 @@ class ScreenMirrorActivity : ComponentActivity() {
         if (isConnecting) return
         isConnecting = true
         val useSurface = surfaceOverride ?: surface
-        connectionStatus = "Starting mirror..."
+        connectionStatus = getString(R.string.mirror_starting)
         isStreaming = true
 
         Thread {
@@ -156,7 +158,7 @@ class ScreenMirrorActivity : ComponentActivity() {
             if (isDestroyed || !connected) {
                 if (!connected) {
                     runOnUiThread {
-                        connectionStatus = "Connect failed"
+                        connectionStatus = getString(R.string.mirror_connection_failed)
                         connectionFailed = true
                         isStreaming = false
                     }
@@ -165,7 +167,7 @@ class ScreenMirrorActivity : ComponentActivity() {
                 return@Thread
             }
 
-            runOnUiThread { connectionStatus = "Connected, receiving stream..." }
+            runOnUiThread { connectionStatus = getString(R.string.mirror_connected) }
 
             if (useSurface != null) {
                 // H.264 硬件解码模式 - 使用 scrcpy-server
@@ -183,7 +185,7 @@ class ScreenMirrorActivity : ComponentActivity() {
                 Log.i(TAG, "H.264 decoder created")
 
                 // 连接后的 ADB 端 shell 命令错误等重置
-                connectionStatus = "Waiting for H.264 stream..."
+                connectionStatus = getString(R.string.mirror_waiting_stream)
 
                 client.startH264Streaming(decoder) { status ->
                     runOnUiThread {
@@ -248,7 +250,7 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "Connect failed",
+            text = stringResource(R.string.mirror_connection_failed),
             color = BrewRed,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
@@ -262,7 +264,7 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
             modifier = Modifier.padding(bottom = 16.dp)
         )
         Text(
-            text = "Check:\n1. Glasses connected to same WiFi\n2. ADB over WiFi enabled (green LED)\n3. IP address correct\n4. Screen recording permission granted on glasses",
+            text = stringResource(R.string.mirror_check_list),
             color = BrewText,
             fontSize = 14.sp,
             modifier = Modifier.padding(bottom = 32.dp)
@@ -276,13 +278,13 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
                 contentColor = BrewTextBright
             )
         ) {
-            Text("Reconnect")
+            Text(stringResource(R.string.reconnect))
         }
         TextButton(
             onClick = onBack,
             modifier = Modifier.padding(top = 8.dp)
         ) {
-            Text("Back", color = BrewTextBright)
+            Text(stringResource(R.string.back_btn), color = BrewTextBright)
         }
     }
 }

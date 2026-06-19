@@ -43,6 +43,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
@@ -53,6 +54,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
+import androidx.compose.animation.core.animateFloatAsState
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -78,7 +80,7 @@ internal fun NewFolderDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit)
     val ctx = LocalContext.current
     var name by remember { mutableStateOf("") }
     
-    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.new_folder)) {
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.new_folder), color = BrewCoral) {
         BrewDialogContent {
             OutlinedTextField(
                 value = name,
@@ -106,7 +108,7 @@ fun RenameDialog(fileName: String, onConfirm: (String) -> Unit, onDismiss: () ->
     val ctx = LocalContext.current
     var newName by remember { mutableStateOf(fileName) }
     
-    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.rename)) {
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.rename), color = BrewCoral) {
         BrewDialogContent {
             OutlinedTextField(
                 value = newName,
@@ -131,7 +133,7 @@ fun RenameDialog(fileName: String, onConfirm: (String) -> Unit, onDismiss: () ->
 @Composable
 fun DeleteConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    BrewDialog(onDismiss = onDismiss) {
+    BrewDialog(onDismiss = onDismiss, color = BrewRed) {
         BrewDialogContent {
             Icon(Icons.Outlined.Warning, contentDescription = "Warning", tint = BrewOrange, modifier = Modifier.size(48.dp))
             Spacer(modifier = Modifier.height(16.dp))
@@ -149,7 +151,7 @@ fun DeleteConfirmDialog(count: Int, onConfirm: () -> Unit, onDismiss: () -> Unit
 @Composable
 internal fun DetailsDialog(file: FileItem, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.file_details)) {
+    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.file_details), color = BrewInfo) {
         BrewDialogContent {
             DetailRow(label = ctx.getString(R.string.name_label), value = file.name)
             DetailRow(label = ctx.getString(R.string.path_label), value = file.path)
@@ -175,7 +177,7 @@ fun DetailRow(label: String, value: String) {
 @Composable
 fun PreviewDialog(fileName: String, content: String?, isLoading: Boolean, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    BrewDialog(onDismiss = onDismiss) {
+    BrewDialog(onDismiss = onDismiss, color = BrewInfo) {
         Column(modifier = Modifier.defaultMinSize(minHeight = 200.dp)) {
             Row(
                 modifier = Modifier
@@ -290,11 +292,34 @@ internal fun FileManagerScreen(
     onInstallApk: ((FileItem) -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
+    var isRefreshing by remember { mutableStateOf(false) }
+    var showSortMenu by remember { mutableStateOf(false) }
+    val rotationAngle by animateFloatAsState(if (isRefreshing) 360f else 0f, label = "refresh")
+
+    // 监听 isLoading 变化来控制动画
+    LaunchedEffect(isLoading) {
+        if (!isLoading) {
+            isRefreshing = false
+        }
+    }
+
+    // 处理刷新动画
+    fun handleRefresh() {
+        isRefreshing = true
+        onRefresh()
+    }
+
+    // 处理排序变化
+    fun handleSortChange(newOrder: FileManagerActivity.SortOrder) {
+        showSortMenu = false
+        onSortChange(newOrder)
+    }
+
     // 处理系统返回键
     BackHandler {
         onBack()
     }
-    
+
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = {
@@ -306,9 +331,6 @@ internal fun FileManagerScreen(
                 }
             },
             actions = {
-                IconButton(onClick = onRefresh) {
-                    Icon(Icons.Outlined.Refresh, contentDescription = "Refresh")
-                }
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = BrewPanel)
         )
@@ -343,8 +365,25 @@ internal fun FileManagerScreen(
             Spacer(modifier = Modifier.width(8.dp))
             
             Box {
-                IconButton(onClick = { /* show sort menu */ }) {
-                    Icon(Icons.Outlined.Sort, contentDescription = "Sort")
+                IconButton(onClick = { showSortMenu = true }) {
+                    Icon(Icons.Outlined.Sort, contentDescription = ctx.getString(R.string.sort))
+                }
+                DropdownMenu(
+                    expanded = showSortMenu,
+                    onDismissRequest = { showSortMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(ctx.getString(R.string.sort_by_name) + if (sortOrder == FileManagerActivity.SortOrder.NAME_ASC) " ↑" else if (sortOrder == FileManagerActivity.SortOrder.NAME_DESC) " ↓" else "") },
+                        onClick = { handleSortChange(if (sortOrder == FileManagerActivity.SortOrder.NAME_ASC) FileManagerActivity.SortOrder.NAME_DESC else FileManagerActivity.SortOrder.NAME_ASC) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(ctx.getString(R.string.sort_by_size) + if (sortOrder == FileManagerActivity.SortOrder.SIZE_ASC) " ↑" else if (sortOrder == FileManagerActivity.SortOrder.SIZE_DESC) " ↓" else "") },
+                        onClick = { handleSortChange(if (sortOrder == FileManagerActivity.SortOrder.SIZE_ASC) FileManagerActivity.SortOrder.SIZE_DESC else FileManagerActivity.SortOrder.SIZE_ASC) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(ctx.getString(R.string.sort_by_date) + if (sortOrder == FileManagerActivity.SortOrder.DATE_ASC) " ↑" else if (sortOrder == FileManagerActivity.SortOrder.DATE_DESC) " ↓" else "") },
+                        onClick = { handleSortChange(if (sortOrder == FileManagerActivity.SortOrder.DATE_ASC) FileManagerActivity.SortOrder.DATE_DESC else FileManagerActivity.SortOrder.DATE_ASC) }
+                    )
                 }
             }
         }
@@ -408,8 +447,8 @@ internal fun FileManagerScreen(
                 IconButton(onClick = onUpload) {
                     Icon(Icons.Outlined.Upload, contentDescription = ctx.getString(R.string.upload_status), tint = BrewCoral)
                 }
-                IconButton(onClick = onRefresh) {
-                    Icon(Icons.Outlined.Refresh, contentDescription = ctx.getString(R.string.refresh), tint = BrewCoral)
+                IconButton(onClick = { handleRefresh() }) {
+                    Icon(Icons.Outlined.Refresh, contentDescription = ctx.getString(R.string.refresh), tint = BrewCoral, modifier = Modifier.rotate(rotationAngle))
                 }
             }
         }
@@ -1091,92 +1130,34 @@ class FileManagerActivity : ComponentActivity() {
         
         Thread {
             try {
-                // 下载APK文件到本地
-                apkInstallStatus = getString(R.string.downloading_apk)
-                val localPath = cacheDir.absolutePath + "/" + file.name
-                val downloadSuccess = adbClient?.downloadFile(file.path, localPath) ?: false
+                apkInstallStatus = getString(R.string.installing_apk)
+                apkInstallProgress = 50
                 
-                if (!downloadSuccess) {
-                    runOnUiThread {
-                        apkInstallStatus = getString(R.string.download_failed)
-                        installingApkPath = null
-                    }
-                    return@Thread
-                }
+                // 直接在眼镜端通过 ADB shell 执行 pm install，无需下载到手机再上传
+                val result = adbClient?.executeShellCommand("pm install -r \"${file.path}\"") ?: ""
+                val isSuccess = !result.contains("Failure", ignoreCase = true) &&
+                    (result.contains("Success", ignoreCase = true) || result.isBlank())
                 
-                // 创建临时文件
-                val apkFile = File(localPath)
-                
-                // 如果需要使用真正的安装功能，启动MainActivity
-                if (useRealInstall) {
-                    runOnUiThread {
-                        apkInstallStatus = getString(R.string.installing_apk)
-                        apkInstallProgress = 50
-                        
-                        // 启动MainActivity来执行安装
-                        val installIntent = Intent(this@FileManagerActivity, MainActivity::class.java).apply {
-                            action = "com.rokidlab.phone.ACTION_INSTALL_APK"
-                            putExtra("apk_file_path", apkFile.absolutePath)
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        startActivity(installIntent)
-                        
-                        // 模拟安装完成（实际安装由MainActivity完成）
-                        Thread {
-                            for (i in 50..100 step 10) {
-                                Thread.sleep(200)
-                                runOnUiThread {
-                                    apkInstallProgress = i
-                                }
-                            }
-                            
-                            runOnUiThread {
-                                apkInstallStatus = getString(R.string.install_completed)
-                                apkInstallProgress = 100
-                                statusMessage = getString(R.string.apk_install_completed, file.name)
-                                
-                                // 3秒后清除状态
-                                Thread {
-                                    Thread.sleep(3000)
-                                    runOnUiThread {
-                                        installingApkPath = null
-                                        apkInstallProgress = 0
-                                        apkInstallStatus = null
-                                    }
-                                }.start()
-                            }
-                        }.start()
-                    }
-                } else {
-                    // 没有真正的安装功能时使用模拟进度
-                    for (i in 50..100 step 10) {
-                        Thread.sleep(200)
-                        runOnUiThread {
-                            apkInstallProgress = i
-                        }
-                    }
-                    
-                    // 模拟安装完成
-                    runOnUiThread {
+                runOnUiThread {
+                    if (isSuccess) {
                         apkInstallStatus = getString(R.string.install_completed)
                         apkInstallProgress = 100
                         statusMessage = getString(R.string.apk_install_completed, file.name)
-                        
-                        // 3秒后清除状态
-                        Thread {
-                            Thread.sleep(3000)
-                            runOnUiThread {
-                                installingApkPath = null
-                                apkInstallProgress = 0
-                                apkInstallStatus = null
-                            }
-                        }.start()
+                    } else {
+                        val errorLine = result.lines().firstOrNull { it.isNotBlank() } ?: getString(R.string.unknown_error)
+                        apkInstallStatus = getString(R.string.apk_install_failed, errorLine)
                     }
+                    
+                    // 3秒后清除状态
+                    Thread {
+                        Thread.sleep(3000)
+                        runOnUiThread {
+                            installingApkPath = null
+                            apkInstallProgress = 0
+                            apkInstallStatus = null
+                        }
+                    }.start()
                 }
-                
-                // 清理临时文件
-                apkFile.delete()
-                
             } catch (e: Exception) {
                 Log.e(TAG, "APK安装失败: ${e.message}", e)
                 runOnUiThread {

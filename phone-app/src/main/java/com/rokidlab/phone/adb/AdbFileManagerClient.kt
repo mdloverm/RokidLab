@@ -1,6 +1,7 @@
 package com.rokidlab.phone.adb
 
 import com.rokidlab.phone.util.AppConfig
+import com.rokidlab.phone.R
 import android.content.Context
 import android.util.Base64
 import android.util.Log
@@ -92,7 +93,7 @@ class AdbFileManagerClient(
 
     fun connect(onStatus: (String) -> Unit): Boolean {
         return try {
-            onStatus("Connecting to glasses ($ipAddress:$port)...")
+            onStatus(context.getString(R.string.file_manager_connecting, ipAddress, port))
             Log.i(TAG, "Connecting to $ipAddress:$port")
 
             socket = Socket()
@@ -102,16 +103,16 @@ class AdbFileManagerClient(
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
             Log.i(TAG, "TCP connection established")
-            onStatus("Completing ADB authentication...")
+            onStatus(context.getString(R.string.file_manager_auth))
 
             keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
             doHandshake()
             Log.i(TAG, "ADB connection successful")
-            onStatus("Connected")
+            onStatus(context.getString(R.string.file_manager_connected))
             true
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed: ${e.message}", e)
-            onStatus("Connection failed: ${e.message}")
+            onStatus(context.getString(R.string.file_manager_connection_failed, e.message))
             disconnect()
             false
         }

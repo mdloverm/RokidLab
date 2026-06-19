@@ -181,21 +181,25 @@ internal fun BrewIconButton(
 }
 
 // ═══════════════════════════════════════════════════
-// 标准对话框系统
+// 标准对话框系统 — RokidLink 卡片样式
 // ═══════════════════════════════════════════════════
 
 /**
- * 标准对话框容器 — 统一所有弹窗的外观
+ * 标准对话框容器 — 统一所有弹窗的 RokidLink 卡片外观
  *
  * @param title 可选标题
- * @param titleColor 标题颜色（默认 BrewTextBright，可传模块色标记）
+ * @param icon 可选标题图标（emoji 或符号）
+ * @param subtitle 可选副标题
+ * @param color 卡片主题色（决定标题条背景和边框颜色）
  */
 @Composable
 internal fun BrewDialog(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
     title: String? = null,
-    titleColor: Color = BrewTextBright,
+    icon: String? = null,
+    subtitle: String? = null,
+    color: Color = BrewInfo,
     properties: androidx.compose.ui.window.DialogProperties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = true),
     content: @Composable () -> Unit,
 ) {
@@ -205,37 +209,61 @@ internal fun BrewDialog(
     ) {
         Surface(
             modifier = modifier,
-            shape = BrewShapeLarge,
-            color = BrewPanelAlt,
-            border = androidx.compose.foundation.BorderStroke(1.dp, BrewBorder),
+            shape = BrewShapeStandard,
+            color = BrewPanel,
+            border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.25f)),
         ) {
             Column {
                 if (title != null) {
-                    BrewDialogTitle(text = title, color = titleColor)
+                    // 彩色标题条
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(color)
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (icon != null) {
+                                Text(
+                                    text = icon,
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(end = 8.dp),
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = title,
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp,
+                                )
+                                if (subtitle != null) {
+                                    Text(
+                                        text = subtitle,
+                                        color = Color.White.copy(alpha = 0.7f),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    // 装饰分隔线
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .background(BrewBorder)
+                            .offset(x = 8.dp),
+                    )
                 }
                 content()
             }
         }
     }
-}
-
-/**
- * 标准标题栏 — 用于对话框标题
- * @param color 标题颜色，可传模块色（如 BrewInfo, BrewMagenta 等）
- */
-@Composable
-internal fun BrewDialogTitle(
-    text: String,
-    modifier: Modifier = Modifier,
-    color: Color = BrewTextBright,
-) {
-    Text(
-        text = text,
-        color = color,
-        fontSize = 18.sp,
-        fontWeight = FontWeight.Bold,
-        modifier = modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp),
-    )
 }
 
 /**

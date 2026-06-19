@@ -50,7 +50,7 @@ internal fun GuideScreen(
         verticalArrangement = Arrangement.Center,
     ) {
         Text(
-            text = "Welcome to Rokid Lab",
+            text = ctx.getString(R.string.guide_welcome),
             color = BrewGreen,
             fontSize = 32.sp,
             fontWeight = FontWeight.Bold,
