@@ -497,7 +497,7 @@
     <!-- ADB Tools - Timer -->
     <string name="adb_tools_timer_subtitle">定时任务 / 组合操作</string>
     <string name="timer_task_list">定时任务列表</string>
-    <string name="timer_new_task">+ 新建</string>
+    <string name="timer_new_task">新建任务</string>
     <string name="timer_no_tasks">暂无定时任务</string>
     <string name="timer_default_name">定时任务 %d</string>
     <string name="timer_edit_task">编辑任务</string>

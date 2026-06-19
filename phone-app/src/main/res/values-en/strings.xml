@@ -499,7 +499,7 @@
     <!-- ADB Tools - Timer -->
     <string name="adb_tools_timer_subtitle">Timer / Combo Actions</string>
     <string name="timer_task_list">Timer Tasks</string>
-    <string name="timer_new_task">+ New</string>
+    <string name="timer_new_task">New Task</string>
     <string name="timer_no_tasks">No timer tasks</string>
     <string name="timer_default_name">Task %d</string>
     <string name="timer_edit_task">Edit Task</string>
