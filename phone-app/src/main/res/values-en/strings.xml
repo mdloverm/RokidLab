@@ -257,6 +257,8 @@
     <string name="theme_velvet_dark_desc">Warm dark default theme</string>
     <string name="theme_cool_blue">Ice Blue</string>
     <string name="theme_cool_blue_desc">Cool light blue theme</string>
+    <string name="apply">Apply</string>
+    <string name="reset">Reset</string>
     <string name="reinstall_glasses">Reinstall on Glasses</string>
     <string name="ready">Ready</string>
     <string name="system_log">System Log</string>

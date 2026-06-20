@@ -30,12 +30,14 @@ object VelvetDarkColors : BrewColors {
     override val border: Color = Color(0xFF2C2C33)
 
     // ═══════════════════════════════════════════════════
-    // 五模块五色
+    // 七模块七色
     // ═══════════════════════════════════════════════════
     override val store: Color = Color(0xFFE85D3F)       // 商店 — 朱砂红
     override val mirror: Color = Color(0xFF5B8FB9)       // 屏幕镜像 — 静谧蓝
     override val projection: Color = Color(0xFFD4A85C)  // 手机投屏 — 画廊金
     override val fileManager: Color = Color(0xFFA78BFA) // 文件管理 — 雾紫
+    override val adbTools: Color = Color(0xFF00CEC9)    // ADB工具 — 薄荷青
+    override val hidGamepad: Color = Color(0xFFFD79A8)  // HID手柄 — 玫瑰粉
     override val settings: Color = Color(0xFF7D7A70)   // 设置 — 暖灰褐
 }
 

@@ -52,36 +52,4 @@
   ```
 - 构建命令：`.\gradlew.bat :cxrl:RokidLab:phone-app:assembleDebug`
 
-## 7. 纠错检查清单（修改代码后必须逐项验证）
 
-### 7.1 导入检查
-- [ ] `clip` 必须使用 `import androidx.compose.ui.draw.clip`，**禁止**使用 `import androidx.compose.foundation.clip`
-- [ ] 同一行不要用换行符拼接多个 import 语句（如 `import A\nimport B` 必须分行）
-- [ ] 删除重复的 import 行
-
-### 7.2 字符串资源检查
-- [ ] 新增的字符串资源 name 必须唯一，不能与已有定义重复
-- [ ] 新增字符串同时添加中文（`values/strings.xml`）和英文（`values-en/strings.xml`）
-- [ ] 删除旧代码时同步清理不再使用的字符串资源
-- [ ] Toast、log()、弹窗内容等用户可见文本已加语言包
-
-### 7.3 编译错误预防
-- [ ] Composable 函数内部的局部 Composable 函数必须标注 `@Composable`
-- [ ] 引用的字符串资源必须确保在 `strings.xml` 中有定义
-- [ ] 组件参数名必须匹配 design 模块实际定义的参数（如 `BrewCompactButton` 参数为 `text` 而非 `label`）
-- [ ] lambda 参数传递函数引用时，若类型推断歧义使用 lambda 包装：`{ cb -> getOrConnect(cb) }`
-- [ ] 列表构造使用 `context.getString(R.string.xxx_fmt, arg1, arg2)` 而非字符串拼接
-
-### 7.4 函数/类定义约束
-- [ ] 数据类（data class）和密封类（sealed class）定义在 Composable 函数外部（文件顶层）
-- [ ] 不要在 Composable 函数内部定义 `class`、`data class`、`sealed class`
-- [ ] `resetEditor` 等辅助函数必须在 `createTask` 等调用者之前定义（前向引用问题）
-
-### 7.5 颜色与主题检查
-- [ ] 使用 `design` 包的 `Brew*` 颜色常量替代 `Color(0xFF...)` 或 `Color.Red` 等硬编码
-- [ ] 使用 `BrewShape*` 形状常量替代 `RoundedCornerShape` 硬编码值
-
-### 7.6 弹窗样式检查
-- [ ] 新增弹窗使用 `BrewDialog` 而非原始 `Dialog`
-- [ ] `BrewDialog` 调用时传入 `color` 参数指定主题色
-- [ ] 弹窗标题/内容已加语言包

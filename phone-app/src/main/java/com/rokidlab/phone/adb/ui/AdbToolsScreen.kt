@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.adb.ui
+package com.rokidlab.phone.adb.ui
 
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.R
@@ -39,13 +39,13 @@ fun AdbToolsScreen(
     var showTimer by remember { mutableStateOf(false) }
     var showShell by remember { mutableStateOf(false) }
 
-    // ADB 工具模块，颜色使用导航栏 ADB 主题色 BrewInfo
+    // ADB 工具模块，颜色使用导航栏 ADB 主题色 BrewTeal
     Column(modifier = Modifier.padding(16.dp)) {
         // 1. ModuleHeader
         ModuleHeader(
             title = ctx.getString(R.string.adb_tools_title),
             subtitle = ctx.getString(R.string.adb_tools_subtitle),
-            color = BrewInfo,
+            color = BrewTeal,
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -71,36 +71,37 @@ fun AdbToolsScreen(
                 ip = newVal
                 prefs.edit().putString("ip", newVal).apply()
             },
-            color = BrewInfo,
+            color = BrewTeal,
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
         // 4. 四个工具按钮 — 各自独立，点击后弹窗自动处理 ADB 连接
+        // 使用其他模块色进行区分
         BrutalButton(
             label = ctx.getString(R.string.system_info),
-            color = BrewInfo,
+            color = BrewCoral,
             onClick = { showSysInfo = true },
         )
         Spacer(modifier = Modifier.height(8.dp))
 
         BrutalButton(
             label = ctx.getString(R.string.app_manager),
-            color = BrewCoral,
+            color = BrewCyan,
             onClick = { showAppMgr = true },
         )
         Spacer(modifier = Modifier.height(8.dp))
 
         BrutalButton(
             label = ctx.getString(R.string.timer_func),
-            color = BrewWarning,
+            color = BrewPurple,
             onClick = { showTimer = true },
         )
         Spacer(modifier = Modifier.height(8.dp))
 
         BrutalButton(
             label = ctx.getString(R.string.shell_command),
-            color = BrewMagenta,
+            color = BrewAmber,
             onClick = { showShell = true },
         )
 
@@ -108,7 +109,7 @@ fun AdbToolsScreen(
 
         // 5. UsageInstructionsCard — 与 FileManagerModule 完全一致
         UsageInstructionsCard(
-            color = BrewInfo,
+            color = BrewTeal,
             instructions = listOf(
                 "1. ${ctx.getString(R.string.connecting_adb_hint)}（5555）",
                 "2. ${ctx.getString(R.string.ip_address_label)}（${ip}）",

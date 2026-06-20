@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.design.theme
+package com.rokidlab.phone.design.theme
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -18,9 +18,6 @@ enum class BrewTheme(val displayNameResId: Int, val descriptionResId: Int) {
 
 /**
  * 主题管理器
- *
- * 颜色通过 mutableStateOf 暴露，在 @Composable 中读取时会自动触发重组，
- * 因此全局变量如 BrewBg、BrewPanel 等能随主题切换正确更新。
  */
 object BrewThemeManager {
     private const val TAG = "BrewThemeManager"
@@ -29,14 +26,12 @@ object BrewThemeManager {
 
     private lateinit var prefs: SharedPreferences
 
-    // 使用 mutableStateOf — Compose 原生状态，读取时自动触发重组
     private var _currentTheme by mutableStateOf(BrewTheme.VELVET_DARK)
 
-    /** 当前主题 (Compose-aware) */
     val currentTheme: BrewTheme get() = _currentTheme
 
     /**
-     * 当前配色 (Compose-aware)
+     * 当前配色
      */
     val currentColors: BrewColors
         get() = when (_currentTheme) {

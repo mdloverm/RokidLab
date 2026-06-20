@@ -257,6 +257,8 @@
     <string name="theme_velvet_dark_desc">暖暗调默认主题</string>
     <string name="theme_cool_blue">冰蓝冰川</string>
     <string name="theme_cool_blue_desc">浅蓝冷调主题</string>
+    <string name="apply">应用</string>
+    <string name="reset">重置</string>
     <string name="reinstall_glasses">重装眼镜端</string>
     <string name="ready">就绪</string>
     <string name="system_log">系统日志</string>

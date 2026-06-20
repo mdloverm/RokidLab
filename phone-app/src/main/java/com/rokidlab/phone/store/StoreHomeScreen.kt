@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.store
+package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.AdbShellClient
@@ -1313,8 +1313,8 @@ private fun BottomNavigationBar(
                     NavPage.SCREEN_MIRROR -> BrewCyan
                     NavPage.PHONE_MIRROR -> BrewPurple
                     NavPage.FILE_MANAGER -> BrewAmber
-                    NavPage.ADB_TOOLS -> BrewInfo
-                    NavPage.HID_GAMEPAD -> BrewSuccess
+                    NavPage.ADB_TOOLS -> BrewTeal
+                    NavPage.HID_GAMEPAD -> BrewPink
                     NavPage.SETTINGS -> BrewMagenta
                 }
                 

@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.design
+package com.rokidlab.phone.design
 
 import android.util.Log
 import android.view.View
@@ -140,14 +140,16 @@ val BrewDim: Color get() = BrewThemeManager.currentColors.dim
 // 边框
 val BrewBorder: Color get() = BrewThemeManager.currentColors.border
 
-// 五模块五色（固定用途）
+// 七模块七色（固定用途）
 val BrewCoral: Color get() = BrewThemeManager.currentColors.store      // 商店
 val BrewCyan: Color get() = BrewThemeManager.currentColors.mirror      // 屏幕镜像
 val BrewPurple: Color get() = BrewThemeManager.currentColors.projection // 手机投屏
 val BrewAmber: Color get() = BrewThemeManager.currentColors.fileManager  // 文件管理
+val BrewTeal: Color get() = BrewThemeManager.currentColors.adbTools     // ADB工具
+val BrewPink: Color get() = BrewThemeManager.currentColors.hidGamepad   // HID手柄
 val BrewMagenta: Color get() = BrewThemeManager.currentColors.settings  // 设置
 
-// 功能色（映射到模块色，每套主题只需配 5 个模块色即可）
+// 功能色（映射到模块色，每套主题只需配 7 个模块色即可）
 //   错误 → 商店色 (暖/醒目)
 //   成功 → 镜像色 (冷/平静)
 //   警告 → 文件管理色 (暖橙/注意)

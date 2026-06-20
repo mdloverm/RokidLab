@@ -73,10 +73,6 @@ android {
         buildConfig = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.4"
-    }
-
     // ── APK 输出命名规则 ──
     applicationVariants.all {
         val variant = this

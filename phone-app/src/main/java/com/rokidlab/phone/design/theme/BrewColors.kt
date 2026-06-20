@@ -28,15 +28,17 @@ interface BrewColors {
     // ═══════════════════════════════════════════════════
     // 边框
     // ═══════════════════════════════════════════════════
-    val border: Color                // 边框
+    val border: Color                // 边框 — 卡片/按钮/分割线边框
 
     // ═══════════════════════════════════════════════════
-    // 五模块五色（固定用途）
+    // 七模块七色（固定用途）
     // ═══════════════════════════════════════════════════
     val store: Color                 // 商店
     val mirror: Color                // 屏幕镜像
     val projection: Color            // 手机投屏
     val fileManager: Color           // 文件管理
+    val adbTools: Color              // ADB工具
+    val hidGamepad: Color            // HID手柄
     val settings: Color              // 设置
 }
 

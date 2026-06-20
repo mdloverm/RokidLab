@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.hid
+package com.rokidlab.phone.hid
 
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.R
@@ -59,7 +59,7 @@ internal fun HidGamepadModule(
         // ── 标题 ──
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(context.getString(R.string.nav_hid_gamepad), color = BrewSuccess, fontSize = 28.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp,
+                Text(context.getString(R.string.nav_hid_gamepad), color = BrewPink, fontSize = 28.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp,
                     maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(4.dp))
                 Text(context.getString(R.string.select_paired_device), color = BrewMuted, fontSize = 14.sp,

@@ -38,12 +38,14 @@ object CoolBlueColors : BrewColors {
     override val border: Color = Color(0xFFC8D4E8)      // 浅蓝边框
 
     // ═══════════════════════════════════════════════════
-    // 五模块五色 — 浅蓝底 × 撞色
+    // 七模块七色 — 浅蓝底 × 撞色
     // ═══════════════════════════════════════════════════
     override val store: Color = Color(0xFFE85D3F)       // 商店 — 珊瑚红 (暖色撞浅蓝)
     override val mirror: Color = Color(0xFF00B894)       // 屏幕镜像 — 翡翠绿
     override val projection: Color = Color(0xFF6C5CE7)  // 手机投屏 — 明媚紫
     override val fileManager: Color = Color(0xFFF39C12) // 文件管理 — 琥珀金
+    override val adbTools: Color = Color(0xFF0984E3)    // ADB工具 — 深海蓝
+    override val hidGamepad: Color = Color(0xFFE17055)  // HID手柄 — 珊瑚橙
     override val settings: Color = Color(0xFF5A7BA0)    // 设置 — 钢灰蓝
 }
 
