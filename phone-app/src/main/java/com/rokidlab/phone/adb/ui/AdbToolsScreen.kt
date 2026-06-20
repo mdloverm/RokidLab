@@ -58,6 +58,7 @@ fun AdbToolsScreen(
             onInstall = onInstallRokidLink,
             onOpen = onOpenRokidLink,
             onStop = onStopRokidLink,
+            moduleColor = BrewTeal,
             ctx = ctx,
         )
 
@@ -76,8 +77,7 @@ fun AdbToolsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // 4. 四个工具按钮 — 各自独立，点击后弹窗自动处理 ADB 连接
-        // 使用其他模块色进行区分
+        // 4. 四个工具按钮 — 使用其他导航栏颜色（排除当前 ADB 的 BrewTeal）
         BrutalButton(
             label = ctx.getString(R.string.system_info),
             color = BrewCoral,

@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.adb.ui
+package com.rokidlab.phone.adb.ui
 
 import com.rokidlab.phone.adb.AdbShellClient
 import com.rokidlab.phone.design.*
@@ -45,7 +45,7 @@ fun AppMgrDialog(
 ) {
     val ctx = LocalContext.current
     AdbDialogContent(
-        ctx.getString(R.string.app_manager), BrewCoral, client, connected, scope, getOrConnect, onDismiss,
+        ctx.getString(R.string.app_manager), BrewCyan, client, connected, scope, getOrConnect, onDismiss,
         icon = null,
         subtitle = ctx.getString(R.string.app_manager_subtitle),
     ) { c ->
@@ -145,12 +145,12 @@ fun AppMgrDialog(
                         Text(selectedPkg, color = BrewCoral, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Spacer(Modifier.height(6.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            ActionButton(ctx.getString(R.string.launch), BrewSuccess) { doAction({ c.launchApp(it) }, selectedPkg) }
-                            ActionButton(ctx.getString(R.string.uninstall), BrewRed) { doAction({ c.uninstallApp(it) }, selectedPkg) }
-                            ActionButton(if (isSelectedFrozen) ctx.getString(R.string.unfreeze) else ctx.getString(R.string.freeze), if (isSelectedFrozen) BrewSuccess else BrewWarning) {
+                            ActionButton(ctx.getString(R.string.launch), BrewCoral) { doAction({ c.launchApp(it) }, selectedPkg) }
+                            ActionButton(ctx.getString(R.string.uninstall), BrewPurple) { doAction({ c.uninstallApp(it) }, selectedPkg) }
+                            ActionButton(if (isSelectedFrozen) ctx.getString(R.string.unfreeze) else ctx.getString(R.string.freeze), if (isSelectedFrozen) BrewTeal else BrewAmber) {
                                 if (isSelectedFrozen) doAction({ c.enableApp(it) }, selectedPkg) else doAction({ c.disableApp(it) }, selectedPkg)
                             }
-                            ActionButton(ctx.getString(R.string.extract), BrewMagenta) {
+                            ActionButton(ctx.getString(R.string.extract), BrewPink) {
                                 scope.launch(Dispatchers.IO) { if (selectedPkg.isNotEmpty()) { val r = c.extractApkToDownloads(selectedPkg); Log.i("AppMgr", "extract result: $r"); withContext(Dispatchers.Main) { statusMsg = r } } }
                             }
                         }

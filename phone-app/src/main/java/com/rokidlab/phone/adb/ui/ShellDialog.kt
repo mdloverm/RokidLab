@@ -40,7 +40,7 @@ fun ShellDialog(
 ) {
     val ctx = LocalContext.current
     AdbDialogContent(
-        ctx.getString(R.string.shell_command), BrewMagenta, client, connected, scope, getOrConnect, onDismiss,
+        ctx.getString(R.string.shell_command), BrewAmber, client, connected, scope, getOrConnect, onDismiss,
         icon = null,
         subtitle = ctx.getString(R.string.shell_command_subtitle),
     ) { c ->
@@ -99,25 +99,25 @@ fun ShellDialog(
                     .padding(horizontal = 10.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Shell>", color = BrewMagenta, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                Text("Shell>", color = BrewTeal, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 Spacer(Modifier.width(8.dp))
                 BasicTextField(
                     value = cmd, onValueChange = { cmd = it },
                     modifier = Modifier.weight(1f).heightIn(min = 40.dp), singleLine = true,
                     textStyle = TextStyle(color = BrewText, fontSize = 14.sp, fontFamily = FontFamily.Monospace),
-                    cursorBrush = SolidColor(BrewMagenta),
+                    cursorBrush = SolidColor(BrewTeal),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { execute(cmd.trim()) }),
                     decorationBox = { innerTextField -> Box(contentAlignment = Alignment.CenterStart) { if (cmd.isEmpty()) Text(ctx.getString(R.string.enter_command), color = BrewMuted.copy(alpha = 0.4f), fontSize = 14.sp, fontFamily = FontFamily.Monospace); innerTextField() } },
                 )
                 Spacer(Modifier.width(8.dp))
                 Box(
-                    Modifier.height(36.dp).clip(BrewShapeSmall).background(BrewMagenta.copy(alpha = 0.2f))
-                        .border(1.dp, BrewMagenta.copy(alpha = 0.6f), BrewShapeSmall)
+                    Modifier.height(36.dp).clip(BrewShapeSmall).background(BrewCoral.copy(alpha = 0.2f))
+                        .border(1.dp, BrewCoral.copy(alpha = 0.6f), BrewShapeSmall)
                         .clickable(enabled = !loading && cmd.isNotBlank()) { execute(cmd.trim()) }
                         .padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center,
-                ) { Text("↵", color = if (loading) BrewMuted else BrewMagenta, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                ) { Text("↵", color = if (loading) BrewMuted else BrewCoral, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
             }
         }
     }

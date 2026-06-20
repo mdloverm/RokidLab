@@ -223,10 +223,11 @@
 
 | 模块 | color | 用途 |
 |------|-------|------|
-| 商店 | `#E85D3F` | 应用安装/更新对话框 |
-| 屏幕镜像 / ADB工具 | `#5B8FB9` | 镜像状态/SysInfo/Timer/Shell/AppMgr |
-| 文件管理 | `#A78BFA` | 文件操作确认 |
-| 设置 | `#8A8780` | 退出确认/语言切换 |
+| 商店 | `BrewCoral` | 应用安装/更新对话框 |
+| 屏幕镜像 | `BrewCyan` | 镜像状态/应用管理弹窗 |
+| 手机投屏 | `BrewPurple` | 定时功能弹窗 |
+| 文件管理 | `BrewAmber` | 文件操作确认/Shell 命令弹窗 |
+| ADB 工具 | `BrewTeal` | ADB 工具主色（非弹窗标题色，各子功能使用上述四色） |
 
 **BrewDialogTitle — 标题栏组件**
 
@@ -329,37 +330,40 @@
 | focusBorderColor | 模块色 |
 | unfocusedBorderColor | BrewBorder |
 
-### 2.5 ScreenStreamStatusCard（安装状态卡片）
+### 2.5 RokidLinkStatusCard（眼镜端服务状态卡片）
+
+定义：[store/StoreHomeScreen.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/StoreHomeScreen.kt) `RokidLinkStatusCard`
 
 | 属性 | 值 |
 |------|-----|
 | 容器 | clip(RoundedCornerShape(12dp)), background(BrewPanel) |
 | 边框 | 1dp, statusColor alpha 0.3, 圆角 12dp |
-| 顶部状态条 | 填满宽度, 背景=statusBg, padding 20dp×14dp |
+| 顶部状态条 | 填满宽度, 背景=statusColor, padding 20dp×14dp |
 | 状态图标 | 20sp Bold, color=BrewBg |
-| 状态文字 | "SCREENSTREAM {状态}" 16sp Bold, BrewBg, letterSpacing 2sp |
-| 副文字 | "投屏和文件管理功能必需" 11sp Medium, BrewBg alpha 0.7 |
+| 状态文字 | "ROKIDLINK {状态}" 16sp Bold, BrewBg, letterSpacing 2sp |
+| 副文字 | "眼镜端所有服务必须" 11sp Medium, BrewBg alpha 0.7 |
 | 偏移装饰线 | 高 4dp, BrewBorderHi 背景, 安装中时 0↔8dp 脉冲动画 |
-| 安装中容器 | 高 52dp, BrewPanelAlt 背景 12dp, 1dp 边框 BrewCyan alpha 0.3 |
-| 安装中文字 | "⟳ 安装中..." 14sp Bold BrewCyan letterSpacing 3sp |
+| 安装中容器 | 高 52dp, BrewPanelAlt 背景 12dp, 1dp 边框 BrewCoral alpha 0.3 |
+| 安装中文字 | "⟳ 安装中..." 14sp Bold BrewCoral letterSpacing 3sp |
 | 脉冲动画 | `infiniteRepeatable(tween 800ms, LinearEasing, Reverse)` |
 
-**四种状态：**
+**颜色规则：`moduleColor` 参数传入各自导航栏色（BrewCoral/Cyan/Purple/Amber/Teal），未安装和安装中统一使用商店色 BrewCoral**
 
-| 状态 | statusColor | statusBg | statusText | statusIcon |
-|------|------------|----------|------------|------------|
-| 运行中 | BrewWarning | BrewWarning | "运行中" | "▶" |
-| 安装中 | BrewCyan | BrewCyan | "安装中" | "►" |
-| 已安装 | BrewSuccess | BrewSuccess | "已安装" | "✔" |
-| 未安装 | BrewRed | BrewRed | "未安装" | "✘" |
+| 场景 | 状态条/图标/文字色 | 按钮色 |
+|------|-------------------|--------|
+| 运行中 | `moduleColor`（各自导航栏色） | 停止按钮 → `BrewCoral`（商店色） |
+| 已安装 | `moduleColor` | 启动按钮 → `moduleColor` |
+| 安装中 | `BrewCoral` | —（仅显示安装中动画） |
+| 未安装 | `BrewCoral` | 安装按钮 → `BrewCoral` |
 
-**四种操作按钮（BrutalButton）：**
+**四个模块调用示例：**
 
-| 状态 | 按钮文字 | 颜色 |
-|------|---------|------|
-| 运行中 | "● 停止 ScreenStream" | BrewRed |
-| 未安装 | "● 安装 ScreenStream" | BrewAmber |
-| 已安装 | "▶ 启动 ScreenStream" | BrewSuccess |
+| 模块 | moduleColor | 运行中/已安装 | 未安装/安装中/停止 |
+|------|-----------|-------------|-----------------|
+| 屏幕镜像 | `BrewCyan` | 静谧蓝 | 珊瑚红 |
+| 手机投屏 | `BrewPurple` | 画廊金 | 珊瑚红 |
+| 文件管理 | `BrewAmber` | 雾紫 | 珊瑚红 |
+| ADB 工具 | `BrewTeal` | 青绿 | 珊瑚红 |
 
 ### 2.6 UsageInstructionsCard（使用说明卡片）
 
@@ -444,7 +448,7 @@
 | SCREEN_MIRROR | "屏幕镜像" | BrewCyan |
 | PHONE_MIRROR | "手机投屏" | BrewPurple |
 | FILE_MANAGER | "文件管理" | BrewAmber |
-| ADB_TOOLS | "ADB工具" | BrewInfo |
+| ADB_TOOLS | "ADB工具" | BrewTeal |
 | HID_GAMEPAD | "蓝牙手柄" | BrewSuccess |
 | SETTINGS | "设置" | BrewMagenta |
 
@@ -487,8 +491,8 @@ ADB 工具页面的眼镜连接信息卡片。
 | 边框 | 1dp BrewBorder, 圆角 12dp |
 | 内边距 | 16dp |
 | 标签 | "ADB 连接" 10sp Bold uppercase, BrewMuted, letterSpacing 3sp |
-| 标签下线 | 32×3dp 模块色色块 |
-| 设备 IP | 18sp Bold, BrewInfo, letterSpacing 1sp |
+| 标签下线 | 32×3dp BrewTeal 色块 |
+| 设备 IP | 18sp Bold, BrewTeal, letterSpacing 1sp |
 | 状态 | 14sp, 已连接→BrewSuccess "已连接" / 未连接→BrewError "未连接" |
 | 连接按钮 | BrutalButton "🔗 连接眼镜" / "断开" |
 

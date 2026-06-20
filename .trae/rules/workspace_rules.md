@@ -52,4 +52,12 @@
   ```
 - 构建命令：`.\gradlew.bat :cxrl:RokidLab:phone-app:assembleDebug`
 
+### 7. ADB 设备规则
+- **安装 phone-app 到手机**：`adb -s 9fc033b0 install -r <apk>`
+- **安装到眼镜**：`adb -s 1901092534015091 install <apk>`
+- 设备清单：
+  - `9fc033b0` (model: 24129PN74C) — **手机端**，phone-app 安装目标
+  - `1901092534015091` (model: RG_glasses) — **眼镜端**，RokidLink/眼镜应用安装目标
+- **严禁**不带 `-s` 参数执行 `adb install`，避免装错设备
+
 

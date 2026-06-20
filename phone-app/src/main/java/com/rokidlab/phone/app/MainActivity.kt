@@ -263,13 +263,24 @@ class MainActivity : AppCompatActivity() {
                 if (conn.authorized && ::cxrL.isInitialized) {
                     checkRokidLinkInstallation()
                 }
-                // CXR-L 断开时 RokidLink 必然不在运行
+                // CXR-L 完全连通 + RokidLink 已知已安装 → 标记为运行中
+                // 弥补 SDK 查询回调与连接状态之间的竞态窗口
+                if (conn.cxrlConnected && conn.glassBtConnected) {
+                    val app = application as LabApplication
+                    if (app.rokidLinkInstalled == true && !screenMirrorState.rokidLinkRunning) {
+                        log(getString(R.string.log_rokidlink_launched))
+                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = true)
+                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
+                        fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
+                        startRokidLinkHealthCheck()
+                    }
+                }
+                // CXR-L 暂时断开：不立即清零 running 状态
+                // SDK 每次操作（查询/安装/启停）完成后都会 cleanup() 重置连接标志，
+                // 但这只是临时断开操作连接，眼镜端 CXR-L 连接实际仍存活。
+                // 真正的连接断开由 startRokidLinkHealthCheck 的 15 秒心跳兜底检测。
                 if (!conn.cxrlConnected || !conn.glassBtConnected) {
-                    screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
-                    phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
-                    fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
-                    rokidLinkHealthJob?.cancel()
-                    rokidLinkHealthJob = null
+                    // 心跳检测仍在运行 → 等它自己判断，不手动清零
                 }
             },
             initialHostApp = selectedHostApp,
@@ -468,11 +479,7 @@ class MainActivity : AppCompatActivity() {
         preferHighRefreshRate()
         installCheckTick += 1
         refreshPhoneInstallStates()
-        // 重置 RokidLink 运行状态，让用户重新点击开始按钮
-        // 这样可以确保每次进入时按钮文字正确
-        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
-        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
-        fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
+        // 不重置 RokidLink 运行状态 - 心跳检测会自动监控真实状态
     }
 
     private fun preferHighRefreshRate() {
@@ -1016,21 +1023,29 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * 定期心跳检测 RokidLink 是否仍在运行
-     * 每 15 秒通过 CXR-L 连接状态判断，连接断开则自动标记为未运行
+     * 每 15 秒检查一次，需连续 2 次检测连接断开（共 30 秒）才标记为未运行，
+     * 防止 SDK 操作 cleanup() 的临时断连导致误判。
      */
     private fun startRokidLinkHealthCheck() {
         rokidLinkHealthJob?.cancel()
         rokidLinkHealthJob = lifecycleScope.launch {
+            var consecutiveDowns = 0
             while (true) {
                 delay(15_000)
                 if (!cxrConnection.cxrlConnected || !cxrConnection.glassBtConnected) {
-                    android.util.Log.w("MainActivity", "RokidLink heartbeat: CXR-L connection lost, marking as not running")
-                    screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
-                    phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
-                    fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
-                    break
+                    consecutiveDowns++
+                    if (consecutiveDowns >= 2) {
+                        android.util.Log.w("MainActivity", "RokidLink heartbeat: CXR-L connection lost for 30s, marking as not running")
+                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
+                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
+                        fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
+                        break
+                    }
+                    android.util.Log.w("MainActivity", "RokidLink heartbeat: connection down ($consecutiveDowns/2), waiting...")
+                } else {
+                    consecutiveDowns = 0
+                    android.util.Log.d("MainActivity", "RokidLink heartbeat: connection alive")
                 }
-                android.util.Log.d("MainActivity", "RokidLink heartbeat: connection alive")
             }
         }
     }

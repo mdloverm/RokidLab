@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.adb.ui
+package com.rokidlab.phone.adb.ui
 
 import com.rokidlab.phone.adb.AdbShellClient
 import com.rokidlab.phone.design.*
@@ -33,7 +33,7 @@ fun SysInfoDialog(
 ) {
     val ctx = LocalContext.current
     AdbDialogContent(
-        ctx.getString(R.string.system_info), BrewInfo, client, connected, scope, getOrConnect, onDismiss,
+        ctx.getString(R.string.system_info), BrewCoral, client, connected, scope, getOrConnect, onDismiss,
         icon = null,
         subtitle = ctx.getString(R.string.system_info_subtitle),
         height = Modifier.heightIn(max = 520.dp),
@@ -101,7 +101,7 @@ fun SysInfoDialog(
                 }
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    InfoSection(ctx.getString(R.string.section_device_info), BrewInfo) {
+                    InfoSection(ctx.getString(R.string.section_device_info), BrewTeal) {
                         InfoRow(ctx.getString(R.string.label_manufacturer), data.manufacturer)
                         InfoRow(ctx.getString(R.string.label_model), data.model)
                         InfoRow(ctx.getString(R.string.label_os), "Android ${data.release} (API ${data.sdk})")
@@ -109,7 +109,7 @@ fun SysInfoDialog(
                         InfoRow(ctx.getString(R.string.label_serial), data.serial)
                         InfoRow(ctx.getString(R.string.label_build), data.build)
                     }
-                    InfoSection(ctx.getString(R.string.section_storage), BrewCoral) {
+                    InfoSection(ctx.getString(R.string.section_storage), BrewCyan) {
                         InfoRow(ctx.getString(R.string.label_ram), data.memTotal)
                         if (data.stTotal != "?") InfoRow(ctx.getString(R.string.label_data), "${data.stTotal} total / ${data.stUsed} used")
                     }

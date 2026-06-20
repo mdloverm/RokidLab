@@ -63,7 +63,7 @@ fun TimerDialog(
 ) {
     val context = LocalContext.current
     AdbDialogContent(
-        context.getString(R.string.timer_func), BrewWarning, client, connected, scope, getOrConnect, onDismiss,
+        context.getString(R.string.timer_func), BrewPurple, client, connected, scope, getOrConnect, onDismiss,
         icon = null,
         subtitle = context.getString(R.string.adb_tools_timer_subtitle),
     ) { c ->

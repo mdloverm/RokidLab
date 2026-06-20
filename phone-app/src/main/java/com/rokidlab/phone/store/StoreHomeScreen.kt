@@ -328,6 +328,7 @@ private fun ScreenMirrorModule(
             onInstall = actions.onScreenMirrorInstallRokidLink,
             onOpen = actions.onScreenMirrorOpenRokidLink,
             onStop = actions.onScreenMirrorStop,
+            moduleColor = BrewCyan,
             ctx = ctx,
         )
         Spacer(modifier = Modifier.height(16.dp))
@@ -413,6 +414,7 @@ private fun PhoneMirrorModule(
                 onInstall = actions.onPhoneMirrorInstallRokidLink,
                 onOpen = actions.onPhoneMirrorOpenRokidLink,
                 onStop = actions.onPhoneMirrorStop,
+                moduleColor = BrewPurple,
                 ctx = ctx,
             )
             Spacer(modifier = Modifier.height(16.dp))
@@ -471,6 +473,7 @@ private fun FileManagerModule(
             onInstall = actions.onFileManagerInstallRokidLink,
             onOpen = actions.onFileManagerOpenRokidLink,
             onStop = actions.onFileManagerStop,
+            moduleColor = BrewAmber,
             ctx = ctx,
         )
         Spacer(modifier = Modifier.height(16.dp))
@@ -710,19 +713,15 @@ internal fun UsageInstructionsCard(
 // ===== Neo Brutalist 组件 =====
 
 @Composable
-internal fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running: Boolean = false, onInstall: () -> Unit, onOpen: () -> Unit, onStop: (() -> Unit)? = null, ctx: android.content.Context) {
+internal fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, running: Boolean = false, onInstall: () -> Unit, onOpen: () -> Unit, onStop: (() -> Unit)? = null, moduleColor: Color = BrewCoral, ctx: android.content.Context) {
+    // 状态颜色：已安装/运行中 → 各自导航栏色，未安装/安装中 → 商店色
     val statusColor = when {
-        running -> BrewWarning
-        installing -> BrewCyan
-        installed -> BrewSuccess
-        else -> BrewRed
+        running -> moduleColor
+        installing -> BrewCoral
+        installed -> moduleColor
+        else -> BrewCoral
     }
-    val statusBg = when {
-        running -> BrewWarning
-        installing -> BrewCyan
-        installed -> BrewSuccess
-        else -> BrewRed
-    }
+    val statusBg = statusColor
     val statusText = when {
         running -> ctx.getString(R.string.running)
         installing -> ctx.getString(R.string.installing)
@@ -805,30 +804,33 @@ internal fun RokidLinkStatusCard(installed: Boolean, installing: Boolean, runnin
                         .fillMaxWidth()
                         .height(52.dp)
                         .background(BrewPanelAlt, BrewShapeStandard)
-                        .border(width = 1.dp, color = BrewCyan.copy(alpha = 0.3f), shape = BrewShapeStandard),
+                        .border(width = 1.dp, color = BrewCoral.copy(alpha = 0.3f), shape = BrewShapeStandard),
                     contentAlignment = Alignment.Center,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "⟳", color = BrewCyan, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 12.dp))
-                        Text(text = ctx.getString(R.string.installing), color = BrewCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+                        Text(text = "⟳", color = BrewCoral, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 12.dp))
+                        Text(text = ctx.getString(R.string.installing), color = BrewCoral, fontSize = 14.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
                     }
                 }
             } else if (running) {
+                // 停止按钮 → 商店色
                 BrutalButton(
                     label = ctx.getString(R.string.stop_rokid_link),
-                    color = BrewRed,
+                    color = BrewCoral,
                     onClick = onStop ?: {},
                 )
             } else if (!installed) {
+                // 安装按钮 → 商店色
                 BrutalButton(
                     label = ctx.getString(R.string.install_rokid_link),
-                    color = BrewAmber,
+                    color = BrewCoral,
                     onClick = onInstall,
                 )
             } else {
+                // 启动按钮 → 各自导航栏色
                 BrutalButton(
                     label = ctx.getString(R.string.launch_rokid_link),
-                    color = BrewSuccess,
+                    color = moduleColor,
                     onClick = onOpen,
                 )
             }
