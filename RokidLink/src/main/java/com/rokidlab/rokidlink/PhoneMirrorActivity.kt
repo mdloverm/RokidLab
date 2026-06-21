@@ -38,7 +38,7 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
         imageView = ImageView(this).apply {
             // FIT_CENTER 保持画面比例不变形
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(Color.TRANSPARENT)
+            setBackgroundColor(Color.BLACK)
             // 双击退出
             setOnClickListener {
                 val now = System.currentTimeMillis()
@@ -56,7 +56,19 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
         startServer()
     }
 
+    override fun onResume() {
+        super.onResume()
+        // CXR-L 重新拉起已存在的 Activity 时可能没有走 onCreate，需检查 Server 状态
+        if (!::server.isInitialized || !server.isRunning) {
+            startServer()
+        }
+    }
+
     private fun startServer() {
+        // 如果旧的 Server 还在运行，先停掉避免冲突
+        if (::server.isInitialized) {
+            server.stop()
+        }
         server = PhoneMirrorServer(PORT)
         server.setFrameListener(this)
         if (!server.start()) {
@@ -81,8 +93,8 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
     override fun onDisconnected() {
         runOnUiThread {
             imageView.setImageBitmap(null)
-            stopServer()
-            finish()
+            // 不 finish()，保持 Activity 运行等待手机重连
+            // Server 的 waitForClient 循环会自动监听新连接
         }
     }
 

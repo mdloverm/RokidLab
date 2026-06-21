@@ -20,6 +20,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.Looper
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.OrientationEventListener
@@ -86,6 +87,10 @@ class PhoneMirrorService : Service() {
     private var lastFrameTime = 0L
     /** 目标帧率（fps） */
     private val TARGET_FPS = 30
+    /** 帧健康检查：记录上次收到帧的时间，超时未收到则重启 VirtualDisplay */
+    private var lastImageTime = 0L
+    /** 帧健康检查定时器 */
+    private var frameWatchdog: Thread? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -226,6 +231,7 @@ class PhoneMirrorService : Service() {
                     orientationListener?.enable()
 
                     Log.i(TAG, "Mirror service started")
+                    startFrameWatchdog()
                 } catch (e: Exception) {
                     Log.e(TAG, "Mirror start failed: ${e.message}", e)
                     throw e
@@ -278,9 +284,18 @@ class PhoneMirrorService : Service() {
     private fun registerImageListener() {
         imageReader?.setOnImageAvailableListener({ reader ->
             if (!isMirrorRunning) return@setOnImageAvailableListener
-            val image = reader.acquireLatestImage()
+            val image = try {
+                reader.acquireLatestImage()
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "acquireLatestImage failed (reader may be closed): ${e.message}")
+                null
+            } catch (e: Exception) {
+                Log.e(TAG, "acquireLatestImage unexpected error: ${e.message}", e)
+                null
+            }
             if (image == null) return@setOnImageAvailableListener
             try {
+                lastImageTime = System.currentTimeMillis()
                 processImage(image)
             } catch (e: IllegalStateException) {
                 Log.w(TAG, "Skipping invalid frame: ${e.message}")
@@ -374,17 +389,12 @@ class PhoneMirrorService : Service() {
     }
 
     /**
-     * 重连眼镜 Socket（最多重试后放弃）
+     * 重连眼镜 Socket（无限重试，不会停 mirror）
      */
     private var reconnectAttempts = 0
     private fun reconnectSocket() {
-        if (reconnectAttempts >= AppConfig.MIRROR_MAX_RECONNECT_ATTEMPTS) {
-            Log.w(TAG, "Socket reconnect max attempts reached, stopping mirror")
-            stopMirror()
-            return
-        }
-        reconnectAttempts++
         if (!isMirrorRunning) return
+        reconnectAttempts++
         try { Thread.sleep(200) } catch (_: InterruptedException) { return }
         if (!isMirrorRunning) return
         try {
@@ -396,8 +406,72 @@ class PhoneMirrorService : Service() {
             reconnectAttempts = 0
             Log.i(TAG, "Socket reconnected successfully")
         } catch (e: Exception) {
-            Log.w(TAG, "Socket reconnect failed ($reconnectAttempts/${AppConfig.MIRROR_MAX_RECONNECT_ATTEMPTS}): ${e.message}")
+            Log.w(TAG, "Socket reconnect failed ($reconnectAttempts): ${e.message}")
         }
+    }
+
+    /**
+     * 帧健康检查看门狗
+     * 如果 3 秒内没有新帧到达，说明 ImageReader 可能卡死，重建 VirtualDisplay
+     */
+    private fun startFrameWatchdog() {
+        stopFrameWatchdog()
+        lastImageTime = System.currentTimeMillis()
+        var recoverAttempted = false
+
+        frameWatchdog = Thread {
+            while (isMirrorRunning && !Thread.currentThread().isInterrupted) {
+                try {
+                    Thread.sleep(2000)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (!isMirrorRunning) break
+                val sinceLastFrame = System.currentTimeMillis() - lastImageTime
+                if (sinceLastFrame > 8000 && !recoverAttempted) {
+                    Log.w(TAG, "No frames for ${sinceLastFrame}ms, attempting to recover ImageReader")
+                    recoverAttempted = true
+                    Handler(Looper.getMainLooper()).post {
+                        recoverImageReader()
+                    }
+                } else if (sinceLastFrame > 15000) {
+                    Log.w(TAG, "No frames for ${sinceLastFrame}ms, stopping mirror")
+                    Handler(Looper.getMainLooper()).post {
+                        stopMirror()
+                    }
+                }
+            }
+        }.apply {
+            name = "mirror-watchdog"
+            isDaemon = true
+            start()
+        }
+    }
+
+    /**
+     * 恢复卡死的 ImageReader：重建 ImageReader + 更新 VirtualDisplay Surface
+     * 不重建 VirtualDisplay，避免 MediaProjection 限制
+     */
+    private fun recoverImageReader() {
+        if (!isMirrorRunning) return
+        try {
+            val newReader = ImageReader.newInstance(mirrorWidth, mirrorHeight, PixelFormat.RGBA_8888, 2)
+            val newSurface = newReader.surface
+            virtualDisplay?.surface = newSurface
+            imageReader?.close()
+            imageReader = newReader
+            surface = newSurface
+            registerImageListener()
+            lastImageTime = System.currentTimeMillis()
+            Log.i(TAG, "ImageReader recovered successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "ImageReader recovery failed: ${e.message}", e)
+        }
+    }
+
+    private fun stopFrameWatchdog() {
+        frameWatchdog?.interrupt()
+        frameWatchdog = null
     }
 
     private fun stopMirror() {
@@ -406,6 +480,7 @@ class PhoneMirrorService : Service() {
             if (!isMirrorRunning) return
             isMirrorRunning = false
         }
+        stopFrameWatchdog()
         runCatching {
             // 先取消注册监听器，防止回调
             orientationListener?.disable()

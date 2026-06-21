@@ -1263,13 +1263,12 @@ class MainActivity : AppCompatActivity() {
         phoneMirrorState = phoneMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses))
         // 先提示用户权限用途
         Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.screen_record_permission), Toast.LENGTH_LONG).show()
-        // 通过 CXR-L 直接启动眼镜端投屏接收页（PhoneMirrorActivity 启动后自动监听 7654 端口）
+        // 通过 CXR-L 启动眼镜端投屏接收页
         cxrL.launchApp("com.rokidlab.rokidlink", activityClass = ".PhoneMirrorActivity") { launched ->
             if (launched) {
                 log(getString(R.string.log_glasses_started_request_permission))
                 phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
-                // 眼镜端 PhoneMirrorServer 已自动启动监听 7654 端口
-                // 用户授权后 PhoneMirrorService 会直接 Socket 连接
+                // 请求 MediaProjection 权限，授权后 PhoneMirrorService 直接 Socket 连接
                 val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 phoneMirrorProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
             } else {

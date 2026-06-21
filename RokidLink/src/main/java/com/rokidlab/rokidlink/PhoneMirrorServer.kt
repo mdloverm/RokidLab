@@ -18,7 +18,8 @@ class PhoneMirrorServer(
     private var clientSocket: Socket? = null
     private var inputStream: BufferedInputStream? = null
     @Volatile
-    private var isRunning = false
+    var isRunning = false
+        private set
     private var receiveThread: Thread? = null
 
     /** Current frame width/height (read from header each frame, dynamically changes) */
@@ -26,6 +27,8 @@ class PhoneMirrorServer(
     private var frameHeight = 640
     /** Reuse Bitmap to avoid GC pressure from creating new one each frame */
     private var reusableBitmap: Bitmap? = null
+    /** Reuse pixel array to avoid allocating IntArray each frame, preventing native OOM */
+    private var reusablePixels: IntArray? = null
 
     companion object {
         private const val TAG = "RokidLink-Server"
@@ -77,7 +80,7 @@ class PhoneMirrorServer(
                 clientSocket = serverSocket?.accept()
                 if (!isRunning) break
                 clientSocket?.tcpNoDelay = true
-                clientSocket?.soTimeout = 5000  // 5 seconds timeout判定断开
+                clientSocket?.soTimeout = 15000  // 15s timeout - 手机切换方向时帧可能会暂停几秒
                 inputStream = BufferedInputStream(clientSocket?.getInputStream())
 
                 Log.i(TAG, "Phone connected")
@@ -176,22 +179,23 @@ class PhoneMirrorServer(
 
     private fun createGrayscaleBitmap(data: ByteArray, w: Int, h: Int): Bitmap? {
         return try {
-            val pixels = IntArray(w * h)
-            for (i in 0 until minOf(data.size, w * h)) {
+            val pixelCount = w * h
+            // Reuse pixel array to avoid allocating IntArray each frame (prevents native OOM)
+            val pixels = reusablePixels?.takeIf { it.size >= pixelCount } ?: IntArray(pixelCount).also { reusablePixels = it }
+            for (i in 0 until minOf(data.size, pixelCount)) {
                 val gray = data[i].toInt() and 0xFF
                 pixels[i] = Color.rgb(gray, gray, gray)
             }
-            // Reuse Bitmap: only recreate when size changes, don't release old bitmap if creation fails
+            // Reuse Bitmap: only recreate when size changes
             if (reusableBitmap?.width != w || reusableBitmap?.height != h) {
                 val newBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                reusableBitmap?.recycle()  // Release old only after new Bitmap created successfully
+                reusableBitmap?.recycle()
                 reusableBitmap = newBitmap
             }
             reusableBitmap?.setPixels(pixels, 0, w, 0, 0, w, h)
             reusableBitmap
         } catch (e: Exception) {
             Log.e(TAG, "Create Bitmap failed: ${e.message}", e)
-            // Don't set to null, keep old reusableBitmap (if exists) for subsequent frames
             null
         }
     }

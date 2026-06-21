@@ -382,70 +382,57 @@ private fun PhoneMirrorModule(
         ModuleHeader(title = ctx.getString(R.string.phone_mirror_title), subtitle = ctx.getString(R.string.phone_mirror_subtitle), color = BrewPurple)
         Spacer(modifier = Modifier.height(24.dp))
         
+        RokidLinkStatusCard(
+            installed = state.phoneMirrorState.rokidLinkInstalled == true,
+            installing = state.phoneMirrorState.isInstallingRokidLink,
+            running = state.phoneMirrorState.rokidLinkRunning,
+            onInstall = actions.onPhoneMirrorInstallRokidLink,
+            onOpen = actions.onPhoneMirrorOpenRokidLink,
+            onStop = actions.onPhoneMirrorStop,
+            moduleColor = BrewPurple,
+            ctx = ctx,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        IpAddressInputCard(
+            label = ctx.getString(R.string.ip_address_label),
+            value = app.phoneMirrorIp,
+            onValueChange = actions.onPhoneMirrorIpChange,
+            color = BrewPurple,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        
         if (isMirroring) {
-            // 投屏中状态
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    ctx.getString(R.string.mirroring),
-                    color = BrewCoral,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    state.phoneMirrorState.connectionStatus,
-                    color = BrewMuted,
-                    fontSize = 14.sp
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-                BrutalButton(
-                    label = "■ ${ctx.getString(R.string.stop_mirror)}",
-                    color = BrewRed,
-                    onClick = actions.onPhoneMirrorStart,
-                )
-            }
+            Text(
+                state.phoneMirrorState.connectionStatus,
+                color = BrewMuted,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+            BrutalButton(
+                label = "■ ${ctx.getString(R.string.stop_mirror)}",
+                color = BrewRed,
+                onClick = actions.onPhoneMirrorStart,
+            )
         } else {
-            RokidLinkStatusCard(
-                installed = state.phoneMirrorState.rokidLinkInstalled == true,
-                installing = state.phoneMirrorState.isInstallingRokidLink,
-                running = state.phoneMirrorState.rokidLinkRunning,
-                onInstall = actions.onPhoneMirrorInstallRokidLink,
-                onOpen = actions.onPhoneMirrorOpenRokidLink,
-                onStop = actions.onPhoneMirrorStop,
-                moduleColor = BrewPurple,
-                ctx = ctx,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            IpAddressInputCard(
-                label = ctx.getString(R.string.ip_address_label),
-                value = app.phoneMirrorIp,
-                onValueChange = actions.onPhoneMirrorIpChange,
-                color = BrewPurple,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            
             BrutalButton(
                 label = ctx.getString(R.string.start_cast),
                 color = BrewPurple,
                 onClick = actions.onPhoneMirrorStart,
             )
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            UsageInstructionsCard(
-                color = BrewPurple,
-                instructions = listOf(
-                    "1. ${ctx.getString(R.string.connecting_adb_hint)}",
-                    "2. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
-                    "3. ${ctx.getString(R.string.start_cast)}",
-                    "4. ${ctx.getString(R.string.phone_mirror_subtitle)}",
-                ),
-                ctx = ctx,
-            )
         }
+        Spacer(modifier = Modifier.height(24.dp))
+        
+        UsageInstructionsCard(
+            color = BrewPurple,
+            instructions = listOf(
+                "1. ${ctx.getString(R.string.connecting_adb_hint)}",
+                "2. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
+                "3. ${ctx.getString(R.string.start_cast)}",
+                "4. ${ctx.getString(R.string.phone_mirror_subtitle)}",
+            ),
+            ctx = ctx,
+        )
     }
 }
 
