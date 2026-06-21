@@ -103,7 +103,10 @@ class MainActivity : AppCompatActivity() {
     private val glassesInstallStateSources = mutableMapOf<String, InstallStateSource>()
     private var pendingAction: (() -> Unit)? = null
     private var isCheckingRokidLink = false
-    private var rokidLinkHealthJob: Job? = null
+    /** 用户是否在本会话中通过启动按键启动过 RokidLink */
+    private var rokidLinkUserStarted = false
+    /** 是否已对本会话做过 ADB 连通性检测（仅新鲜启动时一次） */
+    private var rokidLinkAdbTested = false
     private var selfUpdateState by mutableStateOf(
         BrewSelfUpdateState(
             currentVersion = BuildConfig.VERSION_NAME,
@@ -263,25 +266,8 @@ class MainActivity : AppCompatActivity() {
                 if (conn.authorized && ::cxrL.isInitialized) {
                     checkRokidLinkInstallation()
                 }
-                // CXR-L 完全连通 + RokidLink 已知已安装 → 标记为运行中
-                // 弥补 SDK 查询回调与连接状态之间的竞态窗口
-                if (conn.cxrlConnected && conn.glassBtConnected) {
-                    val app = application as LabApplication
-                    if (app.rokidLinkInstalled == true && !screenMirrorState.rokidLinkRunning) {
-                        log(getString(R.string.log_rokidlink_launched))
-                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = true)
-                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
-                        fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
-                        startRokidLinkHealthCheck()
-                    }
-                }
-                // CXR-L 暂时断开：不立即清零 running 状态
-                // SDK 每次操作（查询/安装/启停）完成后都会 cleanup() 重置连接标志，
-                // 但这只是临时断开操作连接，眼镜端 CXR-L 连接实际仍存活。
-                // 真正的连接断开由 startRokidLinkHealthCheck 的 15 秒心跳兜底检测。
-                if (!conn.cxrlConnected || !conn.glassBtConnected) {
-                    // 心跳检测仍在运行 → 等它自己判断，不手动清零
-                }
+                // CXR-L 连接状态变化不影响 running 状态
+                // ADB 连通性检测在 onResume 中触发，按键启动后本会话保持已启动
             },
             initialHostApp = selectedHostApp,
         )
@@ -479,7 +465,9 @@ class MainActivity : AppCompatActivity() {
         preferHighRefreshRate()
         installCheckTick += 1
         refreshPhoneInstallStates()
-        // 不重置 RokidLink 运行状态 - 心跳检测会自动监控真实状态
+        // 不重置 RokidLink 运行状态 - 按键启动后整个会话内保持已启动
+        // 每次回到前台尝试触发 ADB 连通性检测（内部保证每会话仅执行一次）
+        testAdbOnFreshLaunch()
     }
 
     private fun preferHighRefreshRate() {
@@ -973,15 +961,6 @@ class MainActivity : AppCompatActivity() {
             screenMirrorState = screenMirrorState.copy(rokidLinkInstalled = app.rokidLinkInstalled)
             phoneMirrorState = phoneMirrorState.copy(rokidLinkInstalled = app.rokidLinkInstalled)
             fileManagerState = fileManagerState.copy(rokidLinkInstalled = app.rokidLinkInstalled)
-            // 乐观标记：已安装 + 连接正常 → 默认为运行中
-            if (app.rokidLinkInstalled == true &&
-                cxrConnection.cxrlConnected && cxrConnection.glassBtConnected &&
-                !screenMirrorState.rokidLinkRunning) {
-                screenMirrorState = screenMirrorState.copy(rokidLinkRunning = true)
-                phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
-                fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
-                startRokidLinkHealthCheck()
-            }
             return
         }
         
@@ -999,16 +978,8 @@ class MainActivity : AppCompatActivity() {
                     screenMirrorState = screenMirrorState.copy(rokidLinkInstalled = installed)
                     phoneMirrorState = phoneMirrorState.copy(rokidLinkInstalled = installed)
                     fileManagerState = fileManagerState.copy(rokidLinkInstalled = installed)
-                    // SDK 确认已安装 → 乐观标记为运行中
-                    if (installed &&
-                        cxrConnection.cxrlConnected && cxrConnection.glassBtConnected &&
-                        !screenMirrorState.rokidLinkRunning) {
-                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = true)
-                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
-                        fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
-                        startRokidLinkHealthCheck()
-                    } else if (!installed) {
-                        // 未安装时也要重置 running 状态
+                    if (!installed) {
+                        // 未安装时重置 running 状态
                         screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
                         phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
                         fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
@@ -1022,30 +993,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 定期心跳检测 RokidLink 是否仍在运行
-     * 每 15 秒检查一次，需连续 2 次检测连接断开（共 30 秒）才标记为未运行，
-     * 防止 SDK 操作 cleanup() 的临时断连导致误判。
+     * 测试本机能否通过 ADB (TCP 5555) 连通眼镜。
+     * 仅在新启动会话中调用一次，连通则视为 RokidLink 已在眼镜端运行。
      */
-    private fun startRokidLinkHealthCheck() {
-        rokidLinkHealthJob?.cancel()
-        rokidLinkHealthJob = lifecycleScope.launch {
-            var consecutiveDowns = 0
-            while (true) {
-                delay(15_000)
-                if (!cxrConnection.cxrlConnected || !cxrConnection.glassBtConnected) {
-                    consecutiveDowns++
-                    if (consecutiveDowns >= 2) {
-                        android.util.Log.w("MainActivity", "RokidLink heartbeat: CXR-L connection lost for 30s, marking as not running")
-                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
-                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
-                        fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
-                        break
-                    }
-                    android.util.Log.w("MainActivity", "RokidLink heartbeat: connection down ($consecutiveDowns/2), waiting...")
-                } else {
-                    consecutiveDowns = 0
-                    android.util.Log.d("MainActivity", "RokidLink heartbeat: connection alive")
+    private fun testAdbOnFreshLaunch() {
+        if (rokidLinkAdbTested || rokidLinkUserStarted) return
+        rokidLinkAdbTested = true
+        val app = application as LabApplication
+        // 使用任一模块配置的眼镜 IP（默认 192.168.1.168）
+        val ip = app.phoneMirrorIp.ifBlank { app.fileManagerIp }
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val socket = java.net.Socket()
+                socket.connect(java.net.InetSocketAddress(ip, 5555), 3000)
+                socket.close()
+                // ADB 连通 → 认为眼镜端 RokidLink 已在运行
+                withContext(Dispatchers.Main) {
+                    log(getString(R.string.log_rokidlink_launched))
+                    screenMirrorState = screenMirrorState.copy(rokidLinkRunning = true)
+                    phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
+                    fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
                 }
+            } catch (_: Exception) {
+                // ADB 不通 → 眼镜不在线，保持未运行状态
             }
         }
     }
@@ -1110,39 +1080,42 @@ class MainActivity : AppCompatActivity() {
 
     private var isOpeningRokidLink = false
 
+    /**
+     * 启动 RokidLink：用户按键启动后整个会话期间都视为已启动，
+     * 不再受 CXR-L 连接状态影响。停止键是唯一清除途径。
+     */
     private fun openRokidLinkOnGlasses() {
         if (isOpeningRokidLink) return
         isOpeningRokidLink = true
-        runWithPrerequisites {
-            log(getString(R.string.log_opening_rokidlink))
-            cxrL.launchApp(
-                packageName = "com.rokidlab.rokidlink",
-                activityClass = ".MainActivity",
-                onLaunchResult = { success ->
-                    isOpeningRokidLink = false
-                    if (success) {
-                        log(getString(R.string.log_rokidlink_launched))
-                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = true)
-                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
-                        fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
-                        startRokidLinkHealthCheck()
-                    } else {
-                        log(getString(R.string.log_rokidlink_launch_failed))
-                        // 启动失败，重置 running 状态
-                        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
-                        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
-                        fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
-                    }
+        // 标记用户已在本会话中启动，之后保持运行状态
+        rokidLinkUserStarted = true
+        screenMirrorState = screenMirrorState.copy(rokidLinkRunning = true)
+        phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
+        fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
+        log(getString(R.string.log_opening_rokidlink))
+        // 仍然尝试启动眼镜端应用，但无论成功失败都不影响 running 状态
+        cxrL.launchApp(
+            packageName = "com.rokidlab.rokidlink",
+            activityClass = ".MainActivity",
+            onLaunchResult = { success ->
+                isOpeningRokidLink = false
+                if (success) {
+                    log(getString(R.string.log_rokidlink_launched))
+                } else {
+                    log(getString(R.string.log_rokidlink_launch_failed))
                 }
-            )
-        }
+            }
+        )
     }
 
+    /**
+     * 停止 RokidLink：直接停止眼镜端应用并清除运行状态。
+     * 停止后需用户再次点击启动按键才会重新标记为运行中。
+     */
     private fun stopRokidLinkOnGlasses() {
+        rokidLinkUserStarted = false
         runWithPrerequisites {
             log(getString(R.string.log_closing_rokidlink))
-            rokidLinkHealthJob?.cancel()
-            rokidLinkHealthJob = null
             cxrL.stopApp(
                 packageName = "com.rokidlab.rokidlink",
                 onStopResult = { success ->
@@ -1161,6 +1134,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun reinstallRokidLinkOnGlasses() {
         settingsReinstallError = null
+        rokidLinkUserStarted = false
         runWithPrerequisites {
             lifecycleScope.launch {
                 // 先停止运行中的 RokidLink
