@@ -93,8 +93,8 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
     override fun onDisconnected() {
         runOnUiThread {
             imageView.setImageBitmap(null)
-            // 不 finish()，保持 Activity 运行等待手机重连
-            // Server 的 waitForClient 循环会自动监听新连接
+            stopServer()
+            finish()
         }
     }
 

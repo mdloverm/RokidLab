@@ -355,7 +355,7 @@ class MainActivity : AppCompatActivity() {
                         onPhoneMirrorStart = { 
                             if (phoneMirrorState.isMirroring) stopPhoneMirror() else startPhoneMirror()
                         },
-                        onPhoneMirrorStop = { stopPhoneMirror() },
+                        onPhoneMirrorStop = { stopRokidLinkOnGlasses() },
                         onPhoneMirrorInstallRokidLink = { installRokidLinkToGlasses() },
                         onPhoneMirrorOpenRokidLink = { openRokidLinkOnGlasses() },
                         onPhoneMirrorRetry = { },
@@ -1282,10 +1282,9 @@ class MainActivity : AppCompatActivity() {
     private fun stopPhoneMirror() {
         isStartingPhoneMirror = false
         log(getString(R.string.log_stopping_phone_mirror))
-        // 1. 停止投屏服务
+        // 停止投屏服务（会关闭 Socket，眼镜端 onDisconnected 自动退出投屏画面）
+        // ROKIDLINK 主程序保持运行，不关闭
         stopService(Intent(this, PhoneMirrorService::class.java))
-        // 2. 通过 CXR-L 关闭眼镜端投屏
-        cxrL.stopApp("com.rokidlab.rokidlink")
         phoneMirrorState = phoneMirrorState.copy(
             isMirroring = false,
             connectionStatus = ""
