@@ -37,6 +37,10 @@
     <string name="freeze">Freeze</string>
     <string name="unfreeze">Unfreeze</string>
     <string name="extract">Extract</string>
+    <string name="extract_path_not_found">APK path not found for %s</string>
+    <string name="extract_copy_failed">Copy to device failed</string>
+    <string name="extract_downloaded">Downloaded to Download/%s.apk</string>
+    <string name="extract_pull_failed">Pull to phone failed</string>
     <string name="install_to_phone">Install to Phone</string>
     <string name="install_to_glasses">Install to Glasses</string>
     <string name="more">More</string>
@@ -572,11 +576,20 @@
     <string name="label_build">Build</string>
     <string name="section_storage">Storage</string>
     <string name="label_ram">RAM</string>
+    <string name="storage_ram_format">%1$s used / %2$s total</string>
     <string name="label_data">Data</string>
+    <string name="storage_data_format">%1$s used / %2$s total</string>
     <string name="section_battery">Battery</string>
     <string name="label_level">Level</string>
     <string name="label_power">Power</string>
     <string name="label_health">Health</string>
+    <string name="battery_health_good">Good</string>
+    <string name="battery_health_unknown">Unknown</string>
+    <string name="battery_health_overheat">Overheat</string>
+    <string name="battery_health_dead">Dead</string>
+    <string name="battery_health_overvoltage">Over voltage</string>
+    <string name="battery_health_failure">Failure</string>
+    <string name="battery_health_cold">Cold</string>
 
     <!-- Log Messages -->
     <string name="log_bluetooth_permission_denied">Bluetooth permission denied</string>

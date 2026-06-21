@@ -644,9 +644,9 @@ class CxrLHiRokidSession(
     private fun findServiceConnection(link: CXRLink): ServiceConnection? {
         // 优先使用缓存的字段
         cachedServiceConnectionField?.let { field ->
-            return try {
+            try {
                 field.isAccessible = true
-                field.get(link) as? ServiceConnection
+                return (field.get(link) as ServiceConnection?)
             } catch (e: Exception) {
                 Log.w(TAG, "Cached ServiceConnection field access failed, re-scanning: ${e.message}")
                 cachedServiceConnectionField = null

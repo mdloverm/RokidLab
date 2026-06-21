@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.design
+package com.rokidlab.phone.design
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -586,9 +586,9 @@ fun BrutalTextField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = modifier.heightIn(min = if (singleLine) 48.dp else 56.dp),
-        placeholder = { Text(placeholder, color = color.copy(alpha = 0.4f), fontSize = 13.sp) },
-        textStyle = TextStyle(color = color, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
+        modifier = modifier.heightIn(min = if (singleLine) 36.dp else 56.dp),
+        placeholder = { Text(placeholder, color = color.copy(alpha = 0.4f), fontSize = 16.sp) },
+        textStyle = TextStyle(color = color, fontSize = 16.sp),
         singleLine = singleLine,
         enabled = enabled,
         colors = OutlinedTextFieldDefaults.colors(

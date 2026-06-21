@@ -1,6 +1,7 @@
 package com.rokidlab.phone.adb
 
 import com.rokidlab.phone.util.AppConfig
+import com.rokidlab.phone.R
 import android.content.Context
 import android.util.Base64
 import android.util.Log
@@ -232,17 +233,17 @@ class AdbShellClient(
 
     fun extractApkToDownloads(packageName: String): String {
         val path = getApkPath(packageName)
-        if (path.isEmpty()) return "APK path not found for $packageName"
+        if (path.isEmpty()) return context.getString(R.string.extract_path_not_found, packageName)
         // copy to device Download directory
         val remoteDest = "/sdcard/Download/${packageName}.apk"
         val cpResult = executeShellCommand("cp $path $remoteDest 2>&1 && echo OK")
-        if (!cpResult.trim().endsWith("OK")) return "Copy to device failed: $cpResult"
+        if (!cpResult.trim().endsWith("OK")) return context.getString(R.string.extract_copy_failed)
         // pull from device to phone Download directory via ADB sync
         val localDir = File("/sdcard/Download")
         if (!localDir.exists()) localDir.mkdirs()
         val localFile = File(localDir, "${packageName}.apk")
         val pullOk = pullFile(remoteDest, localFile.absolutePath)
-        return if (pullOk) "Downloaded to Download/${packageName}.apk" else "Pull to phone failed"
+        return if (pullOk) context.getString(R.string.extract_downloaded, packageName) else context.getString(R.string.extract_pull_failed)
     }
 
     fun sendNotification(title: String, content: String): String {

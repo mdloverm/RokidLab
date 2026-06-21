@@ -20,6 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -106,10 +109,28 @@ fun AppMgrDialog(
         Column(Modifier.fillMaxWidth()) {
             // ── 搜索栏 ──
             Row(verticalAlignment = Alignment.CenterVertically) {
-                BrutalTextField(
-                    value = search, onValueChange = { search = it },
-                    placeholder = ctx.getString(R.string.search_apps_placeholder), color = BrewCoral,
-                    modifier = Modifier.weight(1f), singleLine = true,
+                BasicTextField(
+                    value = search,
+                    onValueChange = { search = it },
+                    singleLine = true,
+                    textStyle = TextStyle(color = BrewCoral, fontSize = 16.sp),
+                    cursorBrush = SolidColor(BrewCoral),
+                    modifier = Modifier.weight(1f).height(38.dp)
+                        .clip(BrewShapeSmall)
+                        .border(1.dp, BrewCoral.copy(alpha = 0.2f), BrewShapeSmall)
+                        .padding(horizontal = 12.dp),
+                    decorationBox = { innerTextField ->
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                            if (search.isEmpty()) {
+                                Text(
+                                    ctx.getString(R.string.search_apps_placeholder),
+                                    color = BrewCoral.copy(alpha = 0.4f),
+                                    fontSize = 16.sp,
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
                 )
                 Spacer(Modifier.width(6.dp))
                 Box(

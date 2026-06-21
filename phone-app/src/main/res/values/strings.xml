@@ -37,6 +37,10 @@
     <string name="freeze">冻结</string>
     <string name="unfreeze">解冻</string>
     <string name="extract">提取</string>
+    <string name="extract_path_not_found">未找到 %s 的 APK 路径</string>
+    <string name="extract_copy_failed">复制到设备失败</string>
+    <string name="extract_downloaded">已下载到 Download/%s.apk</string>
+    <string name="extract_pull_failed">提取到手机失败</string>
     <string name="install_to_phone">安装到手机</string>
     <string name="install_to_glasses">安装到眼镜</string>
     <string name="more">更多</string>
@@ -573,11 +577,20 @@
     <string name="label_build">版本</string>
     <string name="section_storage">存储</string>
     <string name="label_ram">内存</string>
+    <string name="storage_ram_format">已用 %1$s / 共 %2$s</string>
     <string name="label_data">数据</string>
+    <string name="storage_data_format">已用 %1$s / 共 %2$s</string>
     <string name="section_battery">电池</string>
     <string name="label_level">电量</string>
     <string name="label_power">电源</string>
     <string name="label_health">健康</string>
+    <string name="battery_health_good">良好</string>
+    <string name="battery_health_unknown">未知</string>
+    <string name="battery_health_overheat">过热</string>
+    <string name="battery_health_dead">损坏</string>
+    <string name="battery_health_overvoltage">过压</string>
+    <string name="battery_health_failure">异常</string>
+    <string name="battery_health_cold">过冷</string>
 
     <!-- 日志消息 -->
     <string name="log_bluetooth_permission_denied">蓝牙权限被拒绝</string>
