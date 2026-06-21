@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.glasses
+package com.rokidlab.phone.glasses
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -36,6 +36,7 @@ internal fun GuideScreen(
     currentStep: GuideStep,
     selectedHostApp: RokidHostApp?,
     authorized: Boolean,
+    hostAppInstalled: Boolean,
     onSelectHostApp: (RokidHostApp) -> Unit,
     onSelectMirrorSource: () -> Unit,
     onAuthorize: () -> Unit,
@@ -83,6 +84,8 @@ internal fun GuideScreen(
             )
             GuideStep.AUTHORIZE -> AuthorizeStep(
                 authorized = authorized,
+                hostAppInstalled = hostAppInstalled,
+                selectedHostApp = selectedHostApp,
                 onAuthorize = onAuthorize,
                 ctx = ctx,
             )
@@ -283,6 +286,8 @@ private fun SelectMirrorSourceStep(
 @Composable
 private fun AuthorizeStep(
     authorized: Boolean,
+    hostAppInstalled: Boolean,
+    selectedHostApp: RokidHostApp?,
     onAuthorize: () -> Unit,
     ctx: android.content.Context,
 ) {
@@ -306,7 +311,24 @@ private fun AuthorizeStep(
         
         Spacer(modifier = Modifier.height(32.dp))
         
-        if (authorized) {
+        if (!hostAppInstalled && selectedHostApp != null) {
+            // Host 应用未安装 — 显示警告引导用户先安装
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .background(BrewWarning.copy(alpha = 0.2f), shape = RoundedCornerShape(12.dp))
+                    .border(1.dp, BrewWarning, RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = ctx.getString(R.string.host_app_not_installed_warning, selectedHostApp.displayName),
+                    color = BrewWarning,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        } else if (authorized) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

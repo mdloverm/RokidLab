@@ -219,6 +219,7 @@ internal fun BrewPhoneApp(
                 currentStep = state.prerequisites.currentGuideStep,
                 selectedHostApp = state.selectedHostApp,
                 authorized = state.prerequisites.authorized,
+                hostAppInstalled = state.hostAppInstalled,
                 onSelectHostApp = actions.onHostAppSelected,
                 onSelectMirrorSource = actions.onSelectMirrorSource,
                 onAuthorize = actions.onAuthorize,

@@ -102,12 +102,11 @@ class ScreenMirrorActivity : ComponentActivity() {
                         ConnectionFailedUI(
                             status = connectionStatus,
                             onRetry = {
-                                // Just reset flags and wait for TextureView to recreate → onSurfaceReady
+                                // Just reset flags and reconnect directly
                                 connectionFailed = false
                                 connectionStatus = getString(R.string.mirror_starting)
                                 isStreaming = true
-                                // connectToGlasses() will be called by onSurfaceReady
-                                // when the new TextureView's Surface is available
+                                connectToGlasses()
                             },
                             onBack = { disconnectAndFinish() }
                         )

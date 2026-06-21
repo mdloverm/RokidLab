@@ -633,4 +633,5 @@
     <!-- ADB Tools -->
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
+    <string name="host_app_not_installed_warning">⚠ %s is not installed. Please install it first.</string>
 </resources>

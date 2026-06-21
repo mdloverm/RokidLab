@@ -626,6 +626,10 @@ class CxrLHiRokidSession(
         complete?.invoke()
     }
 
+    /** 缓存反射获取的 ServiceConnection 字段，避免每次操作都反射遍历 */
+    @Volatile
+    private var cachedServiceConnectionField: java.lang.reflect.Field? = null
+
     private fun bindRokidHostService(link: CXRLink, targetHostApp: RokidHostApp, authToken: String): Boolean {
         val conn = findServiceConnection(link) ?: return false
         return runCatching {
@@ -638,12 +642,24 @@ class CxrLHiRokidSession(
     }
 
     private fun findServiceConnection(link: CXRLink): ServiceConnection? {
+        // 优先使用缓存的字段
+        cachedServiceConnectionField?.let { field ->
+            return try {
+                field.isAccessible = true
+                field.get(link) as? ServiceConnection
+            } catch (e: Exception) {
+                Log.w(TAG, "Cached ServiceConnection field access failed, re-scanning: ${e.message}")
+                cachedServiceConnectionField = null
+            }
+        }
+        // 缓存未命中，遍历查找
         var type: Class<*>? = link.javaClass
         while (type != null) {
             try {
                 val field = type.declaredFields.firstOrNull { ServiceConnection::class.java.isAssignableFrom(it.type) }
                 if (field != null) {
                     field.isAccessible = true
+                    cachedServiceConnectionField = field
                     return field.get(link) as ServiceConnection
                 }
             } catch (e: Exception) {

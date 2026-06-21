@@ -60,4 +60,14 @@
   - `1901092534015091` (model: RG_glasses) — **眼镜端**，RokidLink/眼镜应用安装目标
 - **严禁**不带 `-s` 参数执行 `adb install`，避免装错设备
 
+### 8. Git 同步规则
+- **RokidLab 同步 Gitee**：RokidLab 子模块的 origin remote 是 `https://gitee.com/dlover1314/RokidLab`，同步时必须在 `cxrl/RokidLab` 目录下执行 git 操作
+  ```powershell
+  cd cxrl/RokidLab
+  git add <文件>
+  git commit -m "描述"
+  git push origin master
+  ```
+- **不要对外层仓库（`d:\rokidapp`）执行 push 操作**，外层仓库有 r2emu.apk 等大文件会导致 Gitee 推送被拒
+
 

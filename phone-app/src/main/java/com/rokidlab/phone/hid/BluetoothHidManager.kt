@@ -239,6 +239,8 @@ class BluetoothHidManager(private val appContext: Context) {
     }
     private var scanCallback: ScanCallback? = null
     private var isScanning = false
+    @Volatile
+    private var receiverRegistered = false
 
     private val discoveryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -265,12 +267,16 @@ class BluetoothHidManager(private val appContext: Context) {
         val adapter = bluetoothAdapter ?: return
         if (isScanning) return
         isScanning = true
-        try { appContext.unregisterReceiver(discoveryReceiver) } catch (_: Exception) {}
+        if (receiverRegistered) {
+            try { appContext.unregisterReceiver(discoveryReceiver) } catch (_: Exception) {}
+            receiverRegistered = false
+        }
         appContext.registerReceiver(discoveryReceiver,
             IntentFilter().apply {
                 addAction(BluetoothDevice.ACTION_FOUND)
                 addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
             })
+        receiverRegistered = true
         try { if (adapter.isDiscovering) adapter.cancelDiscovery() } catch (_: Exception) {}
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (appContext.checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN)
@@ -289,7 +295,10 @@ class BluetoothHidManager(private val appContext: Context) {
     fun stopScan() {
         isScanning = false
         try { bluetoothAdapter?.let { if (it.isDiscovering) it.cancelDiscovery() } } catch (_: Exception) {}
-        try { appContext.unregisterReceiver(discoveryReceiver) } catch (_: Exception) {}
+        if (receiverRegistered) {
+            try { appContext.unregisterReceiver(discoveryReceiver) } catch (_: Exception) {}
+            receiverRegistered = false
+        }
     }
 
     private val profileListener = object : BluetoothProfile.ServiceListener {

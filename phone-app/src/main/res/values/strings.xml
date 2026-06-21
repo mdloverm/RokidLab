@@ -408,6 +408,9 @@
     <string name="phone_install_success">手机安装成功。</string>
     <string name="phone_install_failed">手机安装失败。</string>
 
+    <!-- Guide -->
+    <string name="host_app_not_installed_warning">⚠ %s 未安装，请先在手机上安装。</string>
+
     <!-- File Manager APK Install -->
     <string name="not_apk_file">不是APK文件</string>
     <string name="preparing_install">准备安装...</string>

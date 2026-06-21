@@ -1001,7 +1001,11 @@ class MainActivity : AppCompatActivity() {
         rokidLinkAdbTested = true
         val app = application as LabApplication
         // 使用任一模块配置的眼镜 IP（默认 192.168.1.168）
-        val ip = app.phoneMirrorIp.ifBlank { app.fileManagerIp }
+        val ip = app.phoneMirrorIp.ifBlank {
+            app.fileManagerIp.ifBlank {
+                app.screenMirrorIp
+            }
+        }
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val socket = java.net.Socket()
@@ -1180,6 +1184,11 @@ class MainActivity : AppCompatActivity() {
         // 重置前置条件状态，让用户重新完成引导流程
         // 将 hostApp 和 selectedHostApp 都重置，这样会显示第一步（选择主机应用）
         selectedHostApp = RokidHostApp.DEFAULT
+        // 同时清除持久化存储，确保重启后生效
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .remove(PREF_ROKID_HOST_APP)
+            .apply()
         prerequisitesState = prerequisitesState.copy(
             hostApp = null,
             mirrorSourceSelected = false,
@@ -1204,6 +1213,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun runWithPrerequisites(action: () -> Unit) {
+        if (pendingAction != null) return  // 已有待执行操作，避免竞态覆盖
         pendingAction = action
         when {
             !permissions.all(::hasPermission) -> permissionLauncher.launch(permissions)

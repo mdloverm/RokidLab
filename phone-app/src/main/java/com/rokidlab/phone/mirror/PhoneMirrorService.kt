@@ -402,7 +402,10 @@ class PhoneMirrorService : Service() {
 
     private fun stopMirror() {
         if (!isMirrorRunning) return
-        isMirrorRunning = false
+        synchronized(this) {
+            if (!isMirrorRunning) return
+            isMirrorRunning = false
+        }
         runCatching {
             // 先取消注册监听器，防止回调
             orientationListener?.disable()

@@ -272,7 +272,9 @@ class AdbScreenMirrorClient(
                             Thread.sleep(300)
                             Log.i(TAG, "jar push done")
                         }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                            Log.e(TAG, "Failed to check/push scrcpy-server.jar", e)
+                        }
 
                     // Step 1: 启动新 server（nohup 保护进程不被 shell 退出杀死）
                     onStatus(context.getString(R.string.mirror_starting_server))
@@ -735,11 +737,13 @@ class AdbScreenMirrorClient(
 
     /** 检查 /data/local/tmp/scrcpy-server.jar 是否存在，不存在则从 assets 推送 */
     fun disconnect() {
-        isRunning = false
-        touchQueue.clear()
-        // 通知眼镜端杀掉 server 并返回桌面
+        // 先发送断开命令（保持流线程仍可处理 ADB 响应），再停止流线程
         killServer()
         goHome()
+        // 短暂等待命令发送完成
+        try { Thread.sleep(100) } catch (_: Exception) {}
+        isRunning = false
+        touchQueue.clear()
         try { socket?.close() } catch (_: Exception) {}
         socket = null
         inputStream = null
