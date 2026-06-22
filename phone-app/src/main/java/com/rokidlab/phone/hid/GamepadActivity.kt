@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.hid
+package com.rokidlab.phone.hid
 
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.design.*
@@ -205,7 +205,7 @@ private fun TabChip(label: String, tab: Int, activeTab: Int, onClick: () -> Unit
 @Composable
 private fun MouseTouchpad(hidManager: BluetoothHidManager) {
     val ctx = LocalContext.current
-    val sensitivity = 2.5f  // 灵敏度: 每像素移动数
+    val sensitivity = 1.0f  // 灵敏度: 每像素移动数
 
     Box(Modifier.fillMaxSize()) {
         // ── 触控区域 ──

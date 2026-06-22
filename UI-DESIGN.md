@@ -43,12 +43,14 @@
 │  muted      │  #8A8780   风化石         │  #6B7BA0   雾蓝灰                 │
 │  dim        │  #5C5952   深石色         │  #9AABCA   淡蓝灰                 │
 ├────────────┼─────────────────────────┼───────────────────────────────┤
-│  五模块五色 — 撞色方案                                                │
+│  七模块七色 — 撞色方案                                                │
 ├────────────┼─────────────────────────┼───────────────────────────────┤
-│  store      │  #E85D3F   珊瑚红         │  #E85D3F   珊瑚红 (撞色)          │
+│  store      │  #E85D3F   朱砂红         │  #E85D3F   珊瑚红 (撞色)          │
 │  mirror     │  #5B8FB9   静谧蓝         │  #00B894   翡翠绿                 │
 │  projection │  #D4A85C   画廊金         │  #6C5CE7   明媚紫                 │
 │  fileManager│  #A78BFA   雾紫           │  #F39C12   琥珀金                 │
+│  adbTools   │  #00CEC9   薄荷青         │  #0984E3   深海蓝                 │
+│  hidGamepad │  #FD79A8   玫瑰粉         │  #E17055   珊瑚橙                 │
 │  settings   │  #7D7A70   暖灰褐         │  #5A7BA0   钢灰蓝                 │
 ├────────────┼─────────────────────────┼───────────────────────────────┤
 │  边框 — 1 色                                                         │
@@ -84,6 +86,8 @@
 | `BrewCyan` | mirror | 屏幕镜像 |
 | `BrewPurple` | projection | 手机投屏 |
 | `BrewAmber` | fileManager | 文件管理 |
+| `BrewTeal` | adbTools | ADB 工具 |
+| `BrewPink` | hidGamepad | HID 手柄 |
 | `BrewMagenta` | settings | 设置 |
 | `BrewRed` | → store | 错误 |
 | `BrewSuccess` | → mirror | 成功 |
@@ -128,10 +132,12 @@
 
 | 模块 | 主色 | 互补/辅助色 | 说明 |
 |------|------|------------|------|
-| 商店 (珊瑚红) | `BrewCoral=#E85D3F` 珊瑚红 | `BrewCyan=#5B8FB9` 静谧蓝 | 暖红 ↔ 冷蓝 |
+| 商店 (朱砂红) | `BrewCoral=#E85D3F` 朱砂红 | `BrewCyan=#5B8FB9` 静谧蓝 | 暖红 ↔ 冷蓝 |
 | 屏幕镜像 | `BrewCyan=#5B8FB9` 静谧蓝 | 暖琥珀 | 冷调主色 |
 | 手机投屏 | `BrewPurple=#D4A85C` 画廊金 | 紫色调 | 暖而有质感 |
 | 文件管理 | `BrewAmber=#A78BFA` 雾紫 | 金色调 | 柔和区分 |
+| ADB 工具 | `BrewTeal=#00CEC9` 薄荷青 | 深海蓝 | 冷调清新 |
+| HID 手柄 | `BrewPink=#FD79A8` 玫瑰粉 | 珊瑚橙 | 暖色活泼 |
 | 设置 | `BrewMagenta=#7D7A70` 暖灰褐 | — | 最低调中性色 |
 
 > 浅色主题（Cool Blue）中模块色为撞色点缀，底色为浅蓝白。
@@ -227,7 +233,9 @@
 | 屏幕镜像 | `BrewCyan` | 镜像状态/应用管理弹窗 |
 | 手机投屏 | `BrewPurple` | 定时功能弹窗 |
 | 文件管理 | `BrewAmber` | 文件操作确认/Shell 命令弹窗 |
-| ADB 工具 | `BrewTeal` | ADB 工具主色（非弹窗标题色，各子功能使用上述四色） |
+| ADB 工具 | `BrewTeal` | ADB 工具主色 |
+| HID 手柄 | `BrewPink` | 手柄相关弹窗 |
+| 设置 | `BrewMagenta` | 设置相关弹窗 |
 
 **BrewDialogTitle — 标题栏组件**
 
@@ -347,7 +355,7 @@
 | 安装中文字 | "⟳ 安装中..." 14sp Bold BrewCoral letterSpacing 3sp |
 | 脉冲动画 | `infiniteRepeatable(tween 800ms, LinearEasing, Reverse)` |
 
-**颜色规则：`moduleColor` 参数传入各自导航栏色（BrewCoral/Cyan/Purple/Amber/Teal），未安装和安装中统一使用商店色 BrewCoral**
+**颜色规则：`moduleColor` 参数传入各自导航栏色（BrewCoral/Cyan/Purple/Amber/Teal/Pink/Magenta），未安装和安装中统一使用商店色 BrewCoral**
 
 | 场景 | 状态条/图标/文字色 | 按钮色 |
 |------|-------------------|--------|
@@ -356,14 +364,15 @@
 | 安装中 | `BrewCoral` | —（仅显示安装中动画） |
 | 未安装 | `BrewCoral` | 安装按钮 → `BrewCoral` |
 
-**四个模块调用示例：**
+**七个模块调用示例：**
 
 | 模块 | moduleColor | 运行中/已安装 | 未安装/安装中/停止 |
 |------|-----------|-------------|-----------------|
 | 屏幕镜像 | `BrewCyan` | 静谧蓝 | 珊瑚红 |
 | 手机投屏 | `BrewPurple` | 画廊金 | 珊瑚红 |
 | 文件管理 | `BrewAmber` | 雾紫 | 珊瑚红 |
-| ADB 工具 | `BrewTeal` | 青绿 | 珊瑚红 |
+| ADB 工具 | `BrewTeal` | 薄荷青 | 珊瑚红 |
+| HID 手柄 | `BrewPink` | 玫瑰粉 | 珊瑚红 |
 
 **手机投屏模块布局规范：** 与其他模块一致，投屏中状态不隐藏 ROKIDLINK 状态卡和 IP 输入框。投屏前显示"开始投屏"按钮，投屏中仅按钮切换为"■ 停止投屏"（红色），其余元素保持不变。
 
@@ -451,7 +460,7 @@
 | PHONE_MIRROR | "手机投屏" | BrewPurple |
 | FILE_MANAGER | "文件管理" | BrewAmber |
 | ADB_TOOLS | "ADB工具" | BrewTeal |
-| HID_GAMEPAD | "蓝牙手柄" | BrewSuccess |
+| HID_GAMEPAD | "蓝牙手柄" | BrewPink |
 | SETTINGS | "设置" | BrewMagenta |
 
 **页面切换动画：** `AnimatedContent` fadeIn(200ms) + slideInHorizontally(1/4) ⨯ fadeOut + slideOutHorizontally

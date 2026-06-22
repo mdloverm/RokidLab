@@ -9,7 +9,6 @@ import android.bluetooth.BluetoothHidDevice.Callback
 import android.bluetooth.BluetoothHidDeviceAppSdpSettings
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
-import android.bluetooth.BluetoothSocket
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -19,8 +18,6 @@ import android.util.Log
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
-import java.io.OutputStream
-import java.util.UUID
 import android.os.Handler
 import android.os.Looper
 
@@ -49,37 +46,14 @@ class BluetoothHidManager(private val appContext: Context) {
         const val STATE_CONNECTED    = 2
         const val STATE_RETRY_FAILED = 3  // Smart retry exceeded max attempts, manual Bluetooth reset required
 
-        const val MODE_UI   = 0  // 菜单导航模式 — Consumer Control 方向键 + 键盘按钮
-        const val MODE_GAME = 1  // 游戏模式 — 全部用键盘
-
-        const val CONN_HID     = 0  // 蓝牙 HID 模式 (BluetoothHidDevice API)
-        const val CONN_RFCOMM  = 1  // 蓝牙 RFCOMM 模式 (SPP Socket，配合 RetroArch)
+        const val CONN_HID = 0  // 蓝牙 HID 模式 (BluetoothHidDevice API)
 
         private const val KEYBOARD_REPORT_ID = 1
         private const val CONSUMER_REPORT_ID = 2
         private const val MOUSE_REPORT_ID   = 3
-
-        // 蓝牙 SPP UUID (与 RetroArch 服务端一致)
-        private val RFCOMM_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+        // GAMEPAD_REPORT_ID 已移除 — 眼镜内核不支持 Game Pad HID Usage
+        // 游戏手柄模式复用 Keyboard Report ID 1
     }
-
-    // ===== Android Keycode 映射 (供 RFCOMM 模式使用) =====
-    private val KEY_TO_ANDROID = mapOf(
-        KEY_A      to 96,   // AKEYCODE_BUTTON_A
-        KEY_B      to 97,   // AKEYCODE_BUTTON_B
-        KEY_C      to 98,   // AKEYCODE_BUTTON_C
-        KEY_X      to 99,   // AKEYCODE_BUTTON_X
-        KEY_Y      to 100,  // AKEYCODE_BUTTON_Y
-        KEY_Z      to 54,   // AKEYCODE_Z (键盘按键)
-        KEY_L      to 102,  // AKEYCODE_BUTTON_L1
-        KEY_R      to 103,  // AKEYCODE_BUTTON_R1
-        KEY_SELECT to 109,  // AKEYCODE_BUTTON_SELECT
-        KEY_START  to 108,  // AKEYCODE_BUTTON_START
-        KEY_UP     to 19,   // AKEYCODE_DPAD_UP
-        KEY_DOWN   to 20,   // AKEYCODE_DPAD_DOWN
-        KEY_LEFT   to 21,   // AKEYCODE_DPAD_LEFT
-        KEY_RIGHT  to 22,   // AKEYCODE_DPAD_RIGHT
-    )
 
     // ===== HID 描述符（多 Report ID） =====
     // 参考 BTREMOTE — Consumer Control (导航) + Keyboard (按键) + Mouse
@@ -183,6 +157,14 @@ class BluetoothHidManager(private val appContext: Context) {
         KEY_RIGHT  to byteArrayOf(0x00, 0x4F),  // right arrow
     )
 
+    // ===== 游戏手柄模式键码 =====
+    // 游戏手柄模式下也使用 Keyboard Report ID 1
+    // 眼镜端不支持 Game Pad HID Usage，所有按键通过键盘输入设备发送
+    // 映射表与 ROKID 手柄模式一致（KEY_HID），开发者按游戏手柄键码监听：
+    //   A→KEYCODE_Z, B→KEYCODE_X, C→KEYCODE_C, X→KEYCODE_A, Y→KEYCODE_S,
+    //   Z→KEYCODE_D, L→KEYCODE_Q, R→KEYCODE_W, Select→SPACE, Start→ENTER,
+    //   ↑↓←→→KEYCODE_DPAD_UP/DOWN/LEFT/RIGHT
+
     @Volatile
     var connectionState: Int = STATE_DISCONNECTED
         private set
@@ -205,10 +187,6 @@ class BluetoothHidManager(private val appContext: Context) {
 
     private val deviceLock = Any()
 
-    @Volatile
-    var hidMode: Int = MODE_UI
-        private set
-
     private val _connectionEvents = Channel<Int>(Channel.CONFLATED)
     val connectionEvents: Flow<Int> = _connectionEvents.receiveAsFlow()
 
@@ -223,13 +201,6 @@ class BluetoothHidManager(private val appContext: Context) {
     private var quickDisconnectCount = 0
     private val mainHandler = Handler(Looper.getMainLooper())
     private var retryRunnable: Runnable? = null
-
-    // ===== RFCOMM 相关字段 (配合 RetroArch 蓝牙 SPP 服务端) =====
-    @Volatile
-    var connectionType: Int = CONN_HID
-        private set
-    private var rfcommSocket: BluetoothSocket? = null
-    private var rfcommOut: OutputStream? = null
 
     // ===== 蓝牙扫描 (Discovery) =====
     interface ScanCallback {
@@ -322,16 +293,12 @@ class BluetoothHidManager(private val appContext: Context) {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
             isRegistered = registered
             Log.i(TAG, "App status: registered=$registered, device=$pluggedDevice")
-            if (registered && pluggedDevice != null) {
-                Log.i(TAG, "onAppStatusChanged: auto-reconnect")
-                connect(pluggedDevice)
-            }
+            // 注册完成，检查是否有用户手动待连接的设备
             if (registered && pluggedDevice == null) {
-                // 注册完成，检查是否有待连接的设备
                 val pending = pendingConnectDevice
                 pendingConnectDevice = null
                 if (pending != null) {
-                    Log.i(TAG, "onAppStatusChanged: auto-connect pending device")
+                    Log.i(TAG, "onAppStatusChanged: connecting pending device")
                     connect(pending)
                 }
             }
@@ -363,7 +330,7 @@ class BluetoothHidManager(private val appContext: Context) {
                             retryRunnable = Runnable {
                                 if (dev != null) {
                                     Log.i(TAG, "Smart retry: connecting to $dev")
-                                    connect(dev)
+                                    performConnect(dev)
                                 }
                             }
                             mainHandler.postDelayed(retryRunnable!!, waitMs)
@@ -397,11 +364,7 @@ class BluetoothHidManager(private val appContext: Context) {
         if (!isRegistered) registerApp()
     }
 
-    fun setHidMode(mode: Int) {
-        if (mode < 0 || mode > MODE_GAME) return
-        Log.i(TAG, "setHidMode: $mode")
-        hidMode = mode
-    }
+    // hidMode 属性直接在外部赋值 (e.g., hidManager.hidMode = MODE_GAME)
 
     @SuppressLint("MissingPermission")
     private fun registerApp() {
@@ -411,6 +374,8 @@ class BluetoothHidManager(private val appContext: Context) {
                 != android.content.pm.PackageManager.PERMISSION_GRANTED
             ) return
         }
+        // 先断开已有连接和注销 App，确保眼镜 HID Host 正确清理旧状态
+        connectedDeviceInternal?.let { disconnect(it) }
         runCatching { hid.unregisterApp() }
         val sdp = BluetoothHidDeviceAppSdpSettings(
             "RokidLab Keyboard",
@@ -421,6 +386,16 @@ class BluetoothHidManager(private val appContext: Context) {
         )
         val ok = hid.registerApp(sdp, null, null, Runnable::run, hidCallback)
         Log.i(TAG, "registerApp result: $ok")
+        // 注册成功后立即连接 pending 设备，不依赖 onAppStatusChanged 回调
+        // （因为回调可能带回旧缓存设备导致 pending 连接被跳过）
+        if (ok) {
+            val pending = pendingConnectDevice
+            if (pending != null) {
+                pendingConnectDevice = null
+                Log.i(TAG, "registerApp success, connecting pending device immediately")
+                hidDevice?.connect(pending)
+            }
+        }
     }
 
     // ========================================================================
@@ -429,8 +404,16 @@ class BluetoothHidManager(private val appContext: Context) {
 
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
+        // 记录连接发起时间，用于快速断连检测（即使没到 CONNECTED 状态）
+        lastConnectTime = System.currentTimeMillis()
         // 用户手动重连时，重置快速断连计数
         quickDisconnectCount = 0
+        performConnect(device)
+    }
+
+    /** 内部重试连接（不重置快速断连计数） */
+    @SuppressLint("MissingPermission")
+    private fun performConnect(device: BluetoothDevice) {
         if (hidDevice == null) {
             Log.w(TAG, "HID not ready, re-initializing...")
             pendingConnectDevice = device
@@ -460,7 +443,8 @@ class BluetoothHidManager(private val appContext: Context) {
     @SuppressLint("MissingPermission")
     fun destroy() {
         stopScan()
-        disconnectRfcomm()
+        // 先断开已连接的设备，再注销 HID App，确保眼镜 HID Host 正确清理状态
+        connectedDeviceInternal?.let { disconnect(it) }
         unregister()
         bluetoothAdapter?.closeProfileProxy(BluetoothProfile.HID_DEVICE, hidDevice)
         hidDevice = null; isRegistered = false
@@ -468,147 +452,51 @@ class BluetoothHidManager(private val appContext: Context) {
     }
 
     // ========================================================================
-    //  RFCOMM 连接 (配合 RetroArch 蓝牙 SPP 服务端)
-    // ========================================================================
-
-    /** 通过 RFCOMM (SPP) 连接到眼镜上的 RetroArch */
-    @SuppressLint("MissingPermission")
-    fun connectRfcomm(device: BluetoothDevice) {
-        if (connectionType == CONN_RFCOMM && rfcommSocket?.isConnected == true) {
-            Log.i(TAG, "RFCOMM already connected")
-            return
-        }
-        disconnectRfcomm()
-        runCatching {
-            val socket = device.createRfcommSocketToServiceRecord(RFCOMM_UUID)
-            socket.connect()
-            rfcommSocket = socket
-            rfcommOut = socket.outputStream
-            connectionType = CONN_RFCOMM
-            updateConnectionState(STATE_CONNECTED, device)
-            Log.i(TAG, "RFCOMM connected to ${device.address}")
-        }.onFailure { e ->
-            connectionType = CONN_HID
-            rfcommSocket = null; rfcommOut = null
-            Log.w(TAG, "RFCOMM connect failed: ${e.message}")
-        }
-    }
-
-    /** 断开 RFCOMM 连接 */
-    fun disconnectRfcomm() {
-        try { rfcommOut?.close() } catch (_: Exception) {}
-        try { rfcommSocket?.close() } catch (_: Exception) {}
-        rfcommSocket = null; rfcommOut = null
-        if (connectionType == CONN_RFCOMM) {
-            connectionType = CONN_HID
-            updateConnectionState(STATE_DISCONNECTED, null)
-        }
-    }
-
-    /** 切换回 HID 连接 */
-    @SuppressLint("MissingPermission")
-    fun switchToHid(device: BluetoothDevice) {
-        disconnectRfcomm()
-        connectionType = CONN_HID
-        connect(device)
-    }
-
-    // ========================================================================
     //  发送按键
     // ========================================================================
 
-    /** 通过 RFCOMM 发送按键事件到 RetroArch
-     *  协议: [keycode_byte, action_byte]
-     *        action: 1 = 按下, 0 = 释放 */
-    private fun rfcommSendKey(key: Int, pressed: Boolean) {
-        val out = rfcommOut ?: return
-        val androidKey = KEY_TO_ANDROID[key] ?: return
-        try {
-            out.write(byteArrayOf(androidKey.toByte(), if (pressed) 1 else 0))
-            out.flush()
-            Log.i(TAG, "RFCOMM key=$key androidKey=$androidKey pressed=$pressed")
-        } catch (e: Exception) {
-            Log.w(TAG, "RFCOMM send error: ${e.message}")
-        }
-    }
-
-    /** 通过 RFCOMM 发送释放所有按键 */
-    private fun rfcommSendReleaseAll() {
-        val out = rfcommOut ?: return
-        try {
-            out.write(byteArrayOf(0xFF.toByte(), 0x00))  // 0xFF = 特殊释放全部标记
-            out.flush()
-            Log.i(TAG, "RFCOMM release all")
-        } catch (e: Exception) {
-            Log.w(TAG, "RFCOMM release error: ${e.message}")
-        }
-    }
-
     /** 发送按键按下
-     *  CONN_HID:   走 BluetoothHidDevice API
-     *  CONN_RFCOMM:走 RFCOMM Socket 到 RetroArch
-     *
-     *  HID MODE_UI: 方向键/SELECT/START → Consumer Control; A/B/X/Y/Z/L/R → 键盘
-     *  HID MODE_GAME: 全部 → 键盘 */
+     *  方向键/SELECT/START → Consumer Control; A/B/X/Y/Z/L/R → 键盘 */
     @SuppressLint("MissingPermission")
     fun sendButtons(device: BluetoothDevice?, keys: Set<Int>) {
-        val key = keys.firstOrNull() ?: return
-
-        // ---- RFCOMM 模式 ----
-        if (connectionType == CONN_RFCOMM) {
-            rfcommSendKey(key, pressed = true)
-            return
-        }
-
-        // ---- HID 模式 ----
         val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered) return
 
-        // MODE_UI + 导航键 → Consumer Control (Report ID 2)
-        if (hidMode == MODE_UI) {
-            val consumerReport = KEY_CONSUMER[key]
-            if (consumerReport != null) {
-                val ok = hid.sendReport(dev, CONSUMER_REPORT_ID, consumerReport)
-                Log.i(TAG, "CONS mode=UI key=$key hex=${consumerReport.joinToString(""){"%02x".format(it)}} ok=$ok")
-                return
-            }
-        }
-
-        // MODE_GAME 或功能键 → Keyboard (Report ID 1)
-        val kbdReport = KEY_HID[key]
-        if (kbdReport != null) {
-            val ok = hid.sendReport(dev, KEYBOARD_REPORT_ID, kbdReport)
-            Log.i(TAG, "KBD mode=$hidMode key=$key hex=${kbdReport.joinToString(""){"%02x".format(it)}} ok=$ok")
-        }
-    }
-
-    /** 发送按键释放
-     *  CONN_HID:    同时释放 Consumer 和 Keyboard 报告
-     *  CONN_RFCOMM: 发送释放全部标记到 RetroArch */
-    @SuppressLint("MissingPermission")
-    fun sendRelease(device: BluetoothDevice?) {
-        // ---- RFCOMM 模式 ----
-        if (connectionType == CONN_RFCOMM) {
-            rfcommSendReleaseAll()
+        // 导航键 → Consumer Control (Report ID 2)
+        val key = keys.firstOrNull() ?: return
+        val consumerReport = KEY_CONSUMER[key]
+        if (consumerReport != null) {
+            val ok = hid.sendReport(dev, CONSUMER_REPORT_ID, consumerReport)
+            Log.i(TAG, "CONS key=$key hex=${consumerReport.joinToString(""){"%02x".format(it)}} ok=$ok")
             return
         }
 
-        // ---- HID 模式 ----
+        // 功能键 → Keyboard (Report ID 1)
+        val kbdReport = KEY_HID[key]
+        if (kbdReport != null) {
+            val ok = hid.sendReport(dev, KEYBOARD_REPORT_ID, kbdReport)
+            Log.i(TAG, "KBD key=$key hex=${kbdReport.joinToString(""){"%02x".format(it)}} ok=$ok")
+        }
+    }
+
+    /** 发送按键释放 */
+    @SuppressLint("MissingPermission")
+    fun sendRelease(device: BluetoothDevice?) {
         val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered) return
         val release = byteArrayOf(0x00, 0x00)
         hid.sendReport(dev, CONSUMER_REPORT_ID, release)
         hid.sendReport(dev, KEYBOARD_REPORT_ID, release)
+        Log.i(TAG, "release all ok=true")
     }
 
-    /** 发送鼠标移动 (仅 HID 模式)
+    /** 发送鼠标移动
      *  report = [buttons, dx, dy, wheel]
      *  Report ID 3 — Mouse */
     @SuppressLint("MissingPermission")
     fun sendMouseMove(device: BluetoothDevice?, dx: Int, dy: Int) {
-        if (connectionType != CONN_HID) return
         val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered) return
@@ -618,11 +506,10 @@ class BluetoothHidManager(private val appContext: Context) {
         hid.sendReport(dev, MOUSE_REPORT_ID, report)
     }
 
-    /** 发送鼠标点击 (仅 HID 模式)
+    /** 发送鼠标点击
      *  @param button 1=左键, 2=右键, 3=中键 */
     @SuppressLint("MissingPermission")
     fun sendMouseClick(device: BluetoothDevice?, button: Int = 1) {
-        if (connectionType != CONN_HID) return
         val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered) return

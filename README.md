@@ -7,13 +7,14 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 ### 蓝牙手柄
 - 通过蓝牙 HID 协议将手机模拟为键盘/鼠标/游戏手柄
 - **鼠标模式**：手机屏幕作为触控板，控制眼镜光标
-- **游戏手柄模式**：多点触控模拟摇杆 + ABXY 按键
+- **按键模式**：14 个可自定义位置的按键（↑↓←→ + A/B/C/X/Y/Z + L/R + Select/Start）
+- 按键通过双 HID 通道发送：
+  - **Consumer Control**：↑↓←→ / Select / Start → 眼镜端 `KEYCODE_DPAD_*` / `KEYCODE_DPAD_CENTER`
+  - **Keyboard**：A/B/C/X/Y/Z/L/R → 眼镜端 `KEYCODE_Z/X/C/A/S/D/Q/W`
 - 智能重连：检测到快速断连时自动等待重试（3s→6s→9s→12s→15s），5 次上限后停止并提示用户重启眼镜蓝牙
-- 安全退出：退出 App 时自动 `unregisterApp()` 通知眼镜释放 HID 连接，避免眼镜蓝牙状态卡死
-- RFCOMM SPP 连接（兼容 RetroArch 蓝牙手柄）
+- 安全退出：退出 App 时先 `disconnect()` 再 `unregisterApp()`，确保眼镜 HID Host 正确清理状态
 - 自动扫描并列出已配对的蓝牙设备
-- **线程安全优化**：使用 `operationLock` 同步保护操作状态，防止并发修改导致的状态不一致
-- **配置集中管理**：通过 `AppConfig` 统一管理蓝牙重试次数等配置参数
+- 支持按键位置自定义（拖拽调整布局）
 
 ### ADB 工具
 - 通过 WiFi 直接连接眼镜 ADB（无需 adb.exe），自实现完整 ADB TCP 协议
@@ -88,7 +89,7 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - **语言**: Kotlin
 - **UI**: Jetpack Compose (Material 3)
 - **本地化**: Android 原生资源系统（`values/` + `values-en/`），运行时 `AppCompatDelegate.setApplicationLocales()` 切换，Crowdin 云端翻译管理
-- **设计风格**: 双主题配色系统 — 丝绒炭黑（Velvet Dark，暖暗调） + 冰蓝冰川（Cool Blue，浅蓝冷调），详见 [UI-DESIGN.md](./UI-DESIGN.md)
+- **设计风格**: 双主题配色系统 — 丝绒炭黑（Velvet Dark，暖暗调） + 冰蓝冰川（Cool Blue，浅蓝冷调），7 模块 7 色配色体系，详见 [UI-DESIGN.md](./UI-DESIGN.md)
 - **通信**:
   - CXR-L SDK（手机-眼镜通信，用于安装/启动/卸载应用）
   - ADB over TCP（自定义协议实现，无需 adb.exe，用于文件管理、ADB工具和屏幕镜像）
@@ -146,11 +147,11 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 
 项目使用 Android `BluetoothHidDevice` API 将手机模拟为蓝牙 HID 设备：
 
-- **HID 描述符**: 自定义报表描述符，支持键盘、鼠标、游戏手柄多模式
+- **HID 描述符**: 自定义报表描述符，支持 3 个 Report ID：Consumer Control（导航键）、Keyboard（功能键）、Mouse（触控板）
+- **双通道按键**: 方向键/Select/Start 走 Consumer Control 通道，A/B/C/X/Y/Z/L/R 走 Keyboard 通道
 - **自动重连**: 检测到 HID 连接秒断时，智能等待递增间隔后自动重试，最多 5 次
-- **安全退出**: App 退出或 `onDestroy()` 时按序执行 `stopScan()` → `disconnectRfcomm()` → `unregisterApp()` → `closeProfileProxy()`，通知眼镜释放连接，避免 HID Host 状态残留
-- **RGB 报表**: 鼠标模式使用增强 RGB 报表（模拟 16 位鼠标 + 滚轮 + 多媒体按键）
-- **游戏手柄**: 多点触控映射为摇杆值，触摸区域划分 ABXY 按键
+- **安全退出**: App 退出或 `onDestroy()` 时按序执行 `disconnect()` → `unregisterApp()` → `closeProfileProxy()`，确保眼镜 HID Host 正确清理连接状态
+- **鼠标模式**: 触控板区域拖拽发送相对位移报表，灵敏度可调
 
 ## 项目结构
 
@@ -185,8 +186,7 @@ RokidLab/
 │   │   │   │   └── PhoneInstallResultReceiver.kt 安装结果接收器
 │   │   │   ├── hid/         蓝牙 HID
 │   │   │   │   ├── BluetoothHidManager.kt   HID 设备管理（注册/连接/报表发送）
-│   │   │   │   ├── HidGamepadScreen.kt      手柄/鼠标模式 UI
-│   │   │   │   └── GamepadActivity.kt       游戏手柄 Activity
+│   │   │   │   └── GamepadActivity.kt       手柄按键/鼠标模式 Activity
 │   │   │   ├── mirror/      投屏模块
 │   │   │   │   ├── PhoneMirrorActivity.kt     手机投屏页面
 │   │   │   │   ├── PhoneMirrorService.kt      投屏前台 Service（独立线程池异步重连、方向缓存、mirrorLock 同步锁、isReconnecting 防循环、帧健康看门狗30s）
