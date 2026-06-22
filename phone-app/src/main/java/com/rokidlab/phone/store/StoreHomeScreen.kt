@@ -353,7 +353,7 @@ private fun ScreenMirrorModule(
             color = BrewCyan,
             instructions = listOf(
                 "1. ${ctx.getString(R.string.connecting_adb_hint)}",
-                "2. ${ctx.getString(R.string.usage_mirror_step2)}（192.168.1.168）",
+                "2. ${ctx.getString(R.string.usage_mirror_step2)}${ctx.getString(R.string.rokidlink_ip_hint)}",
                 "3. ${ctx.getString(R.string.usage_mirror_step3)}",
                 "4. ${ctx.getString(R.string.usage_mirror_step4)}",
             ),
@@ -427,7 +427,7 @@ private fun PhoneMirrorModule(
             color = BrewPurple,
             instructions = listOf(
                 "1. ${ctx.getString(R.string.connecting_adb_hint)}",
-                "2. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
+                "2. ${ctx.getString(R.string.ip_address_label)}${ctx.getString(R.string.rokidlink_ip_hint)}",
                 "3. ${ctx.getString(R.string.start_cast)}",
                 "4. ${ctx.getString(R.string.phone_mirror_subtitle)}",
             ),
@@ -500,9 +500,9 @@ private fun FileManagerModule(
         UsageInstructionsCard(
             color = BrewAmber,
             instructions = listOf(
-                "1. ${ctx.getString(R.string.connecting_adb_hint)}（5555）",
+                "1. ${ctx.getString(R.string.connecting_adb_hint)}",
                 "2. ${ctx.getString(R.string.usage_filemanager_step2)}",
-                "3. ${ctx.getString(R.string.ip_address_label)}（192.168.1.168）",
+                "3. ${ctx.getString(R.string.ip_address_label)}${ctx.getString(R.string.rokidlink_ip_hint)}",
                 "4. ${ctx.getString(R.string.open_file_manager)}",
                 "5. ${ctx.getString(R.string.file_manager_subtitle)}",
             ),

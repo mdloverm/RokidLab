@@ -265,6 +265,7 @@ internal fun FileManagerScreen(
     installingApkPath: String?,
     apkInstallProgress: Int,
     apkInstallStatus: String?,
+    apkInstallSuccess: Boolean,
     onBack: () -> Unit,
     onNavigateUp: () -> Unit,
     onRefresh: () -> Unit,
@@ -473,7 +474,8 @@ internal fun FileManagerScreen(
                     selectedCount = selectedFiles.size,
                     installingApkPath = installingApkPath,
                     apkInstallProgress = apkInstallProgress,
-                    apkInstallStatus = apkInstallStatus
+                    apkInstallStatus = apkInstallStatus,
+                    apkInstallSuccess = apkInstallSuccess
                 )
             }
         }
@@ -538,6 +540,7 @@ class FileManagerActivity : ComponentActivity() {
     private var installingApkPath: String? by mutableStateOf(null)
     private var apkInstallProgress: Int by mutableStateOf(0)
     private var apkInstallStatus: String? by mutableStateOf(null)
+    private var apkInstallSuccess: Boolean by mutableStateOf(false)
 
     enum class SortOrder {
         NAME_ASC, NAME_DESC, SIZE_ASC, SIZE_DESC, DATE_ASC, DATE_DESC, TYPE_ASC, TYPE_DESC
@@ -607,6 +610,7 @@ class FileManagerActivity : ComponentActivity() {
                                 installingApkPath = installingApkPath,
                                 apkInstallProgress = apkInstallProgress,
                                 apkInstallStatus = apkInstallStatus,
+                                apkInstallSuccess = apkInstallSuccess,
                                 onBack = { 
                                     Log.i(TAG, "onBack called, currentPath=$currentPath")
                                     if (currentPath == "/sdcard/") {
@@ -1140,10 +1144,12 @@ class FileManagerActivity : ComponentActivity() {
                 
                 runOnUiThread {
                     if (isSuccess) {
+                        apkInstallSuccess = true
                         apkInstallStatus = getString(R.string.install_completed)
                         apkInstallProgress = 100
                         statusMessage = getString(R.string.apk_install_completed, file.name)
                     } else {
+                        apkInstallSuccess = false
                         val errorLine = result.lines().firstOrNull { it.isNotBlank() } ?: getString(R.string.unknown_error)
                         apkInstallStatus = getString(R.string.apk_install_failed, errorLine)
                     }
@@ -1155,12 +1161,14 @@ class FileManagerActivity : ComponentActivity() {
                             installingApkPath = null
                             apkInstallProgress = 0
                             apkInstallStatus = null
+                            apkInstallSuccess = false
                         }
                     }.start()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "APK安装失败: ${e.message}", e)
                 runOnUiThread {
+                    apkInstallSuccess = false
                     apkInstallStatus = getString(R.string.apk_install_failed, e.message ?: "Unknown")
                     installingApkPath = null
                 }
@@ -1293,7 +1301,8 @@ fun FileItemRow(
     selectedCount: Int,
     installingApkPath: String? = null,
     apkInstallProgress: Int = 0,
-    apkInstallStatus: String? = null
+    apkInstallStatus: String? = null,
+    apkInstallSuccess: Boolean = false
 ) {
     val ctx = LocalContext.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -1350,8 +1359,8 @@ fun FileItemRow(
                         Text(
                             " [$apkInstallStatus]",
                             color = when {
-                                apkInstallStatus.contains("完成") -> BrewSuccess
-                                apkInstallStatus.contains("失败") -> BrewRed
+                                apkInstallSuccess -> BrewSuccess
+                                apkInstallStatus != null -> BrewRed
                                 else -> BrewCoral
                             },
                             fontSize = 10.sp

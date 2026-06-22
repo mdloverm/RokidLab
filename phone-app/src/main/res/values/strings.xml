@@ -118,6 +118,9 @@
     <string name="media_projection_required">需要"屏幕录制"权限才能将手机画面投到眼镜</string>
     <string name="media_projection_denied">权限被拒绝</string>
 
+    <!-- IP Hint -->
+    <string name="rokidlink_ip_hint">（RokidLink 启动后可查看）</string>
+
     <!-- ADB Dialog -->
     <string name="connecting_adb">正在连接 ADB…</string>
     <string name="connecting_adb_hint">请确保眼镜已开启 ADB 网络调试</string>
@@ -177,6 +180,8 @@
     <!-- Mirror source dialog -->
     <string name="select_mirror_source">选择商店源</string>
     <string name="mirror_github">GitHub 源</string>
+    <string name="mirror_github_desc">官方 GitHub 镜像源</string>
+    <string name="mirror_gitee_desc">Gitee 镜像源（国内访问更快）</string>
     <string name="mirror_gitee">Gitee 源</string>
 
     <!-- Guide -->
@@ -314,7 +319,10 @@
     <string name="refresh_check_update">刷新注册表以检查最新版本</string>
     <string name="not_checked">未检查</string>
     <string name="unknown">未知</string>
+    <string name="unknown_author">未知作者</string>
     <string name="downloading_progress">正在下载 %s（%d%%）</string>
+    <string name="rokidlab_update">RokidLab 更新</string>
+    <string name="update_available_info">RokidLab %s 已准备好安装。</string>
 
     <!-- DetailInfoSections -->
     <string name="about_section">关于</string>

@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.store
+package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -193,6 +193,7 @@ internal fun DetailTopBar(
 }
 @Composable
 internal fun DetailHeroHeader(app: BrewApp, iconLoader: IconLoader, mediaLoader: MediaLoader) {
+    val ctx = LocalContext.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -230,7 +231,7 @@ internal fun DetailHeroHeader(app: BrewApp, iconLoader: IconLoader, mediaLoader:
                 InfoPill("v${app.version}")
             }
             Text(
-                app.author,
+                app.author.ifEmpty { ctx.getString(R.string.unknown_author) },
                 color = BrewMuted,
                 fontSize = 12.sp,
                 maxLines = 1,

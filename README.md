@@ -55,10 +55,14 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - 一键启动/停止，眼镜端自动接收
 - 投屏后眼镜端全屏显示画面，无 UI 干扰
 - Socket 传屏协议：`[1B方向][2B宽LE][2B高LE][N*1B灰度]`，3 秒连接超时
-- **帧健康看门狗**：8 秒无帧时重建 ImageReader 恢复画面，15 秒无帧时自动停止投屏
+- **帧健康看门狗**：30 秒无帧时重建 ImageReader 恢复画面
 - **ImageReader 自恢复**：方向切换导致帧暂停时，自动重建 ImageReader + 更新 VirtualDisplay Surface，无需重建 MediaProjection
-- **Socket 无限重连**：断连后自动重试，无次数限制，恢复后继续投屏
-- **眼镜端 Server 自愈**：Activity 被系统重新拉起时自动重启 Server，投屏控制页布局始终保持一致（ROKIDLINK 状态卡 + IP 输入 + 使用说明始终可见，仅按钮文字切换）
+- **Socket 无限重连**：断连后异步自动重试（独立线程池），使用 `isReconnecting` 标记防止重连循环
+- **方向缓存优化**：使用 `currentOrientation` 缓存取代每帧查询 `DisplayManager`，减少 IPC 开销
+- **线程安全同步锁**：`mirrorLock` 保护 ImageReader 和 VirtualDisplay 切换，防竞态
+- **眼镜端 Server 自愈**：Activity 被系统重新拉起时自动重启 Server
+- **停止投屏行为**：停止投屏仅断开 Socket 连接，眼镜端 RokidLink 退回后台保持运行，下次可直接恢复（不再 `stopApp`）
+- **旋转不中断**：MainActivity 设置 `configChanges="orientation|screenSize"`，旋转时不重建 Activity，投屏持续流畅
 - 眼镜端 RokidLink APK 自动随手机端构建（build.gradle.kts 集成），始终保持同步
 
 ### 文件管理
@@ -185,7 +189,7 @@ RokidLab/
 │   │   │   │   └── GamepadActivity.kt       游戏手柄 Activity
 │   │   │   ├── mirror/      投屏模块
 │   │   │   │   ├── PhoneMirrorActivity.kt     手机投屏页面
-│   │   │   │   ├── PhoneMirrorService.kt      投屏前台 Service（3秒 Socket 超时、方向防抖、帧健康看门狗8s恢复/15s停止、无限重连）
+│   │   │   │   ├── PhoneMirrorService.kt      投屏前台 Service（独立线程池异步重连、方向缓存、mirrorLock 同步锁、isReconnecting 防循环、帧健康看门狗30s）
 │   │   │   │   ├── PhonePackageInstallHelper.kt APK 安装工具
 │   │   │   │   └── ScreenMirrorActivity.kt    屏幕镜像画面
 │   │   │   ├── model/       数据模型
@@ -224,7 +228,7 @@ RokidLab/
 │   │   ├── java/com/rokidlab/rokidlink/
 │   │   │   ├── MainActivity.kt              WiFi/ADB 状态面板
 │   │   │   ├── PhoneMirrorActivity.kt       投屏接收画面（onResume 自愈）
-│   │   │   └── PhoneMirrorServer.kt         Socket 服务端（灰度图接收 + Bitmap 显示 + 像素数组复用防 OOM）
+│   │   │   ├── PhoneMirrorServer.kt         Socket 服务端（灰度图接收 + Bitmap 显示 + 像素数组复用防 OOM + 线程泄漏修复）
 │   │   ├── res/layout/activity_main.xml     状态面板布局
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts

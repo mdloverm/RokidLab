@@ -22,6 +22,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.Manifest
 import android.app.Activity
+import android.app.ActivityManager
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
@@ -282,6 +283,15 @@ class MainActivity : AppCompatActivity() {
         log(getString(R.string.log_loaded_apps, apps.size))
         refreshCachedGlassesInstallStates(apps)
         refreshPhoneInstallStates(apps)
+
+        // 检查 PhoneMirrorService 是否正在运行（Activity 重建后恢复状态）
+        if (isServiceRunning(PhoneMirrorService::class.java)) {
+            isStartingPhoneMirror = false
+            phoneMirrorState = phoneMirrorState.copy(
+                isMirroring = true,
+                connectionStatus = getString(R.string.screen_projection)
+            )
+        }
 
         setContent {
             RokidLabTheme {
@@ -1150,12 +1160,13 @@ class MainActivity : AppCompatActivity() {
                         screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
                         phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
                         fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
+                        // 停止完成后再重新安装
+                        lifecycleScope.launch {
+                            delay(500)
+                            installRokidLinkToGlasses()
+                        }
                     },
                 )
-                // 等待停止生效
-                delay(800)
-                // 重新安装
-                installRokidLinkToGlasses()
             }
         }
     }
@@ -1282,13 +1293,30 @@ class MainActivity : AppCompatActivity() {
     private fun stopPhoneMirror() {
         isStartingPhoneMirror = false
         log(getString(R.string.log_stopping_phone_mirror))
-        // 停止投屏服务（会关闭 Socket，眼镜端 onDisconnected 自动退出投屏画面）
-        // ROKIDLINK 主程序保持运行，不关闭
+        // 停止手机端投屏服务（断 Socket 连接）
         stopService(Intent(this, PhoneMirrorService::class.java))
         phoneMirrorState = phoneMirrorState.copy(
             isMirroring = false,
             connectionStatus = ""
         )
+        // 不关闭眼镜端 RokidLink，眼镜端检测到断连后会自动退回后台
+        // RokidLink 保持运行，下次投屏时直接重连即可
+        log(getString(R.string.log_rokidlink_closed))
+    }
+
+    /**
+     * 检查指定 Service 是否在运行
+     */
+    private fun isServiceRunning(serviceClass: Class<*>): Boolean {
+        return try {
+            val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            manager.getRunningServices(Integer.MAX_VALUE).any { service ->
+                serviceClass.name == service.service.className
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "isServiceRunning failed: ${e.message}")
+            false
+        }
     }
 
     // 处理从FileManagerActivity传来的APK安装请求
@@ -1410,7 +1438,7 @@ internal fun MirrorSourceDialog(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            mirror.description,
+                            ctx.getString(mirror.descriptionRes),
                             color = BrewMuted,
                             fontSize = 13.sp,
                         )

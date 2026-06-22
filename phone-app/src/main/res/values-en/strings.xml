@@ -118,6 +118,9 @@
     <string name="media_projection_required">Screen recording permission is required to cast phone screen to glasses.</string>
     <string name="media_projection_denied">Permission denied</string>
 
+    <!-- IP Hint -->
+    <string name="rokidlink_ip_hint">（view after launching RokidLink）</string>
+
     <!-- ADB Dialog -->
     <string name="connecting_adb">Connecting to ADB…</string>
     <string name="connecting_adb_hint">Make sure glasses have ADB over TCP enabled</string>
@@ -177,7 +180,9 @@
     <!-- Mirror source dialog -->
     <string name="select_mirror_source">Select Mirror Source</string>
     <string name="mirror_github">GitHub</string>
+    <string name="mirror_github_desc">Official GitHub mirror source</string>
     <string name="mirror_gitee">Gitee</string>
+    <string name="mirror_gitee_desc">Gitee mirror source (faster in China)</string>
 
     <!-- Guide -->
     <string name="guide_welcome">Welcome to Rokid Lab</string>

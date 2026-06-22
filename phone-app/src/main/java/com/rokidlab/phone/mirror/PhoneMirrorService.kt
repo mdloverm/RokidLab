@@ -91,6 +91,17 @@ class PhoneMirrorService : Service() {
     private var lastImageTime = 0L
     /** 帧健康检查定时器 */
     private var frameWatchdog: Thread? = null
+    /** 独立的重连线程池，避免阻塞图像处理线程 */
+    private val reconnectExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "mirror-reconnect")
+    }
+    /** 同步锁，保护 imageReader/虚拟显示器切换 */
+    private val mirrorLock = Any()
+    /** 当前取向（缓存，避免每帧查询） */
+    private var currentOrientation = 0
+    /** 防止重连循环：标记正在重连中 */
+    @Volatile
+    private var isReconnecting = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -224,6 +235,7 @@ class PhoneMirrorService : Service() {
                             if (lastOrientation != normalized && now - lastChangeTime > DEBOUNCE_MS) {
                                 lastOrientation = normalized
                                 lastChangeTime = now
+                                currentOrientation = normalized
                                 Log.i(TAG, "Orientation changed to $normalized")
                             }
                         }
@@ -247,45 +259,40 @@ class PhoneMirrorService : Service() {
         }.start()
     }
 
-    private fun isLandscapeNow(): Boolean {
-        val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        val displays = displayManager.displays
-        if (displays.isNotEmpty()) {
-            val rotation = displays[0].rotation
-            return rotation == 1 || rotation == 3
-        }
-        return false
-    }
+    private fun isLandscapeNow(): Boolean = currentOrientation == 90 || currentOrientation == 270
 
     /**
      * 创建 ImageReader + VirtualDisplay（固定 480x640，仅创建一次）
      * 创建后自动注册图像监听器
      */
     private fun createMirrorSession() {
-        try {
-            imageReader?.close()
-            surface?.release()
-            virtualDisplay?.release()
-        } catch (_: Exception) {}
+        synchronized(mirrorLock) {
+            try {
+                imageReader?.close()
+                surface?.release()
+                virtualDisplay?.release()
+            } catch (_: Exception) {}
 
-        imageReader = ImageReader.newInstance(mirrorWidth, mirrorHeight, PixelFormat.RGBA_8888, 2)
-        surface = imageReader?.surface
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "PhoneMirror", mirrorWidth, mirrorHeight, screenDensity,
-            0, surface, null, null
-        )
-        Log.i(TAG, "VirtualDisplay created: ${mirrorWidth}x${mirrorHeight} @ ${screenDensity}dpi")
-        registerImageListener()
+            imageReader = ImageReader.newInstance(mirrorWidth, mirrorHeight, PixelFormat.RGBA_8888, 2)
+            surface = imageReader?.surface
+            virtualDisplay = mediaProjection?.createVirtualDisplay(
+                "PhoneMirror", mirrorWidth, mirrorHeight, screenDensity,
+                0, surface, null, null
+            )
+            Log.i(TAG, "VirtualDisplay created: ${mirrorWidth}x${mirrorHeight} @ ${screenDensity}dpi")
+            registerImageListener()
+        }
     }
 
     /**
      * 在当前 ImageReader 上注册帧监听器
      */
     private fun registerImageListener() {
-        imageReader?.setOnImageAvailableListener({ reader ->
+        val reader = imageReader ?: return
+        reader.setOnImageAvailableListener({ r ->
             if (!isMirrorRunning) return@setOnImageAvailableListener
             val image = try {
-                reader.acquireLatestImage()
+                r.acquireLatestImage()
             } catch (e: IllegalStateException) {
                 Log.w(TAG, "acquireLatestImage failed (reader may be closed): ${e.message}")
                 null
@@ -297,8 +304,6 @@ class PhoneMirrorService : Service() {
             try {
                 lastImageTime = System.currentTimeMillis()
                 processImage(image)
-            } catch (e: IllegalStateException) {
-                Log.w(TAG, "Skipping invalid frame: ${e.message}")
             } catch (e: Exception) {
                 Log.e(TAG, "Image processing failed: ${e.message}", e)
             } finally {
@@ -389,55 +394,59 @@ class PhoneMirrorService : Service() {
     }
 
     /**
-     * 重连眼镜 Socket（无限重试，不会停 mirror）
+     * 重连眼镜 Socket（异步执行，不阻塞图像处理线程）
+     * 使用 isReconnecting 标记防止帧循环触发大量重连任务
      */
     private var reconnectAttempts = 0
     private fun reconnectSocket() {
-        if (!isMirrorRunning) return
-        reconnectAttempts++
-        try { Thread.sleep(200) } catch (_: InterruptedException) { return }
-        if (!isMirrorRunning) return
-        try {
-            socket = Socket()
-            socket?.connect(InetSocketAddress(glassesIp, port), AppConfig.MIRROR_CONNECT_TIMEOUT_MS)
-            socket?.tcpNoDelay = true
-            socket?.keepAlive = true
-            outputStream = socket?.getOutputStream()
-            reconnectAttempts = 0
-            Log.i(TAG, "Socket reconnected successfully")
-        } catch (e: Exception) {
-            Log.w(TAG, "Socket reconnect failed ($reconnectAttempts): ${e.message}")
+        if (!isMirrorRunning || isReconnecting) return
+        isReconnecting = true
+        reconnectExecutor.submit {
+            reconnectAttempts++
+            try { Thread.sleep(200) } catch (_: InterruptedException) { isReconnecting = false; return@submit }
+            if (!isMirrorRunning) { isReconnecting = false; return@submit }
+            try {
+                val newSocket = java.net.Socket()
+                newSocket.connect(java.net.InetSocketAddress(glassesIp, port), AppConfig.MIRROR_CONNECT_TIMEOUT_MS)
+                newSocket.tcpNoDelay = true
+                newSocket.keepAlive = true
+                synchronized(mirrorLock) {
+                    socket = newSocket
+                    outputStream = newSocket.getOutputStream()
+                }
+                reconnectAttempts = 0
+                isReconnecting = false
+                Log.i(TAG, "Socket reconnected successfully")
+            } catch (e: Exception) {
+                Log.w(TAG, "Socket reconnect failed ($reconnectAttempts): ${e.message}")
+                isReconnecting = false
+            }
         }
     }
 
     /**
      * 帧健康检查看门狗
-     * 如果 3 秒内没有新帧到达，说明 ImageReader 可能卡死，重建 VirtualDisplay
+     * 方向切换时帧可能暂停，等待自然恢复，不干预
+     * 如果超过 30 秒仍无帧，说明真有问题，才尝试恢复或放弃
      */
     private fun startFrameWatchdog() {
         stopFrameWatchdog()
         lastImageTime = System.currentTimeMillis()
-        var recoverAttempted = false
 
         frameWatchdog = Thread {
             while (isMirrorRunning && !Thread.currentThread().isInterrupted) {
                 try {
-                    Thread.sleep(2000)
+                    Thread.sleep(5000)
                 } catch (_: InterruptedException) {
                     break
                 }
                 if (!isMirrorRunning) break
                 val sinceLastFrame = System.currentTimeMillis() - lastImageTime
-                if (sinceLastFrame > 8000 && !recoverAttempted) {
-                    Log.w(TAG, "No frames for ${sinceLastFrame}ms, attempting to recover ImageReader")
-                    recoverAttempted = true
+                if (sinceLastFrame > 30000) {
+                    Log.w(TAG, "No frames for ${sinceLastFrame}ms, attempting recovery")
+                    lastImageTime = System.currentTimeMillis()
                     Handler(Looper.getMainLooper()).post {
-                        recoverImageReader()
-                    }
-                } else if (sinceLastFrame > 15000) {
-                    Log.w(TAG, "No frames for ${sinceLastFrame}ms, stopping mirror")
-                    Handler(Looper.getMainLooper()).post {
-                        stopMirror()
+                        swapImageReaderSurface()
                     }
                 }
             }
@@ -449,23 +458,28 @@ class PhoneMirrorService : Service() {
     }
 
     /**
-     * 恢复卡死的 ImageReader：重建 ImageReader + 更新 VirtualDisplay Surface
-     * 不重建 VirtualDisplay，避免 MediaProjection 限制
+     * 更换 ImageReader 并更新 VirtualDisplay 输出 Surface
+     * 不重建 VirtualDisplay（MediaProjection 不允许重复 createVirtualDisplay）
+     * 仅切换输出目标，触发帧流恢复
      */
-    private fun recoverImageReader() {
+    private fun swapImageReaderSurface() {
         if (!isMirrorRunning) return
-        try {
-            val newReader = ImageReader.newInstance(mirrorWidth, mirrorHeight, PixelFormat.RGBA_8888, 2)
-            val newSurface = newReader.surface
-            virtualDisplay?.surface = newSurface
-            imageReader?.close()
-            imageReader = newReader
-            surface = newSurface
-            registerImageListener()
-            lastImageTime = System.currentTimeMillis()
-            Log.i(TAG, "ImageReader recovered successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "ImageReader recovery failed: ${e.message}", e)
+        synchronized(mirrorLock) {
+            if (!isMirrorRunning) return@synchronized
+            try {
+                val newReader = ImageReader.newInstance(mirrorWidth, mirrorHeight, PixelFormat.RGBA_8888, 2)
+                val newSurface = newReader.surface
+                // 仅切换 VirtualDisplay 的输出 Surface，不重建
+                virtualDisplay?.surface = newSurface
+                // 关闭旧的 ImageReader（此时图像线程已切换），再赋新值
+                imageReader?.close()
+                imageReader = newReader
+                surface = newSurface
+                registerImageListener()
+                Log.i(TAG, "ImageReader surface swapped successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "ImageReader surface swap failed: ${e.message}", e)
+            }
         }
     }
 
@@ -473,7 +487,7 @@ class PhoneMirrorService : Service() {
         frameWatchdog?.interrupt()
         frameWatchdog = null
     }
-
+ 
     private fun stopMirror() {
         if (!isMirrorRunning) return
         synchronized(this) {
@@ -486,24 +500,28 @@ class PhoneMirrorService : Service() {
             orientationListener?.disable()
             orientationListener = null
             // 停止并等待 HandlerThread 完全退出
-            imageHandler?.removeCallbacksAndMessages(null)
-            imageHandler = null
-            imageHandlerThread?.quit()
-            imageHandlerThread?.join(1000) // 等待最多1秒
-            imageHandlerThread = null
+            synchronized(mirrorLock) {
+                imageHandler?.removeCallbacksAndMessages(null)
+                imageHandler = null
+                imageHandlerThread?.quit()
+                imageHandlerThread = null
+            }
             // 释放资源
-            imageReader?.close()
-            imageReader = null
-            surface?.release()
-            surface = null
-            virtualDisplay?.release()
-            virtualDisplay = null
+            synchronized(mirrorLock) {
+                imageReader?.close()
+                imageReader = null
+                surface?.release()
+                surface = null
+                virtualDisplay?.release()
+                virtualDisplay = null
+            }
             mediaProjection?.stop()
             mediaProjection = null
             outputStream?.close()
             outputStream = null
             socket?.close()
             socket = null
+            reconnectExecutor.shutdownNow()
         }
         stopSelf()
     }

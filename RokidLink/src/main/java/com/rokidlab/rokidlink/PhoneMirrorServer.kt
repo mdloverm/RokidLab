@@ -51,6 +51,7 @@ class PhoneMirrorServer(
 
     fun start(): Boolean {
         if (isRunning) return false
+        stop()  // 确保旧线程和 Socket 已清理
         return try {
             val server = ServerSocket()
             server.reuseAddress = true
@@ -80,7 +81,7 @@ class PhoneMirrorServer(
                 clientSocket = serverSocket?.accept()
                 if (!isRunning) break
                 clientSocket?.tcpNoDelay = true
-                clientSocket?.soTimeout = 15000  // 15s timeout - 手机切换方向时帧可能会暂停几秒
+                clientSocket?.soTimeout = 30000  // 30s timeout - 手机切换方向时帧可能暂停较长时间，等自然恢复
                 inputStream = BufferedInputStream(clientSocket?.getInputStream())
 
                 Log.i(TAG, "Phone connected")
@@ -91,8 +92,7 @@ class PhoneMirrorServer(
             } catch (e: Exception) {
                 if (isRunning) {
                     Log.e(TAG, "Accept connection failed: ${e.message}", e)
-                    disconnect()  // Clean up possibly partially initialized clientSocket/inputStream
-                    try { Thread.sleep(1000) } catch (_: InterruptedException) { break }
+                    disconnectClient()
                 }
             }
         }
@@ -162,6 +162,9 @@ class PhoneMirrorServer(
                     frameListener?.onFrame(it, isLandscape)
                 }
 
+            } catch (e: java.net.SocketTimeoutException) {
+                // 方向切换时帧可能暂停，超时后继续等待，不断连
+                Log.w(TAG, "Read timeout (frames paused), continuing...")
             } catch (e: Exception) {
                 if (isRunning) {
                     Log.e(TAG, "Receive frame failed: ${e.message}", e)
@@ -170,7 +173,7 @@ class PhoneMirrorServer(
             }
         }
 
-        disconnect()
+        disconnectClient()
         frameListener?.onDisconnected()
         // Clean up state for next waitForClient loop
         inputStream = null
@@ -215,6 +218,22 @@ class PhoneMirrorServer(
         receiveThread?.interrupt()
         receiveThread = null
         Log.i(TAG, "Server stopped")
+    }
+
+    /**
+     * 断开当前客户端连接，但保持 ServerSocket 继续监听
+     * 调用后 waitForClient 循环会重新 accept() 等待新连接
+     */
+    private fun disconnectClient() {
+        try {
+            inputStream?.close()
+            clientSocket?.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Disconnect client failed: ${e.message}", e)
+        }
+        inputStream = null
+        clientSocket = null
+        Log.i(TAG, "Client disconnected")
     }
 
     private fun disconnect() {

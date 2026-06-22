@@ -1211,6 +1211,20 @@ lifecycleScope.launch {
 
 ## 八、版本历史
 
+### v1.0.1 (2026-06-22)
+
+**Bug 修复与性能优化**
+
+- **旋转不崩溃**：MainActivity 添加 `configChanges="orientation|screenSize"`，旋转时 Activity 不重建，投屏服务持续运行
+- **Socket 重连异步化**：`reconnectSocket()` 移至独立线程池 `reconnectExecutor`，不再阻塞图像处理线程，消除画面卡死
+- **重连防循环**：添加 `isReconnecting` 标记，防止多次帧发送失败触发大量重连任务
+- **线程安全同步锁**：引入 `mirrorLock` 保护 ImageReader/VirtualDisplay 切换，解决 swapImageReaderSurface 与图像处理线程的竞态问题
+- **方向缓存优化**：使用 `currentOrientation` 缓存取代每帧查询 `DisplayManager`，减少 IPC 开销
+- **停止投屏不关 RokidLink**：`stopPhoneMirror()` 仅断开 Socket，眼镜端 `onDisconnected` → `moveTaskToBack(true)` 退回后台保持运行
+- **眼镜端线程泄漏修复**：`PhoneMirrorServer.start()` 先调用 `stop()` 清理旧线程
+- **眼镜端异常捕获优化**：移除 accept 异常后的 `Thread.sleep(1000)`，停止 Server 更快响应
+- **多语言覆盖完成**：全面检查并修复所有用户可见区域的硬编码中文字符串
+
 ### v1.0.0 (2024-06-17)
 
 **初始版本**

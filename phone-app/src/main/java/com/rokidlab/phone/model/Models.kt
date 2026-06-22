@@ -145,7 +145,7 @@ data class MirrorSource(
     val id: String,
     val name: String,
     val url: String,
-    val description: String,
+    val descriptionRes: Int,
     val iconRes: Int? = null,
     val iconUrl: String? = null,
 )
@@ -159,7 +159,7 @@ object BrewIndex {
             id = "gitee",
             name = "Gitee",
             url = "https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/dist/apps.v1.json",
-            description = "Gitee 镜像源（国内访问更快）",
+            descriptionRes = R.string.mirror_gitee_desc,
             iconRes = R.drawable.ic_gitee_mark,
             iconUrl = "https://gitee.com/static/images/logo.svg",
         ),
@@ -167,7 +167,7 @@ object BrewIndex {
             id = "github",
             name = "GitHub",
             url = "https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/dist/apps.v1.json",
-            description = "官方 GitHub 镜像源",
+            descriptionRes = R.string.mirror_github_desc,
             iconRes = R.drawable.ic_github_mark,
         ),
     )
@@ -380,7 +380,7 @@ object BrewIndex {
     }
 
     private fun String?.inferredAuthor(): String {
-        if (this.isNullOrBlank()) return "未知"
+        if (this.isNullOrBlank()) return ""
         val owner = Regex("""https://github\.com/([^/]+)""").find(this)?.groupValues?.getOrNull(1)
         return owner ?: URL(this).host.removePrefix("www.")
     }

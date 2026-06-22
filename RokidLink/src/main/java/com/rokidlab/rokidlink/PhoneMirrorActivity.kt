@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
+import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
 
@@ -36,9 +37,11 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
 
         // 全屏 ImageView，仅显示投屏画面
         imageView = ImageView(this).apply {
-            // FIT_CENTER 保持画面比例不变形
+            // FIT_CENTER 保持画面比例，背景透明，非画面区域透出窗口背景黑色，看不出边框
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(Color.BLACK)
+            setBackgroundColor(Color.TRANSPARENT)
+            // 初始隐藏，收到帧后才显示，避免启动时出现空白方框
+            visibility = View.INVISIBLE
             // 双击退出
             setOnClickListener {
                 val now = System.currentTimeMillis()
@@ -78,6 +81,7 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
 
     override fun onFrame(bitmap: Bitmap, isLandscape: Boolean) {
         runOnUiThread {
+            imageView.visibility = View.VISIBLE
             imageView.setImageBitmap(bitmap)
         }
     }
@@ -93,8 +97,8 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
     override fun onDisconnected() {
         runOnUiThread {
             imageView.setImageBitmap(null)
-            stopServer()
-            finish()
+            // 断连后退到后台（不关闭），RokidLink 保持运行，投屏 Server 继续等待重连
+            moveTaskToBack(true)
         }
     }
 
