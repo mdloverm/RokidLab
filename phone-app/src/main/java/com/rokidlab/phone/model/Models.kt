@@ -14,6 +14,7 @@ import com.rokidlab.phone.util.*
 import com.rokidlab.phone.R
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -242,28 +243,34 @@ object BrewIndex {
         val urls = listOf(primaryUrl) + fallbackUrls
         var lastError: Throwable? = null
         for (url in urls) {
-            runCatching {
-                val raw = fetch(url)
-                val parsed = parse(raw)
-                val apps = mergeBundledMedia(parsed.apps, loadBundled(context))
-                require(apps.isNotEmpty()) { "远程注册表为空" }
-                cacheFile(context).writeText(raw)
-                return@withContext BrewIndexRefresh(
-                    apps = apps,
-                    sourceUrl = url,
-                    brewVersion = parsed.brewVersion,
-                    brewVersionCode = parsed.brewVersionCode,
-                    // App 自身更新固定使用 Gitee 地址
-                    brewApkUrl = parsed.brewApkUrl?.replace("https://github.com", "https://gitee.com")
-                        ?: parsed.brewApkUrl,
-                    brewReleaseUrl = parsed.brewReleaseUrl?.replace("github.com", "gitee.com")
-                        ?: parsed.brewReleaseUrl,
-                    brewNotes = parsed.brewNotes,
-                    brewChanges = parsed.brewChanges,
-                )
-            }.onFailure { error ->
-                lastError = error
+            // 每个 URL 最多重试 3 次，间隔递增
+            // 解决网络切换后 DNS 缓存未刷新等问题
+            for (attempt in 0 until 3) {
+                val result = runCatching {
+                    val raw = fetch(url)
+                    val parsed = parse(raw)
+                    val apps = mergeBundledMedia(parsed.apps, loadBundled(context))
+                    require(apps.isNotEmpty()) { "远程注册表为空" }
+                    cacheFile(context).writeText(raw)
+                    return@withContext BrewIndexRefresh(
+                        apps = apps,
+                        sourceUrl = url,
+                        brewVersion = parsed.brewVersion,
+                        brewVersionCode = parsed.brewVersionCode,
+                        // App 自身更新固定使用 Gitee 地址
+                        brewApkUrl = parsed.brewApkUrl?.replace("https://github.com", "https://gitee.com")
+                            ?: parsed.brewApkUrl,
+                        brewReleaseUrl = parsed.brewReleaseUrl?.replace("github.com", "gitee.com")
+                            ?: parsed.brewReleaseUrl,
+                        brewNotes = parsed.brewNotes,
+                        brewChanges = parsed.brewChanges,
+                    )
+                }
+                if (result.isSuccess) break
+                lastError = result.exceptionOrNull()
+                if (attempt < 2) delay((attempt + 1) * 1000L) // 1s, 2s
             }
+            if (lastError == null) break // 当前 URL 重试成功，不再试后面的 URL
         }
         throw lastError ?: IllegalStateException("No available registry endpoint")
     }

@@ -22,7 +22,6 @@ import android.os.Handler
 import android.os.Looper
 
 class BluetoothHidManager(private val appContext: Context) {
-
     companion object {
         private const val TAG = "BluetoothHidManager"
 
@@ -44,87 +43,153 @@ class BluetoothHidManager(private val appContext: Context) {
         const val STATE_DISCONNECTED = 0
         const val STATE_CONNECTING   = 1
         const val STATE_CONNECTED    = 2
-        const val STATE_RETRY_FAILED = 3  // Smart retry exceeded max attempts, manual Bluetooth reset required
+        const val STATE_RETRY_FAILED = 3
 
-        const val CONN_HID = 0  // 蓝牙 HID 模式 (BluetoothHidDevice API)
+        const val CONN_HID = 0
 
         private const val KEYBOARD_REPORT_ID = 1
         private const val CONSUMER_REPORT_ID = 2
         private const val MOUSE_REPORT_ID   = 3
-        // GAMEPAD_REPORT_ID 已移除 — 眼镜内核不支持 Game Pad HID Usage
-        // 游戏手柄模式复用 Keyboard Report ID 1
+        private const val GAMEPAD_REPORT_ID = 4
+
+        /**
+         * 构建 HID 描述符，指定键盘报告的键码数量。
+         * 总键盘报告大小（不含 Report ID）= modifier(1) + kbdKeycodeCount
+         */
+        fun buildHidDescriptor(kbdKeycodeCount: Int = 1): ByteArray {
+            val kc = kbdKeycodeCount.coerceIn(1, 6)
+            // 便捷 byte 数组构造
+            fun b(vararg ints: Int) = ints.map { it.toByte() }.toByteArray()
+
+            // ── Consumer Control (Report ID 2) ──
+            val consumer = b(
+                0x05, 0x0C,                             // Usage Page (Consumer)
+                0x09, 0x01,                             // Usage (Consumer Control)
+                0xA1, 0x01,                             // Collection (Application)
+                0x85, CONSUMER_REPORT_ID,               // Report ID (2)
+                0x19, 0x00,                             // Usage Minimum (Unassigned)
+                0x2A, 0xFF, 0x03,                       // Usage Maximum (1023)
+                0x75, 0x10,                             // Report Size (16)
+                0x95, 0x01,                             // Report Count (1)
+                0x15, 0x00,                             // Logical Minimum (0)
+                0x26, 0xFF, 0x03,                       // Logical Maximum (1023)
+                0x81, 0x00,                             // Input (Data,Array,Abs)
+                0xC0,                                   // End Collection
+            )
+
+            // ── Keyboard (Report ID 1) — 动态键码数量 ──
+            val keyboard = b(
+                0x05, 0x01,                             // Usage Page (Generic Desktop)
+                0x09, 0x06,                             // Usage (Keyboard)
+                0xA1, 0x01,                             // Collection (Application)
+                0x85, KEYBOARD_REPORT_ID,               // Report ID (1)
+                // modifier 字节
+                0x05, 0x07,                             // Usage Page (Keyboard/Keypad)
+                0x19, 0xE0,                             // Usage Minimum (KB Left Ctrl)
+                0x29, 0xE7,                             // Usage Maximum (KB Right GUI)
+                0x15, 0x00,                             // Logical Minimum (0)
+                0x25, 0x01,                             // Logical Maximum (1)
+                0x75, 0x01,                             // Report Size (1)
+                0x95, 0x08,                             // Report Count (8)
+                0x81, 0x02,                             // Input (Data,Var,Abs)
+                // keycode(s) 字节
+                0x75, 0x08,                             // Report Size (8)
+                0x95, kc,                               // Report Count (N)
+                0x15, 0x00,                             // Logical Minimum (0)
+                0x26, 0xFF, 0x00,                       // Logical Maximum (255)
+                0x05, 0x07,                             // Usage Page (Keyboard/Keypad)
+                0x19, 0x00,                             // Usage Minimum (0)
+                0x29, 0xFF,                             // Usage Maximum (255)
+                0x81, 0x00,                             // Input (Data,Array,Abs)
+                0xC0,                                   // End Collection
+            )
+
+            // ── Mouse (Report ID 3) ──
+            val mouse = b(
+                0x05, 0x01,
+                0x09, 0x02,
+                0xA1, 0x01,
+                0x85, MOUSE_REPORT_ID,
+                0x09, 0x01,
+                0xA1, 0x00,
+                0x05, 0x09,
+                0x19, 0x01,
+                0x29, 0x03,
+                0x15, 0x00,
+                0x25, 0x01,
+                0x75, 0x01,
+                0x95, 0x03,
+                0x81, 0x02,
+                0x75, 0x05,
+                0x95, 0x01,
+                0x81, 0x01,
+                0x05, 0x01,
+                0x09, 0x30,
+                0x09, 0x31,
+                0x09, 0x38,
+                0x15, 0x81,
+                0x25, 0x7F,
+                0x75, 0x08,
+                0x95, 0x03,
+                0x81, 0x06,
+                0xC0,
+                0xC0,
+            )
+
+            return consumer + keyboard + mouse
+        }
+
+        /**
+         * 构建 Game Pad HID 描述符。
+         * 报告结构（4 字节，Report ID 4）：
+         *   Byte 0-1: 14 按钮位图（bit 0=A, bit 1=B, ..., bit 13=Right, +2 填充）
+         *   Byte 2: Hat Switch（低 4 位: 0↑1↗2→3↘4↓5↙6←7↖8=释放）
+         *   Byte 3: 保留
+         */
+        fun buildGamepadDescriptor(): ByteArray {
+            fun b(vararg ints: Int) = ints.map { it.toByte() }.toByteArray()
+            return b(
+                0x05, 0x01,                             // Usage Page (Generic Desktop)
+                0x09, 0x05,                             // Usage (Game Pad)
+                0xA1, 0x01,                             // Collection (Application)
+                0x85, GAMEPAD_REPORT_ID,                //   Report ID (4)
+
+                // 14 buttons bitmap → 2 bytes (16 bits)
+                0x05, 0x09,                             //   Usage Page (Button)
+                0x19, 0x01,                             //   Usage Minimum (Button 1)
+                0x29, 0x0E,                             //   Usage Maximum (Button 14)
+                0x15, 0x00,                             //   Logical Minimum (0)
+                0x25, 0x01,                             //   Logical Maximum (1)
+                0x75, 0x01,                             //   Report Size (1)
+                0x95, 0x0E,                             //   Report Count (14)
+                0x81, 0x02,                             //   Input (Data,Var,Abs)
+                0x75, 0x01,                             //   padding 2 bits
+                0x95, 0x02,
+                0x81, 0x01,                             //   Input (Const,Var,Abs)
+
+                // Hat Switch (DPAD) → 4 bits
+                0x05, 0x01,                             //   Usage Page (Generic Desktop)
+                0x09, 0x39,                             //   Usage (Hat Switch)
+                0x15, 0x00,                             //   Logical Minimum (0)
+                0x25, 0x08,                             //   Logical Maximum (8)
+                0x75, 0x04,                             //   Report Size (4)
+                0x95, 0x01,                             //   Report Count (1)
+                0x81, 0x42,                             //   Input (Data,Var,Abs,Null)
+
+                // padding 4 bits (to align byte)
+                0x75, 0x04,
+                0x95, 0x01,
+                0x81, 0x01,
+
+                // 保留字节
+                0x75, 0x08,
+                0x95, 0x01,
+                0x81, 0x01,
+
+                0xC0,                                   // End Collection
+            )
+        }
     }
-
-    // ===== HID 描述符（多 Report ID） =====
-    // 参考 BTREMOTE — Consumer Control (导航) + Keyboard (按键) + Mouse
-    private val HID_DESCRIPTOR = byteArrayOf(
-        // ── Consumer Control (Report ID 2) ──
-        0x05.toByte(), 0x0C.toByte(),                    // Usage Page (Consumer Devices)
-        0x09.toByte(), 0x01.toByte(),                    // Usage (Consumer Control)
-        0xA1.toByte(), 0x01.toByte(),                    // Collection (Application)
-        0x85.toByte(), CONSUMER_REPORT_ID.toByte(),      //   Report ID (2)
-        0x19.toByte(), 0x00.toByte(),                    //   Usage Minimum (Unassigned)
-        0x2A.toByte(), 0xFF.toByte(), 0x03.toByte(),     //   Usage Maximum (1023)
-        0x75.toByte(), 0x10.toByte(),                    //   Report Size (16)
-        0x95.toByte(), 0x01.toByte(),                    //   Report Count (1)
-        0x15.toByte(), 0x00.toByte(),                    //   Logical Minimum (0)
-        0x26.toByte(), 0xFF.toByte(), 0x03.toByte(),     //   Logical Maximum (1023)
-        0x81.toByte(), 0x00.toByte(),                    //   Input (Data,Array,Abs)
-        0xC0.toByte(),                                   // End Collection
-
-        // ── Keyboard (Report ID 1) ──
-        0x05.toByte(), 0x01.toByte(),                    // Usage Page (Generic Desktop)
-        0x09.toByte(), 0x06.toByte(),                    // Usage (Keyboard)
-        0xA1.toByte(), 0x01.toByte(),                    // Collection (Application)
-        0x85.toByte(), KEYBOARD_REPORT_ID.toByte(),      //   Report ID (1)
-        0x05.toByte(), 0x07.toByte(),                    //   Usage Page (Keyboard/Keypad)
-        0x19.toByte(), 0xE0.toByte(),                    //   Usage Minimum (KB Left Ctrl)
-        0x29.toByte(), 0xE7.toByte(),                    //   Usage Maximum (KB Right GUI)
-        0x15.toByte(), 0x00.toByte(),                    //   Logical Minimum (0)
-        0x25.toByte(), 0x01.toByte(),                    //   Logical Maximum (1)
-        0x75.toByte(), 0x01.toByte(),                    //   Report Size (1)
-        0x95.toByte(), 0x08.toByte(),                    //   Report Count (8)
-        0x81.toByte(), 0x02.toByte(),                    //   Input (Data,Var,Abs) — modifier byte
-        0x75.toByte(), 0x08.toByte(),                    //   Report Size (8)
-        0x95.toByte(), 0x01.toByte(),                    //   Report Count (1)
-        0x15.toByte(), 0x00.toByte(),                    //   Logical Minimum (0)
-        0x26.toByte(), 0xFF.toByte(), 0x00.toByte(),     //   Logical Maximum (255)
-        0x05.toByte(), 0x07.toByte(),                    //   Usage Page (Keyboard/Keypad)
-        0x19.toByte(), 0x00.toByte(),                    //   Usage Minimum (0)
-        0x29.toByte(), 0xFF.toByte(),                    //   Usage Maximum (255)
-        0x81.toByte(), 0x00.toByte(),                    //   Input (Data,Array,Abs) — keycode byte
-        0xC0.toByte(),                                   // End Collection
-
-        // ── Mouse (Report ID 3) — 保留 ──
-        0x05.toByte(), 0x01.toByte(),                    // Usage Page (Generic Desktop)
-        0x09.toByte(), 0x02.toByte(),                    // Usage (Mouse)
-        0xA1.toByte(), 0x01.toByte(),                    // Collection (Application)
-        0x85.toByte(), MOUSE_REPORT_ID.toByte(),         //   Report ID (3)
-        0x09.toByte(), 0x01.toByte(),                    //   Usage (Pointer)
-        0xA1.toByte(), 0x00.toByte(),                    //   Collection (Physical)
-        0x05.toByte(), 0x09.toByte(),                    //     Usage Page (Button)
-        0x19.toByte(), 0x01.toByte(),                    //     Usage Minimum (1)
-        0x29.toByte(), 0x03.toByte(),                    //     Usage Maximum (3)
-        0x15.toByte(), 0x00.toByte(),                    //     Logical Minimum (0)
-        0x25.toByte(), 0x01.toByte(),                    //     Logical Maximum (1)
-        0x75.toByte(), 0x01.toByte(),                    //     Report Size (1)
-        0x95.toByte(), 0x03.toByte(),                    //     Report Count (3)
-        0x81.toByte(), 0x02.toByte(),                    //     Input (Data,Var,Abs)
-        0x75.toByte(), 0x05.toByte(),                    //     Report Size (5)
-        0x95.toByte(), 0x01.toByte(),                    //     Report Count (1)
-        0x81.toByte(), 0x01.toByte(),                    //     Input (Const)
-        0x05.toByte(), 0x01.toByte(),                    //     Usage Page (Generic Desktop)
-        0x09.toByte(), 0x30.toByte(),                    //     Usage (X)
-        0x09.toByte(), 0x31.toByte(),                    //     Usage (Y)
-        0x09.toByte(), 0x38.toByte(),                    //     Usage (Wheel)
-        0x15.toByte(), 0x81.toByte(),                    //     Logical Minimum (-127)
-        0x25.toByte(), 0x7F.toByte(),                    //     Logical Maximum (127)
-        0x75.toByte(), 0x08.toByte(),                    //     Report Size (8)
-        0x95.toByte(), 0x03.toByte(),                    //     Report Count (3)
-        0x81.toByte(), 0x06.toByte(),                    //     Input (Data,Var,Rel)
-        0xC0.toByte(),                                   //   End Collection
-        0xC0.toByte(),                                   // End Collection
-    )
 
     // ===== Consumer Control 键码 (Usage Page 0x0C) =====
     // 用于 UI 导航，2字节 = [usage_lsb, usage_msb]
@@ -194,6 +259,9 @@ class BluetoothHidManager(private val appContext: Context) {
     private var hidDevice: BluetoothHidDevice? = null
     private var isRegistered = false
     private var pendingConnectDevice: BluetoothDevice? = null
+    
+    // ── 斜向交替计数器 ──
+    private var diagonalToggle = false
     
     // ── 快速断连检测 + 智能重试 ──
     private var lastConnectTime = 0L
@@ -382,7 +450,7 @@ class BluetoothHidManager(private val appContext: Context) {
             "RokidLab",
             "RokidLab Keyboard",
             BluetoothHidDevice.SUBCLASS2_UNCATEGORIZED,
-            HID_DESCRIPTOR,
+            buildHidDescriptor(1),  // 1 键码（2 字节键盘报告）
         )
         val ok = hid.registerApp(sdp, null, null, Runnable::run, hidCallback)
         Log.i(TAG, "registerApp result: $ok")
@@ -452,44 +520,372 @@ class BluetoothHidManager(private val appContext: Context) {
     }
 
     // ========================================================================
-    //  发送按键
+    //  发送按键（支持多键 + 斜向）
     // ========================================================================
 
-    /** 发送按键按下
-     *  方向键/SELECT/START → Consumer Control; A/B/X/Y/Z/L/R → 键盘 */
+    /**
+     * 发送单个按键
+     * 方向键/Select/Start → Consumer Control; A/B/X/Y/Z/L/R → 键盘
+     */
     @SuppressLint("MissingPermission")
-    fun sendButtons(device: BluetoothDevice?, keys: Set<Int>) {
+    private fun sendSingleKey(device: BluetoothDevice?, key: Int) {
         val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered) return
 
         // 导航键 → Consumer Control (Report ID 2)
-        val key = keys.firstOrNull() ?: return
         val consumerReport = KEY_CONSUMER[key]
         if (consumerReport != null) {
-            val ok = hid.sendReport(dev, CONSUMER_REPORT_ID, consumerReport)
-            Log.i(TAG, "CONS key=$key hex=${consumerReport.joinToString(""){"%02x".format(it)}} ok=$ok")
+            hid.sendReport(dev, CONSUMER_REPORT_ID, consumerReport)
             return
         }
 
-        // 功能键 → Keyboard (Report ID 1)
+        // 功能键 → Keyboard (Report ID 1) — 2 字节 [modifier, keycode]
         val kbdReport = KEY_HID[key]
         if (kbdReport != null) {
-            val ok = hid.sendReport(dev, KEYBOARD_REPORT_ID, kbdReport)
-            Log.i(TAG, "KBD key=$key hex=${kbdReport.joinToString(""){"%02x".format(it)}} ok=$ok")
+            hid.sendReport(dev, KEYBOARD_REPORT_ID, kbdReport)
         }
     }
 
-    /** 发送按键释放 */
+    /**
+      * 发送按键集合（支持多键 + 斜向）
+      * - 方向键 → Consumer Control（斜向时交替发送两个方向）
+      * - 功能键 → Keyboard（最多选第一个发送，其他丢弃）
+      */
+     @SuppressLint("MissingPermission")
+     fun sendButtons(device: BluetoothDevice?, keys: Set<Int>) {
+         val dev = device ?: connectedDeviceInternal ?: return
+         val hid = hidDevice ?: return
+         if (!isRegistered || keys.isEmpty()) return
+ 
+         // 拆分为方向键和功能键
+         val dirKeys = keys.filter { it in KEY_CONSUMER }
+         val actKeys = keys.filter { it in KEY_HID && it !in KEY_CONSUMER }
+ 
+         // 发送方向键（斜向时交替，Consumer Control 一次只能一个）
+         if (dirKeys.isNotEmpty()) {
+             val idx = if (dirKeys.size > 1 && diagonalToggle) 1 else 0
+             diagonalToggle = !diagonalToggle
+             val dirReport = KEY_CONSUMER[dirKeys[idx]]!!
+             hid.sendReport(dev, CONSUMER_REPORT_ID, dirReport)
+         } else {
+             hid.sendReport(dev, CONSUMER_REPORT_ID, byteArrayOf(0x00, 0x00))
+         }
+ 
+         // 发送功能键（取第一个，键盘一次只能一个）
+         if (actKeys.isNotEmpty()) {
+             val kbdData = KEY_HID[actKeys.first()]!!
+             hid.sendReport(dev, KEYBOARD_REPORT_ID, kbdData)
+         } else {
+             hid.sendReport(dev, KEYBOARD_REPORT_ID, byteArrayOf(0x00, 0x00))
+         }
+     }
+
+    /** 发送所有按键释放（Consumer + Keyboard） */
     @SuppressLint("MissingPermission")
     fun sendRelease(device: BluetoothDevice?) {
         val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered) return
-        val release = byteArrayOf(0x00, 0x00)
-        hid.sendReport(dev, CONSUMER_REPORT_ID, release)
-        hid.sendReport(dev, KEYBOARD_REPORT_ID, release)
-        Log.i(TAG, "release all ok=true")
+        hid.sendReport(dev, CONSUMER_REPORT_ID, byteArrayOf(0x00, 0x00))
+        hid.sendReport(dev, KEYBOARD_REPORT_ID, byteArrayOf(0x00, 0x00))
+    }
+
+    // ========================================================================
+    //  HID 报告大小测试
+    // ========================================================================
+
+    /** 测试眼镜 HID 驱动支持的最大键盘报告大小（键码字节数）
+     *  遍历 1~6 键码，每次重新注册并输出日志。
+     *  @return 最大支持的键码数量
+     */
+    @SuppressLint("MissingPermission")
+    fun testHidMaxKeycodeCount(): Int {
+        var maxSupported = 1
+        for (kc in 1..6) {
+            Log.i(TAG, "========== 测试 ${kc} 键码 (报告 ${1 + kc} 字节) ==========")
+            try {
+                // 注销当前 App
+                hidDevice?.let {
+                    runCatching { it.unregisterApp() }
+                }
+                isRegistered = false
+                Thread.sleep(200)
+
+                // 用新的描述符重新注册
+                val sdp = BluetoothHidDeviceAppSdpSettings(
+                    "RokidLab Keyboard",
+                    "RokidLab",
+                    "RokidLab Keyboard",
+                    BluetoothHidDevice.SUBCLASS2_UNCATEGORIZED,
+                    buildHidDescriptor(kc),
+                )
+                val ok = hidDevice?.registerApp(sdp, null, null, Runnable::run, hidCallback) ?: false
+                Log.i(TAG, "registerApp(kc=$kc) result: $ok")
+
+                Thread.sleep(500) // 等待眼镜 HID Host 响应
+
+                if (ok && isRegistered) {
+                    // 尝试连接已配对的设备
+                    val savedDev = connectedDeviceInternal
+                    if (savedDev != null) {
+                        hidDevice?.disconnect(savedDev)
+                        Thread.sleep(200)
+                        hidDevice?.connect(savedDev)
+                        Thread.sleep(1000)
+                    }
+
+                    // 检查眼镜端是否接受（查看 EventHub 日志）
+                    Log.i(TAG, "✅ ${kc} 键码注册成功，请查看眼镜 logcat 确认是否被接受")
+                    maxSupported = kc
+                } else {
+                    Log.w(TAG, "❌ ${kc} 键码注册失败")
+                    break
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "测试 ${kc} 键码异常", e)
+                break
+            }
+        }
+        // 恢复为 1 键码
+        Log.i(TAG, "========== 恢复 1 键码 ==========")
+        try {
+            hidDevice?.let { runCatching { it.unregisterApp() } }
+            isRegistered = false
+            Thread.sleep(200)
+            val sdp = BluetoothHidDeviceAppSdpSettings(
+                "RokidLab Keyboard",
+                "RokidLab",
+                "RokidLab Keyboard",
+                BluetoothHidDevice.SUBCLASS2_UNCATEGORIZED,
+                buildHidDescriptor(1),
+            )
+            hidDevice?.registerApp(sdp, null, null, Runnable::run, hidCallback)
+        } catch (_: Exception) {}
+        Log.i(TAG, "========== 测试结束，最大支持 ${maxSupported} 键码 ==========")
+        return maxSupported
+    }
+
+    // ========================================================================
+    //  Game Pad 模式
+    // ========================================================================
+
+    /** 当前模式: KEYBOARD 或 GAMEPAD */
+    private var gamepadMode = false
+
+    /** Game Pad 按钮到位图 bit 映射 index=键常量值 0~13 */
+    private val GAMEPAD_BIT = intArrayOf(
+        0,   // KEY_A      → bit 0
+        1,   // KEY_B      → bit 1
+        2,   // KEY_C      → bit 2
+        3,   // KEY_X      → bit 3
+        4,   // KEY_Y      → bit 4
+        5,   // KEY_Z      → bit 5
+        6,   // KEY_L      → bit 6
+        7,   // KEY_R      → bit 7
+        8,   // KEY_SELECT → bit 8
+        9,   // KEY_START  → bit 9
+        10,  // KEY_UP     → bit 10
+        11,  // KEY_DOWN   → bit 11
+        12,  // KEY_LEFT   → bit 12
+        13,  // KEY_RIGHT  → bit 13
+    )
+
+    /** Hat Switch 值映射：从方向键集合推导 */
+    private fun hatFromKeys(keys: Set<Int>): Int {
+        val up = keys.contains(KEY_UP)
+        val dn = keys.contains(KEY_DOWN)
+        val lt = keys.contains(KEY_LEFT)
+        val rt = keys.contains(KEY_RIGHT)
+        return when {
+            up && rt -> 1  // ↗
+            rt && dn -> 3  // ↘
+            dn && lt -> 5  // ↙
+            lt && up -> 7  // ↖
+            up       -> 0  // ↑
+            rt       -> 2  // →
+            dn       -> 4  // ↓
+            lt       -> 6  // ←
+            else     -> 8  // 释放
+        }
+    }
+
+    /**
+     * 注册 Game Pad HID 描述符，覆盖旧的键盘描述符。
+     */
+    @SuppressLint("MissingPermission")
+    fun switchToGamepadMode() {
+        val hid = hidDevice ?: return
+        try {
+            // 在注销前保存当前连接的设备
+            val savedDev = connectedDeviceInternal
+            runCatching { hid.unregisterApp() }
+            isRegistered = false
+            gamepadMode = false
+            Thread.sleep(200)
+            val sdp = BluetoothHidDeviceAppSdpSettings(
+                "RokidLab Gamepad",
+                "RokidLab",
+                "RokidLab Gamepad",
+                BluetoothHidDevice.SUBCLASS2_UNCATEGORIZED,
+                buildGamepadDescriptor(),
+            )
+            val ok = hid.registerApp(sdp, null, null, Runnable::run, hidCallback)
+            Log.i(TAG, "switchToGamepadMode result: $ok")
+            if (ok) {
+                gamepadMode = true
+                Thread.sleep(800) // 等待注册稳定
+                if (savedDev != null) {
+                    hid.disconnect(savedDev)
+                    Thread.sleep(200)
+                    hid.connect(savedDev)
+                    Log.i(TAG, "switchToGamepadMode: reconnecting to $savedDev")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "switchToGamepadMode error", e)
+        }
+    }
+
+    /**
+     * 恢复为 Keyboard HID 描述符。
+     */
+    @SuppressLint("MissingPermission")
+    fun switchToKeyboardMode() {
+        val hid = hidDevice ?: return
+        try {
+            val savedDev = connectedDeviceInternal
+            runCatching { hid.unregisterApp() }
+            isRegistered = false
+            gamepadMode = false
+            Thread.sleep(200)
+            val sdp = BluetoothHidDeviceAppSdpSettings(
+                "RokidLab Keyboard",
+                "RokidLab",
+                "RokidLab Keyboard",
+                BluetoothHidDevice.SUBCLASS2_UNCATEGORIZED,
+                buildHidDescriptor(1),
+            )
+            val ok = hid.registerApp(sdp, null, null, Runnable::run, hidCallback)
+            Log.i(TAG, "switchToKeyboardMode result: $ok")
+            if (ok) {
+                Thread.sleep(500)
+                if (savedDev != null) {
+                    hid.disconnect(savedDev)
+                    Thread.sleep(200)
+                    hid.connect(savedDev)
+                    Log.i(TAG, "switchToKeyboardMode: reconnecting to $savedDev")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "switchToKeyboardMode error", e)
+        }
+    }
+
+    /**
+     * 通过 Game Pad 报告发送按键。
+     * 4 字节报告: [buttons_lsb, buttons_msb, hat, reserved]
+     */
+    @SuppressLint("MissingPermission")
+    fun sendGamepadReport(device: BluetoothDevice?, keys: Set<Int>) {
+        val dev = device ?: connectedDeviceInternal ?: return
+        val hid = hidDevice ?: return
+        if (!isRegistered || !gamepadMode) return
+
+        var bitmap = 0
+        for (k in keys) {
+            if (k in 0..13) bitmap = bitmap or (1 shl GAMEPAD_BIT[k])
+        }
+        val hat = hatFromKeys(keys)
+
+        val report = byteArrayOf(
+            (bitmap and 0xFF).toByte(),
+            ((bitmap shr 8) and 0xFF).toByte(),
+            (hat and 0x0F).toByte(),   // hat in low nibble
+            0x00,
+        )
+        hid.sendReport(dev, GAMEPAD_REPORT_ID, report)
+    }
+
+    /** Game Pad 版全释放 */
+    @SuppressLint("MissingPermission")
+    fun sendGamepadRelease(device: BluetoothDevice?) {
+        val dev = device ?: connectedDeviceInternal ?: return
+        val hid = hidDevice ?: return
+        if (!isRegistered || !gamepadMode) return
+        hid.sendReport(dev, GAMEPAD_REPORT_ID, byteArrayOf(0x00, 0x00, 0x08, 0x00))
+    }
+
+    /**
+     * 测试 Game Pad 模式：切换为 Game Pad 描述符，引导用户重新配对，
+     * 然后发送测试按键。
+     */
+    @SuppressLint("MissingPermission")
+    fun testGamepadMode(): Boolean {
+        Log.i(TAG, "========== Game Pad 测试开始 ==========")
+
+        // 1. 先切换描述符
+        switchToGamepadMode()
+        Thread.sleep(500)
+
+        if (!isRegistered || !gamepadMode) {
+            Log.w(TAG, "Game Pad 注册失败，测试中止")
+            return false
+        }
+
+        // 2. 断开当前连接并移除绑定，迫使眼镜重新 SDP
+        val dev = connectedDeviceInternal
+        if (dev == null) {
+            Log.w(TAG, "没有已连接的设备")
+            switchToKeyboardMode()
+            return false
+        }
+
+        Log.i(TAG, "Game Pad 注册成功！请去除配对后重新配对")
+        Log.i(TAG, "操作步骤：")
+        Log.i(TAG, "  1. 前往眼镜设置 → 蓝牙 → 移除 'DLOVER的Xiaomi 15'")
+        Log.i(TAG, "  2. 前往手机蓝牙设置 → 移除眼镜")
+        Log.i(TAG, "  3. 返回此页面，点击右上角扫一扫重新配对")
+        Log.i(TAG, "  重新配对后，Game Pad 将被正确识别！")
+
+        // 保持 Game Pad 模式，等用户重新配对
+        return true
+    }
+
+    // ========================================================================
+    //  360° 摇杆方向映射
+    // ========================================================================
+
+    /**
+     * 将角度转换为方向键 Consumer Control 报告，发送至眼镜。
+     * 斜向时交替发送两个方向（在循环中调用即可实现双键交替效果）。
+     * @param angle 角度，0°=右, 90°=上, 180°=左, 270°=下
+     * @param magnitude 力度 0.0~1.0，低于阈值时释放所有键
+     */
+    @SuppressLint("MissingPermission")
+    fun sendJoystickDirection(device: BluetoothDevice?, angle: Float, magnitude: Float) {
+        if (magnitude < 0.15f) {
+            sendRelease(device)
+            return
+        }
+        val keys = joystickAngleToKeys(angle)
+        sendButtons(device, keys)
+    }
+
+    /** 将角度映射到按键集合（支持对角线） */
+    fun joystickAngleToKeys(angle: Float): Set<Int> {
+        val a = ((angle % 360f) + 360f) % 360f
+        return when {
+            a < 22.5f || a >= 337.5f -> setOf(KEY_RIGHT)
+            a < 67.5f  -> setOf(KEY_RIGHT, KEY_UP)    // ↗
+            a < 112.5f -> setOf(KEY_UP)
+            a < 157.5f -> setOf(KEY_UP, KEY_LEFT)     // ↖
+            a < 202.5f -> setOf(KEY_LEFT)
+            a < 247.5f -> setOf(KEY_LEFT, KEY_DOWN)   // ↙
+            a < 292.5f -> setOf(KEY_DOWN)
+            a < 337.5f -> setOf(KEY_DOWN, KEY_RIGHT)  // ↘
+            else -> setOf(KEY_RIGHT)
+        }
     }
 
     /** 发送鼠标移动

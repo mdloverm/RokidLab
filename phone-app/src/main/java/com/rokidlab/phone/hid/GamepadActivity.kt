@@ -17,12 +17,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
@@ -41,6 +44,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.*
+import kotlin.math.*
 import kotlin.math.roundToInt
 
 private const val PREFS_NAME = "gamepad_layout"
@@ -74,6 +79,20 @@ private val ALL_BTNS = listOf(
     GBtn("Start",  BluetoothHidManager.KEY_START,  C_SYS, 0.52f, 0.52f),
 )
 
+/** 功能键列表（不含方向键），用于摇杆模式 */
+private val ALL_BTNS_FUNC_ONLY = listOf(
+    GBtn("L", BluetoothHidManager.KEY_L,   C_LR,    0.15f, 0.12f),
+    GBtn("R", BluetoothHidManager.KEY_R,   C_LR,    0.85f, 0.12f),
+    GBtn("A", BluetoothHidManager.KEY_A,   C_AB,    0.70f, 0.40f),
+    GBtn("B", BluetoothHidManager.KEY_B,   C_AB,    0.78f, 0.49f),
+    GBtn("C", BluetoothHidManager.KEY_C,   C_C,     0.62f, 0.49f),
+    GBtn("X", BluetoothHidManager.KEY_X,   C_XYZ,   0.70f, 0.58f),
+    GBtn("Y", BluetoothHidManager.KEY_Y,   C_XYZ,   0.78f, 0.67f),
+    GBtn("Z", BluetoothHidManager.KEY_Z,   C_XYZ,   0.62f, 0.67f),
+    GBtn("Select", BluetoothHidManager.KEY_SELECT, C_SYS, 0.40f, 0.52f),
+    GBtn("Start",  BluetoothHidManager.KEY_START,  C_SYS, 0.52f, 0.52f),
+)
+
 // ===== Activity =====
 @SuppressLint("MissingPermission")
 class GamepadActivity : ComponentActivity() {
@@ -91,6 +110,9 @@ class GamepadActivity : ComponentActivity() {
 private const val TAB_GAMEPAD = 0
 private const val TAB_MOUSE   = 1
 
+/** 控制模式: D-Pad 方向键 / 360° 摇杆 */
+private enum class ControlMode { DPAD, JOYSTICK }
+
 // ===== Main Composable =====
 @Composable
 private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreferences, onExit: () -> Unit) {
@@ -102,20 +124,34 @@ private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreference
 
     // 加载保存的位置 (归一化坐标 0~1)
     val savedPos = remember { mutableStateMapOf<String, Offset>() }
+    // 摇杆位置单独管理
+    val joystickPosKey = "JOYSTICK"
     LaunchedEffect(Unit) {
+        // 加载所有按钮位置
         ALL_BTNS.forEach { b ->
             val k = PREF_PREFIX + b.label
             val x = prefs.getFloat("${k}_x", -1f)
             val y = prefs.getFloat("${k}_y", -1f)
             if (x >= 0 && y >= 0) savedPos[b.label] = Offset(x, y)
         }
+        // 加载摇杆位置（默认 D-Pad 中心 ~0.18, 0.49）
+        val jx = prefs.getFloat("${PREF_PREFIX}${joystickPosKey}_x", -1f)
+        val jy = prefs.getFloat("${PREF_PREFIX}${joystickPosKey}_y", -1f)
+        savedPos[joystickPosKey] = if (jx >= 0 && jy >= 0) Offset(jx, jy) else Offset(0.18f, 0.49f)
+    }
+
+    /** 保存位置到 SharedPreferences */
+    fun savePos(label: String, norm: Offset) {
+        savedPos[label] = norm
+        val k = PREF_PREFIX + label
+        prefs.edit().putFloat("${k}_x", norm.x).putFloat("${k}_y", norm.y).apply()
     }
 
     Box(Modifier.fillMaxSize().background(BrewBg)) {
-        // ── 顶部栏 ──
+        // ── 顶部栏（可横向滚动） ──
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).align(Alignment.TopCenter),
-            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).align(Alignment.TopCenter).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically,
         ) {
             // 返回按钮
             Text(ctx.getString(R.string.back_label), color = BrewMuted, fontSize = 12.sp,
@@ -132,6 +168,7 @@ private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreference
                     modifier = Modifier.clip(BrewShapeSmall)
                         .background(if (editMode) BrewCoral.copy(alpha = 0.15f) else BrewPanel)
                         .clickable { editMode = !editMode }.padding(horizontal = 10.dp, vertical = 6.dp))
+
             } else {
                 Spacer(Modifier.width(1.dp)) // 占位
             }
@@ -146,25 +183,72 @@ private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreference
             TabChip(ctx.getString(R.string.mouse_tab), TAB_MOUSE, activeTab) { activeTab = TAB_MOUSE; editMode = false }
         }
 
+        // ── 控制模式（仅在 Gamepad Tab 中生效） ──
+        var controlMode by remember { mutableStateOf(ControlMode.DPAD) }
+        // 当前方向键按下状态（用于 D-Pad 模式）
+        var pressedKeys by remember { mutableStateOf(setOf<Int>()) }
+        // 摇杆当前方向键（用于 Joystick 模式，独立管理）
+        var joystickKeys by remember { mutableStateOf(setOf<Int>()) }
+
         // ── 内容区域 ──
         when (activeTab) {
             TAB_GAMEPAD -> {
-                // 原手柄按键布局
-                GamepadButtons(ALL_BTNS, savedPos, editMode, pressedKeys,
-                    onDown = { bitIndex ->
-                        pressedKeys = pressedKeys.plus(bitIndex)
-                        hidManager.sendButtons(null, pressedKeys)
+                if (controlMode == ControlMode.DPAD) {
+                    // 原手柄按键布局（含 D-Pad 方向键）
+                    GamepadButtons(ALL_BTNS, savedPos, editMode, pressedKeys,
+                        onDown = { bitIndex ->
+                            pressedKeys = pressedKeys.plus(bitIndex)
+                            hidManager.sendButtons(null, pressedKeys + joystickKeys)
+                        },
+                        onUp = { bitIndex ->
+                            pressedKeys = pressedKeys.minus(bitIndex)
+                            val allNow = pressedKeys + joystickKeys
+                            if (allNow.isEmpty()) hidManager.sendRelease(null)
+                            else hidManager.sendButtons(null, allNow)
+                        },
+                        onPositionSave = { label, norm -> savePos(label, norm) },
+                    )
+                } else {
+                    // 摇杆模式：只显示功能键（隐藏方向键）
+                    GamepadButtons(ALL_BTNS_FUNC_ONLY, savedPos, editMode, pressedKeys,
+                        onDown = { bitIndex ->
+                            pressedKeys = pressedKeys.plus(bitIndex)
+                            hidManager.sendButtons(null, pressedKeys + joystickKeys)
+                        },
+                        onUp = { bitIndex ->
+                            pressedKeys = pressedKeys.minus(bitIndex)
+                            val allNow = pressedKeys + joystickKeys
+                            if (allNow.isEmpty()) hidManager.sendRelease(null)
+                            else hidManager.sendButtons(null, allNow)
+                        },
+                        onPositionSave = { label, norm -> savePos(label, norm) },
+                    )
+                }
+
+                // ── 控制模式切换按钮（位于 D-Pad / 摇杆下方） ──
+                ModeToggleButton(
+                    controlMode = controlMode,
+                    onToggle = {
+                        controlMode = if (controlMode == ControlMode.DPAD) ControlMode.JOYSTICK else ControlMode.DPAD
+                        pressedKeys = emptySet()
+                        joystickKeys = emptySet()
+                        hidManager.sendRelease(null)
                     },
-                    onUp = { bitIndex ->
-                        pressedKeys = pressedKeys.minus(bitIndex)
-                        if (pressedKeys.isEmpty()) hidManager.sendRelease(null)
-                    },
-                    onPositionSave = { label, norm ->
-                        savedPos[label] = norm
-                        val k = PREF_PREFIX + label
-                        prefs.edit().putFloat("${k}_x", norm.x).putFloat("${k}_y", norm.y).apply()
-                    },
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp)
                 )
+
+                // ── 摇杆（仅在 JOYSTICK 模式显示，在方向键位置） ──
+                if (controlMode == ControlMode.JOYSTICK) {
+                    JoystickArea(
+                        hidManager = hidManager,
+                        savedPos = savedPos,
+                        posKey = joystickPosKey,
+                        editMode = editMode,
+                        actionKeys = pressedKeys,  // 传入当前按下的功能键
+                        onJoystickKeys = { keys -> joystickKeys = keys },
+                        onPositionSave = { label, norm -> savePos(label, norm) },
+                    )
+                }
 
                 // 编辑模式底部面板
                 if (editMode) {
@@ -358,5 +442,200 @@ private fun SingleButton(
     ) {
         Text(label, color = tc, fontSize = if (isDpad) 16.sp else 12.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
         if (editMode) Text("↕", color = BrewTextBright.copy(alpha = 0.4f), fontSize = 8.sp, modifier = Modifier.align(Alignment.TopEnd).padding(2.dp))
+    }
+}
+
+// ===== 控制模式切换按钮 =====
+@Composable
+private fun ModeToggleButton(controlMode: ControlMode, onToggle: () -> Unit, modifier: Modifier) {
+    val ctx = LocalContext.current
+    val dpadLabel = ctx.getString(R.string.dpad_mode)
+    val joystickLabel = ctx.getString(R.string.joystick_mode)
+    val label = when (controlMode) {
+        ControlMode.DPAD -> "✓ $dpadLabel  |  $joystickLabel"
+        ControlMode.JOYSTICK -> "$dpadLabel  |  $joystickLabel ✓"
+    }
+    val bgColor = if (controlMode == ControlMode.DPAD) BrewPanel else BrewCoral.copy(alpha = 0.15f)
+    val txtColor = if (controlMode == ControlMode.DPAD) BrewCyan else BrewCoral
+    Box(
+        modifier.clip(BrewShapeMedium).background(bgColor)
+            .border(1.dp, BrewBorder, BrewShapeMedium)
+            .clickable { onToggle() }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Text(label, color = txtColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+// ===== 360° 摇杆（可定位、可自定义移动位置） =====
+@Composable
+private fun JoystickArea(
+    hidManager: BluetoothHidManager,
+    savedPos: Map<String, Offset>,
+    posKey: String,
+    editMode: Boolean,
+    actionKeys: Set<Int>,
+    onJoystickKeys: (Set<Int>) -> Unit,
+    onPositionSave: (String, Offset) -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val sw = with(density) { maxWidth.toPx() }
+        val sh = with(density) { maxHeight.toPx() }
+
+        // 摇杆尺寸
+        val joystickSize = 160.dp
+        val innerSize = 60.dp
+        val joystickPx = with(density) { joystickSize.toPx() }
+        val innerPx = with(density) { innerSize.toPx() }
+
+        // 摇杆位置（归一化 → 像素）
+        val norm = savedPos[posKey] ?: Offset(0.18f, 0.49f)
+        val cx = norm.x * sw; val cy = norm.y * sh
+
+        // 摇杆偏移量（归一化 -1~1）
+        var stickOffset by remember { mutableStateOf(Offset.Zero) }
+        var angle by remember { mutableStateOf(0f) }
+        var magnitude by remember { mutableStateOf(0f) }
+        var isTouching by remember { mutableStateOf(false) }
+        // 始终使用最新的 actionKeys，不让 LaunchedEffect 重启
+        val currentActionKeys by rememberUpdatedState(actionKeys)
+
+        // 摇杆协程——约 30fps 持续发送（方向键 + 功能键合并发送）
+        LaunchedEffect(isTouching, angle, magnitude) {
+            if (!isTouching) {
+                hidManager.sendRelease(null)
+                onJoystickKeys(emptySet())
+                return@LaunchedEffect
+            }
+            while (isActive) {
+                // 计算当前方向键
+                val dirKeys = if (magnitude < 0.15f) emptySet()
+                else hidManager.joystickAngleToKeys(angle)
+                onJoystickKeys(dirKeys)
+                // 合并方向键 + 当前按下的功能键一起发送
+                hidManager.sendButtons(null, dirKeys + currentActionKeys)
+                delay(33)
+            }
+        }
+
+        // 摇杆容器的像素偏移
+        val offsetX = (cx - joystickPx / 2f).roundToInt()
+        val offsetY = (cy - joystickPx / 2f).roundToInt()
+
+        Box(
+            Modifier.offset { IntOffset(offsetX, offsetY) }.size(joystickSize),
+            contentAlignment = Alignment.Center
+        ) {
+            // 外圈
+            Canvas(Modifier.size(joystickSize)) {
+                drawCircle(
+                    color = BrewMuted.copy(alpha = 0.3f),
+                    radius = size.minDimension / 2f,
+                    style = Stroke(width = 2.dp.toPx()),
+                )
+                // 十字准线（45° 步进）
+                val centerX = size.width / 2f; val centerY = size.height / 2f
+                val r = size.minDimension / 2f - 4.dp.toPx()
+                for (deg in 0 until 360 step 45) {
+                    val rad = Math.toRadians(deg.toDouble())
+                    val ex = centerX + (r * cos(rad)).toFloat()
+                    val ey = centerY + (r * sin(rad)).toFloat()
+                    drawLine(
+                        color = BrewMuted.copy(alpha = 0.15f),
+                        start = Offset(centerX, centerY),
+                        end = Offset(ex, ey),
+                        strokeWidth = 1.dp.toPx(),
+                    )
+                }
+            }
+            // 内圈（跟随手指位置）
+            Box(
+                Modifier
+                    .offset {
+                        val maxR = (joystickPx - innerPx) / 2f
+                        IntOffset(
+                            (stickOffset.x * maxR).roundToInt(),
+                            (stickOffset.y * maxR).roundToInt(),
+                        )
+                    }
+                    .size(innerSize)
+                    .clip(CircleShape)
+                    .background(
+                        if (isTouching) BrewCoral.copy(alpha = 0.5f)
+                        else BrewPanel
+                    )
+                    .border(1.5.dp, if (isTouching) BrewCoral else BrewBorder, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (!isTouching) {
+                    Text("●", color = BrewDim.copy(alpha = 0.4f), fontSize = 20.sp)
+                }
+            }
+            // 触摸/拖拽检测
+            Box(
+                Modifier
+                    .size(joystickSize)
+                    .pointerInput(editMode) {
+                        if (editMode) {
+                            // 编辑模式：拖拽移动位置
+                            var accumX = 0f; var accumY = 0f
+                            detectDragGestures { change, dragAmount ->
+                                change.consume()
+                                accumX += dragAmount.x; accumY += dragAmount.y
+                                val newNorm = Offset(
+                                    ((cx + accumX) / sw).coerceIn(0.02f, 0.98f),
+                                    ((cy + accumY) / sh).coerceIn(0.02f, 0.98f),
+                                )
+                                onPositionSave(posKey, newNorm)
+                            }
+                        } else {
+                            // 游戏模式：摇杆方向控制
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    isTouching = true
+                                    val localCx = size.width / 2f; val localCy = size.height / 2f
+                                    val dx = offset.x - localCx; val dy = offset.y - localCy
+                                    val maxR = minOf(size.width, size.height) / 2f
+                                    val rawDist = sqrt(dx * dx + dy * dy)
+                                    val clampedDist = rawDist.coerceAtMost(maxR)
+                                    // 按比例缩放，确保 stickOffset 不超出 [-1, 1]
+                                    val scale = if (rawDist > 0f) clampedDist / rawDist else 0f
+                                    stickOffset = Offset(dx * scale / maxR, dy * scale / maxR)
+                                    angle = (Math.toDegrees(atan2(-dy.toDouble(), dx.toDouble()))).toFloat()
+                                    magnitude = clampedDist / maxR
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val localCx = size.width / 2f; val localCy = size.height / 2f
+                                    val dx = change.position.x - localCx; val dy = change.position.y - localCy
+                                    val maxR = minOf(size.width, size.height) / 2f
+                                    val rawDist = sqrt(dx * dx + dy * dy)
+                                    val clampedDist = rawDist.coerceAtMost(maxR)
+                                    val scale = if (rawDist > 0f) clampedDist / rawDist else 0f
+                                    stickOffset = Offset(dx * scale / maxR, dy * scale / maxR)
+                                    angle = (Math.toDegrees(atan2(-dy.toDouble(), dx.toDouble()))).toFloat()
+                                    magnitude = clampedDist / maxR
+                                },
+                                onDragEnd = {
+                                    isTouching = false; stickOffset = Offset.Zero
+                                    angle = 0f; magnitude = 0f
+                                    onJoystickKeys(emptySet()); hidManager.sendRelease(null)
+                                },
+                                onDragCancel = {
+                                    isTouching = false; stickOffset = Offset.Zero
+                                    angle = 0f; magnitude = 0f
+                                    onJoystickKeys(emptySet()); hidManager.sendRelease(null)
+                                },
+                            )
+                        }
+                    },
+            )
+            // 编辑模式标记
+            if (editMode) {
+                Text("↕", color = BrewTextBright.copy(alpha = 0.4f), fontSize = 8.sp,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(2.dp))
+            }
+        }
     }
 }

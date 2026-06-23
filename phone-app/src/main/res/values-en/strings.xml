@@ -512,6 +512,8 @@
     <string name="middle_button">Middle</string>
     <string name="gamepad_tab">🎮 Gamepad</string>
     <string name="mouse_tab">🖱 Mouse</string>
+    <string name="dpad_mode">D-Pad</string>
+    <string name="joystick_mode">Joystick</string>
 
     <!-- ADB Tools - Timer -->
     <string name="adb_tools_timer_subtitle">Timer / Combo Actions</string>

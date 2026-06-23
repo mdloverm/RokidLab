@@ -516,6 +516,8 @@
     <string name="middle_button">中键</string>
     <string name="gamepad_tab">🎮 手柄</string>
     <string name="mouse_tab">🖱 鼠标</string>
+    <string name="dpad_mode">十字键</string>
+    <string name="joystick_mode">摇杆</string>
 
     <!-- ADB Tools - Timer -->
     <string name="adb_tools_timer_subtitle">定时任务 / 组合操作</string>
