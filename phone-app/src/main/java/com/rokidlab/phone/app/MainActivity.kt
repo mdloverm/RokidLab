@@ -434,7 +434,10 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        refreshStoreIndex(manual = false)
+        // 仅在非引导模式下启动时自动刷新（引导模式由 LaunchedEffect 在引导完成后处理）
+        if (prerequisitesState.canInstallApps) {
+            refreshStoreIndex(manual = false)
+        }
         log(getString(R.string.log_ready_authorize, selectedHostApp.displayName))
 
         // Android 13+ 请求通知权限（用于定时消息推送到眼镜）
@@ -592,7 +595,10 @@ class MainActivity : AppCompatActivity() {
         BrewIndex.setMirror(this, index)
         prerequisitesState = prerequisitesState.copy(mirrorSourceSelected = true)
         log(getString(R.string.log_switched_mirror, BrewIndex.getCurrentMirror().name))
-        refreshStoreIndex(manual = true)
+        // 只在非引导模式下立即刷新（引导中的刷新由 LaunchedEffect 在引导完成后统一处理）
+        if (prerequisitesState.canInstallApps) {
+            refreshStoreIndex(manual = true)
+        }
     }
 
     private fun installLocalApkToGlasses(uri: Uri) {
