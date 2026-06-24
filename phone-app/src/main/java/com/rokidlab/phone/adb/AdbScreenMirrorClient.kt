@@ -276,11 +276,37 @@ class AdbScreenMirrorClient(
                             Log.e(TAG, "Failed to check/push scrcpy-server.jar", e)
                         }
 
-                    // Step 1: 启动新 server（nohup 保护进程不被 shell 退出杀死）
+                    // Step 1: 先结束可能残留的旧 scrcpy-server 进程
                     onStatus(context.getString(R.string.mirror_starting_server))
+                    runCatching {
+                        val killId = localId.getAndIncrement()
+                        sendPacket(CMD_OPEN, killId, 0, "shell:pkill -f scrcpy.Server 2>/dev/null; sleep 1; echo killed\u0000".toByteArray(Charsets.UTF_8))
+                        val killDeadline = System.currentTimeMillis() + 3_000L
+                        var killDone = false
+                        while (isRunning && !killDone && System.currentTimeMillis() < killDeadline) {
+                            val msg = try { readPacket() } catch (_: java.net.SocketTimeoutException) { continue }
+                            if (msg.arg1 == killId) {
+                                when (msg.command) {
+                                    CMD_CLSE -> killDone = true
+                                    CMD_WRTE -> { sendPacket(CMD_OKAY, killId, msg.arg0, null) }
+                                    else -> {}
+                                }
+                            } else {
+                                when (msg.command) {
+                                    CMD_WRTE -> sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                                    CMD_CLSE -> sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                                    else -> {}
+                                }
+                            }
+                        }
+                    }
+                    Log.i(TAG, "old scrcpy-server killed (if any)")
+
+                    // Step 2: 启动新 server（nohup 保护进程不被 shell 退出杀死）
                     val shellId = localId.getAndIncrement()
                     val shellCmd = ("shell:nohup app_process -Djava.class.path=/data/local/tmp/scrcpy-server.jar " +
                             "/ com.genymobile.scrcpy.Server 3.3.4 " +
+                            "stay_awake=true " +
                             "tunnel_forward=true video_bit_rate=4000000 " +
                             "max_size=640 " +
                             "video=true audio=false control=false cleanup=false " +
@@ -304,11 +330,10 @@ class AdbScreenMirrorClient(
                                 CMD_CLSE -> shellDone = true
                             }
                         } else {
-                            // 处理触控 shell 命令的响应
                             when (msg.command) {
                                 CMD_WRTE -> sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
                                 CMD_CLSE -> sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
-                                CMD_OKAY -> {} // shell 流打开确认，无需处理
+                                CMD_OKAY -> {}
                                 else -> {}
                             }
                         }
@@ -317,50 +342,62 @@ class AdbScreenMirrorClient(
                         Log.w(TAG, "shell did not complete within 15s, continuing")
                     }
 
-                    // Step 2: 通过 ADB 隧道连接 localabstract:scrcpy
+                    // Step 3: 轮询等待 scrcpy-server 就绪，而非固定 sleep
                     onStatus(context.getString(R.string.mirror_connecting_tunnel))
-                    Thread.sleep(500)
-                    streamId = localId.getAndIncrement()
-                    val connectCmd = "localabstract:scrcpy\u0000"
-                    sendPacket(CMD_OPEN, streamId, 0, connectCmd.toByteArray(Charsets.UTF_8))
-                    Log.i(TAG, "Requesting connection to localabstract:scrcpy, streamId=$streamId")
-
-                    // Step 3: 等待 OKAY 确认视频连接建立
-                    val connectDeadline = System.currentTimeMillis() + 10_000L
                     var connected = false
-                    while (isRunning && !connected && System.currentTimeMillis() < connectDeadline) {
-                        val msg = try { readPacket() } catch (e: java.net.SocketTimeoutException) { continue }
-                        if (msg.arg1 == streamId) {
-                            when (msg.command) {
-                                CMD_OKAY -> {
-                                    streamRemoteId = msg.arg0
-                                    connected = true
-                                    Log.i(TAG, "LocalSocket video connected")
+                    val serverReadyDeadline = System.currentTimeMillis() + 15_000L
+                    var localAbstractAttempts = 0
+                    while (isRunning && !connected && System.currentTimeMillis() < serverReadyDeadline) {
+                        if (localAbstractAttempts > 0) {
+                            // 指数退避：1s, 2s, 3s, ...
+                            val waitMs = minOf(1000L * localAbstractAttempts, 5000L)
+                            Log.i(TAG, "localabstract retry #$localAbstractAttempts, waiting ${waitMs}ms")
+                            Thread.sleep(waitMs)
+                        }
+                        localAbstractAttempts++
+
+                        streamId = localId.getAndIncrement()
+                        val connectCmd = "localabstract:scrcpy\u0000"
+                        sendPacket(CMD_OPEN, streamId, 0, connectCmd.toByteArray(Charsets.UTF_8))
+                        Log.i(TAG, "Requesting connection to localabstract:scrcpy (attempt #$localAbstractAttempts), streamId=$streamId")
+
+                        // 等待 OKAY 确认（每轮 3s）
+                        val connectDeadline = System.currentTimeMillis() + 3_000L
+                        while (isRunning && !connected && System.currentTimeMillis() < connectDeadline) {
+                            val msg = try { readPacket() } catch (e: java.net.SocketTimeoutException) { continue }
+                            if (msg.arg1 == streamId) {
+                                when (msg.command) {
+                                    CMD_OKAY -> {
+                                        streamRemoteId = msg.arg0
+                                        connected = true
+                                        Log.i(TAG, "LocalSocket video connected")
+                                    }
+                                    CMD_CLSE -> {
+                                        Log.w(TAG, "LocalSocket rejected, will retry")
+                                        break
+                                    }
+                                    CMD_WRTE -> {
+                                        streamRemoteId = msg.arg0
+                                        connected = true
+                                        sendPacket(CMD_OKAY, streamId, msg.arg0, null)
+                                        Log.i(TAG, "data arrived, LocalSocket video connected")
+                                        decoder.feedData(msg.payload)
+                                    }
                                 }
-                                CMD_CLSE -> {
-                                Log.w(TAG, "LocalSocket connection rejected, retrying")
-                                    break
-                                }
-                                CMD_WRTE -> {
-                                    // 连接后可能立即有数据（dummy byte + device meta）
-                                    streamRemoteId = msg.arg0
-                                    connected = true
-                                    sendPacket(CMD_OKAY, streamId, msg.arg0, null)
-                                    Log.i(TAG, "data arrived, LocalSocket video connected")
-                                    decoder.feedData(msg.payload)
+                            } else {
+                                when (msg.command) {
+                                    CMD_WRTE -> sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                                    CMD_CLSE -> sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                                    else -> {}
                                 }
                             }
-                        } else {
-                            when (msg.command) {
-                                CMD_WRTE -> sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
-                                CMD_CLSE -> sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
-                                else -> {}
-                            }
+                        }
+                        if (!connected) {
+                            sendPacket(CMD_CLSE, streamId, 0, null)
                         }
                     }
                     if (!connected) {
-                        Log.w(TAG, "cannot connect LocalSocket, retrying...")
-                        sendPacket(CMD_CLSE, streamId, 0, null)
+                        Log.w(TAG, "cannot connect LocalSocket after $localAbstractAttempts attempts, restarting server...")
                         continue
                     }
 

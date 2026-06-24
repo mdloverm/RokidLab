@@ -120,6 +120,9 @@ class MainActivity : AppCompatActivity() {
     private var phoneInstallRefreshGeneration = 0
     private var glassesInstallRefreshGeneration = 0
     private var showMirrorDialog by mutableStateOf(false)
+    private var showRefreshDialog by mutableStateOf(false)
+    private var refreshDialogSuccess by mutableStateOf(false)
+    private var refreshDialogMessage by mutableStateOf("")
     private var mirrorSourceSelected by mutableStateOf(false)
     private var prerequisitesState by mutableStateOf(PrerequisitesState())
     private var screenMirrorState by mutableStateOf(ScreenMirrorState())
@@ -408,6 +411,17 @@ class MainActivity : AppCompatActivity() {
                         onCancelDownload = { cancelDownload("brew-self-update") },
                     )
                 }
+                if (showRefreshDialog) {
+                    BrewDialog(
+                        onDismiss = { showRefreshDialog = false },
+                        title = if (refreshDialogSuccess) this@MainActivity.getString(R.string.refresh_success) else this@MainActivity.getString(R.string.refresh_failed),
+                        color = if (refreshDialogSuccess) BrewSuccess else BrewWarning,
+                    ) {
+                        BrewDialogContent {
+                            Text(refreshDialogMessage, color = BrewText, fontSize = 13.sp)
+                        }
+                    }
+                }
                 if (showMirrorDialog) {
                     MirrorSourceDialog(
                         currentIndex = BrewIndex.getMirrorIndex(this@MainActivity),
@@ -529,9 +543,14 @@ class MainActivity : AppCompatActivity() {
                 // 单独检查 RokidLab 自身更新（固定从 Gitee 获取）
                 checkRokidLabUpdate()
                 log(getString(R.string.log_registry_updated, refresh.apps.size))
+                showRefreshDialog = true
+                refreshDialogSuccess = true
+                refreshDialogMessage = getString(R.string.refresh_result_ok, refresh.apps.size)
             }.onFailure { error ->
                 log(getString(R.string.log_registry_unavailable, error.message ?: error.javaClass.simpleName))
-                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.registry_unavailable, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
+                showRefreshDialog = true
+                refreshDialogSuccess = false
+                refreshDialogMessage = getString(R.string.refresh_result_fail, error.message ?: error.javaClass.simpleName)
             }
             val elapsed = System.currentTimeMillis() - started
             if (elapsed < 300) delay(300 - elapsed)
@@ -1299,9 +1318,21 @@ class MainActivity : AppCompatActivity() {
             isMirroring = false,
             connectionStatus = ""
         )
-        // 不关闭眼镜端 RokidLink，眼镜端检测到断连后会自动退回后台
-        // RokidLink 保持运行，下次投屏时直接重连即可
-        log(getString(R.string.log_rokidlink_closed))
+        // 通过 CXR-L 关闭眼镜端的 PhoneMirrorActivity，避免它退到后台残留
+        // 下次启动投屏时重新由 startPhoneMirror 启动
+        log(getString(R.string.log_stopping_glasses_mirror))
+        runWithPrerequisites {
+            cxrL.stopApp(
+                packageName = "com.rokidlab.rokidlink",
+                onStopResult = { success ->
+                    if (success) {
+                        log(getString(R.string.log_glasses_mirror_stopped))
+                    } else {
+                        log(getString(R.string.log_glasses_mirror_stop_failed))
+                    }
+                }
+            )
+        }
     }
 
     /**

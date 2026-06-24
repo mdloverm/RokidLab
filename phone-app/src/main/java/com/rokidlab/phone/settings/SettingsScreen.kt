@@ -1,57 +1,51 @@
 package com.rokidlab.phone.settings
 
+import com.rokidlab.phone.R
 import com.rokidlab.phone.design.*
-import com.rokidlab.phone.design.theme.BrewColors
 import com.rokidlab.phone.design.theme.BrewTheme
 import com.rokidlab.phone.design.theme.BrewThemeManager
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.LocalizationManager
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
-import com.rokidlab.phone.R
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
 
 @Composable
 internal fun SettingsScreen(
@@ -61,8 +55,15 @@ internal fun SettingsScreen(
     val ctx = LocalContext.current
     var showLangDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
+    var showSponsorDialog by remember { mutableStateOf(false) }
     val currentTheme = BrewThemeManager.currentTheme
 
+    // ── 开发者工具入口 ──
+    var showDeveloperScreen by remember { mutableStateOf(false) }
+
+    if (showDeveloperScreen) {
+        DeveloperScreen(onBack = { showDeveloperScreen = false })
+    } else {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -73,88 +74,118 @@ internal fun SettingsScreen(
         ModuleHeader(title = ctx.getString(R.string.nav_settings), subtitle = ctx.getString(R.string.settings_subtitle), color = BrewMagenta)
         Spacer(modifier = Modifier.height(24.dp))
 
-        SettingCard(title = ctx.getString(R.string.app_version), content = state.selfUpdateState.currentVersion, color = BrewCoral)
-        Spacer(modifier = Modifier.height(16.dp))
-        SettingCard(
+        // ── 基本信息 ──
+        SettingsCard(title = ctx.getString(R.string.app_version), content = state.selfUpdateState.currentVersion, color = BrewCoral)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SettingsCard(
             title = ctx.getString(R.string.host_app),
             content = state.selectedHostApp.displayName,
             color = BrewCyan,
             onClick = { actions.onGoToGuideStep1() },
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // Language selector
+        // Language
         val currentLangName = LocalizationManager.AppLocale.entries
             .find { it.code == state.currentLocale }
             ?.let { "${it.displayName}" } ?: ctx.getString(R.string.language_simple_chinese)
-        SettingCard(
+        SettingsCard(
             title = ctx.getString(R.string.language),
             content = currentLangName,
             color = BrewPurple,
             onClick = { showLangDialog = true },
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // 主题选择
-        SettingCard(
+        // Theme
+        SettingsCard(
             title = ctx.getString(R.string.theme),
             content = ctx.getString(currentTheme.displayNameResId),
             color = BrewAmber,
             onClick = { showThemeDialog = true },
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
+        // Update status
         if (state.selfUpdateState.available) {
-            BrutalButton(label = ctx.getString(R.string.update_available), color = BrewCoral, onClick = actions.onSelfUpdate)
+            SettingsCard(
+                title = ctx.getString(R.string.update_status),
+                content = ctx.getString(R.string.update_available),
+                color = BrewCoral,
+                onClick = actions.onSelfUpdate,
+            )
         } else {
-            SettingCard(title = ctx.getString(R.string.update_status), content = ctx.getString(R.string.no_update), color = BrewMuted)
+            SettingsCard(
+                title = ctx.getString(R.string.update_status),
+                content = ctx.getString(R.string.no_update),
+                color = BrewMuted,
+            )
         }
-        Spacer(modifier = Modifier.height(16.dp))
-        BrutalButton(label = ctx.getString(R.string.switch_source), color = BrewCyan, onClick = actions.onSwitchMirror)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Switch source
+        SettingsCard(
+            title = ctx.getString(R.string.switch_source),
+            content = ctx.getString(R.string.switch_source_desc),
+            color = BrewCyan,
+            onClick = actions.onSwitchMirror,
+        )
         Spacer(modifier = Modifier.height(24.dp))
 
         // ── 眼镜端服务 ──
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp),
-        ) {
-            Text(text = ctx.getString(R.string.glasses_services), color = BrewMagenta.copy(alpha = 0.8f), fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-            Spacer(modifier = Modifier.height(12.dp))
-            SettingCard(
-                title = "RokidLink",
-                content = if (state.screenMirrorState.rokidLinkInstalled == true) ctx.getString(R.string.installed) else ctx.getString(R.string.not_installed),
-                color = if (state.screenMirrorState.rokidLinkInstalled == true) BrewCoral else BrewWarning,
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            BrutalButton(
-                label = if (state.screenMirrorState.isInstallingRokidLink) ctx.getString(R.string.installing_rokid_link) else ctx.getString(R.string.reinstall_glasses),
-                color = BrewWarning,
-                enabled = !state.screenMirrorState.isInstallingRokidLink,
-                onClick = actions.onSettingsReinstallRokidLink,
-            )
-        }
+        SectionTitle(ctx.getString(R.string.glasses_services), BrewMagenta)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SettingsCard(
+            title = "RokidLink",
+            content = if (state.screenMirrorState.rokidLinkInstalled == true) ctx.getString(R.string.installed) else ctx.getString(R.string.not_installed),
+            color = if (state.screenMirrorState.rokidLinkInstalled == true) BrewCoral else BrewWarning,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        SettingsCard(
+            title = ctx.getString(R.string.reinstall_glasses),
+            content = if (state.screenMirrorState.isInstallingRokidLink) ctx.getString(R.string.installing_rokid_link) else ctx.getString(R.string.reinstall_glasses_desc),
+            color = BrewWarning,
+            enabled = !state.screenMirrorState.isInstallingRokidLink,
+            onClick = actions.onSettingsReinstallRokidLink,
+        )
         Spacer(modifier = Modifier.height(24.dp))
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(BrewPanel, RoundedCornerShape(12.dp))
-                .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
-                .padding(16.dp),
-        ) {
-            Column {
-                Text(text = ctx.getString(R.string.developer), color = BrewDim, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                Box(
-                    modifier = Modifier
-                        .width(32.dp)
-                        .height(3.dp)
-                        .background(BrewCoral)
-                        .padding(bottom = 8.dp),
-                )
-                Text(text = "DLOVER", color = BrewCoral, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            }
-        }
+        // ── 更多 ──
+        SectionTitle(ctx.getString(R.string.more_section), BrewCoral)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Developer info
+        SettingsCard(
+            title = ctx.getString(R.string.developer),
+            content = "DLOVER",
+            color = BrewCoral,
+            onClick = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://gitee.com/dlover1314/RokidLab"))
+                ctx.startActivity(intent)
+            },
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Sponsor
+        SettingsCard(
+            title = ctx.getString(R.string.sponsor),
+            content = ctx.getString(R.string.sponsor_desc),
+            color = BrewAmber,
+            onClick = { showSponsorDialog = true },
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Submit app
+        SettingsCard(
+            title = ctx.getString(R.string.developer_app_submit),
+            content = ctx.getString(R.string.developer_subtitle),
+            color = BrewInfo,
+            onClick = { showDeveloperScreen = true },
+        )
+        Spacer(modifier = Modifier.height(48.dp))
+    }
     }
 
     // Language selection dialog
@@ -175,6 +206,155 @@ internal fun SettingsScreen(
             onSelect = { BrewThemeManager.switchTheme(it) },
             onDismiss = { showThemeDialog = false },
         )
+    }
+
+    // Sponsor dialog
+    if (showSponsorDialog) {
+        SponsorDialog(onDismiss = { showSponsorDialog = false })
+    }
+}
+
+@Composable
+private fun SponsorDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    var sponsors by remember { mutableStateOf<List<SponsorUser>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    // 打开弹窗时获取赞助数据
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            try {
+                sponsors = fetchSponsors()
+            } catch (e: Exception) {
+                errorMsg = e.message
+            }
+            loading = false
+        }
+    }
+
+    BrewDialog(
+        onDismiss = onDismiss,
+        title = ctx.getString(R.string.sponsor),
+        color = BrewAmber,
+    ) {
+        BrewDialogContent {
+            // ── 赞助方式 ──
+            Text(
+                text = ctx.getString(R.string.sponsor_methods),
+                color = BrewText,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // AI Fa Dian
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(BrewAmber.copy(alpha = 0.12f))
+                    .border(1.dp, BrewAmber.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                    .clickable {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ifdian.net/a/rokidlab"))
+                        ctx.startActivity(intent)
+                    }
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(BrewAmber),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("⚡", fontSize = 18.sp)
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(ctx.getString(R.string.sponsor_afdian), color = BrewAmber, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        Text(ctx.getString(R.string.sponsor_afdian_desc), color = BrewMuted, fontSize = 11.sp)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // ── 赞助用户 ──
+            Text(
+                text = ctx.getString(R.string.sponsor_list),
+                color = BrewText,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (loading) {
+                Text(
+                    text = "加载中...",
+                    color = BrewDim,
+                    fontSize = 13.sp,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                )
+            } else if (errorMsg != null) {
+                Text(
+                    text = errorMsg!!,
+                    color = BrewWarning,
+                    fontSize = 12.sp,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                )
+            } else if (sponsors.isEmpty()) {
+                Text(
+                    text = ctx.getString(R.string.sponsor_empty),
+                    color = BrewDim,
+                    fontSize = 13.sp,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                )
+            } else {
+                val rows = sponsors.chunked(4)
+                rows.forEach { rowSponsors ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                    ) {
+                        rowSponsors.forEach { sponsor ->
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.padding(vertical = 8.dp),
+                            ) {
+                                SponsorAvatar(
+                                    avatarUrl = sponsor.avatar,
+                                    name = sponsor.name,
+                                    size = 48.dp,
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    sponsor.name,
+                                    color = BrewMuted,
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            if (sponsors.isNotEmpty()) {
+                Text(
+                    text = ctx.getString(R.string.sponsor_more_coming),
+                    color = BrewDim,
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
     }
 }
 
@@ -236,51 +416,51 @@ private fun ModuleHeader(title: String, subtitle: String, color: Color) {
 }
 
 @Composable
-private fun BrutalButton(label: String, color: Color, enabled: Boolean = true, onClick: () -> Unit) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val pressScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.97f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
-        label = "btn-press",
+private fun SectionTitle(text: String, color: Color) {
+    Text(
+        text = text.uppercase(),
+        color = color.copy(alpha = 0.8f),
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 3.sp,
     )
-    val dimAlpha = if (enabled) 1f else 0.45f
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(52.dp)
-            .graphicsLayer { scaleX = pressScale; scaleY = pressScale; alpha = dimAlpha }
-            .clip(BrewShapeStandard)
-            .background(color.copy(alpha = if (isPressed) 0.20f else if (enabled) 0.12f else 0.05f))
-            .border(width = 1.dp, color = color.copy(alpha = if (enabled) 0.5f else 0.15f), shape = BrewShapeStandard)
-            .clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            color = color.copy(alpha = dimAlpha),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 1.sp,
-        )
-    }
 }
 
 @Composable
-private fun SettingCard(title: String, content: String, color: Color, onClick: (() -> Unit)? = null) {
+private fun SettingsCard(
+    title: String,
+    content: String,
+    color: Color,
+    enabled: Boolean = true,
+    onClick: (() -> Unit)? = null,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.98f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "card-press",
+    )
+    val dimAlpha = if (enabled) 1f else 0.45f
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .graphicsLayer { scaleX = pressScale; scaleY = pressScale; alpha = dimAlpha }
             .clip(RoundedCornerShape(12.dp))
             .background(BrewPanel, RoundedCornerShape(12.dp))
             .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
-            .padding(16.dp)
-            .clickable(enabled = onClick != null) { onClick?.invoke() },
+            .then(
+                if (onClick != null && enabled) {
+                    Modifier.clickable(interactionSource = interactionSource, indication = null) { onClick() }
+                } else Modifier
+            )
+            .padding(16.dp),
     ) {
         Column {
             Text(
                 text = title.uppercase(),
-                color = BrewMuted,
+                color = if (enabled) BrewMuted else BrewMuted.copy(alpha = 0.5f),
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 3.sp,
@@ -290,10 +470,138 @@ private fun SettingCard(title: String, content: String, color: Color, onClick: (
                 modifier = Modifier
                     .width(32.dp)
                     .height(3.dp)
-                    .background(color)
+                    .background(color.copy(alpha = if (enabled) 1f else 0.4f))
                     .padding(bottom = 8.dp),
             )
-            Text(text = content, color = color, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, style = TabularNumbersStyle)
+            Text(
+                text = content,
+                color = if (enabled) color else color.copy(alpha = 0.5f),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp,
+            )
+        }
+    }
+}
+
+// ── 爱发电 API ──
+
+private data class SponsorUser(
+    val name: String,
+    val avatar: String,
+)
+
+private const val IFDIAN_USER_ID = "76a44eda67c011f1854952540025c377"
+private const val IFDIAN_TOKEN = "Vd7nJXymva9s5xDujfHGCqc4bQW6YEUM"
+
+private fun fetchSponsors(): List<SponsorUser> {
+    val params = """{"page":1}"""
+    val ts = System.currentTimeMillis() / 1000L
+    val signStr = IFDIAN_TOKEN + "params" + params + "ts" + ts + "user_id" + IFDIAN_USER_ID
+    val sign = MessageDigest.getInstance("MD5").digest(signStr.toByteArray())
+        .joinToString("") { "%02x".format(it) }
+
+    val body = JSONObject().apply {
+        put("user_id", IFDIAN_USER_ID)
+        put("params", params)
+        put("ts", ts.toString())
+        put("sign", sign)
+    }
+
+    val conn = URL("https://ifdian.net/api/open/query-sponsor").openConnection() as HttpURLConnection
+    conn.requestMethod = "POST"
+    conn.doOutput = true
+    conn.setRequestProperty("Content-Type", "application/json;charset=UTF-8")
+    conn.connectTimeout = 10000
+    conn.readTimeout = 10000
+    try {
+        conn.outputStream.use { os ->
+            os.write(body.toString().toByteArray(Charsets.UTF_8))
+        }
+        val code = conn.responseCode
+        if (code != 200) throw RuntimeException("HTTP $code")
+        val resp = conn.inputStream.bufferedReader().readText()
+        val json = JSONObject(resp)
+        val ec = json.optInt("ec")
+        if (ec != 200) throw RuntimeException("API error: $ec ${json.optString("em")}")
+        val data = json.optJSONObject("data") ?: return emptyList()
+        val list = data.optJSONArray("list") ?: return emptyList()
+        return buildList {
+            for (i in 0 until list.length()) {
+                val item = list.optJSONObject(i) ?: continue
+                val user = item.optJSONObject("user") ?: continue
+                val name = user.optString("name").takeIf { it.isNotBlank() } ?: continue
+                val avatar = user.optString("avatar").takeIf { it.isNotBlank() } ?: ""
+                add(SponsorUser(name, avatar))
+            }
+        }
+    } finally {
+        conn.disconnect()
+    }
+}
+
+// ── 赞助商头像加载 ──
+
+@Composable
+private fun SponsorAvatar(
+    avatarUrl: String,
+    name: String,
+    size: androidx.compose.ui.unit.Dp,
+) {
+    var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(avatarUrl) {
+        if (avatarUrl.isBlank()) return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            try {
+                val conn = URL(avatarUrl).openConnection() as HttpURLConnection
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                conn.instanceFollowRedirects = true
+                try {
+                    conn.connect()
+                    val bytes = conn.inputStream.use { input ->
+                        val baos = ByteArrayOutputStream()
+                        input.copyTo(baos)
+                        baos.toByteArray()
+                    }
+                    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    if (bmp != null) bitmap = bmp.asImageBitmap()
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (_: Exception) {
+                // 加载失败就不显示头像
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(if (bitmap != null) Color.Transparent else BrewAmber.copy(alpha = 0.2f))
+            .border(
+                width = if (bitmap != null) 0.dp else 2.dp,
+                color = if (bitmap != null) Color.Transparent else BrewAmber.copy(alpha = 0.5f),
+                shape = CircleShape,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap!!,
+                contentDescription = name,
+                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Text(
+                name.take(1),
+                color = BrewAmber,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }

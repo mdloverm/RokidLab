@@ -70,4 +70,75 @@
   ```
 - **不要对外层仓库（`d:\rokidapp`）执行 push 操作**，外层仓库有 r2emu.apk 等大文件会导致 Gitee 推送被拒
 
+### 9. 眼镜端开发参考
+
+#### 9.1 Rokid Glasses 硬件规格
+
+Rokid Glasses（型号 RV101）运行 **YodaOS-Sprite** 系统（基于 **Android 12（API 31）** / Android Go），配套 SDK 为 CXR-S（`cxr-service-bridge`）。
+
+**官方开发者文档地址：**
+```
+https://custom.rokid.com/prod/rokid_web/ff28c865a9634876be98cbc293588460/pc/cn/index.html
+```
+
+| 项 | 说明 |
+|---|---|
+| 眼镜系统 | YodaOS-Sprite，Android 12（API 31）/ Android Go |
+| 官方 Sample minSdk | **31** |
+| RokidLink 项目 minSdk | **28**（兼容更早系统版本） |
+| 屏幕分辨率 | **480 × 640 px**（单绿色显示） |
+| 镜腿输入 | 功能键 + 右触控板 TouchPad（系统广播 + KeyEvent） |
+| 音频 | 8 通道原始音频（`AudioRecord`） |
+| 相机 | CameraX（拍照/录像） |
+| 传感器 | 六轴 IMU（`SensorManager`） |
+| UI 规范 | https://t.rokid.com/0w0opp8x |
+
+#### 9.2 与手机端通信方式
+
+| 协议/SDK | 方向 | 用途 |
+|:--------:|:----:|:------|
+| **CXR-S**（`cxr-service-bridge`） | 眼镜端 | 接收手机端 CXR-L SDK 的指令（安装/启动/卸载应用等） |
+| **CXR-L**（`client-l`） | 手机端 | 手机端 SDK，通过 CXR-S 与眼镜通信 |
+| ADB over TCP | 双向 | 文件管理、屏幕镜像、Shell 命令等 |
+| Socket（自定义协议） | 手机→眼镜 | 手机投屏：`[1B方向][2B宽][2B高][N*1B灰度]` |
+
+#### 9.3 CXR-S SDK 参考
+
+CXR-S SDK（`cxr-service-bridge-1.0.aar`）位于 `RokidLink/libs/`，集成方式：
+```kotlin
+dependencies {
+    implementation(files("libs/cxr-service-bridge-1.0.aar"))
+}
+```
+
+CXR-S 为眼镜端提供的服务能力（对应手机端 CXR-L SDK 的 `ICXRLinkCbk` 回调）：
+- 安装/启动/卸载应用
+- 自定义命令、自定义视图
+- 音频流、图片流接收
+- 设备状态回传、AI 事件回调
+
+CXR-S SDK 内部接口结构（从 `phone-app/libs/` 反编译获取）：
+```
+com.rokid.cxr.link.callbacks.ICXRLinkCbk       // CXR-L 连接回调
+com.rokid.cxr.link.callbacks.IAudioStreamCbk    // 音频流回调
+com.rokid.cxr.link.callbacks.IImageStreamCbk    // 图片流回调
+com.rokid.cxr.link.callbacks.ICustomCmdCbk      // 自定义命令回调
+com.rokid.cxr.link.callbacks.ICustomViewCbk     // 自定义视图回调
+com.rokid.cxr.link.callbacks.IGlassAppCbk       // 眼镜端应用管理回调
+com.rokid.cxr.CXRServiceBridge                  // 眼镜端服务桥接入口
+com.rokid.cxr.CXRSocketProtocol                 // Socket 通信协议
+```
+
+**CXR-S SDK 详细 API（连接管理、消息订阅/发送、IMU、按键广播等）见 `d:\rokidapp\.trae\rules\project_rules.md` 的「SDK 能力参考」章节。**
+
+#### 9.4 裸机开发
+
+Rokid Glasses 支持直接运行标准 Android 应用，无需手机端协同 SDK。官方示例工程：**GlassesBareDevSample**（包名 `com.rokid.glassesbaredevsample`）。
+
+通过手机端 **Rokid AI App** 开启眼镜 ADB 后调试：
+```bash
+adb connect 192.168.49.1
+adb -s <device_id> install <app.apk>
+```
+
 

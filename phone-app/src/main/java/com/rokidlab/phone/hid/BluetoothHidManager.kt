@@ -269,6 +269,8 @@ class BluetoothHidManager(private val appContext: Context) {
     private var quickDisconnectCount = 0
     private val mainHandler = Handler(Looper.getMainLooper())
     private var retryRunnable: Runnable? = null
+    /** 连接序列号，每次 connect() 调用递增，用于防止过期的 retryRunnable 执行旧连接 */
+    private var connectSequence = 0L
 
     // ===== 蓝牙扫描 (Discovery) =====
     interface ScanCallback {
@@ -394,8 +396,14 @@ class BluetoothHidManager(private val appContext: Context) {
                             val waitMs = minOf(quickDisconnectCount * 3000L, 15000L)
                             Log.w(TAG, "Quick disconnect #$quickDisconnectCount, waiting ${waitMs}ms before retry")
                             val dev: BluetoothDevice? = device
+                            val seqAtDisconnect = connectSequence
                             retryRunnable?.let { mainHandler.removeCallbacks(it) }
                             retryRunnable = Runnable {
+                                // 如果在此期间用户手动发起过新连接，跳过此次自动重试
+                                if (connectSequence != seqAtDisconnect) {
+                                    Log.i(TAG, "Skipping stale retry: user initiated new connection")
+                                    return@Runnable
+                                }
                                 if (dev != null) {
                                     Log.i(TAG, "Smart retry: connecting to $dev")
                                     performConnect(dev)
@@ -417,10 +425,13 @@ class BluetoothHidManager(private val appContext: Context) {
     @SuppressLint("MissingPermission")
     fun initialize() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
-        if (hidDevice != null) return
+        // 即使 hidDevice 不为 null，也允许重新获取 profile proxy
+        // （防止 onServiceDisconnected 回调延迟导致引用失效）
         val manager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         bluetoothAdapter = manager?.adapter ?: return
-        bluetoothAdapter!!.getProfileProxy(appContext, profileListener, BluetoothProfile.HID_DEVICE)
+        if (hidDevice == null) {
+            bluetoothAdapter!!.getProfileProxy(appContext, profileListener, BluetoothProfile.HID_DEVICE)
+        }
     }
 
     fun retryRegisterApp() {
@@ -454,16 +465,8 @@ class BluetoothHidManager(private val appContext: Context) {
         )
         val ok = hid.registerApp(sdp, null, null, Runnable::run, hidCallback)
         Log.i(TAG, "registerApp result: $ok")
-        // 注册成功后立即连接 pending 设备，不依赖 onAppStatusChanged 回调
-        // （因为回调可能带回旧缓存设备导致 pending 连接被跳过）
-        if (ok) {
-            val pending = pendingConnectDevice
-            if (pending != null) {
-                pendingConnectDevice = null
-                Log.i(TAG, "registerApp success, connecting pending device immediately")
-                hidDevice?.connect(pending)
-            }
-        }
+        // 不立即 connect：等待 onAppStatusChanged 回调确认注册完成后，
+        // 在回调内部检查 pendingConnectDevice 并执行连接，避免竞争条件
     }
 
     // ========================================================================
@@ -474,8 +477,9 @@ class BluetoothHidManager(private val appContext: Context) {
     fun connect(device: BluetoothDevice) {
         // 记录连接发起时间，用于快速断连检测（即使没到 CONNECTED 状态）
         lastConnectTime = System.currentTimeMillis()
-        // 用户手动重连时，重置快速断连计数
+        // 用户手动重连时，重置快速断连计数，递增序列号
         quickDisconnectCount = 0
+        connectSequence++
         performConnect(device)
     }
 

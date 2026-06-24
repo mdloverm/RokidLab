@@ -74,6 +74,16 @@
     <string name="language_subtitle">Interface Language</string>
     <string name="language_simple_chinese">简体中文</string>
     <string name="language_english">English</string>
+    <string name="more_section">More</string>
+    <string name="sponsor">Sponsor</string>
+    <string name="sponsor_desc">Support RokidLab</string>
+    <string name="developer_app_submit">Submit App</string>
+    <string name="sponsor_methods">Sponsorship Methods</string>
+    <string name="sponsor_afdian">AI Fa Dian</string>
+    <string name="sponsor_afdian_desc">Support RokidLab on Aifadian</string>
+    <string name="sponsor_list">Sponsors</string>
+    <string name="sponsor_empty">No sponsors yet. Be the first!</string>
+    <string name="sponsor_more_coming">More sponsors coming soon</string>
 
     <!-- Glasses Services -->
     <string name="glasses_services">Glasses Services</string>
@@ -227,6 +237,7 @@
     <string name="all">All</string>
     <string name="no_apps_found">No apps found</string>
     <string name="switch_source">Switch Source</string>
+    <string name="switch_source_desc">Switch download source</string>
     <string name="install_apk_to_glasses">Install APK to Glasses</string>
     <string name="search_label">Search</string>
 
@@ -269,6 +280,7 @@
     <string name="apply">Apply</string>
     <string name="reset">Reset</string>
     <string name="reinstall_glasses">Reinstall on Glasses</string>
+    <string name="reinstall_glasses_desc">Reinstall RokidLink on glasses</string>
     <string name="ready">Ready</string>
     <string name="system_log">System Log</string>
     <string name="registry_unavailable">Registry unavailable: %s, pull down to retry</string>
@@ -295,6 +307,10 @@
     <string name="phone_mirror_channel_desc">Project phone screen to glasses</string>
     <string name="phone_mirror_projecting">Projecting screen to glasses</string>
     <string name="switch_source_btn">Switch Source</string>
+    <string name="refresh_success">Refresh Succeeded</string>
+    <string name="refresh_failed">Refresh Failed</string>
+    <string name="refresh_result_ok">Store refreshed successfully, loaded %d apps</string>
+    <string name="refresh_result_fail">Store refresh failed: %s</string>
     <string name="cancel_btn">Cancel</string>
     <string name="connection_failed">Connection failed: %s</string>
     <string name="streaming_screen">Streaming screen...</string>
@@ -645,6 +661,9 @@
     <string name="log_starting_phone_mirror">Starting phone screen mirror</string>
     <string name="log_glasses_started_request_permission">Glasses started, requesting screen recording permission</string>
     <string name="log_stopping_phone_mirror">Stopping phone screen mirror</string>
+    <string name="log_stopping_glasses_mirror">Closing glasses mirror activity...</string>
+    <string name="log_glasses_mirror_stopped">Glasses mirror activity closed</string>
+    <string name="log_glasses_mirror_stop_failed">Failed to close glasses mirror activity</string>
 
     <!-- Toast Messages -->
     <string name="toast_rokidlink_installed">RokidLink installed successfully</string>
@@ -654,4 +673,63 @@
     <string name="connect">Connect</string>
     <string name="disconnect">Disconnect</string>
     <string name="host_app_not_installed_warning">⚠ %s is not installed. Please install it first.</string>
+
+    <!-- Developer Tools -->
+    <string name="developer_title">Developer Tools</string>
+    <string name="developer_subtitle">Submit your app to the RokidLab App Store</string>
+    <string name="developer_open">Developer Tools</string>
+    <string name="developer_required">Required</string>
+    <string name="developer_optional">Optional</string>
+    <string name="developer_app_info">App Info</string>
+    <string name="developer_app_name">App Name</string>
+    <string name="developer_app_id">App ID (unique identifier, e.g. my-cool-app)</string>
+    <string name="developer_version">Version (e.g. 1.0.0)</string>
+    <string name="developer_author">Author Name</string>
+    <string name="developer_type">Type</string>
+    <string name="developer_category">Category</string>
+    <string name="developer_summary">Short summary (one sentence)</string>
+    <string name="developer_description">Full description (optional)</string>
+    <string name="developer_links">Links &amp; Media</string>
+    <string name="developer_source_url">Source URL (GitHub/Gitee, optional)</string>
+    <string name="developer_icon_url">Icon URL (optional)</string>
+    <string name="developer_icon_asset">Icon asset name (optional, e.g. ic_launcher)</string>
+    <string name="developer_screenshot_urls">Screenshot URLs (comma-separated, optional)</string>
+    <string name="developer_screenshot_assets">Screenshot assets (comma-separated, optional)</string>
+    <string name="developer_phone_required">Phone companion required (phoneRequired)</string>
+    <string name="developer_artifact">APK Artifacts</string>
+    <string name="developer_artifact_target">Target</string>
+    <string name="developer_artifact2">Second Artifact (optional)</string>
+    <string name="developer_add_artifact">+ Add Second Artifact</string>
+    <string name="developer_remove_artifact">− Remove</string>
+    <string name="developer_package_name">APK Package Name (e.g. com.example.app)</string>
+    <string name="developer_apk_url">APK Download URL</string>
+    <string name="developer_version_code">Version Code</string>
+    <string name="developer_size_bytes">File Size (bytes)</string>
+    <string name="developer_listing_title">App Listing</string>
+    <string name="developer_listing_hint">These fields will show on the app detail page (optional)</string>
+    <string name="developer_listing_about">About (short intro)</string>
+    <string name="developer_listing_description">Description (Markdown supported)</string>
+    <string name="developer_release">Releases</string>
+    <string name="developer_release_date">Release Date (e.g. 2026-06-24)</string>
+    <string name="developer_release_url">Release Page URL</string>
+    <string name="developer_release_notes">Release Notes</string>
+    <string name="developer_release_changes">Changelog (one per line)</string>
+    <string name="developer_preview_json">Preview/Edit JSON</string>
+    <string name="developer_apply_json">Apply JSON to Form</string>
+    <string name="developer_apply_json_ok">✅ JSON parsed and applied to form</string>
+    <string name="developer_error_invalid_json">❌ Invalid JSON: </string>
+    <string name="developer_submit">Submit to Repo</string>
+    <string name="developer_submitting">Submitting...</string>
+    <string name="developer_submit_success">✅ Submitted! The app has been added to the registry. Restart the store to see it</string>
+    <string name="developer_submit_failed">❌ Gitee API error (%d): %s</string>
+    <string name="developer_submit_error">❌ Submission failed: %s</string>
+    <string name="developer_error_app_id">Please enter the App ID</string>
+    <string name="developer_error_app_name">Please enter the App Name</string>
+    <string name="developer_error_version">Please enter the Version</string>
+    <string name="developer_error_summary">Please enter a Summary</string>
+    <string name="developer_error_package_name">Please enter the APK Package Name</string>
+    <string name="developer_error_apk_url">Please enter the APK URL</string>
+    <string name="developer_error_url_format">APK URL must start with http:// or https://</string>
+    <string name="developer_error_no_token">❌ Gitee Token not configured. Contact the developer to set it in the code and rebuild</string>
+    <string name="developer_error_duplicate_id">❌ App ID \"%s\" already exists. Please use a different ID</string>
 </resources>

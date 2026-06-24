@@ -1,8 +1,10 @@
 package com.rokidlab.rokidlink
 
 import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.drawable.GradientDrawable
 import android.net.ConnectivityManager
 import android.net.Network
@@ -60,9 +62,20 @@ class MainActivity : Activity() {
         }
     }
 
+    // 用于接收 PhoneMirrorActivity 发来的关闭信号
+    private val finishMainReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.i(TAG, "收到关闭信号，结束 MainActivity")
+            finish()
+        }
+    }
+
     companion object {
         private const val TAG = "RokidLink"
         private const val REQUEST_WIFI = 100
+
+        /** PhoneMirrorActivity 启动时发出的广播 Action，用于关闭本页面 */
+        const val ACTION_FINISH_MAIN = "com.rokidlab.rokidlink.FINISH_MAIN"
 
         // 状态灯颜色（Mondrian Noir）
         private const val DOT_IDLE    = 0xFF666666.toInt()  // 灰 — 初始
@@ -91,6 +104,9 @@ class MainActivity : Activity() {
 
         setDotColor(DOT_IDLE)
         startSetup()
+
+        // 注册关闭广播接收器，当 PhoneMirrorActivity 启动时自动结束本页面
+        registerReceiver(finishMainReceiver, IntentFilter(ACTION_FINISH_MAIN))
     }
 
     override fun onDestroy() {
@@ -100,6 +116,8 @@ class MainActivity : Activity() {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             cm.unregisterNetworkCallback(networkCallback)
         }
+        // 注销关闭广播接收器
+        runCatching { unregisterReceiver(finishMainReceiver) }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

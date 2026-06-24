@@ -1,6 +1,10 @@
 package com.rokidlab.rokidlink
 
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Bundle
@@ -20,13 +24,31 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
     private lateinit var imageView: ImageView
     private var lastTapTime = 0L
 
+    // 接收 ScreenMirrorIntentActivity 发来的关闭广播，确保投屏不会残留
+    private val finishMirrorReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.i(TAG, "收到关闭广播，结束 PhoneMirrorActivity")
+            stopServer()
+            finish()
+        }
+    }
+
     companion object {
         private const val TAG = "RokidLink-Mirror"
         const val PORT = 7654
+
+        /** ScreenMirrorIntentActivity 启动时发出的广播 Action，用于关闭本页面 */
+        const val ACTION_FINISH_MIRROR = "com.rokidlab.rokidlink.FINISH_MIRROR"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 发送广播关闭同应用内的 MainActivity（ADB IP 配置页），确保投屏独立运行
+        sendBroadcast(Intent(MainActivity.ACTION_FINISH_MAIN))
+
+        // 注册关闭广播，当 ScreenMirrorIntentActivity 启动时自动结束本页面
+        registerReceiver(finishMirrorReceiver, IntentFilter(ACTION_FINISH_MIRROR))
 
         // 全屏显示，隐藏状态栏和导航栏
         window.setFlags(
@@ -119,6 +141,7 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
 
     override fun onDestroy() {
         stopServer()
+        runCatching { unregisterReceiver(finishMirrorReceiver) }
         super.onDestroy()
     }
 }

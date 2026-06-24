@@ -213,6 +213,15 @@ internal fun BrewPhoneApp(
     
     val showGuide = !state.prerequisites.canInstallApps
 
+    // 进入主界面（非引导）时自动刷新商店列表
+    val enteredMain = remember { mutableStateOf(false) }
+    LaunchedEffect(showGuide) {
+        if (!showGuide && !enteredMain.value) {
+            enteredMain.value = true
+            actions.onRefresh()
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(BrewBg)) {
         if (showGuide) {
             GuideScreen(

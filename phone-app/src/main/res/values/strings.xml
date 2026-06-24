@@ -74,6 +74,16 @@
     <string name="language_subtitle">界面语言设置</string>
     <string name="language_simple_chinese">简体中文</string>
     <string name="language_english">English</string>
+    <string name="more_section">更多</string>
+    <string name="sponsor">赞助</string>
+    <string name="sponsor_desc">支持 RokidLab</string>
+    <string name="developer_app_submit">提交应用</string>
+    <string name="sponsor_methods">赞助方式</string>
+    <string name="sponsor_afdian">爱发电</string>
+    <string name="sponsor_afdian_desc">在爱发电上支持 RokidLab 开发</string>
+    <string name="sponsor_list">赞助用户</string>
+    <string name="sponsor_empty">还没有赞助用户，快来支持吧！</string>
+    <string name="sponsor_more_coming">更多赞助用户陆续加入</string>
 
     <!-- Glasses Services -->
     <string name="glasses_services">眼镜端服务</string>
@@ -227,6 +237,7 @@
     <string name="all">全部</string>
     <string name="no_apps_found">未找到应用</string>
     <string name="switch_source">切换源</string>
+    <string name="switch_source_desc">切换下载源</string>
     <string name="install_apk_to_glasses">安装 APK 到眼镜</string>
     <string name="search_label">搜索</string>
 
@@ -269,9 +280,10 @@
     <string name="apply">应用</string>
     <string name="reset">重置</string>
     <string name="reinstall_glasses">重装眼镜端</string>
+    <string name="reinstall_glasses_desc">重装 RokidLink 到眼镜</string>
     <string name="ready">就绪</string>
     <string name="system_log">系统日志</string>
-    <string name="registry_unavailable">注册表不可用：%s，下拉可重试</string>
+    <string name="registry_unavailable">商店不可用：%s</string>
     <string name="cannot_get_package">无法获取 %s 的包名</string>
     <string name="cannot_launch_glasses">无法在眼镜上启动 %s</string>
     <string name="launch_failed">启动 %s 失败：%s</string>
@@ -294,7 +306,11 @@
     <string name="phone_mirror_channel">手机投屏</string>
     <string name="phone_mirror_channel_desc">手机屏幕投射到眼镜</string>
     <string name="phone_mirror_projecting">正在投射屏幕到眼镜</string>
-    <string name="switch_source_btn">切换源</string>
+    <string name="switch_source_btn">切换下载源</string>
+    <string name="refresh_success">刷新成功</string>
+    <string name="refresh_failed">刷新失败</string>
+    <string name="refresh_result_ok">已成功刷新商店列表，加载 %d 个应用</string>
+    <string name="refresh_result_fail">刷新商店列表失败：%s</string>
     <string name="cancel_btn">取消</string>
     <string name="connection_failed">连接失败: %s</string>
     <string name="streaming_screen">画面传输中...</string>
@@ -649,6 +665,9 @@
     <string name="log_starting_phone_mirror">正在启动手机投屏</string>
     <string name="log_glasses_started_request_permission">眼镜已启动，正在请求屏幕录制权限</string>
     <string name="log_stopping_phone_mirror">正在停止手机投屏</string>
+    <string name="log_stopping_glasses_mirror">正在关闭眼镜投屏活动...</string>
+    <string name="log_glasses_mirror_stopped">眼镜投屏活动已关闭</string>
+    <string name="log_glasses_mirror_stop_failed">眼镜投屏活动关闭失败</string>
 
     <!-- Toast 消息 -->
     <string name="toast_rokidlink_installed">RokidLink 安装成功</string>
@@ -657,4 +676,63 @@
     <!-- ADB 工具 -->
     <string name="connect">连接</string>
     <string name="disconnect">断开</string>
+
+    <!-- 开发者工具 -->
+    <string name="developer_title">开发者工具</string>
+    <string name="developer_subtitle">提交你的应用到 RokidLab 应用商店</string>
+    <string name="developer_open">开发者工具</string>
+    <string name="developer_required">必填信息</string>
+    <string name="developer_optional">选填信息</string>
+    <string name="developer_app_info">应用信息</string>
+    <string name="developer_app_name">应用名称</string>
+    <string name="developer_app_id">应用 ID（唯一标识，如 my-cool-app）</string>
+    <string name="developer_version">版本号（如 1.0.0）</string>
+    <string name="developer_author">作者名称</string>
+    <string name="developer_type">类型</string>
+    <string name="developer_category">分类</string>
+    <string name="developer_summary">简短描述（一句话介绍）</string>
+    <string name="developer_description">详细描述（可选）</string>
+    <string name="developer_links">链接 &amp; 媒体</string>
+    <string name="developer_source_url">源码地址（GitHub/Gitee 等，可选）</string>
+    <string name="developer_icon_url">图标 URL（可选）</string>
+    <string name="developer_icon_asset">图标资源名称（可选，如 ic_launcher）</string>
+    <string name="developer_screenshot_urls">截屏 URL（多个用逗号分隔，可选）</string>
+    <string name="developer_screenshot_assets">截屏资源名（多个用逗号分隔，可选）</string>
+    <string name="developer_phone_required">需要手机端配合（phoneRequired）</string>
+    <string name="developer_artifact">APK 构件（artifacts）</string>
+    <string name="developer_artifact_target">目标设备</string>
+    <string name="developer_artifact2">第二构件（可选）</string>
+    <string name="developer_add_artifact">+ 添加第二构件</string>
+    <string name="developer_remove_artifact">− 移除</string>
+    <string name="developer_package_name">APK 包名（如 com.example.app）</string>
+    <string name="developer_apk_url">APK 下载地址</string>
+    <string name="developer_version_code">版本码</string>
+    <string name="developer_size_bytes">文件大小（字节）</string>
+    <string name="developer_listing_title">应用详情（listing）</string>
+    <string name="developer_listing_hint">以下字段将展示在应用详情页（可选）</string>
+    <string name="developer_listing_about">关于（简短介绍）</string>
+    <string name="developer_listing_description">详细说明（支持 Markdown）</string>
+    <string name="developer_release">发行记录（releases）</string>
+    <string name="developer_release_date">发行日期（如 2026-06-24）</string>
+    <string name="developer_release_url">发行页 URL</string>
+    <string name="developer_release_notes">发行说明</string>
+    <string name="developer_release_changes">变更日志（每行一条）</string>
+    <string name="developer_preview_json">预览/编辑 JSON</string>
+    <string name="developer_apply_json">将 JSON 填入表单</string>
+    <string name="developer_apply_json_ok">✅ JSON 已成功解析并填入表单</string>
+    <string name="developer_error_invalid_json">❌ JSON 解析失败：</string>
+    <string name="developer_submit">提交到仓库</string>
+    <string name="developer_submitting">提交中...</string>
+    <string name="developer_submit_success">✅ 提交成功！应用已追加到仓库，重启商店即可看到</string>
+    <string name="developer_submit_failed">❌ Gitee API 错误（%d）：%s</string>
+    <string name="developer_submit_error">❌ 提交失败：%s</string>
+    <string name="developer_error_app_id">请输入应用 ID</string>
+    <string name="developer_error_app_name">请输入应用名称</string>
+    <string name="developer_error_version">请输入版本号</string>
+    <string name="developer_error_summary">请输入简短描述</string>
+    <string name="developer_error_package_name">请输入 APK 包名</string>
+    <string name="developer_error_apk_url">请输入 APK 下载地址</string>
+    <string name="developer_error_url_format">APK 地址必须以 http:// 或 https:// 开头</string>
+    <string name="developer_error_no_token">❌ 打包时未配置 Gitee Token，请联系开发者在代码中填入 Token 后重打包</string>
+    <string name="developer_error_duplicate_id">❌ 应用 ID \"%s\" 已存在，请使用其他 ID</string>
 </resources>

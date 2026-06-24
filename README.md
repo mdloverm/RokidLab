@@ -1,3 +1,5 @@
+> ⚡ 爱发电赞助主页：[https://ifdian.net/a/rokidlab](https://ifdian.net/a/rokidlab)
+
 # RokidLab
 
 Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具、屏幕镜像、手机投屏、文件管理等功能。

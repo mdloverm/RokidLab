@@ -1,6 +1,7 @@
 package com.rokidlab.rokidlink
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -20,6 +21,9 @@ class ScreenMirrorIntentActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "ScreenMirrorIntentActivity started, auto closing in 2 seconds")
+
+        // 发送广播关闭可能残留的 PhoneMirrorActivity（投屏页面）
+        sendBroadcast(Intent(PhoneMirrorActivity.ACTION_FINISH_MIRROR))
 
         // 延时关闭，确保眼镜画面切换到前台
         Handler(Looper.getMainLooper()).postDelayed({
