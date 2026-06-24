@@ -309,7 +309,98 @@ adb/
 3. **日志检查**：确认 build 输出无 `ERROR`，warning 可接受
 4. **功能验证**：在有条件的情况下连接真机测试 ADB 功能
 
-## 十、部署规范
+## 十、App 更新发布流程
+
+### 自动化执行约定
+
+当我说"发布"或"发布 vX.Y"时，AI 助手需自动按以下 7 步完整执行，无需逐项确认。
+
+### 发布 RokidLab 新版本
+
+1. **修改版本号**
+   - 编辑 `phone-app/build.gradle.kts`：`versionCode` 递增、`versionName` 更新
+   - 示例：`versionCode = 2`、`versionName = "1.1"`
+
+2. **提交版本号变更到 Git**
+   先提交再打 tag，确保 tag 指向正确的新版本 commit：
+   ```bash
+   git add phone-app/build.gradle.kts
+   git commit -m "Bump version to {version}"
+   git push
+   ```
+
+3. **打包带签名的正式版 APK**
+   Gradle 会自动使用 `release.keystore` 签名（配置在 `signingConfigs.release`）：
+   ```bash
+   ./gradlew :cxrl:RokidLab:phone-app:assembleRelease
+   ```
+   APK 位置：`phone-app/build/outputs/apk/release/RokidLab-v{version}-release.apk`
+
+4. **验证签名（必须执行）**
+   使用 `apksigner` 确认 APK 已签名，否则无法安装到设备：
+   ```bash
+   & "D:\android-sdk\build-tools\34.0.0\apksigner.bat" verify --print-certs "D:\rokidapp\cxrl\RokidLab\phone-app\build\outputs\apk\release\RokidLab-v{version}-release.apk"
+   ```
+   成功输出示例：
+   ```
+   Signer #1 certificate DN: CN=RokidBrew, OU=Rokid, O=Rokid, L=Unknown, ST=Unknown, C=CN
+   ```
+   - 如果提示 `jar 未签名`，说明不是标准签名格式，请改用 `apksigner` 检查（新版 Android 使用 v2/v3 签名方案，`jarsigner` 检测不到）
+   - 如果 `apksigner` 报错，说明 APK 确实未签名，需检查 `build.gradle.kts` 中 `signingConfigs.release` 配置
+
+5. **推 Git Tag 并创建 Gitee Release**
+   ```bash
+   git tag -a v{version} -m "RokidLab v{version}"
+   git push origin v{version}
+   ```
+   然后通过 Gitee API v5 创建 Release（需要 access_token）：
+   ```json
+   POST /repos/dlover1314/RokidLab/releases
+   Body: {"tag_name":"v{version}","name":"v{version}","body":"更新说明","target_commitish":"master"}
+   ```
+
+6. **上传 APK 到 Release**
+   ```bash
+   curl -X POST "https://gitee.com/api/v5/repos/dlover1314/RokidLab/releases/{release_id}/attach_files?access_token={token}" -F "file=@RokidLab-v{version}-release.apk"
+   ```
+   注意上传后会得到 `browser_download_url`，即 APK 直链。
+
+7. **更新 apps.v1.json 版本信息**
+   - 仓库：`dlover1314/RokidBrew-Registry`
+   - 文件：`dist/apps.v1.json`
+   - 通过 Gitee API v5 读取 → 修改 → base64 编码 → PUT 写回
+   - 需修改的字段：
+
+     | 字段 | 说明 |
+     |------|------|
+     | `generatedAt` | 更新日期（如 `"2026-06-24T00:00:00.000Z"`） |
+     | `brewVersion` | 版本号（如 `"1.1"`） |
+     | `brewVersionCode` | 版本码（递增，如 `2`） |
+     | `brewApkUrl` | APK 下载直链（Gitee Release 的 download URL） |
+     | `brewReleaseUrl` | Release 页面链接 |
+     | `brewNotes` | 更新简述 |
+     | `brewChanges` | 更新详情列表 |
+
+### 部署注意事项
+
+- **Release APK 与 Debug APK 签名不同**：手机上如果之前装的是 debug 版（Android 默认 debug 证书签名），覆盖安装 release 版会失败（`INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`）。需先 `adb uninstall com.rokidlab.phone` 再安装 release 版。
+- **验证安装**：打包 release 后建议先用 `adb install -r` 测试能否覆盖安装，确认签名一致
+
+### 更新数据源
+
+用户打开 App → 商店刷新 → `checkRokidLabUpdate()` 从 Gitee 读取 `apps.v1.json` → 检测到 `brewVersionCode > 当前版本码` → 弹出更新对话框 → 用户点击更新 → 下载 APK → 请求安装。
+
+### 关键代码位置
+
+| 作用 | 文件 |
+|------|------|
+| 版本号定义 | `phone-app/build.gradle.kts` |
+| 自更新检查 | `Models.kt` → `BrewIndex.checkSelfUpdate()` → `SELF_UPDATE_URL` |
+| 更新对话框 UI | `UpdateDialog.kt` → `UpdateDialog` Composable |
+| 下载安装逻辑 | `MainActivity.kt` → `performSelfUpdate()` |
+| Gitee API token | `49bba993ecf39b735883064a78a917aa`（token，存于 RULES.md 仅供 API 操作参考） |
+
+## 十一、部署规范
 
 ### RokidLink 安装规则
 
