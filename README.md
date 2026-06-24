@@ -6,6 +6,8 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 
 > ⚡ 爱发电赞助主页：[https://ifdian.net/a/rokidlab](https://ifdian.net/a/rokidlab)
 
+> 🏪 商店 GitHub 源项目地址：[https://github.com/Anezium/RokidBrew](https://github.com/Anezium/RokidBrew)
+
 ## 主要功能
 
 ### 蓝牙手柄
