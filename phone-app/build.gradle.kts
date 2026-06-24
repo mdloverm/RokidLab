@@ -25,8 +25,8 @@ android {
         applicationId = "com.rokidlab.phone"
         minSdk = 28
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
         manifestPlaceholders["cleartextTrafficPermitted"] = "false"
     }
 
@@ -131,6 +131,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     
     // 本地 CXR-L SDK (包含所有 SO 文件)
     implementation(files("libs/client-l-1.0.3.aar"))
