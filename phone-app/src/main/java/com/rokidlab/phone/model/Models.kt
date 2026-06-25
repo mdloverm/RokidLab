@@ -204,7 +204,9 @@ object BrewIndex {
      */
     suspend fun checkSelfUpdate(): BrewSelfUpdate? = withContext(Dispatchers.IO) {
         return@withContext try {
-            val raw = fetch(SELF_UPDATE_URL)
+            // 添加时间戳参数绕过 Gitee CDN 缓存，确保获取最新版本
+            val cacheBuster = System.currentTimeMillis()
+            val raw = fetch("$SELF_UPDATE_URL?t=$cacheBuster")
             val parsed = parse(raw)
             BrewSelfUpdate(
                 version = parsed.brewVersion.orEmpty(),
@@ -239,7 +241,9 @@ object BrewIndex {
 
     suspend fun refresh(context: Context): BrewIndexRefresh = withContext(Dispatchers.IO) {
         val mirror = MIRRORS[currentMirrorIndex]
-        val url = mirror.url
+        // 添加时间戳参数绕过 CDN 缓存
+        val cacheBuster = System.currentTimeMillis()
+        val url = "${mirror.url}?t=$cacheBuster"
         var lastError: Throwable? = null
         // 重试 3 次，间隔递增
         for (attempt in 0 until 3) {

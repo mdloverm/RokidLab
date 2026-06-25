@@ -46,8 +46,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.Icon
@@ -82,6 +84,7 @@ import kotlinx.coroutines.withContext
 
 private const val PREFS_NAME = "rokidbrew_preferences"
 private const val PREF_ROKID_HOST_APP = "rokid_host_app"
+private const val PREF_COMPAT_GUIDE_DISMISSED = "compat_guide_dismissed"
 
 class MainActivity : AppCompatActivity() {
     private companion object {
@@ -154,8 +157,15 @@ class MainActivity : AppCompatActivity() {
     private val permissions: Array<String>
         get() = buildList {
             add(Manifest.permission.BLUETOOTH)
-            add(Manifest.permission.BLUETOOTH_ADMIN)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) add(Manifest.permission.BLUETOOTH_CONNECT)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // Android 12+ 需要运行时请求 BLUETOOTH_SCAN（发现设备）和 BLUETOOTH_CONNECT（连接设备）
+                // BLUETOOTH_ADMIN 在 API 31+ 已弃用，不再需要
+                add(Manifest.permission.BLUETOOTH_SCAN)
+                add(Manifest.permission.BLUETOOTH_CONNECT)
+            } else {
+                @Suppress("DEPRECATION")
+                add(Manifest.permission.BLUETOOTH_ADMIN)
+            }
         }.toTypedArray()
 
     private val permissionLauncher =
@@ -172,11 +182,6 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             if (it) {
                 log(getString(R.string.log_notification_permission_granted))
-                // 授予后强制设置 appops 为 allow
-                runCatching {
-                    val pm = packageManager
-                    // Nothing extra needed - system handles it
-                }
             } else {
                 log(getString(R.string.log_notification_permission_denied))
             }
@@ -185,6 +190,15 @@ class MainActivity : AppCompatActivity() {
     private val enableBluetoothLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
             if (isBluetoothEnabled()) consumePendingAction() else log(getString(R.string.log_bluetooth_not_enabled))
+        }
+
+    /** 现代授权 Launcher，替代已废弃的 startActivityForResult + onActivityResult */
+    private val authLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            cxrL.handleAuthorizationResult(result.resultCode, result.data)
+            if (cxrL.hasAuthorization()) {
+                prerequisitesState = prerequisitesState.copy(authorized = true)
+            }
         }
 
     private val phoneInstallStatusReceiver = object : BroadcastReceiver() {
@@ -289,6 +303,7 @@ class MainActivity : AppCompatActivity() {
                 // ADB 连通性检测在 onResume 中触发，按键启动后本会话保持已启动
             },
             initialHostApp = selectedHostApp,
+            authLauncher = authLauncher::launch,
         )
         (application as LabApplication).setCxrL(cxrL)
         // 如果之前已授权，同步前置条件状态
@@ -447,7 +462,11 @@ class MainActivity : AppCompatActivity() {
                         BrewDialogContent {
                             Text(this@MainActivity.getString(R.string.error_log_hint), color = BrewMuted, fontSize = 12.sp)
                             Spacer(Modifier.height(12.dp))
-                            Text(errorLogContent.take(300), color = BrewText.copy(alpha = 0.7f), fontSize = 11.sp)
+                            Column(
+                                modifier = Modifier.verticalScroll(rememberScrollState()).weight(1f, fill = false).fillMaxWidth()
+                            ) {
+                                Text(errorLogContent, color = BrewText.copy(alpha = 0.7f), fontSize = 11.sp)
+                            }
                             Spacer(Modifier.height(16.dp))
                             BrewButton(
                                 text = if (errorLogSaved) this@MainActivity.getString(R.string.save_log_done) else this@MainActivity.getString(R.string.save_log),
@@ -474,6 +493,10 @@ class MainActivity : AppCompatActivity() {
         // 仅在非引导模式下启动时自动刷新（引导模式由 LaunchedEffect 在引导完成后处理）
         if (prerequisitesState.canInstallApps) {
             refreshStoreIndex(manual = false)
+        }
+        // 独立检查 RokidLab 自身更新，不依赖刷新结果或引导状态
+        lifecycleScope.launch {
+            checkRokidLabUpdate()
         }
         log(getString(R.string.log_ready_authorize, selectedHostApp.displayName))
 
@@ -591,17 +614,20 @@ class MainActivity : AppCompatActivity() {
                 refreshCachedGlassesInstallStates(refresh.apps)
                 refreshPhoneInstallStates(refresh.apps)
                 installCheckTick += 1
-                // 单独检查 RokidLab 自身更新（固定从 Gitee 获取）
-                checkRokidLabUpdate()
                 log(getString(R.string.log_registry_updated, refresh.apps.size))
-                showRefreshDialog = true
-                refreshDialogSuccess = true
-                refreshDialogMessage = getString(R.string.refresh_result_ok, refresh.apps.size)
+                if (manual) {
+                    showRefreshDialog = true
+                    refreshDialogSuccess = true
+                    refreshDialogMessage = getString(R.string.refresh_result_ok, refresh.apps.size)
+                }
             }.onFailure { error ->
                 log(getString(R.string.log_registry_unavailable, error.message ?: error.javaClass.simpleName))
-                showRefreshDialog = true
-                refreshDialogSuccess = false
-                refreshDialogMessage = getString(R.string.refresh_result_fail, error.message ?: error.javaClass.simpleName)
+                // 启动自动刷新失败不弹窗，仅后台静默重试；手动刷新失败才弹窗提示用户
+                if (manual) {
+                    showRefreshDialog = true
+                    refreshDialogSuccess = false
+                    refreshDialogMessage = getString(R.string.refresh_result_fail, error.message ?: error.javaClass.simpleName)
+                }
             }
             val elapsed = System.currentTimeMillis() - started
             if (elapsed < 300) delay(300 - elapsed)
@@ -732,7 +758,9 @@ class MainActivity : AppCompatActivity() {
                 downloadProgress["brew-self-update"] = 100
                 selfUpdateState = selfUpdateState.copy(downloading = false, downloadPercent = 100)
                 log(getString(R.string.log_downloaded_bytes, file.length()))
-                val ok = PhonePackageInstallHelper.requestInstall(this@MainActivity, file, ::log)
+                val ok = withContext(Dispatchers.IO) {
+                    PhonePackageInstallHelper.requestInstall(this@MainActivity, file, ::log)
+                }
                 if (!ok) {
                     selfUpdateState = selfUpdateState.copy(downloading = false)
                 }
@@ -754,17 +782,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    @Deprecated("CXR-L SDK still uses startActivityForResult for authorization.")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == CxrLHiRokidSession.AUTH_REQUEST_CODE) {
-            cxrL.handleAuthorizationResult(resultCode, data)
-            // 授权完成后更新前置条件状态
-            if (cxrL.hasAuthorization()) {
-                prerequisitesState = prerequisitesState.copy(authorized = true)
-            }
-        }
-    }
+    // ── 授权结果由 authLauncher (registerForActivityResult) 处理，无需 onActivityResult ──
 
     private fun checkGlassesInstallStateIfNeeded(app: BrewApp) {
         val artifact = app.artifactFor("glasses") ?: return
@@ -1321,7 +1339,7 @@ class MainActivity : AppCompatActivity() {
     /** 打开错误日志导出对话框 */
     private fun showExportLogDialog() {
         runOnUiThread {
-            errorLogContent = LogCollector.getLogText()
+            errorLogContent = LogCollector.getErrorLogText()
             errorLogSaved = false
             showErrorLogDialog = true
         }
@@ -1330,7 +1348,7 @@ class MainActivity : AppCompatActivity() {
     /** 保存错误日志到文件并分享 */
     private fun saveErrorLog() {
         runCatching {
-            val intent = LogCollector.createShareIntent(this@MainActivity)
+            val intent = LogCollector.createShareIntent(this@MainActivity, errorsOnly = true)
             if (intent != null) {
                 startActivity(Intent.createChooser(intent, getString(R.string.save_log)))
                 errorLogSaved = true
@@ -1548,6 +1566,12 @@ class MainActivity : AppCompatActivity() {
      * - 自启动权限（广播接收器可靠触发）
      */
     private fun checkCompatibilitySettings() {
+        // 兼容性引导已关闭，不再重复提示
+        if (getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COMPAT_GUIDE_DISMISSED, false)) {
+            Log.i(TAG, "Compatibility guide already dismissed, skipping")
+            return
+        }
+
         if (!ManufacturerUtils.isChineseRom()) {
             // 三星设备特有检测
             if (ManufacturerUtils.hasSamsungDeepSleepIssue()) {
@@ -1603,10 +1627,12 @@ class MainActivity : AppCompatActivity() {
                 .setPositiveButton(getString(R.string.auto_start_guide)) { _, _ ->
                     ManufacturerUtils.openAutoStartSettings(this@MainActivity)
                     autoStartDialogShown = false
+                    dismissCompatibilityGuide()
                 }
                 .setNegativeButton(getString(R.string.auto_start_skip)) { _, _ ->
                     log(getString(R.string.log_auto_start_skipped))
                     autoStartDialogShown = false
+                    dismissCompatibilityGuide()
                 }
                 .show()
         }
@@ -1628,9 +1654,19 @@ class MainActivity : AppCompatActivity() {
                 .setPositiveButton(getString(R.string.dialog_got_it)) { _, _ ->
                     ManufacturerUtils.openPowerSavingSettings(this@MainActivity)
                     vivoLimitDialogShown = false
+                    dismissCompatibilityGuide()
                 }
                 .show()
         }
+    }
+
+    /** 标记兼容性引导已完成，后续启动不再提示 */
+    private fun dismissCompatibilityGuide() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_COMPAT_GUIDE_DISMISSED, true)
+            .apply()
+        Log.i(TAG, "Compatibility guide dismissed permanently")
     }
 
     /**

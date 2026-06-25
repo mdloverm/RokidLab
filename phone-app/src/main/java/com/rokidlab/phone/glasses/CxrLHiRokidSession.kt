@@ -41,10 +41,11 @@ class CxrLHiRokidSession(
     private val onBusyChanged: (Boolean) -> Unit,
     private val onConnectionChanged: (CxrConnectionState) -> Unit,
     initialHostApp: RokidHostApp = RokidHostApp.DEFAULT,
+    /** 用于启动授权 Activity 的现代 ActivityResultLauncher，替代已废弃的 startActivityForResult */
+    private val authLauncher: ((Intent) -> Unit)? = null,
 ) {
     companion object {
         private const val TAG = "CxrLHiRokidSession"
-        const val AUTH_REQUEST_CODE = 4027
         private const val PREFS_NAME = "cxr_l_auth"
         private const val KEY_TOKEN_PREFIX = "token_"
 
@@ -126,16 +127,20 @@ class CxrLHiRokidSession(
             return
         }
 
-        runCatching {
-            val intent = Intent().setComponent(ComponentName(targetHostApp.packageName, AUTH_ACTIVITY_CLASS))
-            activity.startActivityForResult(intent, AUTH_REQUEST_CODE)
-        }.recoverCatching {
-            val fallback = Intent(AUTH_ACTION).setPackage(targetHostApp.packageName)
-            activity.startActivityForResult(fallback, AUTH_REQUEST_CODE)
-        }.onSuccess {
+        val launchIntent = runCatching {
+            Intent().setComponent(ComponentName(targetHostApp.packageName, AUTH_ACTIVITY_CLASS))
+        }.getOrElse {
+            Intent(AUTH_ACTION).setPackage(targetHostApp.packageName)
+        }
+        val launcher = authLauncher
+        if (launcher != null) {
+            launcher(launchIntent)
             onStatus(activity.getString(R.string.auth_page_opened, targetHostApp.displayName))
-        }.onFailure { error ->
-            onStatus(activity.getString(R.string.auth_failed, targetHostApp.displayName, error.message ?: error.javaClass.simpleName))
+        } else {
+            // 兜底：使用已废弃的 startActivityForResult（无现代 Launcher 时）
+            @Suppress("DEPRECATION")
+            activity.startActivityForResult(launchIntent, 4027)
+            onStatus(activity.getString(R.string.auth_page_opened, targetHostApp.displayName))
         }
     }
 

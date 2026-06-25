@@ -77,6 +77,15 @@ object LogCollector {
 
     /** 获取当前所有日志文本 */
     fun getLogText(): String {
+        return buildLogText(false)
+    }
+
+    /** 获取仅错误级别日志（ERROR/FATAL） */
+    fun getErrorLogText(): String {
+        return buildLogText(true)
+    }
+
+    private fun buildLogText(errorsOnly: Boolean): String {
         val sb = StringBuilder()
         sb.appendLine("========================================")
         sb.appendLine("  RokidLab 错误报告")
@@ -88,25 +97,29 @@ object LogCollector {
         sb.appendLine()
         sb.appendLine("--- 日志 ---")
         synchronized(logList) {
-            if (logList.isEmpty()) {
-                sb.appendLine("  (无日志)")
+            val entries = if (errorsOnly) logList.filter { it.level == "E" || it.level == "FATAL" } else logList
+            if (entries.isEmpty()) {
+                sb.appendLine("  (${if (errorsOnly) "无错误日志" else "无日志"})")
             } else {
-                for (entry in logList) {
+                for (entry in entries) {
                     sb.appendLine("${entry.time} [${entry.level}] [${entry.tag}] ${entry.message}")
                 }
+                if (errorsOnly) sb.appendLine("\n  (共 ${logList.size} 条日志，已过滤显示 ${entries.size} 条错误)")
             }
         }
         return sb.toString()
     }
 
     /** 将日志保存到文件并返回 Uri（可通过 Intent 分享/保存） */
-    fun saveToFile(context: Context): File? {
+    fun saveToFile(context: Context, errorsOnly: Boolean = false): File? {
         return try {
             val time = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.CHINA).format(Date())
             val dir = File(context.cacheDir, "logs")
             dir.mkdirs()
-            val file = File(dir, "RokidLab_error_$time.txt")
-            FileWriter(file).use { it.write(getLogText()) }
+            val suffix = if (errorsOnly) "_errors" else ""
+            val file = File(dir, "RokidLab${suffix}_$time.txt")
+            val text = if (errorsOnly) getErrorLogText() else getLogText()
+            FileWriter(file).use { it.write(text) }
             file
         } catch (e: Exception) {
             Log.e(TAG, "saveToFile failed", e)
@@ -115,8 +128,8 @@ object LogCollector {
     }
 
     /** 创建分享 Intent（把日志文件发出去，如保存到 TXT） */
-    fun createShareIntent(context: Context): Intent? {
-        val file = saveToFile(context) ?: return null
+    fun createShareIntent(context: Context, errorsOnly: Boolean = false): Intent? {
+        val file = saveToFile(context, errorsOnly) ?: return null
         val uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",

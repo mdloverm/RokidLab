@@ -45,7 +45,7 @@
         {
           "version": "1.0.0",
           "date": "2026-05-26T00:00:00.000Z",
-          "sourceReleaseUrl": "https://gitee.com/dlover1314/rokid-xiaozhi/releases/tag/rokid-xiaozhi-v1.0.0",
+          "sourceReleaseUrl": "https://gitee.com/dlover1314/rokid-xiaozhi/releases/tag/rokid-xiaozhi",
           "notes": "首次发布，支持基础语音助手功能",
           "changes": [
             "支持语音唤醒和语音指令",

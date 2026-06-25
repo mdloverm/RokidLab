@@ -555,7 +555,9 @@ private fun AdbToolsModule(
             onConnected(existing)
             return
         }
-        val ip = app.fileManagerIp.ifBlank { "192.168.1.168" }
+        // ADB 工具使用自己的 IP 配置（adb_prefs），与投屏/文件管理器独立
+        val adbPrefs = ctx.getSharedPreferences("adb_prefs", 0)
+        val ip = adbPrefs.getString("ip", "192.168.1.168") ?: "192.168.1.168"
         scope.launch(Dispatchers.IO) {
             try {
                 val c = AdbShellClient(app, ip)

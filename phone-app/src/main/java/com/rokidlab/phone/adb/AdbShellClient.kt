@@ -1,6 +1,7 @@
 package com.rokidlab.phone.adb
 
 import com.rokidlab.phone.util.AppConfig
+import com.rokidlab.phone.util.LogCollector
 import com.rokidlab.phone.R
 import android.content.Context
 import android.util.Base64
@@ -62,13 +63,8 @@ class AdbShellClient(
                     break
                 }
                 if (!client.heartbeatRunning || !client.adbSessionAlive) break
-                try {
-                    // 发送轻量级 ADB shell 命令检测连接活性
-                    client.executeShellCommand("echo 1", AppConfig.ADB_HEARTBEAT_TIMEOUT_MS.toInt())
-                } catch (e: Exception) {
-                    Log.w(TAG, "Heartbeat failed, connection may be stale: ${e.message}")
-                    // 不立即标记断开，让下次真正调用时检测
-                }
+                // 通过 executeShellCommand 执行心跳，自动使用 lock 避免与 shell 命令竞态
+                client.executeShellCommand("echo 1", AppConfig.ADB_HEARTBEAT_TIMEOUT_MS.toInt())
             }
         }
     }
@@ -103,9 +99,11 @@ class AdbShellClient(
         adbSessionAlive = true
         startHeartbeat()
         Log.i(TAG, "ADB connection successful")
+        LogCollector.i(TAG, "ADB connection successful to $ipAddress:$port")
         true
     } catch (e: Exception) {
         Log.e(TAG, "Connection failed: ${e.message}", e)
+        LogCollector.e(TAG, "ADB connection failed to $ipAddress:$port", e)
         disconnect()
         false
     }
@@ -143,6 +141,7 @@ class AdbShellClient(
                 else -> Log.w(TAG, "Unknown command: 0x${msg.command.toString(16)}")
             }
         }
+        LogCollector.e(TAG, "ADB authentication failed after $authAttempts attempts")
         throw RuntimeException("ADB authentication failed ($authAttempts attempts)")
     }
 
@@ -188,6 +187,7 @@ class AdbShellClient(
                 return result
             } catch (e: Exception) {
                 Log.w(TAG, "executeShellCommand failed, marking session dead: ${e.message}")
+                LogCollector.e(TAG, "Shell command failed: [${command.take(100)}]", e)
                 adbSessionAlive = false
                 return ""
             }
@@ -272,12 +272,12 @@ class AdbShellClient(
     fun extractApkToDownloads(packageName: String): String {
         val path = getApkPath(packageName)
         if (path.isEmpty()) return context.getString(R.string.extract_path_not_found, packageName)
-        // copy to device Download directory
+        // copy to device Download directory (remote glasses)
         val remoteDest = "/sdcard/Download/${packageName}.apk"
         val cpResult = executeShellCommand("cp $path $remoteDest 2>&1 && echo OK")
         if (!cpResult.trim().endsWith("OK")) return context.getString(R.string.extract_copy_failed)
-        // pull from device to phone Download directory via ADB sync
-        val localDir = File("/sdcard/Download")
+        // pull from glasses to phone app-private directory (兼容鸿蒙作用域存储，无需存储权限)
+        val localDir = File(context.filesDir, "Download")
         if (!localDir.exists()) localDir.mkdirs()
         val localFile = File(localDir, "${packageName}.apk")
         val pullOk = pullFile(remoteDest, localFile.absolutePath)
@@ -407,9 +407,11 @@ class AdbShellClient(
                 close(localId, remoteId)
                 socket?.soTimeout = 5000
                 Log.i(TAG, "pullFile success: $remotePath → $localPath (${localFile.length()} bytes)")
+                LogCollector.i(TAG, "pullFile success: $remotePath → $localPath")
                 return true
             } catch (e: Exception) {
                 Log.e(TAG, "pullFile failed: ${e.message}", e)
+                LogCollector.e(TAG, "pullFile failed: $remotePath", e)
                 // cleanup sync stream on exception to prevent leaks
                 if (closeLocalId > 0 && closeRemoteId > 0) {
                     try { close(closeLocalId, closeRemoteId) } catch (_: Exception) {}
@@ -484,18 +486,16 @@ class AdbShellClient(
 
     /**
      * Close stream using localId from open().
-     * Send CLSE(localId, remoteId) and consume all remaining messages.
+     * Send CLSE(localId, remoteId) and drain remaining messages.
+     * NOTE: Server may or may not respond with its own CLSE (depends on who initiated close).
+     * Do NOT wait for a specific CLSE - just drain briefly to avoid 3-second timeout.
      */
     private fun close(localId: Int, remoteId: Int) {
         writeMessage(CMD_CLSE, localId, remoteId, ByteArray(0))
-        try {
-            socket?.soTimeout = 3000
-            while (true) {
-                val msg = readMessage()
-                // only consume CLSE matching current stream, keep consuming others
-                if (msg.command == CMD_CLSE && msg.arg1 == localId) break
-            }
-        } catch (_: Exception) { }
+        // Drain remaining messages briefly. If readAllWrites already consumed the server's
+        // CLSE, server won't send another one. If close is initiated by us, server may send
+        // CLSE back. Either way, 500ms drain is sufficient.
+        drainStaleMessages()
     }
 
     /** Drain stale messages from socket buffer */

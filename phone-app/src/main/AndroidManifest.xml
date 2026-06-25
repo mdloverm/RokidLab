@@ -91,7 +91,6 @@
         <service
             android:name=".mirror.PhoneMirrorService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection"
-            tools:targetApi="34" />
+            android:foregroundServiceType="mediaProjection" />
     </application>
 </manifest>
