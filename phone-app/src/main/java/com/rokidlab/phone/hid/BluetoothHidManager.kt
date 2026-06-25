@@ -1,6 +1,7 @@
 package com.rokidlab.phone.hid
 
 import com.rokidlab.phone.util.AppConfig
+import com.rokidlab.phone.util.ManufacturerUtils
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -140,6 +141,99 @@ class BluetoothHidManager(private val appContext: Context) {
         }
 
         /**
+         * 构建适用于 QTI 蓝牙栈（MTU 64 字节限制）的轻量 HID 描述符。
+         * 仅包含 Keyboard + Consumer Control 两种报告类型，总长度 ≤ 64 字节。
+         *
+         * QTI 蓝牙栈 HID_DEV_MTU_SIZE 固定为 64（AOSP 默认 512），
+         * 超过 MTU 的描述符可能被截断导致眼镜解析失败。
+         */
+        fun buildQtiCompatibleDescriptor(): ByteArray {
+            fun b(vararg ints: Int) = ints.map { it.toByte() }.toByteArray()
+
+            // ── Consumer Control (Report ID 2) — 2字节 ──
+            val consumer = b(
+                0x05, 0x0C,                       // Usage Page (Consumer)
+                0x09, 0x01,                       // Usage (Consumer Control)
+                0xA1, 0x01,                       // Collection (Application)
+                0x85, CONSUMER_REPORT_ID,         //   Report ID (2)
+                0x19, 0x00,                       //   Usage Minimum (0)
+                0x2A, 0xFF, 0x03,                 //   Usage Maximum (1023)
+                0x75, 0x10,                       //   Report Size (16)
+                0x95, 0x01,                       //   Report Count (1)
+                0x15, 0x00,                       //   Logical Minimum (0)
+                0x26, 0xFF, 0x03,                 //   Logical Maximum (1023)
+                0x81, 0x00,                       //   Input (Data,Array,Abs)
+                0xC0,                             // End Collection
+            )
+
+            // ── Keyboard (Report ID 1) — 2字节 [modifier, keycode] ──
+            val keyboard = b(
+                0x05, 0x01,                       // Usage Page (Generic Desktop)
+                0x09, 0x06,                       // Usage (Keyboard)
+                0xA1, 0x01,                       // Collection (Application)
+                0x85, KEYBOARD_REPORT_ID,         //   Report ID (1)
+                0x05, 0x07,                       //   Usage Page (Keyboard/Keypad)
+                0x19, 0xE0,                       //   Usage Minimum (KB Left Ctrl)
+                0x29, 0xE7,                       //   Usage Maximum (KB Right GUI)
+                0x15, 0x00,                       //   Logical Minimum (0)
+                0x25, 0x01,                       //   Logical Maximum (1)
+                0x75, 0x01,                       //   Report Size (1)
+                0x95, 0x08,                       //   Report Count (8)
+                0x81, 0x02,                       //   Input (Data,Var,Abs)
+                0x75, 0x08,                       //   Report Size (8)
+                0x95, 0x01,                       //   Report Count (1)
+                0x15, 0x00,                       //   Logical Minimum (0)
+                0x26, 0xFF, 0x00,                 //   Logical Maximum (255)
+                0x05, 0x07,                       //   Usage Page (Keyboard/Keypad)
+                0x19, 0x00,                       //   Usage Minimum (0)
+                0x29, 0xFF,                       //   Usage Maximum (255)
+                0x81, 0x00,                       //   Input (Data,Array,Abs)
+                0xC0,                             // End Collection
+            )
+
+            return consumer + keyboard
+        }
+
+        /**
+         * 构建 QTI 兼容的 Game Pad HID 描述符（精简版，≤ 64 字节）。
+         * 仅包含 Game Pad 类型，不混合其他报告。
+         */
+        fun buildQtiGamepadDescriptor(): ByteArray {
+            fun b(vararg ints: Int) = ints.map { it.toByte() }.toByteArray()
+            return b(
+                0x05, 0x01,                       // Usage Page (Generic Desktop)
+                0x09, 0x05,                       // Usage (Game Pad)
+                0xA1, 0x01,                       // Collection (Application)
+                0x85, GAMEPAD_REPORT_ID,          //   Report ID (4)
+                // 8 buttons + padding → 2 bytes
+                0x05, 0x09,                       //   Usage Page (Button)
+                0x19, 0x01,                       //   Usage Minimum (Button 1)
+                0x29, 0x08,                       //   Usage Maximum (Button 8)
+                0x15, 0x00,                       //   Logical Minimum (0)
+                0x25, 0x01,                       //   Logical Maximum (1)
+                0x75, 0x01,                       //   Report Size (1)
+                0x95, 0x08,                       //   Report Count (8)
+                0x81, 0x02,                       //   Input (Data,Var,Abs)
+                // Hat Switch (DPAD) → 4 bits + padding 4 → 1 byte
+                0x05, 0x01,                       //   Usage Page (Generic Desktop)
+                0x09, 0x39,                       //   Usage (Hat Switch)
+                0x15, 0x00,                       //   Logical Minimum (0)
+                0x25, 0x08,                       //   Logical Maximum (8)
+                0x75, 0x04,                       //   Report Size (4)
+                0x95, 0x01,                       //   Report Count (1)
+                0x81, 0x42,                       //   Input (Data,Var,Abs,Null)
+                0x75, 0x04,                       //   padding 4 bits
+                0x95, 0x01,
+                0x81, 0x01,
+                // 保留 1 byte
+                0x75, 0x08,
+                0x95, 0x01,
+                0x81, 0x01,
+                0xC0,                             // End Collection
+            )
+        }
+
+        /**
          * 构建 Game Pad HID 描述符。
          * 报告结构（4 字节，Report ID 4）：
          *   Byte 0-1: 14 按钮位图（bit 0=A, bit 1=B, ..., bit 13=Right, +2 填充）
@@ -251,6 +345,13 @@ class BluetoothHidManager(private val appContext: Context) {
         get() = connectedDeviceInternal
 
     private val deviceLock = Any()
+    
+    // ── QTI 蓝牙栈兼容（VIVO/OnePlus 等） ──
+    /** 是否使用 QTI（Qualcomm）蓝牙栈，需特殊 HID 兼容处理 */
+    val isQtiDevice: Boolean = ManufacturerUtils.needsQtiHidWorkaround()
+    /** 上次发送 HID 报告的时间戳（用于 QTI 强制间隔控制） */
+    @Volatile
+    private var lastReportSendTime = 0L
 
     private val _connectionEvents = Channel<Int>(Channel.CONFLATED)
     val connectionEvents: Flow<Int> = _connectionEvents.receiveAsFlow()
@@ -259,6 +360,11 @@ class BluetoothHidManager(private val appContext: Context) {
     private var hidDevice: BluetoothHidDevice? = null
     private var isRegistered = false
     private var pendingConnectDevice: BluetoothDevice? = null
+    
+    // ── 通道激活（部分手机首次连接中断通道未就绪，需发空报告唤醒）──
+    private var channelReadyTime = 0L
+    private val CHANNEL_WARMUP_DELAY_MS: Long
+        get() = if (isQtiDevice) AppConfig.HID_CHANNEL_WARMUP_MS else 300L
     
     // ── 斜向交替计数器 ──
     private var diagonalToggle = false
@@ -277,6 +383,24 @@ class BluetoothHidManager(private val appContext: Context) {
         fun onDeviceFound(device: BluetoothDevice)
         fun onScanFinished()
         fun onScanStarted()
+    }
+
+    /** HID Profile 检测回调 — 当设备不支持 HID Device Profile 时触发 */
+    interface HidProfileCheckCallback {
+        /** 注册成功 */
+        fun onProfileSupported()
+        /**
+         * 注册失败，HID Profile 可能未被系统支持
+         * @param manufacturer 厂商名（如 "Xiaomi", "Huawei"）
+         */
+        fun onProfileNotSupported(manufacturer: String)
+    }
+
+    private var hidProfileCallback: HidProfileCheckCallback? = null
+
+    /** 设置 HID Profile 检测回调 */
+    fun setHidProfileCheckCallback(callback: HidProfileCheckCallback?) {
+        hidProfileCallback = callback
     }
     private var scanCallback: ScanCallback? = null
     private var isScanning = false
@@ -363,13 +487,26 @@ class BluetoothHidManager(private val appContext: Context) {
         override fun onAppStatusChanged(pluggedDevice: BluetoothDevice?, registered: Boolean) {
             isRegistered = registered
             Log.i(TAG, "App status: registered=$registered, device=$pluggedDevice")
-            // 注册完成，检查是否有用户手动待连接的设备
-            if (registered && pluggedDevice == null) {
-                val pending = pendingConnectDevice
-                pendingConnectDevice = null
-                if (pending != null) {
-                    Log.i(TAG, "onAppStatusChanged: connecting pending device")
-                    connect(pending)
+            if (registered) {
+                hidProfileCallback?.onProfileSupported()
+                // 注册完成，检查是否有用户手动待连接的设备
+                if (pluggedDevice == null) {
+                    val pending = pendingConnectDevice
+                    pendingConnectDevice = null
+                    if (pending != null) {
+                        Log.i(TAG, "onAppStatusChanged: connecting pending device")
+                        connect(pending)
+                    }
+                }
+            } else {
+                // 注册失败 — 检测是否因为设备不支持 HID Device Profile
+                val manufacturer = ManufacturerUtils.detect()
+                val manufacturerName = manufacturer?.name ?: "Unknown"
+                if (manufacturer != null && manufacturer != ManufacturerUtils.Manufacturer.OTHER
+                    && manufacturer != ManufacturerUtils.Manufacturer.SAMSUNG
+                    && manufacturer != ManufacturerUtils.Manufacturer.GOOGLE) {
+                    Log.w(TAG, "registerApp failed on $manufacturerName — HID Device Profile may not be supported")
+                    hidProfileCallback?.onProfileNotSupported(manufacturerName)
                 }
             }
         }
@@ -381,6 +518,36 @@ class BluetoothHidManager(private val appContext: Context) {
                     quickDisconnectCount = 0
                     retryRunnable?.let { mainHandler.removeCallbacks(it); retryRunnable = null }
                     updateConnectionState(STATE_CONNECTED, device)
+                    // 通道激活：部分手机蓝牙栈首次连接中断通道（PSM 0x13）未就绪，
+                    // 直接发空报告唤醒通道，比断开重连更温和、更稳定。
+                    if (channelReadyTime == 0L) {
+                        val seqAtConnect = connectSequence
+                        val dev = device
+                        val warmupDelay = if (isQtiDevice) AppConfig.HID_CHANNEL_WARMUP_MS else CHANNEL_WARMUP_DELAY_MS
+                        mainHandler.postDelayed({
+                            if (connectSequence != seqAtConnect) return@postDelayed
+                            Log.i(TAG, "Channel priming: sending null reports to wake interrupt channel (qti=$isQtiDevice)")
+                            hidDevice?.let { hid ->
+                                if (isRegistered) {
+                                    // 唤醒所有报告类型
+                                    sendKbdReport(dev, KEYBOARD_REPORT_ID, byteArrayOf(0x00, 0x00))
+                                    if (isQtiDevice) {
+                                        try { Thread.sleep(AppConfig.HID_REPORT_INTERVAL_MS) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+                                    }
+                                    sendKbdReport(dev, CONSUMER_REPORT_ID, byteArrayOf(0x00, 0x00))
+                                    sendKbdReport(dev, MOUSE_REPORT_ID, byteArrayOf(0x00, 0x00, 0x00, 0x00))
+                                    // QTI 额外：再发一组确保通道完全就绪
+                                    if (isQtiDevice) {
+                                        try { Thread.sleep(AppConfig.HID_REPORT_INTERVAL_MS * 2) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+                                        sendKbdReport(dev, KEYBOARD_REPORT_ID, byteArrayOf(0x00, 0x00))
+                                        sendKbdReport(dev, CONSUMER_REPORT_ID, byteArrayOf(0x00, 0x00))
+                                    }
+                                    channelReadyTime = System.currentTimeMillis()
+                                    Log.i(TAG, "Channel priming complete (qti=$isQtiDevice)")
+                                }
+                            }
+                        }, warmupDelay)
+                    }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     lastDisconnectTime = System.currentTimeMillis()
@@ -424,12 +591,28 @@ class BluetoothHidManager(private val appContext: Context) {
 
     @SuppressLint("MissingPermission")
     fun initialize() {
+        val hogpNeeded = ManufacturerUtils.needsHogpManualEnablement()
+        Log.i(TAG, "BluetoothHidManager: isQtiDevice=$isQtiDevice (VIVO/QTI compat mode: ${if (isQtiDevice) "ON" else "OFF"}), " +
+                "HOGP manual enablement needed=$hogpNeeded")
+        if (hogpNeeded) {
+            Log.w(TAG, "This device (${ManufacturerUtils.detect()}) may need manual Bluetooth HID Host enablement in Developer Options. " +
+                    "Guide: ${ManufacturerUtils.getHogpGuideText()}")
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
         // 即使 hidDevice 不为 null，也允许重新获取 profile proxy
         // （防止 onServiceDisconnected 回调延迟导致引用失效）
         val manager = appContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         bluetoothAdapter = manager?.adapter ?: return
         if (hidDevice == null) {
+            // Android 12+ 需要 BLUETOOTH_CONNECT 权限
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (appContext.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    Log.w(TAG, "BLUETOOTH_CONNECT permission not granted, skipping getProfileProxy")
+                    return
+                }
+            }
             bluetoothAdapter!!.getProfileProxy(appContext, profileListener, BluetoothProfile.HID_DEVICE)
         }
     }
@@ -456,15 +639,18 @@ class BluetoothHidManager(private val appContext: Context) {
         // 先断开已有连接和注销 App，确保眼镜 HID Host 正确清理旧状态
         connectedDeviceInternal?.let { disconnect(it) }
         runCatching { hid.unregisterApp() }
+
+        // QTI 蓝牙栈（VIVO/OnePlus）MTU 仅 64 字节，使用精简描述符
+        val descriptor = if (isQtiDevice) buildQtiCompatibleDescriptor() else buildHidDescriptor(1)
         val sdp = BluetoothHidDeviceAppSdpSettings(
             "RokidLab Keyboard",
             "RokidLab",
             "RokidLab Keyboard",
             BluetoothHidDevice.SUBCLASS2_UNCATEGORIZED,
-            buildHidDescriptor(1),  // 1 键码（2 字节键盘报告）
+            descriptor,
         )
         val ok = hid.registerApp(sdp, null, null, Runnable::run, hidCallback)
-        Log.i(TAG, "registerApp result: $ok")
+        Log.i(TAG, "registerApp result: $ok (descriptor size=${descriptor.size} bytes, isQti=$isQtiDevice)")
         // 不立即 connect：等待 onAppStatusChanged 回调确认注册完成后，
         // 在回调内部检查 pendingConnectDevice 并执行连接，避免竞争条件
     }
@@ -480,6 +666,7 @@ class BluetoothHidManager(private val appContext: Context) {
         // 用户手动重连时，重置快速断连计数，递增序列号
         quickDisconnectCount = 0
         connectSequence++
+        channelReadyTime = 0
         performConnect(device)
     }
 
@@ -523,6 +710,76 @@ class BluetoothHidManager(private val appContext: Context) {
         updateConnectionState(STATE_DISCONNECTED, null)
     }
 
+    /** 发送 HID 报告（自动兼容 QTI/AOSP 蓝牙栈行为）
+     *
+     *  方法1（标准 AOSP）：reportId > 0，系统自动在数据前加 Report ID — 适用大多数手机
+     *  方法2（QTI 兼容）：reportId = 0，数据自身已包含 Report ID — Vivo 等 QTI 设备
+     *  方法3（setReport 回退）：通过控制通道发送，QTI 栈中断通道失败时备用
+     *
+     *  注意：
+     *  - VIVO/iQOO 等使用 Qualcomm (QTI) 蓝牙栈的设备，标准 sendReport 可能
+     *    返回 true 但数据未实际发送（中断通道问题）
+     *  - 对 QTI 设备，还会尝试 setReport() 作为最终回退
+     *  - QTI 设备需要插入报告间最小间隔（AppConfig.HID_REPORT_INTERVAL_MS）
+     */
+    @SuppressLint("MissingPermission")
+    private fun sendKbdReport(dev: BluetoothDevice, reportId: Int, data: ByteArray): Boolean {
+        val hid = hidDevice ?: return false
+
+        // QTI 兼容：强制报告间间隔
+        if (isQtiDevice && lastReportSendTime > 0) {
+            val elapsed = System.currentTimeMillis() - lastReportSendTime
+            if (elapsed < AppConfig.HID_REPORT_INTERVAL_MS) {
+                try {
+                    Thread.sleep(AppConfig.HID_REPORT_INTERVAL_MS - elapsed)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
+        }
+
+        if (reportId <= 0) {
+            val ok = hid.sendReport(dev, 0, data)
+            if (ok) lastReportSendTime = System.currentTimeMillis()
+            return ok
+        }
+
+        // 方法1（标准）：reportId > 0 — 适用于 AOSP 蓝牙栈
+        val standardOk = hid.sendReport(dev, reportId, data)
+
+        // 方法2（QTI 兼容）：reportId = 0，数据前加 Report ID 字节
+        val full = byteArrayOf(reportId.toByte()) + data
+        val manualOk = hid.sendReport(dev, 0, full)
+
+        if (standardOk || manualOk) {
+            lastReportSendTime = System.currentTimeMillis()
+            return true
+        }
+
+        // 方法3（QTI 回退）：使用 setReport() 控制通道发送
+        // 部分 QTI 设备中断通道完全不可用，但控制通道（setReport）可以
+        if (isQtiDevice) {
+            try {
+                // 使用反射调用 setReport（是隐藏 API）
+                val setReportMethod = BluetoothHidDevice::class.java.getMethod(
+                    "setReport", BluetoothDevice::class.java, Int::class.java, ByteArray::class.java
+                )
+                val outputReportId = 3  // OUTPUT_REPORT type
+                val setOk = setReportMethod.invoke(hid, dev, outputReportId, full) as? Boolean ?: false
+                if (setOk) {
+                    Log.i(TAG, "sendKbdReport: setReport fallback succeeded for reportId=$reportId")
+                    lastReportSendTime = System.currentTimeMillis()
+                    return true
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "sendKbdReport: setReport fallback not available: ${e.message}")
+            }
+        }
+
+        Log.w(TAG, "sendKbdReport: all methods failed for reportId=$reportId (isQti=$isQtiDevice)")
+        return false
+    }
+
     // ========================================================================
     //  发送按键（支持多键 + 斜向）
     // ========================================================================
@@ -540,14 +797,16 @@ class BluetoothHidManager(private val appContext: Context) {
         // 导航键 → Consumer Control (Report ID 2)
         val consumerReport = KEY_CONSUMER[key]
         if (consumerReport != null) {
-            hid.sendReport(dev, CONSUMER_REPORT_ID, consumerReport)
+            val ok = sendKbdReport(dev, CONSUMER_REPORT_ID, consumerReport)
+            if (!ok) Log.w(TAG, "sendSingleKey: consumer report failed")
             return
         }
 
         // 功能键 → Keyboard (Report ID 1) — 2 字节 [modifier, keycode]
         val kbdReport = KEY_HID[key]
         if (kbdReport != null) {
-            hid.sendReport(dev, KEYBOARD_REPORT_ID, kbdReport)
+            val ok = sendKbdReport(dev, KEYBOARD_REPORT_ID, kbdReport)
+            if (!ok) Log.w(TAG, "sendSingleKey: keyboard report failed")
         }
     }
 
@@ -555,6 +814,9 @@ class BluetoothHidManager(private val appContext: Context) {
       * 发送按键集合（支持多键 + 斜向）
       * - 方向键 → Consumer Control（斜向时交替发送两个方向）
       * - 功能键 → Keyboard（最多选第一个发送，其他丢弃）
+      *
+      * QTI 兼容：方向键和功能键的报告间插入最小间隔（AppConfig.HID_REPORT_INTERVAL_MS）
+      * 避免 QTI 蓝牙栈连续发送丢失第二个报告
       */
      @SuppressLint("MissingPermission")
      fun sendButtons(device: BluetoothDevice?, keys: Set<Int>) {
@@ -571,17 +833,24 @@ class BluetoothHidManager(private val appContext: Context) {
              val idx = if (dirKeys.size > 1 && diagonalToggle) 1 else 0
              diagonalToggle = !diagonalToggle
              val dirReport = KEY_CONSUMER[dirKeys[idx]]!!
-             hid.sendReport(dev, CONSUMER_REPORT_ID, dirReport)
+             val ok = sendKbdReport(dev, CONSUMER_REPORT_ID, dirReport)
+             if (!ok) Log.w(TAG, "sendButtons: consumer report failed")
          } else {
-             hid.sendReport(dev, CONSUMER_REPORT_ID, byteArrayOf(0x00, 0x00))
+             sendKbdReport(dev, CONSUMER_REPORT_ID, byteArrayOf(0x00, 0x00))
+         }
+ 
+         // QTI 兼容：方向键与功能键报告间插入延迟，防止第二个报告被 QTI 栈丢弃
+         if (isQtiDevice && actKeys.isNotEmpty() && (dirKeys.isNotEmpty() || diagonalToggle)) {
+             try { Thread.sleep(AppConfig.HID_REPORT_INTERVAL_MS) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
          }
  
          // 发送功能键（取第一个，键盘一次只能一个）
          if (actKeys.isNotEmpty()) {
              val kbdData = KEY_HID[actKeys.first()]!!
-             hid.sendReport(dev, KEYBOARD_REPORT_ID, kbdData)
+             val ok = sendKbdReport(dev, KEYBOARD_REPORT_ID, kbdData)
+             if (!ok) Log.w(TAG, "sendButtons: keyboard report failed")
          } else {
-             hid.sendReport(dev, KEYBOARD_REPORT_ID, byteArrayOf(0x00, 0x00))
+             sendKbdReport(dev, KEYBOARD_REPORT_ID, byteArrayOf(0x00, 0x00))
          }
      }
 
@@ -589,10 +858,14 @@ class BluetoothHidManager(private val appContext: Context) {
     @SuppressLint("MissingPermission")
     fun sendRelease(device: BluetoothDevice?) {
         val dev = device ?: connectedDeviceInternal ?: return
-        val hid = hidDevice ?: return
         if (!isRegistered) return
-        hid.sendReport(dev, CONSUMER_REPORT_ID, byteArrayOf(0x00, 0x00))
-        hid.sendReport(dev, KEYBOARD_REPORT_ID, byteArrayOf(0x00, 0x00))
+        val ok1 = sendKbdReport(dev, CONSUMER_REPORT_ID, byteArrayOf(0x00, 0x00))
+        // QTI 兼容：两个释放报告间插入延迟
+        if (isQtiDevice) {
+            try { Thread.sleep(AppConfig.HID_REPORT_INTERVAL_MS) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        }
+        val ok2 = sendKbdReport(dev, KEYBOARD_REPORT_ID, byteArrayOf(0x00, 0x00))
+        if (!ok1 || !ok2) Log.w(TAG, "sendRelease failed (consumer=$ok1, kbd=$ok2)")
     }
 
     // ========================================================================
@@ -727,15 +1000,17 @@ class BluetoothHidManager(private val appContext: Context) {
             isRegistered = false
             gamepadMode = false
             Thread.sleep(200)
+            // QTI 设备用精简游戏手柄描述符
+            val gpDescriptor = if (isQtiDevice) buildQtiGamepadDescriptor() else buildGamepadDescriptor()
             val sdp = BluetoothHidDeviceAppSdpSettings(
                 "RokidLab Gamepad",
                 "RokidLab",
                 "RokidLab Gamepad",
                 BluetoothHidDevice.SUBCLASS2_UNCATEGORIZED,
-                buildGamepadDescriptor(),
+                gpDescriptor,
             )
             val ok = hid.registerApp(sdp, null, null, Runnable::run, hidCallback)
-            Log.i(TAG, "switchToGamepadMode result: $ok")
+            Log.i(TAG, "switchToGamepadMode result: $ok (descriptor size=${gpDescriptor.size} bytes, isQti=$isQtiDevice)")
             if (ok) {
                 gamepadMode = true
                 Thread.sleep(800) // 等待注册稳定
@@ -763,15 +1038,16 @@ class BluetoothHidManager(private val appContext: Context) {
             isRegistered = false
             gamepadMode = false
             Thread.sleep(200)
+            val descriptor = if (isQtiDevice) buildQtiCompatibleDescriptor() else buildHidDescriptor(1)
             val sdp = BluetoothHidDeviceAppSdpSettings(
                 "RokidLab Keyboard",
                 "RokidLab",
                 "RokidLab Keyboard",
                 BluetoothHidDevice.SUBCLASS2_UNCATEGORIZED,
-                buildHidDescriptor(1),
+                descriptor,
             )
             val ok = hid.registerApp(sdp, null, null, Runnable::run, hidCallback)
-            Log.i(TAG, "switchToKeyboardMode result: $ok")
+            Log.i(TAG, "switchToKeyboardMode result: $ok (descriptor size=${descriptor.size} bytes, isQti=$isQtiDevice)")
             if (ok) {
                 Thread.sleep(500)
                 if (savedDev != null) {
@@ -808,7 +1084,7 @@ class BluetoothHidManager(private val appContext: Context) {
             (hat and 0x0F).toByte(),   // hat in low nibble
             0x00,
         )
-        hid.sendReport(dev, GAMEPAD_REPORT_ID, report)
+        sendKbdReport(dev, GAMEPAD_REPORT_ID, report)
     }
 
     /** Game Pad 版全释放 */
@@ -817,7 +1093,7 @@ class BluetoothHidManager(private val appContext: Context) {
         val dev = device ?: connectedDeviceInternal ?: return
         val hid = hidDevice ?: return
         if (!isRegistered || !gamepadMode) return
-        hid.sendReport(dev, GAMEPAD_REPORT_ID, byteArrayOf(0x00, 0x00, 0x08, 0x00))
+        sendKbdReport(dev, GAMEPAD_REPORT_ID, byteArrayOf(0x00, 0x00, 0x08, 0x00))
     }
 
     /**
@@ -903,7 +1179,8 @@ class BluetoothHidManager(private val appContext: Context) {
         val clampedDx = dx.coerceIn(-127, 127).toByte()
         val clampedDy = dy.coerceIn(-127, 127).toByte()
         val report = byteArrayOf(0x00, clampedDx, clampedDy, 0x00)  // buttons=0, wheel=0
-        hid.sendReport(dev, MOUSE_REPORT_ID, report)
+        val ok = sendKbdReport(dev, MOUSE_REPORT_ID, report)
+        if (!ok) Log.w(TAG, "sendMouseMove: sendReport failed")
     }
 
     /** 发送鼠标点击
@@ -914,9 +1191,23 @@ class BluetoothHidManager(private val appContext: Context) {
         val hid = hidDevice ?: return
         if (!isRegistered) return
         // 按下
-        hid.sendReport(dev, MOUSE_REPORT_ID, byteArrayOf(button.toByte(), 0, 0, 0))
+        val ok1 = sendKbdReport(dev, MOUSE_REPORT_ID, byteArrayOf(button.toByte(), 0, 0, 0))
         // 释放
-        hid.sendReport(dev, MOUSE_REPORT_ID, byteArrayOf(0, 0, 0, 0))
+        val ok2 = sendKbdReport(dev, MOUSE_REPORT_ID, byteArrayOf(0, 0, 0, 0))
+        if (!ok1 || !ok2) Log.w(TAG, "sendMouseClick: sendReport failed (down=$ok1, up=$ok2)")
+    }
+
+    /** 发送鼠标按钮状态（按下或释放，不自动释放）
+     *  @param button 1=左键, 2=右键, 3=中键
+     *  @param pressed true=按下, false=释放 */
+    @SuppressLint("MissingPermission")
+    fun sendMouseButton(device: BluetoothDevice?, button: Int = 1, pressed: Boolean) {
+        val dev = device ?: connectedDeviceInternal ?: return
+        val hid = hidDevice ?: return
+        if (!isRegistered) return
+        val data = if (pressed) byteArrayOf(button.toByte(), 0, 0, 0) else byteArrayOf(0, 0, 0, 0)
+        val ok = sendKbdReport(dev, MOUSE_REPORT_ID, data)
+        if (!ok) Log.w(TAG, "sendMouseButton: sendReport failed (pressed=$pressed)")
     }
 
     fun getPairedDevices(): List<BluetoothDevice> =

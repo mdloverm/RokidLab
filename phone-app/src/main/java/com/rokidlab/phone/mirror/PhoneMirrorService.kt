@@ -2,6 +2,7 @@ package com.rokidlab.phone.mirror
 
 import com.rokidlab.phone.R
 import com.rokidlab.phone.util.AppConfig
+import com.rokidlab.phone.util.ManufacturerUtils
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -52,6 +53,24 @@ class PhoneMirrorService : Service() {
                 context.startForegroundService(intent)
             } else {
                 context.startService(intent)
+            }
+        }
+    }
+
+    /**
+     * 尝试应用 HWC 禁用属性以解决国产 ROM 投屏黑屏问题。
+     * 仅在 debuggable 或 root 设备上生效，非侵入式。
+     */
+    private fun tryApplyHwcFix() {
+        val props = ManufacturerUtils.getHwcDisableProps()
+        if (props.isEmpty()) return
+        for ((key, value) in props) {
+            try {
+                val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", "setprop $key $value"))
+                process.waitFor()
+                Log.i(TAG, "Applied HWC fix: $key=$value (exit=${process.exitValue()})")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to apply HWC fix $key=$value: ${e.message}")
             }
         }
     }
@@ -183,6 +202,19 @@ class PhoneMirrorService : Service() {
                     screenWidth = metrics.widthPixels
                     screenHeight = metrics.heightPixels
                     screenDensity = metrics.densityDpi
+
+                    // ── 兼容性适配：检测设备并应用修复 ──
+                    if (ManufacturerUtils.isMediaProjectionBlacklisted()) {
+                        Log.w(TAG, "Device is in MediaProjection blacklist, applying compatibility fixes")
+                        // 尝试通过 ADB setprop 禁用 HWC（仅当有 root 或 debuggable 时生效）
+                        tryApplyHwcFix()
+                    }
+                    if (ManufacturerUtils.needsReducedMirrorResolution()) {
+                        // 低端/联发科设备降低投屏分辨率，减少黑屏概率
+                        mirrorWidth = 320
+                        mirrorHeight = 426
+                        Log.w(TAG, "Reducing mirror resolution to ${mirrorWidth}x${mirrorHeight} for compatibility")
+                    }
                     Log.i(TAG, "Screen size: ${screenWidth}x${screenHeight}, Mirror size: ${mirrorWidth}x${mirrorHeight}")
 
                     // 2. 连接眼镜（使用配置的超时时间）

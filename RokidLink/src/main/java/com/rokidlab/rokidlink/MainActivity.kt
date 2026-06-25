@@ -28,12 +28,14 @@ class MainActivity : Activity() {
     private lateinit var ipText: TextView
     private lateinit var dot: View
 
+    /** ADB 启用线程引用，用于 onDestroy 时中断 */
+    private var enableAdbThread: Thread? = null
+
     // WiFi 状态实时监听
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             Log.i(TAG, getString(R.string.log_network_recovered))
             Handler(Looper.getMainLooper()).post {
-                // 重新检查 WiFi 状态和连接状态
                 startSetup()
             }
         }
@@ -111,6 +113,9 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // 中断 ADB 启用线程
+        enableAdbThread?.interrupt()
+        enableAdbThread = null
         // 注销网络监听
         runCatching {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -165,8 +170,16 @@ class MainActivity : Activity() {
     }
 
     private fun isWifiEnabled(): Boolean {
-        val wifiManager = getSystemService(WIFI_SERVICE) as? WifiManager ?: return false
-        return wifiManager.isWifiEnabled
+        return try {
+            val wifiManager = getSystemService(WIFI_SERVICE) as? WifiManager ?: return false
+            wifiManager.isWifiEnabled
+        } catch (_: SecurityException) {
+            // 缺少 CHANGE_WIFI_STATE 权限时回退到 ConnectivityManager
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+        }
     }
 
     private fun isWifiConnected(): Boolean {
@@ -215,16 +228,18 @@ class MainActivity : Activity() {
     }
 
     private fun enableAdbTcp() {
-        Thread {
+        val thread = Thread {
             Log.i(TAG, getString(R.string.log_try_enable_adb_tcp))
 
             setAdbProperty()
 
             for (attempt in 1..3) {
+                if (Thread.currentThread().isInterrupted) return@Thread
                 Log.i(TAG, getString(R.string.log_try_attempt, attempt))
                 tryExec("setprop", "ctl.restart", "adbd")
 
                 for (wait in 1..4) {
+                    if (Thread.currentThread().isInterrupted) return@Thread
                     Thread.sleep(1000)
                     if (isAdbTcpListening()) {
                         Handler(Looper.getMainLooper()).post {
@@ -242,7 +257,11 @@ class MainActivity : Activity() {
                 statusText.text = getString(R.string.status_adb_failed)
                 Log.w(TAG, getString(R.string.log_retry_failed))
             }
-        }.start()
+        }.apply {
+            name = "enable-adb-tcp"
+            enableAdbThread = this
+            start()
+        }
     }
 
     private fun tryExec(vararg cmd: String) {

@@ -184,6 +184,15 @@ internal fun SettingsScreen(
             color = BrewInfo,
             onClick = { showDeveloperScreen = true },
         )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Export log
+        SettingsCard(
+            title = ctx.getString(R.string.export_log),
+            content = ctx.getString(R.string.export_log_desc),
+            color = BrewMagenta,
+            onClick = actions.onExportLog,
+        )
         Spacer(modifier = Modifier.height(48.dp))
     }
     }

@@ -317,6 +317,30 @@
     <string name="reconnect">Reconnect</string>
     <string name="reconnecting">Reconnecting...</string>
 
+    <!-- Compatibility -->
+    <string name="battery_optimization_title">Battery Optimization</string>
+    <string name="battery_optimization_desc">To ensure stable glasses connection and background casting service, it is recommended to add this app to the battery optimization whitelist to prevent the system from killing the app process in the background.</string>
+    <string name="battery_optimization_guide">Go to Settings</string>
+    <string name="battery_optimization_skip">Later</string>
+    <string name="auto_start_title">Auto-Start Permission</string>
+    <string name="auto_start_desc">Some phone systems (e.g. Xiaomi, Huawei, OPPO, vivo) restrict app auto-start. Please enable auto-start permission to ensure background features like APK installation result reporting and scheduled messages work properly.</string>
+    <string name="auto_start_guide">Enable Now</string>
+    <string name="auto_start_skip">Not Now</string>
+    <string name="overlay_permission_title">Overlay Permission</string>
+    <string name="overlay_permission_desc">Some phones (OPPO/vivo) require additional overlay permission for stable screen casting.</string>
+    <string name="overlay_permission_guide">Enable Now</string>
+    <string name="compatibility_settings_title">Compatibility Settings</string>
+    <string name="compatibility_settings_desc">Detected your device as %s, which has additional background power-saving policies. Completing the following settings is recommended for the best experience.</string>
+    <string name="compatibility_settings_battery">☐ Add to battery optimization whitelist</string>
+    <string name="compatibility_settings_auto_start">☐ Enable auto-start permission</string>
+    <string name="compatibility_settings_done">Done</string>
+    <string name="log_battery_optimization_guide">Guiding user to enable battery optimization whitelist</string>
+    <string name="log_battery_optimization_granted">Already in battery optimization whitelist</string>
+    <string name="log_battery_optimization_skipped">User skipped battery optimization guide</string>
+    <string name="log_auto_start_guide">Guiding user to enable auto-start permission</string>
+    <string name="log_auto_start_skipped">User skipped auto-start guide</string>
+    <string name="log_overlay_permission_guide">Guiding user to enable overlay permission</string>
+
     <!-- UpdateDialog -->
     <string name="download_in_progress">Downloading...</string>
     <string name="update_available_short">Update Available</string>
@@ -653,6 +677,9 @@
     <string name="log_closing_rokidlink">Closing RokidLink on glasses...</string>
     <string name="log_rokidlink_closed">RokidLink closed</string>
     <string name="log_rokidlink_close_failed">RokidLink close failed</string>
+    <string name="log_uninstalling_rokidlink">Uninstalling RokidLink from glasses…</string>
+    <string name="log_rokidlink_uninstalled">RokidLink uninstalled successfully</string>
+    <string name="log_rokidlink_uninstall_failed">RokidLink uninstall failed</string>
     <string name="log_host_set">CXR-L host set to %s. Please re-authorize before installing glasses apps.</string>
     <string name="log_guide_step">User navigated to guide step 1</string>
     <string name="log_starting_glasses_mirror">Starting glasses screen mirror service...</string>
@@ -677,6 +704,13 @@
     <!-- Developer Tools -->
     <string name="developer_title">Developer Tools</string>
     <string name="developer_subtitle">Submit your app to the RokidLab App Store</string>
+    <string name="export_log">Export Log</string>
+    <string name="export_log_desc">Export runtime logs to TXT file for troubleshooting</string>
+    <string name="save_log">Save Log</string>
+    <string name="save_log_done">Log saved</string>
+    <string name="save_log_failed">Failed to save log</string>
+    <string name="error_log_title">Error Report</string>
+    <string name="error_log_hint">An error was detected. Exporting logs can help analyze the issue</string>
     <string name="developer_open">Developer Tools</string>
     <string name="developer_required">Required</string>
     <string name="developer_optional">Optional</string>
@@ -732,4 +766,12 @@
     <string name="developer_error_url_format">APK URL must start with http:// or https://</string>
     <string name="developer_error_no_token">❌ Gitee Token not configured. Contact the developer to set it in the code and rebuild</string>
     <string name="developer_error_duplicate_id">❌ App ID \"%s\" already exists. Please use a different ID</string>
+
+    <!-- Compatibility - new -->
+    <string name="dialog_got_it">Got it</string>
+    <string name="vivo_limit_title">vivo Background Limit Notice</string>
+    <string name="vivo_limit_desc">Detected your device as vivo/iQOO. The system imposes a 10-minute background service hard limit for non-whitelisted apps.\n\nLong-running operations like screen casting may be interrupted.\n\nIt is recommended to add this app to the \"Protected Apps\" list (Settings → Security → More security settings → Protected apps) for stable background operation.</string>
+    <string name="log_samsung_deep_sleep">Samsung device detected: Casting may be demoted to background after 15 minutes without user interaction</string>
+    <string name="phone_mirror_notification_channel_fgs">Phone Cast Foreground Service</string>
+    <string name="phone_mirror_notification_channel_fgs_desc">Displays phone cast foreground service status</string>
 </resources>

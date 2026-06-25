@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "com.rokidlab.rokidlink"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.rokidlab.rokidlink"
         minSdk = 28
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 34
+        versionCode = 2
+        versionName = "1.3"
     }
 
     signingConfigs {
@@ -52,7 +52,5 @@ tasks.whenTaskAdded {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.appcompat:appcompat:1.7.0")
     implementation(files("libs/cxr-service-bridge-1.0.aar"))
 }

@@ -191,6 +191,8 @@ internal data class StoreActions(
     val onSettingsReinstallRokidLink: () -> Unit,
     // 设置页 — 语言切换
     val onSwitchLanguage: (String) -> Unit,
+    // 设置页 — 导出日志
+    val onExportLog: () -> Unit,
 )
 
 // ===== 应用入口 =====

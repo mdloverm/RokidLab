@@ -84,6 +84,10 @@ private const val PREFS_NAME = "rokidbrew_preferences"
 private const val PREF_ROKID_HOST_APP = "rokid_host_app"
 
 class MainActivity : AppCompatActivity() {
+    private companion object {
+        private const val TAG = "MainActivity"
+    }
+
     enum class InstallState { UNKNOWN, NOT_INSTALLED, INSTALLED, INSTALLED_UNKNOWN_VERSION, UPDATE_AVAILABLE }
     private enum class InstallStateSource { CACHED, VERIFIED }
 
@@ -132,6 +136,15 @@ class MainActivity : AppCompatActivity() {
     private var settingsReinstallError: String? = null
     // 日志列表，用于 UI 实时显示（最多保留 100 条）
     private val logMessages = mutableStateListOf<String>()
+    // 错误日志导出
+    private var showErrorLogDialog by mutableStateOf(false)
+    private var errorLogContent by mutableStateOf("")
+    private var errorLogSaved by mutableStateOf(false)
+    
+    // 兼容性引导
+    private var showCompatibilityDialog by mutableStateOf(false)
+    private val compatibilityPrefsName = "compatibility_dialog"
+    private val EXTRA_HAS_SEEN_COMPAT_GUIDE = "has_seen_compatibility_guide"
     
     // 本地APK安装状态
     private var isInstallingLocalApk by mutableStateOf(false)
@@ -237,6 +250,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         BrewThemeManager.init(this)
         preferHighRefreshRate()
+        // 初始化日志收集器（含全局崩溃处理器）
+        LogCollector.init(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong())
 
         BrewIndex.initMirror(this)
         try {
@@ -391,6 +406,7 @@ class MainActivity : AppCompatActivity() {
                         onCancelDownload = { key -> cancelDownload(key) },
                         onExitApp = { finishAndRemoveTask() },
                         onSettingsReinstallRokidLink = { reinstallRokidLinkOnGlasses() },
+                        onExportLog = { showExportLogDialog() },
                         onSwitchLanguage = { code ->
                             com.rokidlab.phone.util.LocalizationManager.setLocale(this@MainActivity, code)
                             // Recreate activity to apply language
@@ -422,6 +438,27 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
+                if (showErrorLogDialog) {
+                    BrewDialog(
+                        onDismiss = { showErrorLogDialog = false; errorLogSaved = false },
+                        title = this@MainActivity.getString(R.string.error_log_title),
+                        color = BrewWarning,
+                    ) {
+                        BrewDialogContent {
+                            Text(this@MainActivity.getString(R.string.error_log_hint), color = BrewMuted, fontSize = 12.sp)
+                            Spacer(Modifier.height(12.dp))
+                            Text(errorLogContent.take(300), color = BrewText.copy(alpha = 0.7f), fontSize = 11.sp)
+                            Spacer(Modifier.height(16.dp))
+                            BrewButton(
+                                text = if (errorLogSaved) this@MainActivity.getString(R.string.save_log_done) else this@MainActivity.getString(R.string.save_log),
+                                onClick = {
+                                    saveErrorLog()
+                                },
+                                modifier = Modifier.fillMaxWidth().height(44.dp),
+                            )
+                        }
+                    }
+                }
                 if (showMirrorDialog) {
                     MirrorSourceDialog(
                         currentIndex = BrewIndex.getMirrorIndex(this@MainActivity),
@@ -442,6 +479,9 @@ class MainActivity : AppCompatActivity() {
 
         // Android 13+ 请求通知权限（用于定时消息推送到眼镜）
         requestNotificationPermission()
+
+        // 检查国产手机兼容性设置（电池优化白名单、自启动权限等）
+        checkCompatibilitySettings()
     }
 
     private fun requestNotificationPermission() {
@@ -520,13 +560,21 @@ class MainActivity : AppCompatActivity() {
         ) {
             attributes.preferredDisplayModeId = preferredMode.modeId
             attributes.preferredRefreshRate = fastestMode.refreshRate
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-                attributes.setFrameRatePowerSavingsBalanced(false)
+            if (Build.VERSION.SDK_INT >= 35) {
+                try {
+                    val wlpClass = Class.forName("android.view.WindowLayoutParams")
+                    val setBalanced = wlpClass.getMethod("setFrameRatePowerSavingsBalanced", Boolean::class.java)
+                    setBalanced.invoke(attributes, false)
+                } catch (_: Exception) { }
             }
             window.attributes = attributes
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-            window.decorView.setRequestedFrameRate(View.REQUESTED_FRAME_RATE_CATEGORY_HIGH)
+        if (Build.VERSION.SDK_INT >= 35) {
+            try {
+                val setFrameRate = View::class.java.getMethod("setRequestedFrameRate", Int::class.java)
+                val categoryHigh = View::class.java.getField("REQUESTED_FRAME_RATE_CATEGORY_HIGH").getInt(null)
+                setFrameRate.invoke(window.decorView, categoryHigh)
+            } catch (_: Exception) { }
         }
     }
 
@@ -908,25 +956,37 @@ class MainActivity : AppCompatActivity() {
                 downloadProgress[progressKey] = 100
                 log(getString(R.string.log_downloaded_kb, file.name, file.length() / 1024))
                 if (target == "glasses") {
-                    cxrL.installApk(file) { installed ->
-                        artifact.packageName?.takeIf { it.isNotBlank() }?.let { packageName ->
+                    // 传包名绕过 APK 头读取（兼容部分国产手机 getPackageArchiveInfo 返回 null）
+                    val pkg = artifact.packageName?.takeIf { it.isNotBlank() }
+                    if (pkg != null) {
+                        cxrL.installApk(file, pkg) { installed ->
                             if (installed) {
                                 installCache.recordGlassesInstall(app, artifact)
                                 setGlassesInstallState(
-                                    packageName,
+                                    pkg,
                                     cachedGlassesInstallState(app, artifact) ?: InstallState.INSTALLED,
                                     InstallStateSource.VERIFIED,
                                 )
                                 Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.install_success_toast, app.name), Toast.LENGTH_SHORT).show()
                             } else {
-                                installCache.removeGlasses(packageName)
-                                setGlassesInstallState(packageName, InstallState.NOT_INSTALLED, InstallStateSource.VERIFIED)
+                                installCache.removeGlasses(pkg)
+                                setGlassesInstallState(pkg, InstallState.NOT_INSTALLED, InstallStateSource.VERIFIED)
                             }
                             installCheckTick += 1
+                            downloadProgress.remove(progressKey)
+                            downloadCancelJobs.remove(progressKey)
+                            updateBusy(false)
                         }
-                        downloadProgress.remove(progressKey)
-                        downloadCancelJobs.remove(progressKey)
-                        updateBusy(false)
+                    } else {
+                        // 没有包名信息时降级到旧方式（从 APK 头读取）
+                        cxrL.installApk(file) { installed ->
+                            if (installed) {
+                                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.install_success_toast, app.name), Toast.LENGTH_SHORT).show()
+                            }
+                            downloadProgress.remove(progressKey)
+                            downloadCancelJobs.remove(progressKey)
+                            updateBusy(false)
+                        }
                     }
                 } else {
                     updateBusy(false)
@@ -936,10 +996,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }.onFailure { error ->
                 log(getString(R.string.log_install_failed, error.message ?: error.javaClass.simpleName))
+                LogCollector.e("Install", getString(R.string.log_install_failed, error.message ?: error.javaClass.simpleName), error)
                 Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.install_failed, app.name, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
                 downloadProgress.remove(progressKey)
                 downloadCancelJobs.remove(progressKey)
                 updateBusy(false)
+                // 安装异常时自动弹出错误报告
+                showExportLogDialog()
             }
         }
         downloadCancelJobs[progressKey] = job
@@ -1112,6 +1175,8 @@ class MainActivity : AppCompatActivity() {
                     phoneMirrorState = phoneMirrorState.copy(isInstallingRokidLink = false)
                     fileManagerState = fileManagerState.copy(isInstallingRokidLink = false)
                     updateBusy(false)
+                    // 安装异常时自动弹出错误报告
+                    showExportLogDialog()
                 }
             }
         }
@@ -1182,10 +1247,20 @@ class MainActivity : AppCompatActivity() {
                     packageName = "com.rokidlab.rokidlink",
                     onStopResult = { success ->
                         log(if (success) getString(R.string.log_rokidlink_closed) else getString(R.string.log_rokidlink_close_failed))
+                    },
+                )
+
+                // 无论 stop 成功与否，都先卸载旧版本再重新安装
+                delay(300)
+                log(getString(R.string.log_uninstalling_rokidlink))
+                cxrL.uninstallApp(
+                    packageName = "com.rokidlab.rokidlink",
+                    onUninstallResult = { uninstalled ->
+                        log(if (uninstalled) getString(R.string.log_rokidlink_uninstalled) else getString(R.string.log_rokidlink_uninstall_failed))
                         screenMirrorState = screenMirrorState.copy(rokidLinkRunning = false)
                         phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = false)
                         fileManagerState = fileManagerState.copy(rokidLinkRunning = false)
-                        // 停止完成后再重新安装
+                        // 卸载完成后再重新安装（无论卸载成功与否都尝试安装）
                         lifecycleScope.launch {
                             delay(500)
                             installRokidLinkToGlasses()
@@ -1236,9 +1311,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun log(message: String) {
         android.util.Log.d("RokidLab", message)
+        LogCollector.i("RokidLab", message)
         runOnUiThread {
             logMessages.add(message)
             if (logMessages.size > 100) logMessages.removeFirst()
+        }
+    }
+
+    /** 打开错误日志导出对话框 */
+    private fun showExportLogDialog() {
+        runOnUiThread {
+            errorLogContent = LogCollector.getLogText()
+            errorLogSaved = false
+            showErrorLogDialog = true
+        }
+    }
+
+    /** 保存错误日志到文件并分享 */
+    private fun saveErrorLog() {
+        runCatching {
+            val intent = LogCollector.createShareIntent(this@MainActivity)
+            if (intent != null) {
+                startActivity(Intent.createChooser(intent, getString(R.string.save_log)))
+                errorLogSaved = true
+                Toast.makeText(this@MainActivity, getString(R.string.save_log_done), Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this@MainActivity, getString(R.string.save_log_failed), Toast.LENGTH_SHORT).show()
+            }
+        }.onFailure {
+            Toast.makeText(this@MainActivity, getString(R.string.save_log_failed), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1299,6 +1400,21 @@ class MainActivity : AppCompatActivity() {
         phoneMirrorState = phoneMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses))
         // 先提示用户权限用途
         Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.screen_record_permission), Toast.LENGTH_LONG).show()
+        
+        // Android 13+ 先检查通知权限（前台服务需要通知）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (!hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+                log(getString(R.string.log_requesting_notification_permission))
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        
+        // 检查悬浮窗权限（OPPO/vivo 需要额外授权）
+        if (!ManufacturerUtils.canDrawOverlays(this)) {
+            log(getString(R.string.log_overlay_permission_guide))
+            checkOverlayPermissionForMirror()
+        }
+        
         // 通过 CXR-L 启动眼镜端投屏接收页
         cxrL.launchApp("com.rokidlab.rokidlink", activityClass = ".PhoneMirrorActivity") { launched ->
             if (launched) {
@@ -1422,6 +1538,161 @@ class MainActivity : AppCompatActivity() {
         startActivity(FileManagerActivity.createIntent(this, useRealInstall = true))
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  国产手机兼容性设置
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 检查并引导用户完成国产手机兼容性设置
+     * - 电池优化白名单（后台保活）
+     * - 自启动权限（广播接收器可靠触发）
+     */
+    private fun checkCompatibilitySettings() {
+        if (!ManufacturerUtils.isChineseRom()) {
+            // 三星设备特有检测
+            if (ManufacturerUtils.hasSamsungDeepSleepIssue()) {
+                Log.i(TAG, "Samsung device with Deep Sleep issue detected, logging only")
+                log(getString(R.string.log_samsung_deep_sleep))
+            }
+            Log.i(TAG, "Not a Chinese ROM, skipping compatibility checks")
+            return
+        }
+        val manufacturer = ManufacturerUtils.getManufacturerDisplayName()
+        Log.i(TAG, "Chinese ROM detected: $manufacturer")
+
+        // 检查电池优化白名单
+        if (!ManufacturerUtils.isIgnoringBatteryOptimizations(this)) {
+            log(getString(R.string.log_battery_optimization_guide))
+            showBatteryOptimizationDialog()
+            // 同时也弹出自动启动引导（延迟执行，避免同时弹多个对话框）
+            lifecycleScope.launch {
+                delay(5000)
+                showAutoStartDialog()
+            }
+        } else {
+            log(getString(R.string.log_battery_optimization_granted))
+            // 已在白名单中，弹出自动启动引导
+            lifecycleScope.launch {
+                delay(2000)
+                showAutoStartDialog()
+            }
+        }
+        
+        // vivo 特有：提示 10 分钟后台限制
+        if (ManufacturerUtils.hasVivoBackgroundHardLimit()) {
+            lifecycleScope.launch {
+                delay(8000)
+                showVivoBackgroundLimitDialog()
+            }
+        }
+    }
+
+    /**
+     * 弹出自动启动权限引导对话框（使用标准 AlertDialog，避免 Compose 上下文限制）
+     */
+    private var autoStartDialogShown = false
+    
+    private fun showAutoStartDialog() {
+        if (autoStartDialogShown) return
+        autoStartDialogShown = true
+        runOnUiThread {
+            android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle(getString(R.string.auto_start_title))
+                .setMessage(getString(R.string.auto_start_desc))
+                .setCancelable(false)
+                .setPositiveButton(getString(R.string.auto_start_guide)) { _, _ ->
+                    ManufacturerUtils.openAutoStartSettings(this@MainActivity)
+                    autoStartDialogShown = false
+                }
+                .setNegativeButton(getString(R.string.auto_start_skip)) { _, _ ->
+                    log(getString(R.string.log_auto_start_skipped))
+                    autoStartDialogShown = false
+                }
+                .show()
+        }
+    }
+    
+    /**
+     * vivo/iQOO 10分钟后台限制引导（使用标准 AlertDialog）
+     */
+    private var vivoLimitDialogShown = false
+    
+    private fun showVivoBackgroundLimitDialog() {
+        if (vivoLimitDialogShown) return
+        vivoLimitDialogShown = true
+        runOnUiThread {
+            android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle(getString(R.string.vivo_limit_title))
+                .setMessage(getString(R.string.vivo_limit_desc))
+                .setCancelable(false)
+                .setPositiveButton(getString(R.string.dialog_got_it)) { _, _ ->
+                    ManufacturerUtils.openPowerSavingSettings(this@MainActivity)
+                    vivoLimitDialogShown = false
+                }
+                .show()
+        }
+    }
+
+    /**
+     * 弹出电池优化白名单引导对话框
+     * 解决华为/小米等手机后台服务被强杀的问题
+     */
+    private var batteryOptimizationDialogShown = false
+
+    private fun showBatteryOptimizationDialog() {
+        if (batteryOptimizationDialogShown) return
+        batteryOptimizationDialogShown = true
+        lifecycleScope.launch {
+            delay(2000) // 延迟弹出，避免干扰首次启动流程
+
+            val manufacturer = ManufacturerUtils.getManufacturerDisplayName()
+            val message = getString(R.string.compatibility_settings_desc, manufacturer)
+            val desc = message + "\n\n" + getString(R.string.compatibility_settings_battery)
+
+            runOnUiThread {
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle(getString(R.string.compatibility_settings_title))
+                    .setMessage(desc)
+                    .setCancelable(false)
+                    .setPositiveButton(getString(R.string.battery_optimization_guide)) { _, _ ->
+                        ManufacturerUtils.requestIgnoreBatteryOptimizations(this@MainActivity)
+                        log(getString(R.string.log_battery_optimization_guide))
+                        lifecycleScope.launch {
+                            delay(1000)
+                            showAutoStartDialog()
+                        }
+                    }
+                    .setNegativeButton(getString(R.string.battery_optimization_skip)) { _, _ ->
+                        log(getString(R.string.log_battery_optimization_skipped))
+                        showAutoStartDialog()
+                    }
+                    .show()
+            }
+        }
+    }
+
+    /**
+     * 检查悬浮窗权限（OPPO/vivo 投屏兼容）
+     * 在启动手机投屏前检查
+     */
+    private fun checkOverlayPermissionForMirror(): Boolean {
+        if (!ManufacturerUtils.isChineseRom()) return true
+        if (ManufacturerUtils.canDrawOverlays(this)) return true
+
+        log(getString(R.string.log_overlay_permission_guide))
+        runOnUiThread {
+            android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle(getString(R.string.overlay_permission_title))
+                .setMessage(getString(R.string.overlay_permission_desc))
+                .setCancelable(false)
+                .setPositiveButton(getString(R.string.overlay_permission_guide)) { _, _ ->
+                    ManufacturerUtils.openOverlaySettings(this@MainActivity)
+                    log(getString(R.string.log_overlay_permission_guide))
+                }
+                .show()
+        }
+        return false
+    }
 }
 
 @Composable

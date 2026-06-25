@@ -7,11 +7,16 @@ import java.io.FileOutputStream
 import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
+import java.security.Signature
+import java.security.spec.PKCS8EncodedKeySpec
+import java.security.spec.X509EncodedKeySpec
 
 /**
  * ADB RSA 密钥持久化管理器
  * 所有 ADB Client 共享同一对密钥，避免每次连接都弹 RSA 确认对话框。
  * 密钥文件存储在 [baseDir]/adbkey 和 [baseDir]/adbkey.pub。
+ *
+ * BouncyCastle Provider 由 LabApplication.onCreate() 提前注册，此处直接优先使用 BC。
  */
 object AdbKeyManager {
     private const val TAG = "AdbKeyManager"
@@ -20,6 +25,24 @@ object AdbKeyManager {
 
     @Volatile
     private var cachedKeyPair: KeyPair? = null
+
+    /** 获取 KeyFactory（优先 BC Provider，兼容 HarmonyOS） */
+    private fun getKeyFactory(): KeyFactory {
+        return try { KeyFactory.getInstance("RSA", "BC") }
+        catch (_: Exception) { KeyFactory.getInstance("RSA") }
+    }
+
+    /** 获取 KeyPairGenerator（优先 BC Provider，兼容 HarmonyOS） */
+    private fun getKeyPairGenerator(): KeyPairGenerator {
+        return try { KeyPairGenerator.getInstance("RSA", "BC") }
+        catch (_: Exception) { KeyPairGenerator.getInstance("RSA") }
+    }
+
+    /** 获取 SHA1withRSA Signature（优先 BC Provider，兼容 HarmonyOS） */
+    fun getSignature(): Signature {
+        return try { Signature.getInstance("SHA1withRSA", "BC") }
+        catch (_: Exception) { Signature.getInstance("SHA1withRSA") }
+    }
 
     /**
      * 获取或生成 RSA 密钥对。
@@ -37,9 +60,9 @@ object AdbKeyManager {
             try {
                 val privBytes = FileInputStream(privKeyFile).use { it.readBytes() }
                 val pubBytes = FileInputStream(pubKeyFile).use { it.readBytes() }
-                val keyFactory = KeyFactory.getInstance("RSA")
-                val privKey = keyFactory.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(privBytes))
-                val pubKey = keyFactory.generatePublic(java.security.spec.X509EncodedKeySpec(pubBytes))
+                val keyFactory = getKeyFactory()
+                val privKey = keyFactory.generatePrivate(PKCS8EncodedKeySpec(privBytes))
+                val pubKey = keyFactory.generatePublic(X509EncodedKeySpec(pubBytes))
                 val kp = KeyPair(pubKey, privKey)
                 cachedKeyPair = kp
                 Log.i(TAG, "ADB key loaded from disk successfully")
@@ -49,7 +72,7 @@ object AdbKeyManager {
             }
         }
 
-        val kpg = KeyPairGenerator.getInstance("RSA")
+        val kpg = getKeyPairGenerator()
         kpg.initialize(2048)
         val kp = kpg.genKeyPair()
 

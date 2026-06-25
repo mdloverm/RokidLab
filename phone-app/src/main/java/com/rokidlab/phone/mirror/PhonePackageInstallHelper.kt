@@ -54,7 +54,7 @@ object PhonePackageInstallHelper {
         return runCatching {
             val installer = context.packageManager.packageInstaller
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-                .apply { setSize(apkFile.length()) }
+            try { params.setSize(apkFile.length()) } catch (_: Exception) { } // 兼容荣耀等国产 ROM
             val sessionId = installer.createSession(params)
             installer.openSession(sessionId).use { session ->
                 apkFile.inputStream().use { input ->

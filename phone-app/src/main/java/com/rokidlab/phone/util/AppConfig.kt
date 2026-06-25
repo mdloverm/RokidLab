@@ -40,4 +40,18 @@ object AppConfig {
 
     /** ADB 流缓冲区最大大小（字节） */
     const val ADB_MAX_STREAM_BUFFER_SIZE = 10 * 1024 * 1024
+
+    /** ADB 心跳间隔（毫秒）- 防止国产手机后台 Socket 超时断开 */
+    const val ADB_HEARTBEAT_INTERVAL_MS = 30_000L
+
+    /** ADB 心跳超时（毫秒）- 超时未响应视为断开 */
+    const val ADB_HEARTBEAT_TIMEOUT_MS = 10_000L
+
+    /** VIVO/QTI 蓝牙 HID 报告间最小延迟（毫秒）
+     *  QTI 蓝牙栈需要一定的间隔避免报告丢失 */
+    const val HID_REPORT_INTERVAL_MS = 8L
+
+    /** VIVO/QTI 蓝牙 HID 通道预热延迟（毫秒）
+     *  首次连接后等待通道就绪的时间 */
+    const val HID_CHANNEL_WARMUP_MS = 500L
 }

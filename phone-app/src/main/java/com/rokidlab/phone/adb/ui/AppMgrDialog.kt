@@ -66,30 +66,34 @@ fun AppMgrDialog(
         LaunchedEffect(showSystem) {
             Log.w("AppMgr", "LaunchedEffect start showSystem=$showSystem")
             loading = true; selectedPkg = ""
-            try { packages = withContext(Dispatchers.IO) { c.listPackages(showSystem) } } catch (e: Exception) { Log.w("AppMgr", "listPackages FAILED: ${e.message}") }
-            try { disabledPkgs = withContext(Dispatchers.IO) { c.listDisabledPackages() } } catch (e: Exception) { Log.w("AppMgr", "listDisabled FAILED: ${e.message}") }
+            try { packages = withContext(Dispatchers.IO) { c.listPackages(showSystem) } } catch (e: Throwable) { Log.w("AppMgr", "listPackages FAILED: ${e.message}") }
+            try { disabledPkgs = withContext(Dispatchers.IO) { c.listDisabledPackages() } } catch (e: Throwable) { Log.w("AppMgr", "listDisabled FAILED: ${e.message}") }
             loading = false
         }
 
         fun refreshAll(from: String = "unknown") {
-            scope.launch {
-                loading = true; selectedPkg = ""
-                try { packages = withContext(Dispatchers.IO) { c.listPackages(showSystem) } } catch (e: Exception) { Log.w("AppMgr", "refreshAll listPackages FAILED: ${e.message}") }
-                try { disabledPkgs = withContext(Dispatchers.IO) { c.listDisabledPackages() } } catch (e: Exception) { Log.w("AppMgr", "refreshAll listDisabled FAILED: ${e.message}") }
-                loading = false
+            kotlin.runCatching {
+                scope.launch {
+                    loading = true; selectedPkg = ""
+                    try { packages = withContext(Dispatchers.IO) { c.listPackages(showSystem) } } catch (e: Throwable) { Log.w("AppMgr", "refreshAll listPackages FAILED: ${e.message}") }
+                    try { disabledPkgs = withContext(Dispatchers.IO) { c.listDisabledPackages() } } catch (e: Throwable) { Log.w("AppMgr", "refreshAll listDisabled FAILED: ${e.message}") }
+                    loading = false
+                }
             }
         }
 
         fun doAction(action: suspend (String) -> String, pkg: String, shouldRefresh: Boolean = true) {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val result = action(pkg)
-                    withContext(Dispatchers.Main) {
-                        statusMsg = result.lines().firstOrNull { it.isNotBlank() } ?: ctx.getString(R.string.done_label)
-                        if (shouldRefresh) refreshAll("after_action")
+            kotlin.runCatching {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val result = action(pkg)
+                        withContext(Dispatchers.Main) {
+                            statusMsg = result.lines().firstOrNull { it.isNotBlank() } ?: ctx.getString(R.string.done_label)
+                            if (shouldRefresh) refreshAll("after_action")
+                        }
+                    } catch (e: Throwable) {
+                        withContext(Dispatchers.Main) { statusMsg = "${ctx.getString(R.string.error_label)}: ${e.message}" }
                     }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) { statusMsg = "${ctx.getString(R.string.error_label)}: ${e.message}" }
                 }
             }
         }
@@ -171,9 +175,7 @@ fun AppMgrDialog(
                             ActionButton(if (isSelectedFrozen) ctx.getString(R.string.unfreeze) else ctx.getString(R.string.freeze), if (isSelectedFrozen) BrewTeal else BrewAmber) {
                                 if (isSelectedFrozen) doAction({ c.enableApp(it) }, selectedPkg) else doAction({ c.disableApp(it) }, selectedPkg)
                             }
-                            ActionButton(ctx.getString(R.string.extract), BrewPink) {
-                                scope.launch(Dispatchers.IO) { if (selectedPkg.isNotEmpty()) { val r = c.extractApkToDownloads(selectedPkg); Log.i("AppMgr", "extract result: $r"); withContext(Dispatchers.Main) { statusMsg = r } } }
-                            }
+                            ActionButton(ctx.getString(R.string.extract), BrewPink) { doAction({ c.extractApkToDownloads(it) }, selectedPkg) }
                         }
                     }
                 } else {

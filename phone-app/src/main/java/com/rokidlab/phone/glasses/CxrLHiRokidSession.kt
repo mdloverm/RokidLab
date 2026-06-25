@@ -181,6 +181,14 @@ class CxrLHiRokidSession(
     }
 
     fun installApk(apkFile: File, onInstallResult: ((Boolean) -> Unit)? = null) {
+        // 优先从 APK 头读取包名，兜底用文件名
+        val packageName = runCatching { readPackageName(apkFile) }.getOrNull() ?: apkFile.name
+        // 委托给指定包名重载，消除代码重复
+        installApk(apkFile, packageName, onInstallResult)
+    }
+
+    /** 安装 APK（指定包名，绕过 APK 头读取——兼容部分国产手机 getPackageArchiveInfo 返回 null） */
+    fun installApk(apkFile: File, packageName: String, onInstallResult: ((Boolean) -> Unit)? = null) {
         val targetHostApp = hostApp
         if (!hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
             onInstallResult?.invoke(false)
@@ -190,7 +198,6 @@ class CxrLHiRokidSession(
 
         onBusyChanged(true)
         runCatching {
-            val packageName = readPackageName(apkFile)
             onStatus(activity.getString(R.string.detected_package, packageName))
             connectAndUpload(authToken, targetHostApp, packageName, apkFile, onInstallResult)
         }.onFailure { error ->
@@ -274,6 +281,7 @@ class CxrLHiRokidSession(
         runCatching { cxrLink?.disconnect() }
         cxrLink = null
         pendingOperation = null
+        queryQueue.clear()
         cxrlConnected = false
         glassBtConnected = false
         operationStarted = false
@@ -696,10 +704,24 @@ class CxrLHiRokidSession(
         return true
     }
 
+    /** 已知 APK 文件名到包名的映射表（兜底 readPackageName 使用） */
+    private val KNOWN_APK_PACKAGES = mapOf(
+        "RokidLink" to "com.rokidlab.rokidlink",
+    )
+
     private fun readPackageName(apkFile: File): String {
+        // 先尝试从 APK 读取（部分国产手机 getPackageArchiveInfo 可能返回 null）
         @Suppress("DEPRECATION")
-        val info = activity.packageManager.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_ACTIVITIES)
-        return info?.packageName?.takeIf { it.isNotBlank() } ?: error("Cannot read APK package name")
+        val info = runCatching {
+            activity.packageManager.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_ACTIVITIES)
+        }.getOrNull()
+        val fromApk = info?.packageName?.takeIf { it.isNotBlank() }
+        if (fromApk != null) return fromApk
+        // 兜底：从文件名推断（已知应用直接查映射表，未知用文件名自身）
+        val name = apkFile.nameWithoutExtension
+        val mapped = KNOWN_APK_PACKAGES[name] ?: name
+        Log.w(TAG, "readPackageName: getPackageArchiveInfo failed, falling back: name=$name → pkg=$mapped")
+        return mapped
     }
 
     private fun notifyConnectionChanged() {

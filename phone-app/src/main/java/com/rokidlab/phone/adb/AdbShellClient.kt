@@ -14,8 +14,6 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.KeyPair
-import java.security.KeyPairGenerator
-import java.security.Signature
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -50,6 +48,44 @@ class AdbShellClient(
     @Volatile
     private var adbSessionAlive = false
 
+    // ── 心跳保活（防止国产手机后台 Socket 超时断开） ──
+    @Volatile
+    private var heartbeatRunning = false
+    private var heartbeatThread: Thread? = null
+
+    private class HeartbeatCommand(private val client: AdbShellClient) : Runnable {
+        override fun run() {
+            while (client.heartbeatRunning && client.adbSessionAlive) {
+                try {
+                    Thread.sleep(AppConfig.ADB_HEARTBEAT_INTERVAL_MS)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (!client.heartbeatRunning || !client.adbSessionAlive) break
+                try {
+                    // 发送轻量级 ADB shell 命令检测连接活性
+                    client.executeShellCommand("echo 1", AppConfig.ADB_HEARTBEAT_TIMEOUT_MS.toInt())
+                } catch (e: Exception) {
+                    Log.w(TAG, "Heartbeat failed, connection may be stale: ${e.message}")
+                    // 不立即标记断开，让下次真正调用时检测
+                }
+            }
+        }
+    }
+
+    private fun startHeartbeat() {
+        if (heartbeatRunning) return
+        heartbeatRunning = true
+        heartbeatThread = Thread(HeartbeatCommand(this), "adb-heartbeat").also { it.isDaemon = true; it.start() }
+        Log.d(TAG, "Heartbeat started (interval=${AppConfig.ADB_HEARTBEAT_INTERVAL_MS}ms)")
+    }
+
+    private fun stopHeartbeat() {
+        heartbeatRunning = false
+        heartbeatThread?.interrupt()
+        heartbeatThread = null
+    }
+
     private data class AdbMessage(val command: Int, val arg0: Int, val arg1: Int, val payload: ByteArray)
 
     fun connect(): Boolean = try {
@@ -65,6 +101,7 @@ class AdbShellClient(
         nextLocalId = 0
         doHandshake()
         adbSessionAlive = true
+        startHeartbeat()
         Log.i(TAG, "ADB connection successful")
         true
     } catch (e: Exception) {
@@ -91,7 +128,7 @@ class AdbShellClient(
                         authAttempts++
                         Log.i(TAG, "AUTH_TOKEN attempt=$authAttempts")
                         if (authAttempts == 1) {
-                            val sig = Signature.getInstance("SHA1withRSA")
+                            val sig = AdbKeyManager.getSignature()
                             sig.initSign(kp.private)
                             sig.update(msg.payload)
                             writeMessage(CMD_AUTH, AUTH_SIGNATURE, 0, sig.sign())
@@ -127,6 +164,7 @@ class AdbShellClient(
     }
 
     fun disconnect() {
+        stopHeartbeat()
         adbSessionAlive = false
         try { inputStream?.close() } catch (_: Exception) {}
         try { outputStream?.close() } catch (_: Exception) {}
@@ -516,12 +554,6 @@ class AdbShellClient(
             data
         } else ByteArray(0)
         return AdbMessage(command, arg0, arg1, payload)
-    }
-
-    private fun generateRsaKeyPair(): KeyPair {
-        val gen = KeyPairGenerator.getInstance("RSA")
-        gen.initialize(2048)
-        return gen.generateKeyPair()
     }
 
     private fun escapeShell(text: String): String {

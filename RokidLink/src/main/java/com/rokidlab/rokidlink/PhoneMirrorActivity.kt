@@ -89,6 +89,13 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // singleTask 模式下 CXR-L 重新拉起时走此路径，不是 onCreate
+        // Server 已在 onResume 中检查并启动，此处仅记录日志
+        Log.i(TAG, "onNewIntent (singleTask re-launch)")
+    }
+
     private fun startServer() {
         // 如果旧的 Server 还在运行，先停掉避免冲突
         if (::server.isInitialized) {

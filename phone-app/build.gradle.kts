@@ -19,14 +19,14 @@ val releaseRegistryUrl = providers.gradleProperty("rokidbrewReleaseRegistryUrl")
 
 android {
     namespace = "com.rokidlab.phone"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.rokidlab.phone"
         minSdk = 28
-        targetSdk = 35
-        versionCode = 3
-        versionName = "1.2"
+        targetSdk = 34
+        versionCode = 4
+        versionName = "1.3"
         manifestPlaceholders["cleartextTrafficPermitted"] = "false"
     }
 
@@ -49,7 +49,7 @@ android {
             signingConfig = signingConfigs.getByName("release")
             buildConfigField("String", "ROKIDBREW_REGISTRY_URL", "\"${releaseRegistryUrl.asBuildConfigString()}\"")
             isMinifyEnabled = false
-            manifestPlaceholders["cleartextTrafficPermitted"] = "false"
+            manifestPlaceholders["cleartextTrafficPermitted"] = "true"
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

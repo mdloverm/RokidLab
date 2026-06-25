@@ -26,12 +26,7 @@ import java.io.OutputStream
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.security.KeyFactory
 import java.security.KeyPair
-import java.security.KeyPairGenerator
-import java.security.Signature
-import java.security.spec.PKCS8EncodedKeySpec
-import java.security.spec.X509EncodedKeySpec
 
 class AdbScreenMirrorClient(
     private val context: Context,
@@ -131,7 +126,7 @@ class AdbScreenMirrorClient(
                         authAttempts++
                         if (!sentSignature) {
                             Log.i(TAG, "AUTH TOKEN -> sending signature attempt=$authAttempts")
-                            val sig = Signature.getInstance("SHA1withRSA")
+                            val sig = AdbKeyManager.getSignature()
                             sig.initSign(kp.private)
                             sig.update(msg.payload)
                             sendPacket(CMD_AUTH, AUTH_SIGNATURE, 0, sig.sign())
@@ -304,11 +299,16 @@ class AdbScreenMirrorClient(
 
                     // Step 2: 启动新 server（nohup 保护进程不被 shell 退出杀死）
                     val shellId = localId.getAndIncrement()
+                    // 兼容性适配：检测是否需要指定编码器
+                    val encoderArg = ManufacturerUtils.getRecommendedEncoder()?.let {
+                        "video_encoder=$it "
+                    } ?: ""
                     val shellCmd = ("shell:nohup app_process -Djava.class.path=/data/local/tmp/scrcpy-server.jar " +
                             "/ com.genymobile.scrcpy.Server 3.3.4 " +
                             "stay_awake=true " +
                             "tunnel_forward=true video_bit_rate=4000000 " +
                             "max_size=640 " +
+                            "${encoderArg}" +
                             "video=true audio=false control=false cleanup=false " +
                             "> /dev/null 2>&1 &\nsleep 3\necho ok\n\u0000")
                     sendPacket(CMD_OPEN, shellId, 0, shellCmd.toByteArray(Charsets.UTF_8))
@@ -478,30 +478,35 @@ class AdbScreenMirrorClient(
                     decoder.stop()
                     decoder.start()
                     onStatus(context.getString(R.string.mirror_reconnecting))
-                    // 重新建立 ADB 连接
+                    // 重新建立 ADB 连接，最多重试 3 轮（每轮 3 次快速重试 + 3s 等待）
                     var reconnected = false
-                    for (retry in 1..3) {
+                    for (round in 1..3) {
                         if (!isRunning) break
-                        if (retry > 1) Thread.sleep(2000)
-                        try {
-                            socket?.close()
-                            socket = Socket()
-                            socket?.tcpNoDelay = true
-                            socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
-                            socket?.connect(java.net.InetSocketAddress(ipAddress, port), AppConfig.ADB_CONNECT_TIMEOUT_MS)
-                            inputStream = socket?.getInputStream()
-                            outputStream = socket?.getOutputStream()
-                            doHandshake()
-                            Log.i(TAG, "reconnect ok")
-                            reconnected = true
-                            break
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Reconnect failed #$retry: ${e.message}")
+                        for (retry in 1..3) {
+                            if (!isRunning) break
+                            if (retry > 1) Thread.sleep(2000)
+                            try {
+                                socket?.close()
+                                socket = Socket()
+                                socket?.tcpNoDelay = true
+                                socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+                                socket?.connect(java.net.InetSocketAddress(ipAddress, port), AppConfig.ADB_CONNECT_TIMEOUT_MS)
+                                inputStream = socket?.getInputStream()
+                                outputStream = socket?.getOutputStream()
+                                doHandshake()
+                                Log.i(TAG, "reconnect ok (round $round, retry $retry)")
+                                reconnected = true
+                                break
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Reconnect failed round $round retry #$retry: ${e.message}")
+                            }
                         }
-                    }
-                    if (!reconnected && isRunning) {
-                        Log.w(TAG, "reconnect failed multiple times, keep retrying")
+                        if (reconnected || !isRunning) break
                         Thread.sleep(3000)
+                    }
+                    if (!reconnected) {
+                        Log.w(TAG, "reconnect failed after 3 rounds, stopping")
+                        break
                     }
                 }
             }

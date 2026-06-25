@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.mirror
+package com.rokidlab.phone.mirror
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -17,13 +17,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -59,8 +65,6 @@ class PhoneMirrorActivity : ComponentActivity() {
 
         fun createIntent(context: Context): Intent =
             Intent(context, PhoneMirrorActivity::class.java)
-
-        const val REQUEST_MEDIA_PROJECTION = 100
     }
 
     private var ipAddress by mutableStateOf("192.168.1.168")
@@ -69,6 +73,41 @@ class PhoneMirrorActivity : ComponentActivity() {
     private var isStreaming by mutableStateOf(false)
     private var connectionStatus by mutableStateOf("")
     private var connectionFailed by mutableStateOf(false)
+
+    private val mediaProjectionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        Log.i(TAG, "mediaProjection result: resultCode=${result.resultCode}, data=${result.data != null}")
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            Log.i(TAG, "permission granted, starting foreground service")
+            isConnecting = false
+            isStreaming = true
+            connectionStatus = getString(R.string.project_text_in_progress)
+            PhoneMirrorService.startService(
+                this,
+                ipAddress,
+                port.toIntOrNull() ?: DEFAULT_PORT,
+                result.resultCode,
+                result.data!!
+            )
+        } else {
+            Log.i(TAG, "permission denied, resultCode=${result.resultCode}")
+            isConnecting = false
+            connectionFailed = true
+            connectionStatus = getString(R.string.screen_permission_denied)
+        }
+    }
+
+    /** 悬浮窗权限请求 launcher */
+    private val overlayPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        // 返回后重新尝试连接
+        if (isConnecting) {
+            startConnection()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -278,44 +317,32 @@ class PhoneMirrorActivity : ComponentActivity() {
         isConnecting = true
         connectionStatus = getString(R.string.requesting_screen_permission)
 
+        // 检查悬浮窗权限（OPPO/vivo 需要额外授权）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !ManufacturerUtils.canDrawOverlays(this)) {
+            Log.w(TAG, "Overlay permission not granted, requesting...")
+            connectionStatus = getString(R.string.overlay_permission_title)
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${packageName}")
+            )
+            overlayPermissionLauncher.launch(intent)
+            return
+        }
+
         // 首先请求屏幕录制权限
         val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         Log.i(TAG, "startConnection: requesting screen recording permission")
-        startActivityForResult(projectionManager.createScreenCaptureIntent(), REQUEST_MEDIA_PROJECTION)
+        mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 
     private fun stopStreaming() {
         isStreaming = false
         val serviceIntent = Intent(this, PhoneMirrorService::class.java)
         stopService(serviceIntent)
-        finish()
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        Log.i(TAG, "onActivityResult: requestCode=$requestCode, resultCode=$resultCode, data=${data != null}")
-        if (requestCode == REQUEST_MEDIA_PROJECTION) {
-            if (resultCode == Activity.RESULT_OK && data != null) {
-                Log.i(TAG, "onActivityResult: permission granted, starting foreground service")
-                isConnecting = false
-                isStreaming = true
-                connectionStatus = getString(R.string.project_text_in_progress)
-                
-                // 启动前台服务进行屏幕录制（Android 12+ 要求必须在前台服务中）
-                PhoneMirrorService.startService(
-                    this,
-                    ipAddress,
-                    port.toIntOrNull() ?: DEFAULT_PORT,
-                    resultCode,
-                    data
-                )
-            } else {
-                Log.i(TAG, "onActivityResult: permission denied, resultCode=$resultCode")
-                isConnecting = false
-                connectionFailed = true
-                connectionStatus = getString(R.string.screen_permission_denied)
-            }
-        }
+        // 延迟 200ms 让 Service 清理完成后再 finish，减少异步竞态
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isFinishing) finish()
+        }, 200)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -328,8 +355,7 @@ class PhoneMirrorActivity : ComponentActivity() {
 
     override fun onDestroy() {
         if (isStreaming) {
-            val serviceIntent = Intent(this, PhoneMirrorService::class.java)
-            stopService(serviceIntent)
+            stopStreaming()
         }
         super.onDestroy()
     }

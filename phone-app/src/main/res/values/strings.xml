@@ -317,6 +317,30 @@
     <string name="reconnect">重新连接</string>
     <string name="reconnecting">重新连接...</string>
 
+    <!-- Compatibility -->
+    <string name="battery_optimization_title">电池优化</string>
+    <string name="battery_optimization_desc">为确保眼镜连接和后台投屏服务稳定运行，建议将本应用加入电池优化白名单，避免系统在后台强制终止应用进程。</string>
+    <string name="battery_optimization_guide">前往设置</string>
+    <string name="battery_optimization_skip">稍后再说</string>
+    <string name="auto_start_title">自启动权限</string>
+    <string name="auto_start_desc">部分手机系统（如小米、华为、OPPO、vivo）会限制应用自启动。请开启自启动权限，以确保眼镜安装 APK 结果回传、定时消息等后台功能正常工作。</string>
+    <string name="auto_start_guide">前往开启</string>
+    <string name="auto_start_skip">暂不需要</string>
+    <string name="overlay_permission_title">悬浮窗权限</string>
+    <string name="overlay_permission_desc">部分手机（OPPO/vivo）需要额外授予悬浮窗权限，以确保投屏功能稳定运行。</string>
+    <string name="overlay_permission_guide">前往开启</string>
+    <string name="compatibility_settings_title">兼容性设置</string>
+    <string name="compatibility_settings_desc">检测到您的设备为 %s，系统有额外的后台省电策略。建议完成以下设置以优化应用体验。</string>
+    <string name="compatibility_settings_battery">☐ 加入电池优化白名单</string>
+    <string name="compatibility_settings_auto_start">☐ 开启自启动权限</string>
+    <string name="compatibility_settings_done">已完成设置</string>
+    <string name="log_battery_optimization_guide">引导用户开启电池优化白名单</string>
+    <string name="log_battery_optimization_granted">已在电池优化白名单中</string>
+    <string name="log_battery_optimization_skipped">用户跳过了电池优化引导</string>
+    <string name="log_auto_start_guide">引导用户开启自启动权限</string>
+    <string name="log_auto_start_skipped">用户跳过了自启动引导</string>
+    <string name="log_overlay_permission_guide">引导用户开启悬浮窗权限</string>
+
     <!-- UpdateDialog -->
     <string name="download_in_progress">下载中...</string>
     <string name="update_available_short">有可用更新</string>
@@ -657,6 +681,9 @@
     <string name="log_closing_rokidlink">正在关闭眼镜上的 RokidLink...</string>
     <string name="log_rokidlink_closed">RokidLink 已关闭</string>
     <string name="log_rokidlink_close_failed">RokidLink 关闭失败</string>
+    <string name="log_uninstalling_rokidlink">正在卸载眼镜端 RokidLink…</string>
+    <string name="log_rokidlink_uninstalled">RokidLink 卸载成功</string>
+    <string name="log_rokidlink_uninstall_failed">RokidLink 卸载失败</string>
     <string name="log_host_set">CXR-L 主机已设置为 %s。安装眼镜应用前请重新授权。</string>
     <string name="log_guide_step">用户导航到引导步骤 1</string>
     <string name="log_starting_glasses_mirror">正在启动眼镜投屏服务...</string>
@@ -680,6 +707,13 @@
     <!-- 开发者工具 -->
     <string name="developer_title">开发者工具</string>
     <string name="developer_subtitle">提交你的应用到 RokidLab 应用商店</string>
+    <string name="export_log">导出日志</string>
+    <string name="export_log_desc">导出运行日志到 TXT 文件，排查问题时使用</string>
+    <string name="save_log">保存日志</string>
+    <string name="save_log_done">日志已保存</string>
+    <string name="save_log_failed">日志保存失败</string>
+    <string name="error_log_title">错误报告</string>
+    <string name="error_log_hint">程序运行过程中检测到错误，导出日志可以帮助分析问题</string>
     <string name="developer_open">开发者工具</string>
     <string name="developer_required">必填信息</string>
     <string name="developer_optional">选填信息</string>
@@ -735,4 +769,12 @@
     <string name="developer_error_url_format">APK 地址必须以 http:// 或 https:// 开头</string>
     <string name="developer_error_no_token">❌ 打包时未配置 Gitee Token，请联系开发者在代码中填入 Token 后重打包</string>
     <string name="developer_error_duplicate_id">❌ 应用 ID \"%s\" 已存在，请使用其他 ID</string>
+
+    <!-- Compatibility - new -->
+    <string name="dialog_got_it">知道了</string>
+    <string name="vivo_limit_title">vivo 后台限制提示</string>
+    <string name="vivo_limit_desc">检测到您的设备为 vivo/iQOO，系统对非白名单应用有 10 分钟后台存活硬限制。\n\n投屏等长时间后台操作可能被中断。\n\n建议将本应用加入「受保护应用列表」（设置 → 安全 → 更多安全设置 → 受保护应用），以确保后台服务稳定运行。</string>
+    <string name="log_samsung_deep_sleep">三星设备检测：如投屏超15分钟无交互，可能被系统自动降权为后台</string>
+    <string name="phone_mirror_notification_channel_fgs">手机投屏前台服务</string>
+    <string name="phone_mirror_notification_channel_fgs_desc">用于手机投屏前台服务运行状态显示</string>
 </resources>

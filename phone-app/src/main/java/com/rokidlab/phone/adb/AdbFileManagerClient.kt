@@ -12,10 +12,7 @@ import java.io.OutputStream
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.security.KeyFactory
 import java.security.KeyPair
-import java.security.KeyPairGenerator
-import java.security.Signature
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.io.File
@@ -132,7 +129,7 @@ class AdbFileManagerClient(
                 CMD_AUTH -> {
                     if (msg.arg0 == AUTH_TOKEN) {
                         if (!sentSignature) {
-                            val sig = Signature.getInstance("SHA1withRSA")
+                            val sig = AdbKeyManager.getSignature()
                             sig.initSign(kp.private)
                             sig.update(msg.payload)
                             sendPacket(CMD_AUTH, AUTH_SIGNATURE, 0, sig.sign())

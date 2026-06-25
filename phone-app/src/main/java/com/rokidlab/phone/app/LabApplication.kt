@@ -8,8 +8,14 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.SharedPreferences
+import android.util.Log
+import java.security.Provider
+import java.security.Security
 
 class LabApplication : Application() {
+    companion object {
+        private const val TAG = "LabApplication"
+    }
     lateinit var cxrL: CxrLHiRokidSession
         private set
 
@@ -38,6 +44,9 @@ class LabApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // 提前注册 BouncyCastle Provider（鸿蒙 4.2 等系统可能移除默认 RSA Provider）
+        initBouncyCastle()
+
         // 初始化本地化管理器并应用已保存的语言设置
         LocalizationManager.init(this)
         LocalizationManager.applyLocale(LocalizationManager.getCurrentLocaleCode())
@@ -62,14 +71,36 @@ class LabApplication : Application() {
     private fun createNotificationChannels() {
         try {
             val nm = getSystemService(NotificationManager::class.java)
-            val channel = NotificationChannel(
+
+            // 1. 定时消息通知渠道
+            val timerChannel = NotificationChannel(
                 "timer_notify", getString(R.string.timer_channel_name),
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = getString(R.string.timer_channel_desc)
             }
-            nm.createNotificationChannel(channel)
+            nm.createNotificationChannel(timerChannel)
+
+            // 2. 手机投屏前台服务通知渠道（Android 14+ 要求 FGS 有对应渠道）
+            val phoneMirrorChannel = NotificationChannel(
+                "phone_mirror_fgs", getString(R.string.phone_mirror_notification_channel),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = getString(R.string.phone_mirror_notification_channel_desc)
+            }
+            nm.createNotificationChannel(phoneMirrorChannel)
         } catch (_: Exception) { }
+    }
+
+    /** 注册 BouncyCastle Security Provider（直接 import，不依赖反射） */
+    private fun initBouncyCastle() {
+        try {
+            val bcProvider = org.bouncycastle.jce.provider.BouncyCastleProvider()
+            Security.insertProviderAt(bcProvider, 1)
+            Log.i(TAG, "BouncyCastle Provider registered at position 1")
+        } catch (e: Exception) {
+            Log.w(TAG, "BouncyCastle registration failed: ${e.message}")
+        }
     }
 
     fun setCxrL(session: CxrLHiRokidSession) {

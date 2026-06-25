@@ -304,9 +304,17 @@ private fun MouseTouchpad(hidManager: BluetoothHidManager) {
                     .border(1.dp, BrewBorder, BrewShapeXLarge)
                     .pointerInput(Unit) {
                         detectDragGestures(
-                            onDragStart = { },
-                            onDragEnd = { },
-                            onDragCancel = { },
+                            onDragStart = {
+                                // 按下左键，仅按下不释放
+                                hidManager.sendMouseButton(null, button = 1, pressed = true)
+                            },
+                            onDragEnd = {
+                                // 释放左键
+                                hidManager.sendMouseButton(null, button = 1, pressed = false)
+                            },
+                            onDragCancel = {
+                                hidManager.sendMouseButton(null, button = 1, pressed = false)
+                            },
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 val dx = (dragAmount.x * sensitivity).roundToInt()

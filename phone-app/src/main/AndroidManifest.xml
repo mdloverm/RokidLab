@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -9,7 +10,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" tools:targetApi="34" />
     <uses-permission android:name="android.permission.BLUETOOTH_HID_DEVICE" />
     
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
@@ -34,7 +35,7 @@
     <application
         android:name=".app.LabApplication"
         android:allowBackup="false"
-        android:enableOnBackInvokedCallback="true"
+        android:enableOnBackInvokedCallback="false"
         android:icon="@mipmap/ic_launcher"
         android:label="Rokid Lab"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -90,6 +91,7 @@
         <service
             android:name=".mirror.PhoneMirrorService"
             android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
+            android:foregroundServiceType="mediaProjection"
+            tools:targetApi="34" />
     </application>
 </manifest>
