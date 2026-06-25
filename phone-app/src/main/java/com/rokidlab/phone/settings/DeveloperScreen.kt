@@ -50,7 +50,7 @@ private const val APPS_JSON_PATH = "dist/apps.v1.json"
  * !!! 重要: 打包前请将下面的 Token 替换为你自己的 Gitee Personal Access Token !!!
  * 生成方式: Gitee → 设置 → 私人令牌 → 生成新令牌（勾选 projects 权限）
  */
-private const val GITEE_TOKEN = "49bba993ecf39b735883064a78a917aa"
+private const val GITEE_TOKEN = "f79578621ec9da315fa31a80b6c8da8c"
 
 // ── 表单持久化 ──
 private const val PREFS_NAME = "developer_form"

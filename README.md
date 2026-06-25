@@ -67,10 +67,20 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - **Socket 无限重连**：断连后异步自动重试（独立线程池），使用 `isReconnecting` 标记防止重连循环
 - **方向缓存优化**：使用 `currentOrientation` 缓存取代每帧查询 `DisplayManager`，减少 IPC 开销
 - **线程安全同步锁**：`mirrorLock` 保护 ImageReader 和 VirtualDisplay 切换，防竞态
+- **全品牌兼容**：华为 EMUI 12+ / 小米 MIUI 14+ / OPPO ColorOS 13+ / vivo Funtouch OS 13+ 投屏黑屏自动修复（HWC 禁用 + 软件渲染强制 + 分辨率降级）
+- **悬浮窗权限引导**：OPPO/vivo 设备投屏前自动检测并引导开启悬浮窗权限
 - **眼镜端 Server 自愈**：Activity 被系统重新拉起时自动重启 Server
 - **停止投屏行为**：停止投屏仅断开 Socket 连接，眼镜端 RokidLink 退回后台保持运行，下次可直接恢复（不再 `stopApp`）
 - **旋转不中断**：MainActivity 设置 `configChanges="orientation|screenSize"`，旋转时不重建 Activity，投屏持续流畅
 - 眼镜端 RokidLink APK 自动随手机端构建（build.gradle.kts 集成），始终保持同步
+
+### 全品牌兼容性
+- **投屏黑屏修复**：华为 EMUI 12+、小米 MIUI 14+、OPPO ColorOS 13+、vivo Funtouch OS 13+ 自动禁用 HWC + 强制软件渲染
+- **芯片适配**：联发科/麒麟芯片自动降级投屏分辨率（640×480 → 320×426），编码器回退到 OMX.google.h264.encoder
+- **后台保活**：国产 ROM 自动引导电池优化白名单 + 自启动权限 + vivo 10分钟后台硬限制提示
+- **三星适配**：Deep Sleep 检测日志，避免前台服务超 15 分钟被降权
+- **蓝牙兼容**：QTI（高通）蓝牙栈 HID sendReport 自动降级、HOGP 手动开启引导
+- **悬浮窗检测**：OPPO/vivo 悬浮窗权限检测，投屏前自动引导开启
 
 ### 文件管理
 - 通过 ADB 浏览和管理眼镜上的文件
@@ -170,9 +180,10 @@ RokidLab/
 │   │   │   │   ├── MainActivity.kt        主入口、投屏控制、状态管理、权限请求、镜像源对话框
 │   │   │   │   └── LabApplication.kt     全局 Application 状态、HID Manager
 │   │   │   ├── adb/         ADB 协议实现
-│   │   │   │   ├── AdbShellClient.kt      Shell 命令/应用管理/定时功能
-│   │   │   │   ├── AdbFileManagerClient.kt   文件管理 ADB 客户端
-│   │   │   │   └── AdbScreenMirrorClient.kt  屏幕镜像 ADB 客户端
+│   │   │   │   ├── AdbShellClient.kt        Shell 命令/应用管理/定时功能
+│   │   │   │   ├── AdbFileManagerClient.kt  文件管理 ADB 客户端
+│   │   │   │   ├── AdbScreenMirrorClient.kt 屏幕镜像 ADB 客户端
+│   │   │   │   └── AdbKeyManager.kt         RSA 密钥持久化管理（所有 ADB Client 共享）
 │   │   │   ├── design/      设计系统
 │   │   │   ├── StoreTheme.kt      配色/字体/主题（主入口，主题管理 + 全局颜色）
 │   │   │   ├── DesignComponents.kt 全局 UI 组件（错误/警告/加载/结果卡片）
@@ -220,9 +231,12 @@ RokidLab/
 │   │   │   │   ├── DetailTargetTags.kt   详情目标标签
 │   │   │   │   └── UpdateDialog.kt       更新对话框
 │   │   │   └── util/        工具
-│   │   │       ├── HttpClient.kt      统一 HTTP 请求工具
-│   │   │       ├── LocalizationManager.kt  语言切换管理（首次启动自动检测 + 运行时切换）
-│   │   │       └── ImageDecoder.kt     图片解码工具
+│   │   │       ├── AppConfig.kt           全局配置常量
+│   │   │       ├── HttpClient.kt          统一 HTTP 请求工具
+│   │   │       ├── LocalizationManager.kt  语言切换管理
+│   │   │       ├── ImageDecoder.kt         图片解码工具
+│   │   │       ├── ManufacturerUtils.kt    全品牌兼容性检测工具
+│   │   │       └── LogCollector.kt         日志收集器
 │   │   ├── res/             资源文件
 │   │   │   ├── values/strings.xml   简体中文（默认语言）
 │   │   │   └── values-en/strings.xml  English
@@ -232,9 +246,10 @@ RokidLab/
 ├── RokidLink/                            眼镜端配套应用（RokidLink，自动打包到 phone-app assets）
 │   ├── src/main/
 │   │   ├── java/com/rokidlab/rokidlink/
-│   │   │   ├── MainActivity.kt              WiFi/ADB 状态面板
-│   │   │   ├── PhoneMirrorActivity.kt       投屏接收画面（onResume 自愈）
-│   │   │   ├── PhoneMirrorServer.kt         Socket 服务端（灰度图接收 + Bitmap 显示 + 像素数组复用防 OOM + 线程泄漏修复）
+│   │   │   ├── MainActivity.kt              WiFi/ADB 状态面板 + ADB TCP 自动开启
+│   │   │   ├── PhoneMirrorActivity.kt       投屏接收画面（onResume 自愈 + singleTask 重新拉起）
+│   │   │   ├── PhoneMirrorServer.kt         Socket 服务端（灰度图接收 + Bitmap 双缓冲 + 线程安全锁）
+│   │   │   └── ScreenMirrorIntentActivity.kt scrcpy 启动中转 Activity（ADB 就绪等待）
 │   │   ├── res/layout/activity_main.xml     状态面板布局
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts
@@ -250,11 +265,11 @@ RokidLab/
 
 ## 工作区规范
 
-项目遵循 `.trae/rules/workspace_rules.md` 中的开发规范，包括：
+项目遵循 `.traelink/rules.md` 中的开发规范，包括：
 
 - **多语种规则**: 所有用户可见文本必须使用 `R.string.xxx` 引用语言包，禁止硬编码（例外：品牌名、技术术语、作者信息）
 - **弹窗样式规范**: 所有弹窗统一使用 `BrewDialog`，传入模块色 `color` 参数，自动应用彩色标题栏 + 装饰线 + 彩色边框
-- **Gradle 配置**: `settings.gradle.kts` 中模块路径为 `include(":cxrl:RokidLab:phone-app")` 和 `include(":RokidLink")`
+- **Gradle 配置**: `settings.gradle.kts` 中模块路径为 `include(":phone-app")` 和 `include(":RokidLink")`
 - **资源管理**: 定期清理未使用的资源文件，避免打包冗余
 
 ## 构建
@@ -274,7 +289,7 @@ RokidLab/
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v1.0.0-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v1.3-debug.apk
 ```
 
 ### 眼镜端服务

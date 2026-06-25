@@ -398,7 +398,7 @@ adb/
 | 自更新检查 | `Models.kt` → `BrewIndex.checkSelfUpdate()` → `SELF_UPDATE_URL` |
 | 更新对话框 UI | `UpdateDialog.kt` → `UpdateDialog` Composable |
 | 下载安装逻辑 | `MainActivity.kt` → `performSelfUpdate()` |
-| Gitee API token | `49bba993ecf39b735883064a78a917aa`（token，存于 RULES.md 仅供 API 操作参考） |
+| Gitee API token | `f79578621ec9da315fa31a80b6c8da8c`（token，存于 RULES.md 仅供 API 操作参考） |
 
 ## 十一、部署规范
 
