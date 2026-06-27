@@ -7,6 +7,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -37,6 +38,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,6 +46,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.*
 import kotlin.math.*
 import kotlin.math.roundToInt
@@ -263,7 +266,7 @@ private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreference
 
             TAB_MOUSE -> {
                 // 鼠标模式 — 触控板
-                MouseTouchpad(hidManager)
+                MouseTouchpad(hidManager, prefs, ctx)
             }
         }
     }
@@ -287,14 +290,14 @@ private fun TabChip(label: String, tab: Int, activeTab: Int, onClick: () -> Unit
 
 // ===== 鼠标触控板 =====
 @Composable
-private fun MouseTouchpad(hidManager: BluetoothHidManager) {
-    val ctx = LocalContext.current
+private fun MouseTouchpad(hidManager: BluetoothHidManager, prefs: SharedPreferences, ctx: Context) {
     val sensitivity = 1.0f  // 灵敏度: 每像素移动数
+    var showKeyboardDialog by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
         // ── 触控区域 ──
         Box(
-            Modifier.fillMaxSize().padding(top = 80.dp, bottom = 80.dp, start = 20.dp, end = 20.dp),
+            Modifier.fillMaxSize().padding(top = 80.dp, bottom = 100.dp, start = 20.dp, end = 20.dp),
             contentAlignment = Alignment.Center,
         ) {
             Box(
@@ -360,6 +363,140 @@ private fun MouseTouchpad(hidManager: BluetoothHidManager) {
             }
             MouseActionBtn(ctx.getString(R.string.middle_button), BrewPurple) {
                 hidManager.sendMouseClick(null, button = 3)
+            }
+            MouseActionBtn(ctx.getString(R.string.keyboard_btn), BrewCoral) {
+                showKeyboardDialog = true
+            }
+        }
+    }
+
+    // ── 键盘输入弹窗 ──
+    if (showKeyboardDialog) {
+        KeyboardInputDialog(hidManager, ctx) { showKeyboardDialog = false }
+    }
+}
+
+// ===== 键盘输入弹窗 =====
+@Composable
+private fun KeyboardInputDialog(
+    hidManager: BluetoothHidManager,
+    ctx: Context,
+    onDismiss: () -> Unit,
+) {
+    val app = ctx.applicationContext as com.rokidlab.phone.app.LabApplication
+    var ip by remember { mutableStateOf(app.phoneMirrorIp.ifEmpty { app.screenMirrorIp }) }
+    var text by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .clip(BrewShapeXLarge)
+                .background(BrewBg)
+                .border(1.dp, BrewBorder, BrewShapeXLarge)
+                .padding(20.dp)
+        ) {
+            Text(ctx.getString(R.string.keyboard_dialog_title), color = BrewText, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+
+            Spacer(Modifier.height(8.dp))
+
+            // 文字输入
+            Box(
+                Modifier.fillMaxWidth()
+                    .clip(BrewShapeMedium)
+                    .background(BrewPanel)
+                    .border(1.dp, BrewBorder, BrewShapeMedium)
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+            ) {
+                androidx.compose.material3.TextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = { Text(ctx.getString(R.string.keyboard_text_hint), color = BrewMuted, fontSize = 12.sp) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
+                    colors = androidx.compose.material3.TextFieldDefaults.colors(
+                        focusedTextColor = BrewText,
+                        unfocusedTextColor = BrewText,
+                        cursorColor = BrewCoral,
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                    ),
+                    textStyle = TextStyle(color = BrewText, fontSize = 14.sp),
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+
+            // 状态提示
+            if (status.isNotEmpty()) {
+                Text(status, color = if (status.startsWith("✅")) BrewSuccess else BrewWarning, fontSize = 12.sp)
+                Spacer(Modifier.height(4.dp))
+            }
+
+            // 按钮
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Text(
+                    ctx.getString(R.string.cancel),
+                    color = BrewMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clip(BrewShapeSmall).clickable { onDismiss() }.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Box(
+                    Modifier.clip(BrewShapeSmall).background(if (sending) BrewMuted.copy(alpha = 0.15f) else BrewCoral.copy(alpha = 0.15f))
+                        .clickable(enabled = !sending) {
+                            if (ip.isBlank()) { status = ctx.getString(R.string.keyboard_no_ip); return@clickable }
+                            sending = true; status = ""
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    // 1. TCP 发送文字到眼镜（设剪贴板）
+                                    val socket = java.net.Socket()
+                                    socket.connect(java.net.InetSocketAddress(ip.trim(), 7656), 3000)
+                                    socket.soTimeout = 5000
+                                    socket.getOutputStream().write((text + "\n").toByteArray(Charsets.UTF_8))
+                                    socket.getOutputStream().flush()
+                                    val reader = java.io.BufferedReader(java.io.InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+                                    reader.readLine()
+                                    socket.close()
+                                    Log.i("GamepadActivity", "Clipboard text sent via TCP ok")
+
+                                    // 2. ADB Shell 执行粘贴（作为 shell 用户有 INJECT_EVENTS 权限）
+                                    var adbOk = false
+                                    try {
+                                        val keyPair = com.rokidlab.phone.adb.AdbKeyManager
+                                            .getOrCreateKeyPair(ctx.filesDir.absolutePath)
+                                        adbOk = com.rokidlab.phone.adb.AdbPasteCompat
+                                            .execPaste(ip.trim(), keyPair)
+                                    } catch (e: Exception) {
+                                        Log.w("GamepadActivity", "ADB paste failed: ${e.message}")
+                                    }
+
+                                    // 3. HID Ctrl+V 兜底（ADB 失败时）
+                                    if (!adbOk) {
+                                        Log.i("GamepadActivity", "Falling back to HID Ctrl+V")
+                                        hidManager.sendCtrlV(null)
+                                    }
+
+                                    withContext(Dispatchers.Main) {
+                                        status = ctx.getString(R.string.keyboard_sent_ok)
+                                        text = ""
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("GamepadActivity", "TCP send failed: ${e.message}", e)
+                                    withContext(Dispatchers.Main) {
+                                        status = ctx.getString(R.string.keyboard_send_failed, e.message ?: "unknown")
+                                    }
+                                } finally { sending = false }
+                            }
+                        }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        if (sending) "..." else ctx.getString(R.string.keyboard_send),
+                        color = if (sending) BrewMuted else BrewCoral,
+                        fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }

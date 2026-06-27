@@ -34,6 +34,7 @@
             android:name=".ScreenMirrorIntentActivity"
             android:exported="true"
             android:theme="@style/Theme.RokidLink.Transparent" />
+
     </application>
 
 </manifest>

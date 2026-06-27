@@ -90,6 +90,9 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // 启动文本输入 TCP 服务器（端口 7656）
+        TextInputServer.start(this)
+
         statusText = findViewById(R.id.statusText)
         ipText = findViewById(R.id.ipText)
         dot = findViewById(R.id.dot)

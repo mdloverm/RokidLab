@@ -558,6 +558,14 @@
     <string name="mouse_tab">🖱 鼠标</string>
     <string name="dpad_mode">十字键</string>
     <string name="joystick_mode">摇杆</string>
+    <string name="keyboard_btn">⌨ 键盘</string>
+    <string name="keyboard_dialog_title">键盘输入</string>
+    <string name="keyboard_glasses_ip_hint">眼镜 IP（如 192.168.1.100）</string>
+    <string name="keyboard_text_hint">输入文字后发送到眼镜…</string>
+    <string name="keyboard_send">发送</string>
+    <string name="keyboard_sent_ok">✅ 已发送</string>
+    <string name="keyboard_send_failed">发送失败：%s</string>
+    <string name="keyboard_no_ip">请先输入眼镜 IP 地址</string>
 
     <!-- ADB Tools - Timer -->
     <string name="adb_tools_timer_subtitle">定时任务 / 组合操作</string>

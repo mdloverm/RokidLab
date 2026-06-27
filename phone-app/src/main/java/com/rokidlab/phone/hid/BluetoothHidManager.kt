@@ -378,6 +378,9 @@ class BluetoothHidManager(private val appContext: Context) {
     private var retryRunnable: Runnable? = null
     /** 连接序列号，每次 connect() 调用递增，用于防止过期的 retryRunnable 执行旧连接 */
     private var connectSequence = 0L
+    /** registerApp 重试次数（Xiaomi 等机型首次注册可能失败） */
+    private var registerAppRetryCount = 0
+    private var registerAppRetryRunnable: Runnable? = null
 
     // ===== 蓝牙扫描 (Discovery) =====
     interface ScanCallback {
@@ -489,6 +492,8 @@ class BluetoothHidManager(private val appContext: Context) {
             isRegistered = registered
             Log.i(TAG, "App status: registered=$registered, device=$pluggedDevice")
             if (registered) {
+                registerAppRetryCount = 0
+                registerAppRetryRunnable?.let { mainHandler.removeCallbacks(it); registerAppRetryRunnable = null }
                 hidProfileCallback?.onProfileSupported()
                 // 注册完成，检查是否有用户手动待连接的设备
                 if (pluggedDevice == null) {
@@ -507,7 +512,21 @@ class BluetoothHidManager(private val appContext: Context) {
                     && manufacturer != ManufacturerUtils.Manufacturer.SAMSUNG
                     && manufacturer != ManufacturerUtils.Manufacturer.GOOGLE) {
                     Log.w(TAG, "registerApp failed on $manufacturerName — HID Device Profile may not be supported")
-                    hidProfileCallback?.onProfileNotSupported(manufacturerName)
+                    // 有 pending 设备时自动重试（Xiaomi 等机型首次注册可能因蓝牙栈未就绪失败）
+                    if (pendingConnectDevice != null && registerAppRetryCount < 3) {
+                        registerAppRetryCount++
+                        Log.i(TAG, "Will retry registerApp in 2s (attempt $registerAppRetryCount/3)")
+                        registerAppRetryRunnable?.let { mainHandler.removeCallbacks(it) }
+                        registerAppRetryRunnable = Runnable {
+                            if (pendingConnectDevice != null) {
+                                Log.i(TAG, "Retrying registerApp...")
+                                registerApp()
+                            }
+                        }
+                        mainHandler.postDelayed(registerAppRetryRunnable!!, 2000L)
+                    } else {
+                        hidProfileCallback?.onProfileNotSupported(manufacturerName)
+                    }
                 }
             }
         }
@@ -631,6 +650,7 @@ class BluetoothHidManager(private val appContext: Context) {
 
     @SuppressLint("MissingPermission")
     private fun registerApp() {
+        registerAppRetryCount = 0
         val hid = hidDevice ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (appContext.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
@@ -666,6 +686,8 @@ class BluetoothHidManager(private val appContext: Context) {
         lastConnectTime = System.currentTimeMillis()
         // 用户手动重连时，重置快速断连计数，递增序列号
         quickDisconnectCount = 0
+        registerAppRetryCount = 0
+        registerAppRetryRunnable?.let { mainHandler.removeCallbacks(it); registerAppRetryRunnable = null }
         connectSequence++
         channelReadyTime = 0
         performConnect(device)
@@ -1167,6 +1189,29 @@ class BluetoothHidManager(private val appContext: Context) {
             a < 337.5f -> setOf(KEY_DOWN, KEY_RIGHT)  // ↘
             else -> setOf(KEY_RIGHT)
         }
+    }
+
+    /**
+     * 发送 HID Ctrl+V 组合键（粘贴）
+     * modifier=0x08 (Left Ctrl), keycode=0x19 (V)
+     * 用于中文输入：手机设剪贴板 → HID Ctrl+V → 粘贴到眼镜焦点 App
+     */
+    @SuppressLint("MissingPermission")
+    fun sendCtrlV(device: BluetoothDevice?) {
+        val dev = device ?: connectedDeviceInternal ?: return
+        if (!isRegistered) return
+        Log.i(TAG, "sendCtrlV: sending Ctrl+V to $dev")
+        // 标准 8 字节 HID 键盘报告: [modifier, reserved, keycode1, 0,0,0,0,0]
+        val pressOk = sendKbdReport(dev, KEYBOARD_REPORT_ID, byteArrayOf(0x08, 0x00, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00))
+        Log.i(TAG, "sendCtrlV: press report ok=$pressOk")
+        if (isQtiDevice) {
+            try { Thread.sleep(AppConfig.HID_REPORT_INTERVAL_MS) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        } else {
+            try { Thread.sleep(100) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        }
+        // 释放所有键
+        val releaseOk = sendKbdReport(dev, KEYBOARD_REPORT_ID, byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+        Log.i(TAG, "sendCtrlV: release report ok=$releaseOk")
     }
 
     /** 发送鼠标移动
