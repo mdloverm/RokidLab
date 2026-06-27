@@ -11,6 +11,10 @@
 -keep class com.rokid.cxr.** { *; }
 -dontwarn com.rokid.cxr.**
 
+# ── Gson（client-l SDK 内部依赖）──
+-keep class com.google.gson.** { *; }
+-dontwarn com.google.gson.**
+
 # ── Compose ──
 -keep class androidx.compose.** { *; }
 -dontwarn androidx.compose.**

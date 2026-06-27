@@ -137,6 +137,9 @@ dependencies {
     implementation(files("libs/client-l-1.0.3.aar"))
     implementation(files("libs/cxr-service-bridge-1.0.aar"))
     
+    // client-l SDK 内部依赖 Gson，需要显式引入
+    implementation("com.google.code.gson:gson:2.10.1")
+    
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
