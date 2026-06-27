@@ -399,6 +399,7 @@ adb/
 | 更新对话框 UI | `UpdateDialog.kt` → `UpdateDialog` Composable |
 | 下载安装逻辑 | `MainActivity.kt` → `performSelfUpdate()` |
 | Gitee API token | `f79578621ec9da315fa31a80b6c8da8c`（token，存于 RULES.md 仅供 API 操作参考） |
+| Gitee 推送认证 | `git remote set-url origin https://dlover1314:{TOKEN}@gitee.com/dlover1314/RokidLab`（临时，推送完恢复为不需要 token 的 URL） |
 
 ## 十一、部署规范
 
