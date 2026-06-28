@@ -29,6 +29,7 @@
       "description": "为 Rokid 智能眼镜提供语音助手控制功能，支持语音唤醒、语音指令识别、智能问答等。",
       "author": "dlover1314",
       "sourceUrl": "https://gitee.com/dlover1314/rokid-xiaozhi",
+      "iconUrl": "https://gitee.com/dlover1314/rokid-xiaozhi/raw/main/photo/xiaozhi-glasses-icon.png",
       "phoneRequired": false,
       "screenshotUrls": [
         "https://gitee.com/dlover1314/rokid-xiaozhi/raw/main/photo/xiaozhi-glasses-1.jpg",
