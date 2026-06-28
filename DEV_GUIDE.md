@@ -10,19 +10,24 @@
    - [HID 描述符](#22-hid-描述符)
    - [按键映射表](#23-按键映射表)
    - [按键常量定义](#24-按键常量定义)
-3. [眼镜端游戏开发](#3-眼镜端游戏开发)
-   - [推荐方案：键盘监听](#31-推荐方案键盘监听)
-   - [Android View 示例](#32-android-view-示例)
-   - [Unity 示例](#33-unity-示例)
-   - [关键须知](#34-关键须知)
-   - [调试工具](#35-调试工具)
-   - [快速开始模板](#36-快速开始模板)
-4. [商店应用提交指南](#4-商店应用提交指南)
-   - [提交步骤](#41-提交步骤)
-   - [完整 JSON 示例](#42-完整-json-示例)
-   - [字段详解](#43-字段详解)
-   - [更新版本](#44-更新版本)
-   - [注意事项](#45-注意事项)
+3. [键盘输入功能开发指南](#3-键盘输入功能开发指南)
+   - [功能概述](#31-功能概述)
+   - [三层方案详解](#32-三层方案详解)
+   - [通信协议](#33-通信协议)
+   - [文件清单](#34-文件清单)
+4. [眼镜端游戏开发](#4-眼镜端游戏开发)
+   - [推荐方案：键盘监听](#41-推荐方案键盘监听)
+   - [Android View 示例](#42-android-view-示例)
+   - [Unity 示例](#43-unity-示例)
+   - [关键须知](#44-关键须知)
+   - [调试工具](#45-调试工具)
+   - [快速开始模板](#46-快速开始模板)
+5. [商店应用提交指南](#5-商店应用提交指南)
+   - [提交步骤](#51-提交步骤)
+   - [完整 JSON 示例](#52-完整-json-示例)
+   - [字段详解](#53-字段详解)
+   - [更新版本](#54-更新版本)
+   - [注意事项](#55-注意事项)
 
 ---
 
@@ -236,9 +241,108 @@ const val KEY_RIGHT  = 13
 
 ---
 
-## 3. 眼镜端游戏开发
+## 3. 键盘输入功能开发指南
 
-### 3.1 推荐方案：键盘监听
+### 3.1 功能概述
+
+RokidLab 提供在鼠标模式下向眼镜焦点 App 输入中英文文字的功能。用户通过手机键盘打字，文字经三层方案依次尝试写入眼镜。
+
+```
+手机输入法 ──→ [键盘弹窗] ──→ TCP TextInputService ─→ 设置剪贴板 ─→ input keyevent KEYCODE_PASTE
+                  │
+                  ├── 失败 → AdbPasteCompat (ADB 原始协议) ─→ shell input keyevent KEYCODE_PASTE
+                  │
+                  └── 失败 → BluetoothHidManager.sendCtrlV() (HID Ctrl+V)
+```
+
+### 3.2 三层方案详解
+
+#### 方案一：TCP 直连眼镜 TextInputService（主方案）
+
+**眼镜端** — `TextInputService.kt`：
+- 在端口 7656 启动 TCP Server 线程
+- 接收手机发送的文字数据（UTF-8 编码的字符串，以换行符结尾）
+- 使用 Java `StringBuilder` 阻塞读取 `BufferedReader.readLine()`
+- 将接收到的文字设置到系统剪贴板：通过 `context.getSystemService<ClipboardManager>().setPrimaryClip()`
+- 尝试 `Runtime.exec("input keyevent KEYCODE_PASTE")` 注入粘贴事件
+- 回复 "OK\n" 到客户端，表示处理完成
+- 循环等待下一条文字
+
+> **注意**：从普通 App 内执行 `input keyevent` 缺少 `INJECT_EVENTS` 系统权限，此方案在部分系统上可能失败。
+
+**手机端** — `GamepadActivity.kt`：
+- 触控板区域下方显示键盘按钮，点击弹出 `AlertDialog`
+- 对话框内包含 `TextField`（默认 `OutlinedTextField`）用于文字输入
+- 点击"发送"后顺序执行三层方案
+- 自动从 `LabApplication.phoneMirrorIp` 获取眼镜 IP
+
+#### 方案二：ADB 原始协议粘贴（备选）
+
+**手机端** — `AdbPasteCompat.kt`：
+- 通过 TCP Socket 直连眼镜 ADB 端口 5555，无需 adb.exe
+- 实现 ADB 原始二进制协议（24 字节小端序报头 + 负载）
+- 完成 RSA 认证握手（`CNXN`/`AUTH`/`SIGNATURE` 消息交换）
+- 打开 `shell:` service，执行 `input keyevent KEYCODE_PASTE`
+- 读取服务端 `OKAY` + 输出流确认命令已执行
+- 连接完成后自动关闭 Socket
+
+**核心代码结构**：
+```kotlin
+data class Packet(val cmd: String, val arg0: Int, val arg1: Int, val data: ByteArray)
+
+// 连接 → 认证 → 打开 shell → 执行 input keyevent KEYCODE_PASTE → 关闭
+fun execPaste(ip: String, port: Int = 5555): Boolean
+```
+
+> 从 ADB shell 执行 `input keyevent` 拥有 `INJECT_EVENTS` 系统权限，可以跨 App 注入粘贴事件。
+
+#### 方案三：HID Ctrl+V 兜底
+
+**手机端** — `BluetoothHidManager.kt` 的 `sendCtrlV()` 方法：
+- 发送 8 字节标准 HID 键盘报告：`byteArrayOf(0x08, 0x00, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00)`
+  - 第一个字节 `0x08` = 左 Ctrl 修饰键
+  - 第三个字节 `0x19` = 按键码 'v'（对应的 Usage ID）
+- 通过 `BluetoothHidDevice.sendReport()` 发送到眼镜
+- 松键报告：`byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)`
+
+### 3.3 通信协议
+
+#### TextInputService TCP 协议
+
+| 方向 | 格式 | 说明 |
+|:----:|:----:|:----:|
+| 手机 → 眼镜 | `UTF-8 字符串 + \n` | 要输入的文字内容 |
+| 眼镜 → 手机 | `OK\n` | 处理完成（剪贴板已设置，粘贴已尝试） |
+
+#### ADB 原始协议（AdbPasteCompat）
+
+完整实现 ADB TCP 通信协议，包含以下消息交换：
+
+| 阶段 | 客户端发送 | 服务端响应 | 说明 |
+|:----:|:----------:|:----------:|:----:|
+| 连接 | `CNXN`（版本+最大负载+系统标识） | `CNXN` / `AUTH` | 协商版本 |
+| 认证 | `AUTH(TOKEN)` 签名响应 | `OKAY` / `AUTH` | RSA 签名认证 |
+| Shell | `OPEN(local_id, "shell:input...")` | `OKAY` → `WRTE`(输出) | 执行粘贴命令 |
+
+**关键实现细节**：
+- RSA 密钥对使用 `KeyPairGenerator` 生成，`SHA1withRSA` 签名
+- 公钥以 `signature + styles` 格式发送（`@adb` 后缀）
+- 24 字节报头：`[4B cmd][4B arg0][4B arg1][12B data_length]`（小端序）
+
+### 3.4 文件清单
+
+| 文件 | 位置 | 说明 |
+|:----|:-----|:-----|
+| `TextInputService.kt` | `RokidLink/.../rokidlink/` | 眼镜端 TCP 文字接收服务 |
+| `AdbPasteCompat.kt` | `phone-app/.../adb/` | 手机端 ADB 原始协议粘贴工具 |
+| `GamepadActivity.kt` | `phone-app/.../hid/` | 手机端键盘弹窗 UI 和发送逻辑 |
+| `BluetoothHidManager.kt` | `phone-app/.../hid/` | HID Ctrl+V 兜底方案 |
+
+---
+
+## 4. 眼镜端游戏开发
+
+### 4.1 推荐方案：键盘监听
 
 Rokid 眼镜的 Linux 内核 HID 驱动不支持标准 Gamepad Input Device。所有按键通过 **Keyboard** 和 **Consumer Control** 两个输入设备发送，眼镜端接收后转换为 Android 键码。
 
@@ -248,7 +352,7 @@ Rokid 眼镜的 Linux 内核 HID 驱动不支持标准 Gamepad Input Device。�
 | **Android View** | `onKeyDown()` | `KEYCODE_Z` (52) |
 | **Android Compose** | `onKeyEvent` | `KeyEvent.Key.Z` |
 
-### 3.2 Android View 示例
+### 4.2 Android View 示例
 
 ```kotlin
 class GameActivity : Activity() {
@@ -281,7 +385,7 @@ class GameActivity : Activity() {
 }
 ```
 
-### 3.3 Unity 示例
+### 4.3 Unity 示例
 
 ```csharp
 using UnityEngine;
@@ -312,14 +416,14 @@ public class RokidController : MonoBehaviour
 }
 ```
 
-### 3.4 关键须知
+### 4.4 关键须知
 
 1. **非标准 Gamepad**：Rokid 眼镜内核不支持 `Usage Game Pad (0x05)`，请使用键盘键码。
 2. **Select 和 Start 键码相同**：两者都映射为 `KEYCODE_DPAD_CENTER (23)`。建议 Select 作"确定"，Start 作"暂停"。
 3. **单键释放**：松开按键即发送释放报告。
 4. **鼠标模式**：RokidLab 提供"鼠标"标签页，使用 Mouse Report ID 3，非游戏场景适用。
 
-### 3.5 调试工具
+### 4.5 调试工具
 
 ```bash
 # 查看所有输入设备
@@ -332,7 +436,7 @@ adb shell getevent -l /dev/input/event3
 adb shell getevent -l /dev/input/event2
 ```
 
-### 3.6 快速开始模板
+### 4.6 快速开始模板
 
 ```kotlin
 // RokidGameTemplate.kt — 可复用的 Rokid 手柄游戏 Activity 模板
@@ -388,9 +492,9 @@ class RokidGameTemplate : Activity() {
 
 ---
 
-## 4. 商店应用提交指南
+## 5. 商店应用提交指南
 
-### 4.1 提交步骤
+### 5.1 提交步骤
 
 #### 第一步：准备应用
 
@@ -407,7 +511,7 @@ class RokidGameTemplate : Activity() {
   - Gitee：`https://gitee.com/{user}/{repo}/releases/download/{tag}/{file}.apk`
 - 按下方字段说明编写应用 JSON，连同 APK 一起提交给商店维护者
 
-### 4.2 完整 JSON 示例
+### 5.2 完整 JSON 示例
 
 ```json
 {
@@ -465,7 +569,7 @@ class RokidGameTemplate : Activity() {
 }
 ```
 
-### 4.3 字段详解
+### 5.3 字段详解
 
 #### 顶层字段
 
@@ -557,7 +661,7 @@ class RokidGameTemplate : Activity() {
 }
 ```
 
-### 4.4 更新版本
+### 5.4 更新版本
 
 修改对应应用的以下字段：
 
@@ -568,7 +672,7 @@ class RokidGameTemplate : Activity() {
 5. `artifacts[0].versionCode` — 新 versionCode
 6. `artifacts[0].sha256` — 新 SHA256（可选）
 
-### 4.5 注意事项
+### 5.5 注意事项
 
 - 远程注册表的 `apps` 数组只需维护**你的应用**，不需要包含全部应用
 - 远程应用 `id` 与本地内置应用相同时，远程数据覆盖本地数据

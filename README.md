@@ -14,6 +14,13 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - 通过蓝牙 HID 协议将手机模拟为键盘/鼠标/游戏手柄
 - **鼠标模式**：手机屏幕作为触控板，控制眼镜光标
 - **按键模式**：14 个可自定义位置的按键（↑↓←→ + A/B/C/X/Y/Z + L/R + Select/Start）
+- **键盘输入**：鼠标模式下触控板区域下方提供键盘按钮，点击弹出原生输入法对话框
+  - 用户输入文字后通过三层方案写入眼镜当前焦点 App：
+    1. **TCP 直连眼镜 TextInputService** — 设置系统剪贴板（主方案）
+    2. **ADB 原始协议粘贴** — 通过 TCP 连接眼镜 ADB 端口 5555，以 shell 身份执行 `input keyevent KEYCODE_PASTE`
+    3. **HID Ctrl+V 兜底** — 通过蓝牙 HID 键盘报告发送 Ctrl+V（HID 修饰键 `0x08` + 按键码 `0x19`）
+  - 自动从全局 `phoneMirrorIp` 获取眼镜 IP，无需手动输入
+  - 三种方案依次尝试，前一种失败则自动降级到后一种，始终确保文字能送达
 - 按键通过双 HID 通道发送：
   - **Consumer Control**：↑↓←→ / Select / Start → 眼镜端 `KEYCODE_DPAD_*` / `KEYCODE_DPAD_CENTER`
   - **Keyboard**：A/B/C/X/Y/Z/L/R → 眼镜端 `KEYCODE_Z/X/C/A/S/D/Q/W`
@@ -183,6 +190,7 @@ RokidLab/
 │   │   │   │   ├── AdbShellClient.kt        Shell 命令/应用管理/定时功能
 │   │   │   │   ├── AdbFileManagerClient.kt  文件管理 ADB 客户端
 │   │   │   │   ├── AdbScreenMirrorClient.kt 屏幕镜像 ADB 客户端
+│   │   │   │   ├── AdbPasteCompat.kt        ADB 原始协议粘贴工具（TCP 连接眼镜 ADB 5555 端口执行粘贴）
 │   │   │   │   └── AdbKeyManager.kt         RSA 密钥持久化管理（所有 ADB Client 共享）
 │   │   │   ├── design/      设计系统
 │   │   │   ├── StoreTheme.kt      配色/字体/主题（主入口，主题管理 + 全局颜色）
@@ -249,6 +257,7 @@ RokidLab/
 │   │   │   ├── MainActivity.kt              WiFi/ADB 状态面板 + ADB TCP 自动开启
 │   │   │   ├── PhoneMirrorActivity.kt       投屏接收画面（onResume 自愈 + singleTask 重新拉起）
 │   │   │   ├── PhoneMirrorServer.kt         Socket 服务端（灰度图接收 + Bitmap 双缓冲 + 线程安全锁）
+│   │   │   ├── TextInputService.kt          TCP 文字输入服务（监听 7656 端口，接收手机文字 → 设置剪贴板 → 尝试粘贴）
 │   │   │   └── ScreenMirrorIntentActivity.kt scrcpy 启动中转 Activity（ADB 就绪等待）
 │   │   ├── res/layout/activity_main.xml     状态面板布局
 │   │   └── AndroidManifest.xml
@@ -289,7 +298,7 @@ RokidLab/
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v1.3-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v1.5-debug.apk
 ```
 
 ### 眼镜端服务
