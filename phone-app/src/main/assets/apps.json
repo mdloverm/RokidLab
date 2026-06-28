@@ -1,69 +1,403 @@
 {
-  "schemaVersion": 1,
-  "generatedAt": "2026-06-07T00:00:00.000Z",
-
-  "brewVersion": "1.0.0",
-  "brewVersionCode": 1,
-  "brewApkUrl": "https://gitee.com/dlover1314/RokidBrew/releases/download/v1.0.0/phone-app-release.apk",
-  "brewReleaseUrl": "https://gitee.com/dlover1314/RokidBrew/releases/tag/v1.0.0",
-  "brewNotes": "首次发布 RokidBrew 眼镜文件管理",
-  "brewChanges": [
-    "支持通过 WiFi ADB 连接眼镜进行文件管理",
-    "支持文件浏览、上传、下载、删除、重命名",
-    "支持剪贴板复制/粘贴/剪切操作",
-    "支持新建文件夹",
-    "支持文件搜索和排序",
-    "支持查看文件详情",
-    "支持存储空间显示",
-    "支持多选批量操作"
-  ],
-
-  "apps": [
-    {
-      "id": "rokid-xiaozhi",
-      "name": "Rokid 小助手",
-      "type": "glasses",
-      "category": "Utility",
-      "version": "1.0.0",
-      "summary": "Rokid 眼镜语音助手控制应用",
-      "description": "为 Rokid 智能眼镜提供语音助手控制功能，支持语音唤醒、语音指令识别、智能问答等。",
-      "author": "dlover1314",
-      "sourceUrl": "https://gitee.com/dlover1314/rokid-xiaozhi",
-      "iconUrl": "https://gitee.com/dlover1314/rokid-xiaozhi/raw/main/photo/xiaozhi-glasses-icon.png",
-      "phoneRequired": false,
-      "screenshotUrls": [
-        "https://gitee.com/dlover1314/rokid-xiaozhi/raw/main/photo/xiaozhi-glasses-1.jpg",
-        "https://gitee.com/dlover1314/rokid-xiaozhi/raw/main/photo/xiaozhi-glasses-2.jpg"
-      ],
-      "featured": true,
-      "featuredRank": 1,
-      "publishedAt": "2026-05-26T00:00:00.000Z",
-      "newUntil": "2026-07-26T00:00:00.000Z",
-      "listing": {
-        "about": "Rokid 小助手是一款专为 Rokid 智能眼镜打造的语音助手应用。它让您可以通过语音命令控制眼镜的各项功能，实现真正的 hands-free 体验。\n\n主要功能：\n- 语音唤醒：说出唤醒词即可激活助手\n- 语音指令：通过语音控制眼镜应用、调节音量等\n- 智能问答：连接网络后可回答各类问题\n- 信息查询：天气、新闻、日程等信息一目了然"
-      },
-      "releases": [
+    "schemaVersion": 1,
+    "generatedAt": "2026-06-28T00:00:00.000Z",
+    "brewVersion": "1.5",
+    "brewVersionCode": 6,
+    "brewIconUrl": "",
+    "brewApkUrl": "https://gitee.com/dlover1314/RokidLab/releases/download/v1.5/RokidLab-v1.5-release.apk",
+    "brewReleaseUrl": "https://gitee.com/dlover1314/RokidLab/releases/tag/v1.5",
+    "brewNotes": "键盘输入 + 蓝牙HID修复",
+    "brewChanges": [
+        "蓝牙鼠标模式增加键盘输入（弹出系统键盘，文字通过TCP发送到眼镜端自动粘贴）",
+        "三层粘贴保障：TCP设剪贴板 → ADB shell粘贴 → HID Ctrl+V兜底",
+        "RokidLink新增TextInputServer（TCP端口7656）",
+        "修复Xiaomi手机HID注册失败（失败后2秒自动重试，最多3次）",
+        "键盘弹窗UI优化（去掉粘贴相关文字）"
+    ],
+    "apps": [
         {
-          "version": "1.0.0",
-          "date": "2026-05-26T00:00:00.000Z",
-          "sourceReleaseUrl": "https://gitee.com/dlover1314/rokid-xiaozhi/releases/tag/rokid-xiaozhi",
-          "notes": "首次发布，支持基础语音助手功能",
-          "changes": [
-            "支持语音唤醒和语音指令",
-            "支持智能问答",
-            "支持信息查询（天气、新闻等）",
-            "优化眼镜端语音识别准确率"
-          ]
-        }
-      ],
-      "artifacts": [
+            "id": "rokid-xiaozhi",
+            "name": "Rokid 小助手",
+            "type": "glasses",
+            "category": "Utility",
+            "version": "1.0.0",
+            "summary": "Rokid 眼镜语音助手控制应用",
+            "description": "为 Rokid 智能眼镜提供语音助手控制功能，支持语音唤醒、语音指令识别、智能问答等。",
+            "author": "dlover1314",
+            "sourceUrl": "https://gitee.com/dlover1314/rokid-xiaozhi",
+            "iconUrl": "https://gitee.com/dlover1314/rokid-xiaozhi/raw/main/photo/xiaozhi-glasses-icon.png",
+            "phoneRequired": false,
+            "screenshotUrls": [
+                "https://gitee.com/dlover1314/rokid-xiaozhi/raw/main/photo/xiaozhi-glasses-1.jpg",
+                "https://gitee.com/dlover1314/rokid-xiaozhi/raw/main/photo/xiaozhi-glasses-2.jpg"
+            ],
+            "featured": true,
+            "featuredRank": 1,
+            "publishedAt": "2026-05-26T00:00:00.000Z",
+            "newUntil": "2026-07-26T00:00:00.000Z",
+            "listing": {
+                "about": "Rokid 小助手是一款专为 Rokid 智能眼镜打造的语音助手应用。它让您可以通过语音命令控制眼镜的各项功能，实现真正的 hands-free 体验。\n\n主要功能：\n- 语音唤醒：说出唤醒词即可激活助手\n- 语音指令：通过语音控制眼镜应用、调节音量等\n- 智能问答：连接网络后可回答各类问题\n- 信息查询：天气、新闻、日程等信息一目了然"
+            },
+            "releases": [
+                {
+                    "date": "2026-05-26T00:00:00.000Z",
+                    "sourceReleaseUrl": "https://gitee.com/dlover1314/rokid-xiaozhi/releases/tag/rokid-xiaozhi",
+                    "notes": "首次发布，支持基础语音助手功能",
+                    "changes": [
+                        "支持语音唤醒和语音指令",
+                        "支持智能问答",
+                        "支持信息查询（天气、新闻等）",
+                        "优化眼镜端语音识别准确率"
+                    ]
+                }
+            ],
+            "artifacts": [
+                {
+                    "target": "glasses",
+                    "url": "https://gitee.com/dlover1314/rokid-xiaozhi/releases/download/rokid-xiaozhi/app-release-signed.apk",
+                    "packageName": "com.rokid.xiaozhi",
+                    "versionCode": 1
+                }
+            ]
+        },
         {
-          "target": "glasses",
-          "url": "https://gitee.com/dlover1314/rokid-xiaozhi/releases/download/rokid-xiaozhi-v1.0.0/app-release-signed.apk",
-          "packageName": "com.rokid.xiaozhi",
-          "versionCode": 1
+            "id": "com.rokid.overlayrec",
+            "name": "OverlayRec",
+            "type": "glasses",
+            "category": "Tool",
+            "version": "0.1.0",
+            "summary": "Triggers Rokid AR screenshots and AR recording from the glasses with a two-finger gesture overlay.",
+            "description": "Triggers Rokid AR screenshots and AR recording from the glasses with a two-finger gesture overlay.",
+            "author": "Anezium",
+            "sourceUrl": "https://ghproxy.net/https://github.com/Anezium/OverlayRec",
+            "iconAsset": "store_dev_overlayrec",
+            "iconUrl": "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/OverlayRec/main/OverlayRec_logo.png",
+            "screenshotUrls": [
+                "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/OverlayRec/main/OverlayRec-screenshot1.jpg",
+                "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/OverlayRec/main/OverlayRec-screenshot2.jpg"
+            ],
+            "phoneRequired": false,
+            "featured": false,
+            "publishedAt": "2026-06-24T00:00:00.000Z",
+            "artifacts": [
+                {
+                    "target": "glasses",
+                    "url": "https://ghproxy.net/https://github.com/Anezium/OverlayRec/releases/download/v0.1.0/OverlayRec-v0.1.0.apk",
+                    "packageName": "com.rokid.overlayrec",
+                    "versionCode": 1,
+                    "sha256": "4fe10edceb8fcde0e4c3502f1826452f89db9a43b7e08e6c3fcb6a0f2907ad7a",
+                    "sizeBytes": 605747
+                }
+            ],
+            "listing": {
+                "about": "Triggers Rokid AR screenshots and AR recording from the glasses with a two-finger gesture overlay.",
+                "descriptionMarkdown": "Triggers Rokid AR screenshots and AR recording from the glasses with a two-finger gesture overlay."
+            },
+            "releases": [
+                {
+                    "version": "0.1.0",
+                    "date": "2026-06-24T00:00:00.000Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/Anezium/OverlayRec/releases/tag/v0.1.0",
+                    "notes": "Triggers Rokid AR screenshots and AR recording from the glasses with a two-finger gesture overlay.",
+                    "changes": [
+                        "Community Rokid glasses app listing."
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "com.rokid.shell",
+            "name": "Rokid Shell",
+            "type": "glasses",
+            "category": "Tool",
+            "version": "0.1.0",
+            "summary": "Native file explorer for Rokid glasses with APK install flow and a local HTTP transfer server.",
+            "description": "Native file explorer for Rokid glasses with APK install flow and a local HTTP transfer server.",
+            "author": "Anezium",
+            "sourceUrl": "https://ghproxy.net/https://github.com/Anezium/Rokid-Shell",
+            "iconAsset": "store_dev_rokid_shell",
+            "iconUrl": "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/Rokid-Shell/main/Rokid-Shell_Logo.png",
+            "screenshotUrls": [],
+            "phoneRequired": false,
+            "featured": false,
+            "publishedAt": "2026-06-24T00:00:00.000Z",
+            "artifacts": [
+                {
+                    "target": "glasses",
+                    "url": "https://ghproxy.net/https://github.com/Anezium/Rokid-Shell/releases/download/v0.1.0/rokid-shell-v0.1.0.apk",
+                    "packageName": "com.rokid.shell",
+                    "versionCode": 1,
+                    "sha256": "771e44ffa107737abccb42c8965377ea7a9e7016fb727e59fc3fbafc781e20ca",
+                    "sizeBytes": 7982003
+                }
+            ],
+            "listing": {
+                "about": "Native file explorer for Rokid glasses with APK install flow and a local HTTP transfer server.",
+                "descriptionMarkdown": "Native file explorer for Rokid glasses with APK install flow and a local HTTP transfer server."
+            },
+            "releases": [
+                {
+                    "version": "0.1.0",
+                    "date": "2026-06-24T00:00:00.000Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/Anezium/Rokid-Shell/releases/tag/v0.1.0",
+                    "notes": "Native file explorer for Rokid glasses with APK install flow and a local HTTP transfer server.",
+                    "changes": [
+                        "Community Rokid glasses app listing."
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "com.kupstudio.touchmouse",
+            "name": "GazeMou",
+            "type": "glasses",
+            "category": "Tool",
+            "version": "1.6.0",
+            "summary": "Head-gesture cursor, wake mode, favorites, and app drawer utility for Rokid Glasses.",
+            "description": "Head-gesture cursor, wake mode, favorites, and app drawer utility for Rokid Glasses.",
+            "author": "KUPdriveouter",
+            "sourceUrl": "https://ghproxy.net/https://github.com/KUPdriveouter/RokidAppMaker",
+            "iconAsset": "store_dev_gazemou",
+            "screenshotUrls": [],
+            "phoneRequired": false,
+            "featured": false,
+            "publishedAt": "2026-06-24T00:00:00.000Z",
+            "artifacts": [
+                {
+                    "target": "glasses",
+                    "url": "https://ghproxy.net/https://github.com/KUPdriveouter/RokidAppMaker/releases/download/v1.6.0/GazeMou-v1.6.0.apk",
+                    "packageName": "com.kupstudio.touchmouse",
+                    "versionCode": 7,
+                    "sha256": "b6cfc6cd2f7bc14d1472d6a394a364a54239695ff90d301f092cdd5a8695b270",
+                    "sizeBytes": 7219786
+                }
+            ],
+            "listing": {
+                "about": "Head-gesture cursor, wake mode, favorites, and app drawer utility for Rokid Glasses.",
+                "descriptionMarkdown": "Head-gesture cursor, wake mode, favorites, and app drawer utility for Rokid Glasses."
+            },
+            "releases": [
+                {
+                    "version": "1.6.0",
+                    "date": "2026-06-24T00:00:00.000Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/KUPdriveouter/RokidAppMaker/releases/tag/v1.6.0",
+                    "notes": "Head-gesture cursor, wake mode, favorites, and app drawer utility for Rokid Glasses.",
+                    "changes": [
+                        "Community Rokid glasses app listing."
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "com.osagem.photodel4rokidglasses",
+            "name": "PhotoDel",
+            "type": "glasses",
+            "category": "Tool",
+            "version": "1.0.2",
+            "summary": "Simple utility to view and delete photos or videos directly on Rokid glasses.",
+            "description": "Simple utility to view and delete photos or videos directly on Rokid glasses.",
+            "author": "osagem",
+            "sourceUrl": "https://ghproxy.net/https://github.com/osagem/photoDel4rokidglasses",
+            "iconAsset": "store_dev_photodel",
+            "iconUrl": "https://ghproxy.net/https://raw.githubusercontent.com/osagem/photoDel4rokidglasses/master/app/src/main/res/mipmap-hdpi/ic_launcher.webp",
+            "screenshotUrls": [],
+            "phoneRequired": false,
+            "featured": false,
+            "publishedAt": "2026-06-24T00:00:00.000Z",
+            "artifacts": [
+                {
+                    "target": "glasses",
+                    "url": "https://ghproxy.net/https://github.com/osagem/photoDel4rokidglasses/releases/download/v1.0.2/PhotoDel.v1.0.2.apk",
+                    "packageName": "com.osagem.photodel4rokidglasses",
+                    "versionCode": 12,
+                    "sha256": "8bb905d8c6faa3be2eb213d58588d3b7a3c3d50eb3cedd9c06da1a14a1da8f77",
+                    "sizeBytes": 17580071
+                }
+            ],
+            "listing": {
+                "about": "Simple utility to view and delete photos or videos directly on Rokid glasses.",
+                "descriptionMarkdown": "Simple utility to view and delete photos or videos directly on Rokid glasses."
+            },
+            "releases": [
+                {
+                    "version": "1.0.2",
+                    "date": "2026-06-24T00:00:00.000Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/osagem/photoDel4rokidglasses/releases/tag/v1.0.2",
+                    "notes": "Simple utility to view and delete photos or videos directly on Rokid glasses.",
+                    "changes": [
+                        "Community Rokid glasses app listing."
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "io.github.anezium.rokiddragonballscouter",
+            "name": "DragonBall Scouter",
+            "type": "glasses",
+            "category": "Game",
+            "version": "0.1.1",
+            "summary": "Dragon Ball inspired scouter HUD with live face lock, pseudo-AR mode, and battle power reveal.",
+            "description": "Dragon Ball inspired scouter HUD with live face lock, pseudo-AR mode, and battle power reveal.",
+            "author": "Anezium",
+            "sourceUrl": "https://ghproxy.net/https://github.com/Anezium/Rokid-DragonBallScouter",
+            "iconAsset": "store_dev_dragonball",
+            "iconUrl": "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/Rokid-DragonBallScouter/main/Rokid-DragonBallScouter_logo.png",
+            "screenshotUrls": [
+                "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/Rokid-DragonBallScouter/main/Screenshot_HUD.png",
+                "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/Rokid-DragonBallScouter/main/Screenshot_livecam.png"
+            ],
+            "phoneRequired": false,
+            "featured": false,
+            "publishedAt": "2026-06-24T00:00:00.000Z",
+            "artifacts": [
+                {
+                    "target": "glasses",
+                    "url": "https://ghproxy.net/https://github.com/Anezium/Rokid-DragonBallScouter/releases/download/v0.1.1/DragonBallScouter-v0.1.1-debug.apk",
+                    "packageName": "io.github.anezium.rokiddragonballscouter",
+                    "versionCode": 2,
+                    "sha256": "a71a72b05e993fedf3709e5f17708f4d728808fe3c742f5a74cd68cd5b5fe926",
+                    "sizeBytes": 55110006
+                }
+            ],
+            "listing": {
+                "about": "Dragon Ball inspired scouter HUD with live face lock, pseudo-AR mode, and battle power reveal.",
+                "descriptionMarkdown": "Dragon Ball inspired scouter HUD with live face lock, pseudo-AR mode, and battle power reveal."
+            },
+            "releases": [
+                {
+                    "version": "0.1.1",
+                    "date": "2026-06-24T00:00:00.000Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/Anezium/Rokid-DragonBallScouter/releases/tag/v0.1.1",
+                    "notes": "Dragon Ball inspired scouter HUD with live face lock, pseudo-AR mode, and battle power reveal.",
+                    "changes": [
+                        "Community Rokid glasses app listing."
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "com.rokidgames.headpong",
+            "name": "Game Collection",
+            "type": "glasses",
+            "category": "Game",
+            "version": "0.1.0",
+            "summary": "Retro-style mini-game collection for Rokid Glasses with touchpad controls and head-tracked gameplay.",
+            "description": "Retro-style mini-game collection for Rokid Glasses with touchpad controls and head-tracked gameplay.",
+            "author": "ARDings",
+            "sourceUrl": "https://ghproxy.net/https://github.com/ARDings/RokidGames",
+            "iconAsset": "store_dev_games",
+            "screenshotUrls": [],
+            "phoneRequired": false,
+            "featured": false,
+            "publishedAt": "2026-06-24T00:00:00.000Z",
+            "artifacts": [
+                {
+                    "target": "glasses",
+                    "url": "https://ghproxy.net/https://github.com/ARDings/RokidGames/releases/download/Rokid/GameCollection.apk",
+                    "packageName": "com.rokidgames.headpong",
+                    "versionCode": 1,
+                    "sha256": "0b6b66998776b323dc102552f1688d6ab0bcc7d74aaf61231d4e1cd0a3592a9f",
+                    "sizeBytes": 7631938
+                }
+            ],
+            "listing": {
+                "about": "Retro-style mini-game collection for Rokid Glasses with touchpad controls and head-tracked gameplay.",
+                "descriptionMarkdown": "Retro-style mini-game collection for Rokid Glasses with touchpad controls and head-tracked gameplay."
+            },
+            "releases": [
+                {
+                    "version": "0.1.0",
+                    "date": "2026-06-24T00:00:00.000Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/ARDings/RokidGames/releases/tag/Rokid",
+                    "notes": "Retro-style mini-game collection for Rokid Glasses with touchpad controls and head-tracked gameplay.",
+                    "changes": [
+                        "Community Rokid glasses app listing."
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "com.snorlytics.browser_glasses",
+            "name": "Rokid Browser",
+            "type": "glasses",
+            "category": "Productivity",
+            "version": "1.0.1",
+            "summary": "Glasses-side web browser controlled by the Rokid Remote phone companion over Bluetooth.",
+            "description": "Glasses-side web browser controlled by the Rokid Remote phone companion over Bluetooth.",
+            "author": "Inplov",
+            "sourceUrl": "https://ghproxy.net/https://github.com/Inplov/rokid-browser",
+            "iconAsset": "store_dev_browser",
+            "iconUrl": "https://ghproxy.net/https://raw.githubusercontent.com/Inplov/rokid-browser/main/rokid_browser_glasses/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
+            "screenshotUrls": [],
+            "phoneRequired": false,
+            "featured": false,
+            "publishedAt": "2026-06-24T00:00:00.000Z",
+            "artifacts": [
+                {
+                    "target": "glasses",
+                    "url": "https://ghproxy.net/https://github.com/Inplov/rokid-browser/releases/download/v1.0.1/rokid-browser-glasses-v1.0.1.apk",
+                    "packageName": "com.snorlytics.browser_glasses",
+                    "versionCode": 2,
+                    "sha256": "e5acdcd53b40e1922ad9ea2288ba112753ffac38e768471278a3b9060b146df2",
+                    "sizeBytes": 42994080
+                }
+            ],
+            "listing": {
+                "about": "Glasses-side web browser controlled by the Rokid Remote phone companion over Bluetooth.",
+                "descriptionMarkdown": "Glasses-side web browser controlled by the Rokid Remote phone companion over Bluetooth."
+            },
+            "releases": [
+                {
+                    "version": "1.0.1",
+                    "date": "2026-06-24T00:00:00.000Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/Inplov/rokid-browser/releases/tag/v1.0.1",
+                    "notes": "Glasses-side web browser controlled by the Rokid Remote phone companion over Bluetooth.",
+                    "changes": [
+                        "Community Rokid glasses app listing."
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "kr.pe.eung.ekreader",
+            "name": "EK Reader",
+            "type": "glasses",
+            "category": "Education",
+            "version": "1.4.0",
+            "summary": "Clean ebook reader for Rokid Glasses.",
+            "description": "Clean ebook reader for Rokid Glasses.",
+            "author": "eung3392",
+            "sourceUrl": "https://ghproxy.net/https://github.com/eung3392/eungsoft",
+            "iconAsset": "store_dev_eung_reader",
+            "screenshotUrls": [],
+            "phoneRequired": false,
+            "featured": false,
+            "publishedAt": "2026-06-24T00:00:00.000Z",
+            "artifacts": [
+                {
+                    "target": "glasses",
+                    "url": "https://ghproxy.net/https://github.com/eung3392/eungsoft/releases/download/RokidGlassesApp/EKReader_v1.4.0.apk",
+                    "packageName": "kr.pe.eung.ekreader",
+                    "versionCode": 1,
+                    "sha256": "643e1653a1a9a3419561d603337b3c96c7afcb3cfc2f64b4c71cd1b06486ce88",
+                    "sizeBytes": 4753960
+                }
+            ],
+            "listing": {
+                "about": "Clean ebook reader for Rokid Glasses.",
+                "descriptionMarkdown": "Clean ebook reader for Rokid Glasses."
+            },
+            "releases": [
+                {
+                    "version": "1.4.0",
+                    "date": "2026-06-24T00:00:00.000Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/eung3392/eungsoft/releases/tag/RokidGlassesApp",
+                    "notes": "Clean ebook reader for Rokid Glasses.",
+                    "changes": [
+                        "Community Rokid glasses app listing."
+                    ]
+                }
+            ]
         }
-      ]
-    }
-  ]
+    ]
 }
