@@ -85,6 +85,7 @@ import kotlinx.coroutines.withContext
 private const val PREFS_NAME = "rokidbrew_preferences"
 private const val PREF_ROKID_HOST_APP = "rokid_host_app"
 private const val PREF_COMPAT_GUIDE_DISMISSED = "compat_guide_dismissed"
+private const val PREF_OVERLAY_GUIDE_DISMISSED = "overlay_guide_dismissed"
 
 class MainActivity : AppCompatActivity() {
     private companion object {
@@ -1714,6 +1715,10 @@ class MainActivity : AppCompatActivity() {
     private fun checkOverlayPermissionForMirror(): Boolean {
         if (!ManufacturerUtils.isChineseRom()) return true
         if (ManufacturerUtils.canDrawOverlays(this)) return true
+        if (getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_OVERLAY_GUIDE_DISMISSED, false)) {
+            Log.i(TAG, "Overlay guide already dismissed, skipping")
+            return true
+        }
 
         log(getString(R.string.log_overlay_permission_guide))
         runOnUiThread {
@@ -1724,6 +1729,14 @@ class MainActivity : AppCompatActivity() {
                 .setPositiveButton(getString(R.string.overlay_permission_guide)) { _, _ ->
                     ManufacturerUtils.openOverlaySettings(this@MainActivity)
                     log(getString(R.string.log_overlay_permission_guide))
+                }
+                .setNegativeButton(getString(R.string.overlay_permission_skip)) { _, _ ->
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(PREF_OVERLAY_GUIDE_DISMISSED, true)
+                        .apply()
+                    isStartingPhoneMirror = false
+                    Log.i(TAG, "Overlay guide dismissed permanently")
                 }
                 .show()
         }

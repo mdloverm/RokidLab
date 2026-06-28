@@ -192,7 +192,7 @@
     <string name="mirror_github">GitHub</string>
     <string name="mirror_github_desc">Official GitHub mirror source</string>
     <string name="mirror_gitee">Gitee</string>
-    <string name="mirror_gitee_desc">Gitee mirror source (faster in China)</string>
+    <string name="mirror_gitee_desc">Gitee source (Bruce provides base app source)</string>
 
     <!-- Guide -->
     <string name="guide_welcome">Welcome to Rokid Lab</string>
@@ -329,6 +329,7 @@
     <string name="overlay_permission_title">Overlay Permission</string>
     <string name="overlay_permission_desc">Some phones (OPPO/vivo) require additional overlay permission for stable screen casting.</string>
     <string name="overlay_permission_guide">Enable Now</string>
+    <string name="overlay_permission_skip">Don\'t show again</string>
     <string name="compatibility_settings_title">Compatibility Settings</string>
     <string name="compatibility_settings_desc">Detected your device as %s, which has additional background power-saving policies. Completing the following settings is recommended for the best experience.</string>
     <string name="compatibility_settings_battery">☐ Add to battery optimization whitelist</string>
@@ -554,6 +555,16 @@
     <string name="mouse_tab">🖱 Mouse</string>
     <string name="dpad_mode">D-Pad</string>
     <string name="joystick_mode">Joystick</string>
+
+    <!-- GamepadActivity Keyboard -->
+    <string name="keyboard_btn">⌨ Keyboard</string>
+    <string name="keyboard_dialog_title">Keyboard Input</string>
+    <string name="keyboard_glasses_ip_hint">Glasses IP (e.g. 192.168.1.100)</string>
+    <string name="keyboard_text_hint">Enter text to send to glasses…</string>
+    <string name="keyboard_send">Send</string>
+    <string name="keyboard_sent_ok">✅ Sent</string>
+    <string name="keyboard_send_failed">Send failed: %s</string>
+    <string name="keyboard_no_ip">Please enter the glasses IP address</string>
 
     <!-- ADB Tools - Timer -->
     <string name="adb_tools_timer_subtitle">Timer / Combo Actions</string>

@@ -191,7 +191,7 @@
     <string name="select_mirror_source">选择商店源</string>
     <string name="mirror_github">GitHub 源</string>
     <string name="mirror_github_desc">官方 GitHub 镜像源</string>
-    <string name="mirror_gitee_desc">Gitee 镜像源（国内访问更快）</string>
+    <string name="mirror_gitee_desc">Gitee 源（Bruce 提供基础应用源）</string>
     <string name="mirror_gitee">Gitee 源</string>
 
     <!-- Guide -->
@@ -329,6 +329,7 @@
     <string name="overlay_permission_title">悬浮窗权限</string>
     <string name="overlay_permission_desc">部分手机（OPPO/vivo）需要额外授予悬浮窗权限，以确保投屏功能稳定运行。</string>
     <string name="overlay_permission_guide">前往开启</string>
+    <string name="overlay_permission_skip">不再提示</string>
     <string name="compatibility_settings_title">兼容性设置</string>
     <string name="compatibility_settings_desc">检测到您的设备为 %s，系统有额外的后台省电策略。建议完成以下设置以优化应用体验。</string>
     <string name="compatibility_settings_battery">☐ 加入电池优化白名单</string>
@@ -550,7 +551,7 @@
     <string name="customize">自定义</string>
     <string name="drag_to_reposition">拖拽按键以调整位置</string>
     <string name="touchpad_area">触控板区域</string>
-    <string name="touchpad_instructions">滑动移动光标 · 点击左键 · 双击双击</string>
+    <string name="touchpad_instructions">滑动移动光标 · 单击=左键 · 双击=右键</string>
     <string name="left_button">左键</string>
     <string name="right_button">右键</string>
     <string name="middle_button">中键</string>
