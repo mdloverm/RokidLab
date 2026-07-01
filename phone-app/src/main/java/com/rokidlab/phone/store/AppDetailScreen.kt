@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import com.rokidlab.phone.R
+import java.util.Locale
 
 @Composable
 internal fun DetailSheet(
@@ -215,8 +216,33 @@ internal fun DetailHeroHeader(app: BrewApp, iconLoader: IconLoader, mediaLoader:
                 overflow = TextOverflow.Ellipsis,
                 lineHeight = 29.sp,
             )
+            val resId = when (app.category.lowercase(Locale.ROOT)) {
+                "accessibility" -> com.rokidlab.phone.R.string.category_accessibility
+                "ai" -> com.rokidlab.phone.R.string.category_ai
+                "browser" -> com.rokidlab.phone.R.string.category_browser
+                "camera" -> com.rokidlab.phone.R.string.category_camera
+                "developer" -> com.rokidlab.phone.R.string.category_developer
+                "education" -> com.rokidlab.phone.R.string.category_education
+                "experiment" -> com.rokidlab.phone.R.string.category_experiment
+                "fitness" -> com.rokidlab.phone.R.string.category_fitness
+                "game" -> com.rokidlab.phone.R.string.category_game
+                "games" -> com.rokidlab.phone.R.string.category_games
+                "launcher" -> com.rokidlab.phone.R.string.category_launcher
+                "learning" -> com.rokidlab.phone.R.string.category_learning
+                "media" -> com.rokidlab.phone.R.string.category_media
+                "mobility" -> com.rokidlab.phone.R.string.category_mobility
+                "music" -> com.rokidlab.phone.R.string.category_music
+                "navigation" -> com.rokidlab.phone.R.string.category_navigation
+                "productivity" -> com.rokidlab.phone.R.string.category_productivity
+                "reader" -> com.rokidlab.phone.R.string.category_reader
+                "shopping" -> com.rokidlab.phone.R.string.category_shopping
+                "tool" -> com.rokidlab.phone.R.string.category_tool
+                "translation" -> com.rokidlab.phone.R.string.category_translation
+                "utility" -> com.rokidlab.phone.R.string.category_utility
+                else -> null
+            }
             Text(
-                app.category,
+                text = if (resId != null) ctx.getString(resId) else app.category,
                 color = BrewCoral,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,

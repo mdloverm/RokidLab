@@ -905,13 +905,15 @@ class AdbFileManagerClient(
                         if (payload.size >= 4) {
                             val cmdStr = String(payload.copyOfRange(0, 4), Charsets.UTF_8)
                             if (cmdStr == "OKAY") {
-                                success = true
+                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                 Log.d(TAG, "Upload success")
+                                success = true
+                                break
                             } else if (cmdStr == "FAIL") {
                                 Log.e(TAG, "Upload failed: FAIL response")
+                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
                             }
                         }
-                        sendPacket(CMD_OKAY, sid, msg.arg0, null)
                     }
                     CMD_CLSE -> {
                         // 只处理当前 stream 的 CLSE，其他继续等待

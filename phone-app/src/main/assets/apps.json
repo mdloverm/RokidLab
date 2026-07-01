@@ -1,18 +1,19 @@
 {
     "schemaVersion": 1,
     "generatedAt": "2026-06-28T00:00:00.000Z",
-    "brewVersion": "1.5",
-    "brewVersionCode": 6,
+    "brewVersion": "1.7",
+    "brewVersionCode": 8,
     "brewIconUrl": "",
-    "brewApkUrl": "https://gitee.com/dlover1314/RokidLab/releases/download/v1.5/RokidLab-v1.5-release.apk",
-    "brewReleaseUrl": "https://gitee.com/dlover1314/RokidLab/releases/tag/v1.5",
-    "brewNotes": "键盘输入 + 蓝牙HID修复",
+    "brewApkUrl": "https://gitee.com/dlover1314/RokidLab/releases/download/v1.7/RokidLab-v1.7-release.apk",
+    "brewReleaseUrl": "https://gitee.com/dlover1314/RokidLab/releases/tag/v1.7",
+    "brewNotes": "ADB文件管理修复 + 商店优化",
     "brewChanges": [
-        "蓝牙鼠标模式增加键盘输入（弹出系统键盘，文字通过TCP发送到眼镜端自动粘贴）",
-        "三层粘贴保障：TCP设剪贴板 → ADB shell粘贴 → HID Ctrl+V兜底",
-        "RokidLink新增TextInputServer（TCP端口7656）",
-        "修复Xiaomi手机HID注册失败（失败后2秒自动重试，最多3次）",
-        "键盘弹窗UI优化（去掉粘贴相关文字）"
+        "ADB 文件管理器中文目录上传文件超时问题修复",
+        "商店页面新增下拉刷新",
+        "精选应用改为横向滑动展示全部",
+        "分类标签支持中英文本地化（22种分类）",
+        "投屏悬浮窗权限弹窗增加「不再提示」选项",
+        "商店页面加载优化"
     ],
     "apps": [
         {
@@ -77,7 +78,8 @@
                 "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/OverlayRec/main/OverlayRec-screenshot2.jpg"
             ],
             "phoneRequired": false,
-            "featured": false,
+            "featured": true,
+            "featuredRank": 2,
             "publishedAt": "2026-06-24T00:00:00.000Z",
             "artifacts": [
                 {
@@ -247,7 +249,8 @@
                 "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/Rokid-DragonBallScouter/main/Screenshot_livecam.png"
             ],
             "phoneRequired": false,
-            "featured": false,
+            "featured": true,
+            "featuredRank": 2,
             "publishedAt": "2026-06-24T00:00:00.000Z",
             "artifacts": [
                 {

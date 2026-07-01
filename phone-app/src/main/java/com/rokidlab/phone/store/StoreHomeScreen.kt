@@ -51,6 +51,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.ExperimentalMaterialApi
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -971,7 +975,7 @@ private fun LazyListScope.appListItems(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = if (expanded) "SHOW LESS" else "SHOW ALL (${apps.size})",
+                    text = if (expanded) stringResource(R.string.app_list_show_less) else stringResource(R.string.app_list_show_all, apps.size),
                     color = BrewCoral,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
@@ -1345,6 +1349,7 @@ private fun BottomNavigationBar(
 }
 
 // ===== StoreModule - 应用商店列表页 =====
+@OptIn(ExperimentalMaterialApi::class)
 @Composable
 private fun StoreModule(
     listState: LazyListState,
@@ -1366,14 +1371,25 @@ private fun StoreModule(
     onUpdateOpen: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    LazyColumn(
-        state = listState,
+    val isRefreshing = state.refreshing
+    val pullRefreshState = rememberPullRefreshState(
+        refreshing = isRefreshing,
+        onRefresh = { actions.onRefresh() },
+    )
+    
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+            .pullRefresh(pullRefreshState),
     ) {
-        if (showingFeaturedList) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+        ) {
+            if (showingFeaturedList) {
             item(key = "search-header") {
                     Row(
                         modifier = Modifier
@@ -1523,12 +1539,14 @@ private fun StoreModule(
                 item(key = "featured-grid") {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                     ) {
-                        lists.featuredApps.take(2).forEach { app ->
+                        lists.featuredApps.forEach { app ->
                             Box(
                                 modifier = Modifier
-                                    .weight(1f)
+                                    .width(132.dp)
                                     .aspectRatio(1f)
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(BrewPanel)
@@ -1588,8 +1606,33 @@ private fun StoreModule(
                                     .clickable { onCategoryFilter(category) },
                                 contentAlignment = Alignment.Center,
                             ) {
+                                val resId = when (category.lowercase(Locale.ROOT)) {
+                                    "accessibility" -> R.string.category_accessibility
+                                    "ai" -> R.string.category_ai
+                                    "browser" -> R.string.category_browser
+                                    "camera" -> R.string.category_camera
+                                    "developer" -> R.string.category_developer
+                                    "education" -> R.string.category_education
+                                    "experiment" -> R.string.category_experiment
+                                    "fitness" -> R.string.category_fitness
+                                    "game" -> R.string.category_game
+                                    "games" -> R.string.category_games
+                                    "launcher" -> R.string.category_launcher
+                                    "learning" -> R.string.category_learning
+                                    "media" -> R.string.category_media
+                                    "mobility" -> R.string.category_mobility
+                                    "music" -> R.string.category_music
+                                    "navigation" -> R.string.category_navigation
+                                    "productivity" -> R.string.category_productivity
+                                    "reader" -> R.string.category_reader
+                                    "shopping" -> R.string.category_shopping
+                                    "tool" -> R.string.category_tool
+                                    "translation" -> R.string.category_translation
+                                    "utility" -> R.string.category_utility
+                                    else -> null
+                                }
                                 Text(
-                                    text = category.uppercase(),
+                                    text = if (resId != null) ctx.getString(resId) else category.uppercase(Locale.ROOT),
                                     color = if (isSelected) BrewBg else BrewText,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
@@ -1617,5 +1660,12 @@ private fun StoreModule(
                 topPadding = 24,
             )
         }
+        }
+        
+        PullRefreshIndicator(
+            refreshing = isRefreshing,
+            state = pullRefreshState,
+            modifier = Modifier.align(Alignment.TopCenter),
+        )
     }
 }
