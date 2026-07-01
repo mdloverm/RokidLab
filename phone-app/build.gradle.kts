@@ -25,8 +25,8 @@ android {
         applicationId = "com.rokidlab.phone"
         minSdk = 28
         targetSdk = 34
-        versionCode = 7
-        versionName = "1.6"
+        versionCode = 8
+        versionName = "1.7"
         manifestPlaceholders["cleartextTrafficPermitted"] = "false"
     }
 
@@ -147,5 +147,6 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.material:material")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
