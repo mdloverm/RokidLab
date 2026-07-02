@@ -188,12 +188,46 @@ object ManufacturerUtils {
 
     /** 打开悬浮窗权限设置页 */
     fun openOverlaySettings(context: Context) {
-        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+        val intent = getOverlaySettingsIntent(context) ?: Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
             data = Uri.parse("package:${context.packageName}")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         runCatching { context.startActivity(intent) }
-            .onFailure { Log.w(TAG, "Cannot open overlay settings: ${it.message}") }
+            .onFailure {
+                Log.w(TAG, "Cannot open overlay settings: ${it.message}")
+                // fallback to standard intent
+                val fallback = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                runCatching { context.startActivity(fallback) }
+            }
+    }
+
+    /** 获取厂商特定的悬浮窗权限设置页 Intent */
+    fun getOverlaySettingsIntent(context: Context): Intent? {
+        return when (detect()) {
+            Manufacturer.OPPO -> {
+                // ColorOS 悬浮窗管理列表页
+                Intent("com.coloros.safecenter.action.SAFECENTER").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            Manufacturer.VIVO -> {
+                // OriginOS 悬浮窗管理
+                Intent("com.iqoo.powersave.ui.PowerSaveActivity").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            Manufacturer.XIAOMI -> {
+                // MIUI 应用权限管理
+                Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                    putExtra("extra_pkgname", context.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            }
+            else -> null
+        }
     }
 
     // ── 通知权限（厂商特殊处理） ──

@@ -1431,7 +1431,10 @@ class MainActivity : AppCompatActivity() {
         // 检查悬浮窗权限（OPPO/vivo 需要额外授权）
         if (!ManufacturerUtils.canDrawOverlays(this)) {
             log(getString(R.string.log_overlay_permission_guide))
-            checkOverlayPermissionForMirror()
+            if (!checkOverlayPermissionForMirror()) {
+                isStartingPhoneMirror = false
+                return
+            }
         }
         
         // 通过 CXR-L 启动眼镜端投屏接收页

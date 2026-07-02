@@ -321,10 +321,10 @@ class PhoneMirrorActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !ManufacturerUtils.canDrawOverlays(this)) {
             Log.w(TAG, "Overlay permission not granted, requesting...")
             connectionStatus = getString(R.string.overlay_permission_title)
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:${packageName}")
-            )
+            val intent = ManufacturerUtils.getOverlaySettingsIntent(this)
+                ?: Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                    data = Uri.parse("package:${packageName}")
+                }
             overlayPermissionLauncher.launch(intent)
             return
         }
