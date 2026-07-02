@@ -517,6 +517,7 @@
     <string name="load_folder_failed">加载文件夹失败: %s</string>
     <string name="connection_failed_check_ip">连接失败，请检查IP地址和网络</string>
     <string name="connection_error_format">连接异常: %s</string>
+    <string name="connection_lost_reconnect">连接已断开，请重新连接</string>
     <string name="preview_failed_format">预览失败: %s</string>
     <string name="image_download_failed">图片下载失败</string>
     <string name="function_menu">功能菜单</string>
@@ -524,6 +525,9 @@
     <string name="download_action">下载</string>
     <string name="copy_action">复制</string>
     <string name="cut_action">剪切</string>
+    <string name="paste_action">粘贴</string>
+    <string name="clipboard_has_items">剪贴板中有待粘贴文件</string>
+    <string name="clipboard_cleared">已取消粘贴</string>
     <string name="details_action">详情</string>
     <string name="retry_action">重试</string>
     <string name="back_action">返回</string>
@@ -625,6 +629,34 @@
     <string name="timer_coord_y">Y:</string>
     <string name="timer_create_task">创建任务</string>
     <string name="timer_update_task">更新任务</string>
+
+    <!-- ADB Tools - Key Button Settings -->
+    <string name="key_btn_title">按键设置</string>
+    <string name="key_btn_subtitle">自定义眼镜功能键映射</string>
+    <string name="key_btn_short_press">短按</string>
+    <string name="key_btn_long_press">长按</string>
+    <string name="key_btn_package">应用包名</string>
+    <string name="key_btn_package_hint">输入包名，如 com.example.app</string>
+    <string name="key_btn_activity">Activity 类名</string>
+    <string name="key_btn_activity_hint">默认为 .MainActivity</string>
+    <string name="key_btn_quick_pick">快速选择已安装的应用：</string>
+    <string name="key_btn_test_short">测试短按</string>
+    <string name="key_btn_test_long">测试长按</string>
+    <string name="key_btn_launching">正在启动 %s…</string>
+    <string name="key_btn_launch_success">%s 启动成功</string>
+    <string name="key_btn_launch_failed">启动失败：%s</string>
+    <string name="key_btn_note">通过 CXR-L SDK 的 appStart 接口启动眼镜端应用，需要先完成授权（WiFi + RokidApp 授权码）。短按和长按配置保存后可在任何连接会话中使用。此处可通过「测试」按钮验证配置是否正确。</string>
+    <string name="key_btn_no_sdk">CXR-L SDK 未就绪，请先连接眼镜并完成授权</string>
+    <string name="key_btn_no_token">无授权令牌，请先通过 RokidApp 完成授权</string>
+    <string name="key_btn_binding">正在连接 CXR 链路…</string>
+    <string name="key_btn_timeout">发送按键配置超时</string>
+    <string name="key_btn_config_failed">按键配置会话失败</string>
+    <string name="key_btn_send_failed">按键配置发送失败</string>
+    <string name="key_btn_bind_failed">CXR 绑定失败</string>
+    <string name="key_btn_sent">按键配置已发送：短按→%1$s，长按→%2$s</string>
+    <string name="key_btn_save_to_glasses">保存配置到眼镜</string>
+    <string name="key_btn_sending">正在发送按键配置到眼镜…短按=%1$s，长按=%2$s</string>
+    <string name="key_btn_security_note">⚠️ 安全提醒：直接启动第三方应用的 Activity 可能绕过应用的授权/付费验证。请确认你拥有该应用的使用权，或仅启动你自己的应用。RokidLab 不对因不当使用造成的授权问题负责。</string>
 
     <!-- 系统信息 -->
     <string name="section_device_info">设备信息</string>

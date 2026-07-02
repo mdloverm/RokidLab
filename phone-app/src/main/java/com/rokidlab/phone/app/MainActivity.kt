@@ -423,6 +423,33 @@ class MainActivity : AppCompatActivity() {
                         onExitApp = { finishAndRemoveTask() },
                         onSettingsReinstallRokidLink = { reinstallRokidLinkOnGlasses() },
                         onExportLog = { showExportLogDialog() },
+                        onLaunchGlassAppViaSdk = { pkg, activity ->
+                            cxrL.launchApp(
+                                packageName = pkg,
+                                activityClass = activity,
+                                onLaunchResult = { success ->
+                                    runOnUiThread {
+                                        val msg = if (success) "$pkg 启动成功" else "$pkg 启动失败"
+                                        log(msg)
+                                    }
+                                }
+                            )
+                        },
+                        onSendKeyButtonConfig = { shortPkg, shortActivity, longPkg, longActivity, onDone ->
+                            cxrL.sendKeyButtonConfig(
+                                shortPkg = shortPkg,
+                                shortActivity = shortActivity,
+                                longPkg = longPkg,
+                                longActivity = longActivity,
+                                onResult = { success ->
+                                    runOnUiThread {
+                                        val msg = if (success) "按键配置已发送到眼镜" else "按键配置发送失败"
+                                        log(msg)
+                                        onDone(success)
+                                    }
+                                },
+                            )
+                        },
                         onSwitchLanguage = { code ->
                             com.rokidlab.phone.util.LocalizationManager.setLocale(this@MainActivity, code)
                             // Recreate activity to apply language
@@ -778,6 +805,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        // 退出时清理日志，避免下次打开看到旧日志
+        LogCollector.clear()
         cxrL.cleanup()
         (application as LabApplication).hidManager.destroy()
         super.onDestroy()

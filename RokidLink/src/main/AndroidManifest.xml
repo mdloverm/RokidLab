@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.BODY_SENSORS" />
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="false"
@@ -34,6 +39,20 @@
             android:name=".ScreenMirrorIntentActivity"
             android:exported="true"
             android:theme="@style/Theme.RokidLink.Transparent" />
+
+        <!-- 常驻透明 Activity：保持进程 VISIBLE 状态，Service 双重保障 -->
+        <activity
+            android:name=".KeyButtonBridgeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:configChanges="keyboardHidden|orientation|screenSize"
+            android:noHistory="false" />
+
+        <service
+            android:name=".KeyButtonService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
     </application>
 

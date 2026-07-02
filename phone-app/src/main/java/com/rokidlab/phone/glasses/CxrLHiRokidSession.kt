@@ -224,6 +224,58 @@ class CxrLHiRokidSession(
         connectAndLaunch(authToken, targetHostApp, packageName, activityClass, sendCmdAfterLaunch, onLaunchResult)
     }
 
+    /**
+     * 通过 SDK 自定义指令，将按键配置（短按/长按 → 应用包名+Activity）发送到眼镜端。
+     * 眼镜端 RokidLink 的 KeyButtonService 接收后处理按键事件。
+     */
+    fun sendKeyButtonConfig(
+        shortPkg: String,
+        shortActivity: String,
+        longPkg: String,
+        longActivity: String,
+        onResult: ((Boolean) -> Unit)? = null,
+    ) {
+        val targetHostApp = hostApp
+        if (!hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
+            onResult?.invoke(false)
+            return
+        }
+        val authToken = token.orEmpty()
+
+        onBusyChanged(true)
+        connectAndRunCustomAppOperation(
+            authToken = authToken,
+            targetHostApp = targetHostApp,
+            operation = CxrAppOperation(
+                packageName = "com.rokidlab.rokidlink",
+                timeoutMillis = 10_000,
+                timeoutMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_timeout),
+                bindMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_binding),
+                configureFailureMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_config_failed),
+                bindFailureMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_bind_failed),
+                showConnectionStatus = false,
+                onReady = { link ->
+                    val caps = Caps()
+                    caps.write("key_config")
+                    caps.write(shortPkg)
+                    caps.write(shortActivity)
+                    caps.write(longPkg)
+                    caps.write(longActivity)
+                    val result = link.sendCustomCmd("rokidlab_key_config", caps)
+                    val resultMsg = if (result == 0) "OK" else "error=$result"
+                    onStatus(activity.getString(com.rokidlab.phone.R.string.key_btn_sent, shortPkg, longPkg, resultMsg))
+                    completeActiveOperation()
+                    onResult?.invoke(result == 0)
+                },
+                onFailure = {
+                    cleanup()
+                    onBusyChanged(false)
+                    onResult?.invoke(false)
+                },
+            ),
+        )
+    }
+
     fun stopApp(packageName: String, onStopResult: ((Boolean) -> Unit)? = null) {
         val targetHostApp = hostApp
         if (!hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {

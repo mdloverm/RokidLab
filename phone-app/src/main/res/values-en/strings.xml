@@ -513,6 +513,7 @@
     <string name="load_folder_failed">Failed to load folder: %s</string>
     <string name="connection_failed_check_ip">Connection failed. Check IP address and network.</string>
     <string name="connection_error_format">Connection error: %s</string>
+    <string name="connection_lost_reconnect">Connection lost. Please reconnect.</string>
     <string name="preview_failed_format">Preview failed: %s</string>
     <string name="image_download_failed">Image download failed</string>
     <string name="function_menu">Function Menu</string>
@@ -520,6 +521,9 @@
     <string name="download_action">Download</string>
     <string name="copy_action">Copy</string>
     <string name="cut_action">Cut</string>
+    <string name="paste_action">Paste</string>
+    <string name="clipboard_has_items">Files ready to paste</string>
+    <string name="clipboard_cleared">Paste cancelled</string>
     <string name="details_action">Details</string>
     <string name="retry_action">Retry</string>
     <string name="back_action">Back</string>
@@ -623,6 +627,34 @@
     <string name="timer_update_task">Update Task</string>
     <string name="timer_coord_x">X:</string>
     <string name="timer_coord_y">Y:</string>
+
+    <!-- ADB Tools - Key Button Settings -->
+    <string name="key_btn_title">Key Button</string>
+    <string name="key_btn_subtitle">Customize glasses function button</string>
+    <string name="key_btn_short_press">Short Press</string>
+    <string name="key_btn_long_press">Long Press</string>
+    <string name="key_btn_package">Package Name</string>
+    <string name="key_btn_package_hint">e.g. com.example.app</string>
+    <string name="key_btn_activity">Activity Class</string>
+    <string name="key_btn_activity_hint">Defaults to .MainActivity</string>
+    <string name="key_btn_quick_pick">Quick pick installed apps:</string>
+    <string name="key_btn_test_short">Test Short Press</string>
+    <string name="key_btn_test_long">Test Long Press</string>
+    <string name="key_btn_launching">Launching %s…</string>
+    <string name="key_btn_launch_success">%s launched successfully</string>
+    <string name="key_btn_launch_failed">Launch failed: %s</string>
+    <string name="key_btn_note">Uses CXR-L SDK appStart to launch the app/activity on glasses. Requires authorization (WiFi + RokidApp auth code). Configs are saved and persist across sessions. Use the Test button to verify your setup.</string>
+    <string name="key_btn_no_sdk">CXR-L SDK not ready. Please connect glasses and complete authorization first.</string>
+    <string name="key_btn_no_token">No auth token. Please authorize via RokidApp first.</string>
+    <string name="key_btn_binding">Connecting to CXR link...</string>
+    <string name="key_btn_timeout">Key button config send timeout</string>
+    <string name="key_btn_config_failed">Key button config session failed</string>
+    <string name="key_btn_send_failed">Key button config send failed</string>
+    <string name="key_btn_bind_failed">CXR bind failed</string>
+    <string name="key_btn_sent">Key config sent: short→%1$s, long→%2$s</string>
+    <string name="key_btn_save_to_glasses">Save config to glasses</string>
+    <string name="key_btn_sending">Sending key config to glasses... short=%1$s, long=%2$s</string>
+    <string name="key_btn_security_note">⚠️ Security Notice: Launching a third-party app\'s Activity directly may bypass its authorization/payment verification. Ensure you have the right to use the app, or only launch your own apps. RokidLab is not responsible for any authorization issues arising from improper use.</string>
 
     <!-- System Info -->
     <string name="section_device_info">Device Info</string>

@@ -93,6 +93,9 @@ class MainActivity : Activity() {
         // 启动文本输入 TCP 服务器（端口 7656）
         TextInputServer.start(this)
 
+        // 启动按键映射服务（接收手机端下发的按键配置并监听物理按键）
+        KeyButtonService.start(this)
+
         statusText = findViewById(R.id.statusText)
         ipText = findViewById(R.id.ipText)
         dot = findViewById(R.id.dot)

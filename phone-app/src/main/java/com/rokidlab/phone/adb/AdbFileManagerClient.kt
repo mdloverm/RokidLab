@@ -1,6 +1,7 @@
 package com.rokidlab.phone.adb
 
 import com.rokidlab.phone.util.AppConfig
+import com.rokidlab.phone.util.LogCollector
 import com.rokidlab.phone.R
 import android.content.Context
 import android.util.Base64
@@ -31,6 +32,48 @@ class AdbFileManagerClient(
     private var keyPair: KeyPair? = null
     private var localId = AtomicInteger(1)
     private val lock = Any() // 同步锁，防止并发操作
+
+    /** 跟踪 ADB 会话是否真正存活（超过 TCP 层面） */
+    @Volatile
+    private var adbSessionAlive = false
+
+    // ── 心跳保活（防止国产/鸿蒙系统后台 Socket 超时断开） ──
+    @Volatile
+    private var heartbeatRunning = false
+    private var heartbeatThread: Thread? = null
+
+    private class HeartbeatCommand(private val client: AdbFileManagerClient) : Runnable {
+        override fun run() {
+            while (client.heartbeatRunning && client.adbSessionAlive) {
+                try {
+                    Thread.sleep(AppConfig.ADB_HEARTBEAT_INTERVAL_MS)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (!client.heartbeatRunning || !client.adbSessionAlive) break
+                try {
+                    client.executeShellCommandInternal("shell:echo 1\u0000")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Heartbeat failed, marking session dead: ${e.message}")
+                    client.adbSessionAlive = false
+                    break
+                }
+            }
+        }
+    }
+
+    private fun startHeartbeat() {
+        if (heartbeatRunning) return
+        heartbeatRunning = true
+        heartbeatThread = Thread(HeartbeatCommand(this), "fm-heartbeat").also { it.isDaemon = true; it.start() }
+        Log.d(TAG, "Heartbeat started (interval=${AppConfig.ADB_HEARTBEAT_INTERVAL_MS}ms)")
+    }
+
+    private fun stopHeartbeat() {
+        heartbeatRunning = false
+        heartbeatThread?.interrupt()
+        heartbeatThread = null
+    }
 
     companion object {
         private const val TAG = "AdbFileManager"
@@ -95,20 +138,24 @@ class AdbFileManagerClient(
 
             socket = Socket()
             socket?.tcpNoDelay = true
-            socket?.soTimeout = 10000 // 10秒超时
-            socket?.connect(java.net.InetSocketAddress(ipAddress, port), 10000) // 10秒连接超时
+            socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+            socket?.connect(java.net.InetSocketAddress(ipAddress, port), AppConfig.ADB_CONNECT_TIMEOUT_MS)
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
             Log.i(TAG, "TCP connection established")
             onStatus(context.getString(R.string.file_manager_auth))
 
             keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
+            localId.set(1)
             doHandshake()
+            adbSessionAlive = true
+            startHeartbeat()
             Log.i(TAG, "ADB connection successful")
             onStatus(context.getString(R.string.file_manager_connected))
             true
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed: ${e.message}", e)
+            LogCollector.e(TAG, "ADB connection failed to $ipAddress:$port: ${e.message}", e)
             onStatus(context.getString(R.string.file_manager_connection_failed, e.message))
             disconnect()
             false
@@ -289,6 +336,8 @@ class AdbFileManagerClient(
 
             } catch (e: Exception) {
                 Log.e(TAG, "listFiles error: ${e.message}", e)
+                LogCollector.e(TAG, "listFiles error: ${e.message}", e)
+                adbSessionAlive = false
             }
 
             return result.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { it.name.lowercase() })
@@ -432,10 +481,11 @@ class AdbFileManagerClient(
                     }
                     downloadSuccess
                 } catch (e: Exception) {
-                    Log.e(TAG, "Download failed: ${e.message}", e)
-                    // 关闭 sync 流，防止泄漏
-                    try { sendPacket(CMD_CLSE, sid, remoteId, ByteArray(0)) } catch (_: Exception) {}
-                    false
+                Log.e(TAG, "Download failed: ${e.message}", e)
+                LogCollector.e(TAG, "Download failed: ${e.message}", e)
+                // 关闭 sync 流，防止泄漏
+                try { sendPacket(CMD_CLSE, sid, remoteId, ByteArray(0)) } catch (_: Exception) {}
+                false
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "File operation failed: ${e.message}", e)
@@ -895,8 +945,9 @@ class AdbFileManagerClient(
             sendPacket(CMD_WRTE, sid, remoteId, doneCmd)
 
             // 等待响应（超时由 socket.soTimeout 保护）
-            var success = false
-            while (true) {
+            var uploadOk = false
+            var gotFinalClse = false
+            while (!gotFinalClse) {
                 val msg = readPacket()
                 when (msg.command) {
                     CMD_OKAY -> { }
@@ -907,27 +958,47 @@ class AdbFileManagerClient(
                             if (cmdStr == "OKAY") {
                                 sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                 Log.d(TAG, "Upload success")
-                                success = true
-                                break
+                                uploadOk = true
                             } else if (cmdStr == "FAIL") {
-                                Log.e(TAG, "Upload failed: FAIL response")
+                                val errMsg = if (payload.size > 8) {
+                                    val errLen = ((payload[4].toInt() and 0xFF) or
+                                                  ((payload[5].toInt() and 0xFF) shl 8) or
+                                                  ((payload[6].toInt() and 0xFF) shl 16) or
+                                                  ((payload[7].toInt() and 0xFF) shl 24))
+                                    if (payload.size >= 8 + errLen) String(payload, 8, errLen, Charsets.UTF_8) else "?"
+                                } else "?"
+                                Log.e(TAG, "Upload failed: FAIL response: $errMsg")
                                 sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                                uploadOk = false
                             }
                         }
                     }
                     CMD_CLSE -> {
-                        // 只处理当前 stream 的 CLSE，其他继续等待
                         if (msg.arg1 == sid) {
                             sendPacket(CMD_OKAY, sid, remoteId, null)
-                            break
+                            gotFinalClse = true
                         }
                     }
                 }
             }
 
-            success
+            // ⚠️ 关键：消费剩余的 CLSE（服务端可能有重复的 CLSE 包）
+            try {
+                socket?.soTimeout = 500
+                while (true) {
+                    val leftover = readPacket()
+                    if (leftover.command == CMD_CLSE && leftover.arg1 == sid) {
+                        sendPacket(CMD_OKAY, sid, leftover.arg0, null)
+                    }
+                    // 其他包直接丢弃——不是当前 stream 的了
+                }
+            } catch (_: Exception) {}
+            socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+
+            uploadOk
         } catch (e: Exception) {
             Log.e(TAG, "Upload failed: ${e.message}", e)
+            LogCollector.e(TAG, "Upload failed: ${e.message}", e)
             false
         }
         }
@@ -940,11 +1011,11 @@ class AdbFileManagerClient(
         fun shellEscape(s: String): String = "'${s.replace("'", "'\\''")}'"
         val escapedRemotePath = shellEscape(remotePath)
         
-        // 使用分块追加方式上传
-        val chunkSize = 64 * 1024
-        var offset = 0L
+        // 使用分块追加方式上传（8KB 块，避免 base64 后命令行过长）
+        val chunkSize = 8 * 1024
         var isFirst = true
         
+        var allSuccess = true
         file.inputStream().use { fis ->
             val buffer = ByteArray(chunkSize)
             var bytesRead: Int
@@ -956,16 +1027,28 @@ class AdbFileManagerClient(
                 // base64 在单引号内，路径也在单引号内，无 shell 注入风险
                 val cmd = "shell:echo '$base64' | base64 -d $redirect $escapedRemotePath\u0000"
                 
-                executeShellCommandInternal(cmd)
+                try {
+                    executeShellCommandInternal(cmd)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Shell upload chunk failed: ${e.message}")
+                    allSuccess = false
+                    break
+                }
                 
-                offset += bytesRead
                 isFirst = false
             }
         }
 
-        // 验证文件大小
-        val checkCmd = "shell:stat -c %s $escapedRemotePath 2>/dev/null || echo 0\u0000"
-        val checkResult = executeShellCommandInternal(checkCmd).trim()
+        if (!allSuccess) return false
+
+        // 验证文件大小（使用 wc -c，POSIX 兼容，鸿蒙/Android 均支持）
+        val checkCmd = "shell:wc -c < $escapedRemotePath 2>/dev/null || echo 0\u0000"
+        val checkResult = try {
+            executeShellCommandInternal(checkCmd).trim()
+        } catch (e: Exception) {
+            Log.e(TAG, "Shell upload verify failed: ${e.message}")
+            "0"
+        }
         val remoteSize = checkResult.toLongOrNull() ?: 0
         val success = remoteSize == file.length()
         
@@ -975,7 +1058,12 @@ class AdbFileManagerClient(
     
     private fun executeShellCommandInternal(cmd: String): String {
         val sid = localId.getAndIncrement()
-        sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+        try {
+            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+        } catch (e: Exception) {
+            adbSessionAlive = false
+            throw e
+        }
 
         var remoteId = 0
         val output = StringBuilder()
@@ -1158,12 +1246,15 @@ class AdbFileManagerClient(
     }
 
     fun isConnected(): Boolean {
-        val connected = socket?.isConnected == true && socket?.isClosed == false
-        Log.d(TAG, "isConnected: $connected (socket=${socket != null}, isConnected=${socket?.isConnected}, isClosed=${socket?.isClosed})")
-        return connected
+        val tcpAlive = socket?.isConnected == true && socket?.isClosed == false
+        val alive = tcpAlive && adbSessionAlive
+        Log.d(TAG, "isConnected: $alive (tcp=$tcpAlive, session=$adbSessionAlive)")
+        return alive
     }
 
     fun disconnect() {
+        stopHeartbeat()
+        adbSessionAlive = false
         try { socket?.close() } catch (_: Exception) {}
         socket = null
         inputStream = null

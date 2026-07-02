@@ -14,6 +14,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.produceState
 
 @Composable
 fun AdbToolsScreen(
@@ -29,6 +32,10 @@ fun AdbToolsScreen(
     onInstallRokidLink: () -> Unit,
     onOpenRokidLink: () -> Unit,
     onStopRokidLink: () -> Unit,
+    // 通过 CXR-L SDK 启动眼镜端应用（替代 ADB shell）
+    onLaunchAppViaSdk: ((String, String) -> Unit)? = null,
+    // 通过 SDK 发送按键配置到眼镜端
+    onSendKeyButtonConfig: ((String, String, String, String, (Boolean) -> Unit) -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
     val prefs = ctx.getSharedPreferences("adb_prefs", 0)
@@ -37,6 +44,7 @@ fun AdbToolsScreen(
     var showSysInfo by remember { mutableStateOf(false) }
     var showAppMgr by remember { mutableStateOf(false) }
     var showTimer by remember { mutableStateOf(false) }
+    var showKeyBtn by remember { mutableStateOf(false) }
     var showShell by remember { mutableStateOf(false) }
 
     // ADB 工具模块，颜色使用导航栏 ADB 主题色 BrewTeal
@@ -100,6 +108,13 @@ fun AdbToolsScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         BrutalButton(
+            label = ctx.getString(R.string.key_btn_title),
+            color = BrewMagenta,
+            onClick = { showKeyBtn = true },
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        BrutalButton(
             label = ctx.getString(R.string.shell_command),
             color = BrewAmber,
             onClick = { showShell = true },
@@ -126,5 +141,16 @@ fun AdbToolsScreen(
     if (showSysInfo) SysInfoDialog(client, connected, scope, { cb -> getOrConnect(cb) }) { showSysInfo = false }
     if (showAppMgr) AppMgrDialog(client, connected, scope, { cb -> getOrConnect(cb) }) { showAppMgr = false }
     if (showTimer) TimerDialog(client, connected, scope, { cb -> getOrConnect(cb) }) { showTimer = false }
+    if (showKeyBtn) {
+        val appPackages by produceState<List<String>>(emptyList(), client) {
+            value = withContext(Dispatchers.IO) { client?.listPackages(false) ?: emptyList() }
+        }
+        KeyButtonDialog(
+            onLaunchAppViaSdk = onLaunchAppViaSdk,
+            onSendKeyButtonConfig = onSendKeyButtonConfig,
+            appPackages = appPackages,
+            onDismiss = { showKeyBtn = false },
+        )
+    }
     if (showShell) ShellDialog(client, connected, scope, { cb -> getOrConnect(cb) }) { showShell = false }
 }

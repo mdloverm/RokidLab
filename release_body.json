@@ -1,7 +1,7 @@
 {
   "access_token": "f79578621ec9da315fa31a80b6c8da8c",
-  "tag_name": "v1.7",
-  "name": "v1.7 - ADB文件管理修复",
+  "tag_name": "v1.8",
+  "name": "v1.8 - 悬浮窗权限修复 & 投屏兼容性优化",
   "target_commitish": "master",
-  "body": "## RokidLab v1.7 正式版\n\n### ✨ 新功能\n- 商店页面新增下拉刷新\n- 精选应用改为横向滑动展示全部\n- 分类标签支持中英文本地化（22种分类）\n- 投屏悬浮窗权限弹窗增加\"不再提示\"选项\n\n### 🔧 修复\n- ADB 文件管理器中文目录上传文件超时问题\n- 多语言分类显示异常\n- 商店页面加载优化"
+  "body": "## RokidLab v1.8 正式版\n\n### ✨ 新功能\n- 无\n\n### 🔧 修复\n- 修复 AndroidManifest.xml 缺少 SYSTEM_ALERT_WINDOW 权限声明，导致 OPPO/vivo 等手机系统设置中找不到 RokidLab 悬浮窗入口的问题\n- 修复 startPhoneMirror() 悬浮窗权限未授权时流程未阻断的问题\n- 优化 OPPO/vivo/小米等国产 ROM 悬浮窗权限跳转路径，直接进入各厂商安全中心\n\n### ⚙️ 优化\n- ManufacturerUtils 增加 OPPO/vivo/小米等厂商特定悬浮窗权限跳转路径\n- PhoneMirrorActivity 统一使用 ManufacturerUtils 的厂商特定跳转"
 }

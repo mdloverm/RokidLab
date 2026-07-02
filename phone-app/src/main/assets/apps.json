@@ -1,19 +1,17 @@
 {
     "schemaVersion": 1,
     "generatedAt": "2026-06-28T00:00:00.000Z",
-    "brewVersion": "1.7",
-    "brewVersionCode": 8,
+    "brewVersion": "1.8",
+    "brewVersionCode": 9,
     "brewIconUrl": "",
-    "brewApkUrl": "https://gitee.com/dlover1314/RokidLab/releases/download/v1.7/RokidLab-v1.7-release.apk",
-    "brewReleaseUrl": "https://gitee.com/dlover1314/RokidLab/releases/tag/v1.7",
-    "brewNotes": "ADB文件管理修复 + 商店优化",
+    "brewApkUrl": "https://gitee.com/dlover1314/RokidLab/releases/download/v1.8/RokidLab-v1.8-release.apk",
+    "brewReleaseUrl": "https://gitee.com/dlover1314/RokidLab/releases/tag/v1.8",
+    "brewNotes": "悬浮窗权限修复 + 投屏兼容性优化",
     "brewChanges": [
-        "ADB 文件管理器中文目录上传文件超时问题修复",
-        "商店页面新增下拉刷新",
-        "精选应用改为横向滑动展示全部",
-        "分类标签支持中英文本地化（22种分类）",
-        "投屏悬浮窗权限弹窗增加「不再提示」选项",
-        "商店页面加载优化"
+        "修复 AndroidManifest.xml 缺少 SYSTEM_ALERT_WINDOW 权限声明",
+        "修复 OPPO/vivo 手机系统设置中找不到 RokidLab 悬浮窗入口的问题",
+        "优化 OPPO/vivo/小米等国产 ROM 悬浮窗权限跳转路径",
+        "投屏启动时悬浮窗权限未授权正确阻断流程"
     ],
     "apps": [
         {

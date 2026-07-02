@@ -1,6 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    kotlin("android")
     alias(libs.plugins.kotlin.compose)
 }
 
@@ -25,8 +25,8 @@ android {
         applicationId = "com.rokidlab.phone"
         minSdk = 28
         targetSdk = 34
-        versionCode = 9
-        versionName = "1.8"
+        versionCode = 10
+        versionName = "1.9"
         manifestPlaceholders["cleartextTrafficPermitted"] = "false"
     }
 
@@ -86,12 +86,12 @@ android {
 // ── 眼镜端 RokidLink APK 自动构建集成 ──
 // 构建 phone-app 时, 先构建 RokidLink 模块, 将输出的 APK 拷贝到 assets
 // 这样 installRokidLinkToGlasses() 读取的总是最新版 RokidLink
-val rokidLinkProject by lazy { rootProject.project(":RokidLink") }
+val rokidLinkProject by lazy { rootProject.project(":cxrl:RokidLab:RokidLink") }
 
 val buildRokidLinkDebug by tasks.registering {
     description = "构建 RokidLink (debug) 并拷贝到 phone-app assets"
     group = "build"
-    dependsOn(":RokidLink:assembleDebug")
+    dependsOn(":cxrl:RokidLab:RokidLink:assembleDebug")
     doLast {
         val sourceApk = rokidLinkProject.buildDir.resolve("outputs/apk/debug/RokidLink-debug.apk")
         val targetFile = file("src/main/assets/RokidLink.apk")
@@ -103,7 +103,7 @@ val buildRokidLinkDebug by tasks.registering {
 val buildRokidLinkRelease by tasks.registering {
     description = "构建 RokidLink (release) 并拷贝到 phone-app assets"
     group = "build"
-    dependsOn(":RokidLink:assembleRelease")
+    dependsOn(":cxrl:RokidLab:RokidLink:assembleRelease")
     doLast {
         val releaseDir = rokidLinkProject.buildDir.resolve("outputs/apk/release")
         // 优先取已签名的 APK，失败则取未签名的
@@ -133,7 +133,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     
-    // 本地 CXR-L SDK (包含所有 SO 文件)
+    // CXR-L SDK v1.0.3 (本地 AAR)
     implementation(files("libs/client-l-1.0.3.aar"))
     implementation(files("libs/cxr-service-bridge-1.0.aar"))
     

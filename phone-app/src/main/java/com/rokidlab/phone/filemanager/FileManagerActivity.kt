@@ -11,6 +11,7 @@ import com.rokidlab.phone.network.*
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.AppConfig
+import com.rokidlab.phone.util.LogCollector
 import com.rokidlab.phone.R
 import android.content.Intent
 import android.content.ActivityNotFoundException
@@ -286,6 +287,7 @@ internal fun FileManagerScreen(
     onDetails: (FileItem) -> Unit,
     onSelectAll: () -> Unit,
     onClearSelection: () -> Unit,
+    onClearClipboard: () -> Unit,
     onRenameFile: (FileItem) -> Unit,
     onCopyFile: (FileItem) -> Unit,
     onCutFile: (FileItem) -> Unit,
@@ -450,6 +452,32 @@ internal fun FileManagerScreen(
                 }
                 IconButton(onClick = { handleRefresh() }) {
                     Icon(Icons.Outlined.Refresh, contentDescription = ctx.getString(R.string.refresh), tint = BrewCoral, modifier = Modifier.rotate(rotationAngle))
+                }
+            }
+        }
+
+        // 粘贴栏 — 剪贴板有内容时显示
+        if (hasClipboard) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(BrewAmber.copy(alpha = 0.12f))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.ContentPaste, contentDescription = "Paste", tint = BrewAmber, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(ctx.getString(R.string.clipboard_has_items), color = BrewAmber, fontSize = 14.sp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onPaste) {
+                        Text(ctx.getString(R.string.paste_action), color = BrewAmber, fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(onClick = onClearClipboard) {
+                        Text(ctx.getString(R.string.cancel), color = BrewMuted)
+                    }
                 }
             }
         }
@@ -640,6 +668,7 @@ class FileManagerActivity : ComponentActivity() {
                                 onDetails = { file -> showFileDetails(file) },
                                 onSelectAll = { selectAll() },
                                 onClearSelection = { clearSelection() },
+                                onClearClipboard = { clearClipboard() },
                                 onRenameFile = { file -> 
                                     selectedFiles = setOf(file.path)
                                     showRenameDialog = true
@@ -722,6 +751,10 @@ class FileManagerActivity : ComponentActivity() {
     }
 
     private fun connect() {
+        // 先清理旧连接
+        adbClient?.disconnect()
+        adbClient = null
+        isConnected = false
         isConnecting = true
         connectionError = null
         Log.i(TAG, "Starting connection: $ipAddress:${AppConfig.DEFAULT_ADB_PORT}")
@@ -767,6 +800,18 @@ class FileManagerActivity : ComponentActivity() {
         
         Thread {
             try {
+                // 检查连接状态，防止心跳断开后用户无感知
+                if (adbClient?.isConnected() != true) {
+                    runOnUiThread {
+                        if (loadId == loadFilesCounter) {
+                            isLoading = false
+                            isConnected = false
+                            connectionError = getString(R.string.connection_lost_reconnect)
+                        }
+                    }
+                    return@Thread
+                }
+                
                 val result = adbClient?.listFiles(targetPath) ?: emptyList()
                 
                 runOnUiThread {
@@ -780,7 +825,8 @@ class FileManagerActivity : ComponentActivity() {
                 runOnUiThread {
                     if (loadId == loadFilesCounter) {
                         isLoading = false
-                        statusMessage = getString(R.string.load_folder_failed, e.message)
+                        isConnected = false
+                        connectionError = getString(R.string.connection_lost_reconnect)
                     }
                 }
             }
@@ -850,6 +896,11 @@ class FileManagerActivity : ComponentActivity() {
 
     private fun clearSelection() {
         selectedFiles = emptySet()
+    }
+
+    private fun clearClipboard() {
+        clipboard = null
+        statusMessage = getString(R.string.clipboard_cleared)
     }
 
     private fun openFile(file: FileItem) {
@@ -940,6 +991,10 @@ class FileManagerActivity : ComponentActivity() {
             val localPath = cacheDir.absolutePath + "/" + file.name
             val success = adbClient?.downloadFile(file.path, localPath) ?: false
             
+            if (!success) {
+                LogCollector.e(TAG, "Download failed: ${file.path}")
+            }
+            
             if (success) {
                 try {
                     contentResolver.openOutputStream(uri)?.use { outputStream ->
@@ -982,6 +1037,10 @@ class FileManagerActivity : ComponentActivity() {
             val success = adbClient?.uploadFile(localPath, targetPath) ?: false
             File(localPath).delete()
             
+            if (!success) {
+                LogCollector.e(TAG, "Upload failed: $fileName -> $targetPath")
+            }
+            
             runOnUiThread {
                 isLoading = false
                 if (success) {
@@ -1001,6 +1060,10 @@ class FileManagerActivity : ComponentActivity() {
         Thread {
             val newPath = buildPath(currentPath, name)
             val success = adbClient?.createFolder(newPath) ?: false
+            
+            if (!success) {
+                LogCollector.e(TAG, "Create folder failed: $newPath")
+            }
             
             runOnUiThread {
                 isLoading = false
@@ -1031,6 +1094,10 @@ class FileManagerActivity : ComponentActivity() {
         Thread {
             val newPath = buildPath(currentPath, newName)
             val success = adbClient?.renameFile(targetFile!!.path, newPath) ?: false
+            
+            if (!success) {
+                LogCollector.e(TAG, "Rename failed: ${targetFile!!.path} -> $newPath")
+            }
             
             runOnUiThread {
                 isLoading = false
@@ -1063,18 +1130,26 @@ class FileManagerActivity : ComponentActivity() {
             
             Thread {
                 var successCount = 0
+                val failedPaths = mutableListOf<String>()
                 paths.forEach { path ->
                     val fileName = path.substringAfterLast('/')
                     val newPath = buildPath(currentPath, fileName)
                     if (action == ClipboardAction.COPY) {
                         if (adbClient?.copyFile(path, newPath) == true) successCount++
+                        else failedPaths.add(path)
                     } else {
                         // Move = copy + delete
                         if (adbClient?.copyFile(path, newPath) == true) {
                             adbClient?.deleteFile(path)
                             successCount++
+                        } else {
+                            failedPaths.add(path)
                         }
                     }
+                }
+                
+                if (failedPaths.isNotEmpty()) {
+                    LogCollector.e(TAG, "Paste failed for ${failedPaths.size}/${paths.size} items: ${failedPaths.take(3)}")
                 }
                 
                 runOnUiThread {
@@ -1105,8 +1180,14 @@ class FileManagerActivity : ComponentActivity() {
         
         Thread {
             var successCount = 0
+            val failedPaths = mutableListOf<String>()
             selectedFiles.forEach { path ->
                 if (adbClient?.deleteFile(path) == true) successCount++
+                else failedPaths.add(path)
+            }
+            
+            if (failedPaths.isNotEmpty()) {
+                LogCollector.e(TAG, "Delete failed for ${failedPaths.size}/${selectedFiles.size} items: ${failedPaths.take(3)}")
             }
             
             runOnUiThread {
@@ -1151,6 +1232,7 @@ class FileManagerActivity : ComponentActivity() {
                     } else {
                         apkInstallSuccess = false
                         val errorLine = result.lines().firstOrNull { it.isNotBlank() } ?: getString(R.string.unknown_error)
+                        LogCollector.e(TAG, "APK install failed: ${file.path} — $errorLine")
                         apkInstallStatus = getString(R.string.apk_install_failed, errorLine)
                     }
                     

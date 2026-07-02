@@ -1,6 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    kotlin("android")
 }
 
 android {
@@ -11,8 +11,8 @@ android {
         applicationId = "com.rokidlab.rokidlink"
         minSdk = 28
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.8"
+        versionCode = 5
+        versionName = "1.9"
     }
 
     signingConfigs {

@@ -197,6 +197,10 @@ internal data class StoreActions(
     val onSwitchLanguage: (String) -> Unit,
     // 设置页 — 导出日志
     val onExportLog: () -> Unit,
+    // ADB 工具 — 通过 SDK 启动眼镜端应用（替代 ADB shell）
+    val onLaunchGlassAppViaSdk: (String, String) -> Unit = { _, _ -> },
+    // ADB 工具 — 通过 SDK 自定义指令发送按键配置到眼镜端
+    val onSendKeyButtonConfig: (String, String, String, String, (Boolean) -> Unit) -> Unit = { _, _, _, _, _ -> },
 )
 
 // ===== 应用入口 =====
@@ -600,6 +604,8 @@ private fun AdbToolsModule(
             onInstallRokidLink = actions.onFileManagerInstallRokidLink,
             onOpenRokidLink = actions.onFileManagerOpenRokidLink,
             onStopRokidLink = actions.onFileManagerStop,
+            onLaunchAppViaSdk = actions.onLaunchGlassAppViaSdk,
+            onSendKeyButtonConfig = actions.onSendKeyButtonConfig,
         )
     }
     
