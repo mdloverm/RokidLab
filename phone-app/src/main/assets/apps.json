@@ -1,4 +1,4 @@
-﻿{
+{
     "schemaVersion":  1,
     "generatedAt":  "2026-07-03T00:00:00.000Z",
     "brewVersion":  "2.0",
@@ -3159,6 +3159,36 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/your-voice-4.jpg"
                                         ],
                      "nameZh":  "你的声音"
+                 },
+                 {
+                     "id":  "dm40",
+                     "name":  "DM40",
+                     "nameZh":  "DM40",
+                     "packageName":  "com.osagem.dm40atrokid",
+                     "version":  "1.0.0",
+                     "versionCode":  1,
+                     "author":  "osagem",
+                     "type":  "glasses",
+                     "categories":  ["Utility"],
+                     "iconAsset":  "dm40.png",
+                     "iconUrl":  "https://ghproxy.net/https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/assets/icons/dm40.png",
+                     "screenshotUrls":  [],
+                     "apkAsset":  "com.osagem.dm40atrokid.apk",
+                     "downloadUrl":  "https://ghproxy.net/https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/assets/apks/com.osagem.dm40atrokid.apk",
+                     "platforms":  ["glasses"],
+                     "featured":  false,
+                     "new":  true,
+                     "publishedAt":  "2026-07-03",
+                     "listing":  {
+                                     "summary":  "DM40 digital multimeter real-time measurement display",
+                                     "summaryZh":  "DM40万用表测量数据实时显示",
+                                     "descriptionMarkdown":  "DM40 digital multimeter real-time measurement data display for Rokid glasses.\n\nFeatures:\n- Real-time multimeter data display\n- VAΩ measurement symbols\n- Clear HUD interface",
+                                     "about":  "DM40万用表测量数据实时显示",
+                                     "aboutZh":  "DM40万用表测量数据实时显示"
+                                 },
+                     "releaseNotes":  {
+                                          "1.0.0":  "Initial release"
+                                      }
                  }
              ]
 }
