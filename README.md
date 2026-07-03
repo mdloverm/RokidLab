@@ -45,6 +45,8 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - **输入模拟**：发送文本、按键、点击、滑动事件
 - **资源管理优化**：修复 ADB Shell Client 的流泄漏问题，确保连接断开时正确释放所有资源
 - **统一对话框样式**：所有 ADB 工具弹窗（系统信息/定时器/Shell/应用管理）均使用 BrewDialog RokidLink 卡片样式
+- **按键设置**：自定义眼镜功能键短按/长按启动第三方应用，下拉列表选择，60 秒缓存加速
+- **ADB 协议修复**：修复 sync 协议 CLSE 误判导致文件上传回退到 shell 慢速方式，修复流关闭协议错误导致 daemon 无限重传 CLSE 包
 
 ### 应用商店
 - 浏览和搜索 Rokid 眼镜应用
@@ -302,7 +304,7 @@ RokidLab/
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v1.5-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v2.0-debug.apk
 ```
 
 ### 眼镜端服务
