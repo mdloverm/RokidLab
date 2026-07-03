@@ -3160,8 +3160,8 @@
                      "type":  "glasses",
                      "category":  "Utility",
                      "version":  "1.0.0",
-                     "summary":  "DM40万用表测量数据实时显示",
-                     "description":  "DM40万用表测量数据实时显示",
+                     "summary":  "DM40系列万用表测量数据实时显示",
+                     "description":  "DM40系列万用表测量数据实时显示",
                      "author":  "osagem",
                      "iconAsset":  "dm40.png",
                      "iconUrl":  "https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/assets/icons/dm40.png",
@@ -3182,10 +3182,10 @@
                                    ],
                      "listing":  {
                                      "summary":  "DM40 digital multimeter real-time measurement display",
-                                     "summaryZh":  "DM40万用表测量数据实时显示",
+                                     "summaryZh":  "DM40系列万用表测量数据实时显示",
                                      "descriptionMarkdown":  "DM40 digital multimeter real-time measurement data display for Rokid glasses.\n\nFeatures:\n- Real-time multimeter data display\n- VAΩ measurement symbols\n- Clear HUD interface",
-                                     "about":  "DM40万用表测量数据实时显示",
-                                     "aboutZh":  "DM40万用表测量数据实时显示"
+                                     "about":  "DM40系列万用表测量数据实时显示",
+                                     "aboutZh":  "DM40系列万用表测量数据实时显示"
                                  },
                      "releases":  [
                                       {
