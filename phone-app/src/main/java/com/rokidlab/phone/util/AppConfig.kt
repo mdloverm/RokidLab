@@ -41,8 +41,8 @@ object AppConfig {
     /** ADB 流缓冲区最大大小（字节） */
     const val ADB_MAX_STREAM_BUFFER_SIZE = 10 * 1024 * 1024
 
-    /** ADB 心跳间隔（毫秒）- 防止国产手机后台 Socket 超时断开 */
-    const val ADB_HEARTBEAT_INTERVAL_MS = 30_000L
+    /** ADB 心跳间隔（毫秒）- 防止国产手机后台 Socket 超时断开，鸿蒙4.2需更短间隔 */
+    const val ADB_HEARTBEAT_INTERVAL_MS = 8_000L
 
     /** ADB 心跳超时（毫秒）- 超时未响应视为断开 */
     const val ADB_HEARTBEAT_TIMEOUT_MS = 10_000L

@@ -1,11 +1,15 @@
 package com.rokidlab.phone.adb.ui
 
+import com.rokidlab.phone.adb.AdbShellClient
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.R
+import android.util.Log
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** 按键映射配置 */
 data class KeyButtonConfig(
@@ -44,11 +50,44 @@ private val PRIMARY_COLOR = BrewMagenta
 fun KeyButtonDialog(
     onLaunchAppViaSdk: ((String, String) -> Unit)?,
     onSendKeyButtonConfig: ((String, String, String, String, (Boolean) -> Unit) -> Unit)? = null,
-    appPackages: List<String> = emptyList(),
+    client: AdbShellClient? = null,
+    connected: Boolean = false,
+    scope: kotlinx.coroutines.CoroutineScope? = null,
+    getOrConnect: (((AdbShellClient?) -> Unit) -> Unit)? = null,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences(PREFS_NAME, 0)
+
+    // 自动连接 ADB（和其他弹窗一致）
+    var isConnecting by remember { mutableStateOf(!connected || client == null) }
+    LaunchedEffect(Unit) {
+        if (connected && client != null) {
+            isConnecting = false
+        } else {
+            isConnecting = true
+            getOrConnect?.invoke { c ->
+                isConnecting = c == null
+            }
+        }
+    }
+
+    // 异步加载应用列表
+    var appPackages by remember { mutableStateOf(emptyList<String>()) }
+    var loading by remember { mutableStateOf(true) }
+    LaunchedEffect(isConnecting) {
+        if (isConnecting) return@LaunchedEffect
+        loading = true
+        Log.i("KeyBtn", "Loading packages, client=${client != null}")
+        if (client != null) {
+            val pkgs = withContext(Dispatchers.IO) { client.listPackages(false) }
+            Log.i("KeyBtn", "Loaded ${pkgs.size} packages")
+            appPackages = pkgs
+        } else {
+            Log.w("KeyBtn", "Client is null, showing empty list")
+        }
+        loading = false
+    }
 
     var config by remember {
         mutableStateOf(
@@ -142,6 +181,39 @@ fun KeyButtonDialog(
                 }
 
                 item { Spacer(modifier = Modifier.height(4.dp)) }
+
+                // 连接中 / 加载中提示
+                if (isConnecting) {
+                    item {
+                        Text(
+                            "正在连接眼镜...",
+                            color = BrewMuted,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
+                    }
+                } else if (loading) {
+                    item {
+                        Text(
+                            "正在获取应用列表...",
+                            color = BrewMuted,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
+                    }
+                }
+
+                // 连接失败提示
+                if (!isConnecting && !loading && appPackages.isEmpty() && client == null) {
+                    item {
+                        Text(
+                            "（未连接眼镜，请先连接）",
+                            color = BrewWarning,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                        )
+                    }
+                }
 
                 // ══════════ 短按配置 ══════════
                 item { SectionHeader(context.getString(R.string.key_btn_short_press), PRIMARY_COLOR) }
@@ -267,7 +339,7 @@ fun KeyButtonDialog(
 //  子组件
 // ═══════════════════════════════════════
 
-/** 第三方应用包名列表（可选中） */
+/** 第三方应用包名下拉列表 */
 @Composable
 private fun SelectablePackageList(
     packages: List<String>,
@@ -275,49 +347,88 @@ private fun SelectablePackageList(
     onSelect: (String) -> Unit,
     color: Color,
 ) {
-    if (packages.isEmpty()) {
-        Text(
-            when {
-                selectedPkg.isNotBlank() -> "（$selectedPkg）"
-                else -> "（暂无第三方应用，可手动输入包名）"
-            },
-            color = BrewMuted,
-            fontSize = 12.sp,
-        )
-        return
+    var expanded by remember { mutableStateOf(false) }
+    
+    val displayText = selectedPkg.ifBlank {
+        if (packages.isEmpty()) "暂无第三方应用，可手动输入包名" else "请选择第三方应用"
     }
-    Column {
-        Text("第三方应用：", color = BrewMuted, fontSize = 11.sp)
-        Row(
+    val hasSelection = selectedPkg.isNotBlank()
+    val canExpand = packages.isNotEmpty()
+
+    Box {
+        // 触发器
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                .height(40.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (hasSelection) color.copy(alpha = 0.15f) else color.copy(alpha = 0.05f))
+                .border(
+                    width = if (hasSelection) 1.5.dp else 1.dp,
+                    color = if (hasSelection) color else color.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(6.dp),
+                )
+                .clickable(enabled = canExpand) { expanded = canExpand }
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.CenterStart,
         ) {
-            packages.forEach { pkg ->
-                val selected = pkg == selectedPkg
-                Box(
-                    modifier = Modifier
-                        .height(34.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (selected) color.copy(alpha = 0.2f) else color.copy(alpha = 0.05f))
-                        .border(
-                            width = if (selected) 1.5.dp else 1.dp,
-                            color = if (selected) color else color.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(6.dp),
-                        )
-                        .clickable { onSelect(pkg) }
-                        .padding(horizontal = 10.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = displayText,
+                    color = if (hasSelection) color else BrewMuted,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (canExpand) {
                     Text(
-                        text = pkg,
-                        color = if (selected) color else BrewMuted,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        text = if (expanded) "\u25B2" else "\u25BC",
+                        color = color.copy(alpha = 0.6f),
+                        fontSize = 10.sp,
                     )
                 }
+            }
+        }
+
+        // 下拉菜单
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .heightIn(max = 280.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(BrewBg)
+                .border(1.dp, color.copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
+        ) {
+            packages.forEach { pkg ->
+                val isSelected = pkg == selectedPkg
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = pkg,
+                            color = if (isSelected) color else BrewText,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    onClick = {
+                        onSelect(pkg)
+                        expanded = false
+                    },
+                    modifier = Modifier
+                        .background(
+                            if (isSelected) color.copy(alpha = 0.12f) else Color.Transparent,
+                            RoundedCornerShape(4.dp),
+                        )
+                        .padding(vertical = 2.dp),
+                )
             }
         }
     }

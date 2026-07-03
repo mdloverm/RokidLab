@@ -20,6 +20,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.locks.ReentrantLock
 
 class AdbFileManagerClient(
     private val context: Context,
@@ -31,49 +32,11 @@ class AdbFileManagerClient(
     private var outputStream: OutputStream? = null
     private var keyPair: KeyPair? = null
     private var localId = AtomicInteger(1)
-    private val lock = Any() // 同步锁，防止并发操作
+    private val lock = ReentrantLock()
 
     /** 跟踪 ADB 会话是否真正存活（超过 TCP 层面） */
     @Volatile
     private var adbSessionAlive = false
-
-    // ── 心跳保活（防止国产/鸿蒙系统后台 Socket 超时断开） ──
-    @Volatile
-    private var heartbeatRunning = false
-    private var heartbeatThread: Thread? = null
-
-    private class HeartbeatCommand(private val client: AdbFileManagerClient) : Runnable {
-        override fun run() {
-            while (client.heartbeatRunning && client.adbSessionAlive) {
-                try {
-                    Thread.sleep(AppConfig.ADB_HEARTBEAT_INTERVAL_MS)
-                } catch (_: InterruptedException) {
-                    break
-                }
-                if (!client.heartbeatRunning || !client.adbSessionAlive) break
-                try {
-                    client.executeShellCommandInternal("shell:echo 1\u0000")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Heartbeat failed, marking session dead: ${e.message}")
-                    client.adbSessionAlive = false
-                    break
-                }
-            }
-        }
-    }
-
-    private fun startHeartbeat() {
-        if (heartbeatRunning) return
-        heartbeatRunning = true
-        heartbeatThread = Thread(HeartbeatCommand(this), "fm-heartbeat").also { it.isDaemon = true; it.start() }
-        Log.d(TAG, "Heartbeat started (interval=${AppConfig.ADB_HEARTBEAT_INTERVAL_MS}ms)")
-    }
-
-    private fun stopHeartbeat() {
-        heartbeatRunning = false
-        heartbeatThread?.interrupt()
-        heartbeatThread = null
-    }
 
     companion object {
         private const val TAG = "AdbFileManager"
@@ -139,6 +102,7 @@ class AdbFileManagerClient(
             socket = Socket()
             socket?.tcpNoDelay = true
             socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+            socket?.keepAlive = true
             socket?.connect(java.net.InetSocketAddress(ipAddress, port), AppConfig.ADB_CONNECT_TIMEOUT_MS)
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
@@ -149,7 +113,6 @@ class AdbFileManagerClient(
             localId.set(1)
             doHandshake()
             adbSessionAlive = true
-            startHeartbeat()
             Log.i(TAG, "ADB connection successful")
             onStatus(context.getString(R.string.file_manager_connected))
             true
@@ -210,17 +173,32 @@ class AdbFileManagerClient(
         return keyStr.toByteArray(Charsets.UTF_8)
     }
 
+    private fun drainStalePackets() {
+        try {
+            socket?.soTimeout = 100
+            while (true) {
+                val msg = readPacket()
+                if (msg.command == CMD_CLSE) {
+                    sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                }
+            }
+        } catch (_: Exception) {}
+        socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+    }
+
     fun listFiles(path: String): List<FileItem> {
-        synchronized(lock) {
-            val result = mutableListOf<FileItem>()
+        lock.lock()
+        val result = try {
+            val items = mutableListOf<FileItem>()
 
             try {
+                drainStalePackets()
                 Log.d(TAG, "listFiles started, path: $path")
 
                 // 检查连接状态
                 if (!isConnected()) {
                     Log.e(TAG, "listFiles: ADB not connected")
-                    return result
+                    return items
                 }
 
                 val inputPath = path.replace("//", "/").trimEnd('/').ifEmpty { "/" }
@@ -271,9 +249,9 @@ class AdbFileManagerClient(
                                 sendPacket(CMD_CLSE, sid, remoteId, null)
                                 break
                             } else {
-                                // 其他 stream 的关闭，回复 OKAY 并继续
-                                Log.d(TAG, "listFiles: other stream closing (arg1=${msg.arg1}), continue waiting")
-                                sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                                // 其他 stream 的关闭，回复 CLSE 完全关闭流
+                                Log.d(TAG, "listFiles: other stream closing (arg1=${msg.arg1}), sending CLSE")
+                                sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                             }
                         }
                         else -> {
@@ -323,7 +301,7 @@ class AdbFileManagerClient(
 
                     val fullPath = if (inputPath == "/") "/$name" else "$inputPath/$name"
 
-                    result.add(FileItem(
+                    items.add(FileItem(
                         name = name,
                         path = fullPath,
                         isDirectory = isDir,
@@ -332,7 +310,7 @@ class AdbFileManagerClient(
                     ))
                 }
 
-                Log.d(TAG, "listFiles completed, found ${result.size} files")
+                Log.d(TAG, "listFiles completed, found ${items.size} files")
 
             } catch (e: Exception) {
                 Log.e(TAG, "listFiles error: ${e.message}", e)
@@ -340,157 +318,167 @@ class AdbFileManagerClient(
                 adbSessionAlive = false
             }
 
-            return result.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { it.name.lowercase() })
+            items.sortedWith(compareByDescending<FileItem> { it.isDirectory }.thenBy { it.name.lowercase() })
+        } finally {
+            lock.unlock()
         }
+        return result
     }
 
     fun downloadFile(remotePath: String, localPath: String): Boolean {
-        synchronized(lock) {
-            return try {
-                Log.d(TAG, "Download file: $remotePath -> $localPath")
-                Log.d(TAG, "Connection state: socket=${socket != null}, isConnected=${socket?.isConnected}, isClosed=${socket?.isClosed}")
+        lock.lock()
+        return try {
+            drainStalePackets()
+            Log.d(TAG, "Download file: $remotePath -> $localPath")
+            Log.d(TAG, "Connection state: socket=${socket != null}, isConnected=${socket?.isConnected}, isClosed=${socket?.isClosed}")
 
-                val sid = localId.getAndIncrement()
-                val cmd = "sync:\u0000"
-                Log.d(TAG, "Sending sync open command, sid=$sid")
-                sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+            val sid = localId.getAndIncrement()
+            val cmd = "sync:\u0000"
+            Log.d(TAG, "Sending sync open command, sid=$sid")
+            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
-                var remoteId = 0
+            var remoteId = 0
 
-                // 等待 sync 服务打开
-                var retryCount = 0
-                while (retryCount < 10) {
-                    Log.d(TAG, "Waiting for sync response, retry=$retryCount")
-                    val msg = readPacket()
-                    Log.d(TAG, "Received response: cmd=${msg.command.toString(16)}, arg0=${msg.arg0}, arg1=${msg.arg1}, payloadLen=${msg.payloadLength}")
-                    
-                    when (msg.command) {
-                        CMD_OKAY -> {
-                            remoteId = msg.arg0
-                            Log.d(TAG, "Sync service opened, remoteId=$remoteId")
-                            break
-                        }
-                        CMD_CLSE -> {
+            // 等待 sync 服务打开
+            var retryCount = 0
+            while (retryCount < 10) {
+                Log.d(TAG, "Waiting for sync response, retry=$retryCount")
+                val msg = readPacket()
+                Log.d(TAG, "Received response: cmd=${msg.command.toString(16)}, arg0=${msg.arg0}, arg1=${msg.arg1}, payloadLen=${msg.payloadLength}")
+                
+                when (msg.command) {
+                    CMD_OKAY -> {
+                        remoteId = msg.arg0
+                        Log.d(TAG, "Sync service opened, remoteId=$remoteId")
+                        break
+                    }
+                    CMD_CLSE -> {
+                        if (msg.arg1 == sid) {
                             Log.e(TAG, "Sync service open failed - CLSE received, falling back to shell")
-                            // 检查是否有错误信息
                             if (msg.payload.isNotEmpty()) {
                                 val error = String(msg.payload, Charsets.UTF_8)
                                 Log.e(TAG, "Error: $error")
                             }
                             return downloadFileShell(remotePath, localPath)
                         }
-                        else -> {
-                            Log.w(TAG, "Received unknown response: ${msg.command.toString(16)}")
-                            retryCount++
-                        }
+                        // 其他流的 CLSE，发送 CLSE 完全关闭流
+                        try { sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null) } catch (_: Exception) {}
+                        retryCount++
+                    }
+                    else -> {
+                        Log.w(TAG, "Received unknown response: ${msg.command.toString(16)}")
+                        retryCount++
                     }
                 }
+            }
 
-                if (remoteId == 0) {
-                    Log.e(TAG, "Sync service open timed out, falling back to shell")
-                    return downloadFileShell(remotePath, localPath)
-                }
+            if (remoteId == 0) {
+                Log.e(TAG, "Sync service open timed out, falling back to shell")
+                return downloadFileShell(remotePath, localPath)
+            }
 
-                // RECV 命令格式: "RECV" + 4字节路径长度(little endian) + 路径
-                val pathBytes = remotePath.toByteArray(Charsets.UTF_8)
-                val recvCmd = ByteArray(8 + pathBytes.size)
-                System.arraycopy("RECV".toByteArray(Charsets.UTF_8), 0, recvCmd, 0, 4)
-                recvCmd[4] = (pathBytes.size and 0xFF).toByte()
-                recvCmd[5] = ((pathBytes.size shr 8) and 0xFF).toByte()
-                recvCmd[6] = ((pathBytes.size shr 16) and 0xFF).toByte()
-                recvCmd[7] = ((pathBytes.size shr 24) and 0xFF).toByte()
-                System.arraycopy(pathBytes, 0, recvCmd, 8, pathBytes.size)
-                sendPacket(CMD_WRTE, sid, remoteId, recvCmd)
+            // RECV 命令格式: "RECV" + 4字节路径长度(little endian) + 路径
+            val pathBytes = remotePath.toByteArray(Charsets.UTF_8)
+            val recvCmd = ByteArray(8 + pathBytes.size)
+            System.arraycopy("RECV".toByteArray(Charsets.UTF_8), 0, recvCmd, 0, 4)
+            recvCmd[4] = (pathBytes.size and 0xFF).toByte()
+            recvCmd[5] = ((pathBytes.size shr 8) and 0xFF).toByte()
+            recvCmd[6] = ((pathBytes.size shr 16) and 0xFF).toByte()
+            recvCmd[7] = ((pathBytes.size shr 24) and 0xFF).toByte()
+            System.arraycopy(pathBytes, 0, recvCmd, 8, pathBytes.size)
+            sendPacket(CMD_WRTE, sid, remoteId, recvCmd)
 
-                // 等待 OKAY
-                var waitForOkay = true
-                while (waitForOkay) {
-                    val msg = readPacket()
-                    when (msg.command) {
-                        CMD_OKAY -> waitForOkay = false
-                        CMD_CLSE -> {
+            // 等待 OKAY
+            var waitForOkay = true
+            while (waitForOkay) {
+                val msg = readPacket()
+                when (msg.command) {
+                    CMD_OKAY -> waitForOkay = false
+                    CMD_CLSE -> {
+                        if (msg.arg1 == sid) {
                             Log.e(TAG, "RECV command failed")
                             throw Exception("RECV command failed")
                         }
+                        sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                     }
                 }
+            }
 
-                var totalReceived = 0L
-                var downloadSuccess = false
-                try {
-                    FileOutputStream(localPath).use { fos ->
-                        while (true) {
-                            val msg = readPacket()
-                            when (msg.command) {
-                                CMD_OKAY -> {}
-                                CMD_WRTE -> {
-                                    val payload = msg.payload
-                                    if (payload.size >= 8) {
-                                        val cmdStr = String(payload.copyOfRange(0, 4), Charsets.UTF_8)
-                                        when (cmdStr) {
-                                            "FAIL" -> {
-                                                val errLen = ((payload[4].toInt() and 0xFF) or
-                                                              ((payload[5].toInt() and 0xFF) shl 8) or
-                                                              ((payload[6].toInt() and 0xFF) shl 16) or
-                                                              ((payload[7].toInt() and 0xFF) shl 24))
-                                                val errMsg = if (payload.size >= 8 + errLen) {
-                                                    String(payload.copyOfRange(8, 8 + errLen), Charsets.UTF_8)
-                                                } else {
-                                                    "Unknown error"
-                                                }
-                                                Log.e(TAG, "Download failed: $errMsg")
-                                                throw Exception("Download failed: $errMsg")
+            var totalReceived = 0L
+            var downloadSuccess = false
+            try {
+                FileOutputStream(localPath).use { fos ->
+                    while (true) {
+                        val msg = readPacket()
+                        when (msg.command) {
+                            CMD_OKAY -> {}
+                            CMD_WRTE -> {
+                                val payload = msg.payload
+                                if (payload.size >= 8) {
+                                    val cmdStr = String(payload.copyOfRange(0, 4), Charsets.UTF_8)
+                                    when (cmdStr) {
+                                        "FAIL" -> {
+                                            val errLen = ((payload[4].toInt() and 0xFF) or
+                                                          ((payload[5].toInt() and 0xFF) shl 8) or
+                                                          ((payload[6].toInt() and 0xFF) shl 16) or
+                                                          ((payload[7].toInt() and 0xFF) shl 24))
+                                            val errMsg = if (payload.size >= 8 + errLen) {
+                                                String(payload.copyOfRange(8, 8 + errLen), Charsets.UTF_8)
+                                            } else {
+                                                "Unknown error"
                                             }
-                                            "DATA" -> {
-                                                val dataLen = ((payload[4].toInt() and 0xFF) or
-                                                               ((payload[5].toInt() and 0xFF) shl 8) or
-                                                               ((payload[6].toInt() and 0xFF) shl 16) or
-                                                               ((payload[7].toInt() and 0xFF) shl 24))
-                                                if (payload.size >= 8 + dataLen) {
-                                                    fos.write(payload, 8, dataLen)
-                                                    totalReceived += dataLen
-                                                }
-                                                if (totalReceived % (1024 * 1024) == 0L) {
-                                                    Log.d(TAG, "Download progress: $totalReceived bytes")
-                                                }
+                                            Log.e(TAG, "Download failed: $errMsg")
+                                            throw Exception("Download failed: $errMsg")
+                                        }
+                                        "DATA" -> {
+                                            val dataLen = ((payload[4].toInt() and 0xFF) or
+                                                           ((payload[5].toInt() and 0xFF) shl 8) or
+                                                           ((payload[6].toInt() and 0xFF) shl 16) or
+                                                           ((payload[7].toInt() and 0xFF) shl 24))
+                                            if (payload.size >= 8 + dataLen) {
+                                                fos.write(payload, 8, dataLen)
+                                                totalReceived += dataLen
                                             }
-                                            "DONE" -> {
-                                                Log.d(TAG, "Download complete: $totalReceived bytes")
-                                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                                                sendPacket(CMD_CLSE, sid, remoteId, null)
-                                                // 消费服务端的 CLSE 响应（仅消费当前 stream 的）
-                                                try {
-                                                    while (true) {
-                                                        val clseMsg = readPacket()
-                                                        if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) break
-                                                    }
-                                                } catch (_: Exception) {}
-                                                downloadSuccess = true
-                                                break
+                                            if (totalReceived % (1024 * 1024) == 0L) {
+                                                Log.d(TAG, "Download progress: $totalReceived bytes")
                                             }
                                         }
+                                        "DONE" -> {
+                                            Log.d(TAG, "Download complete: $totalReceived bytes")
+                                            sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                                            sendPacket(CMD_CLSE, sid, remoteId, null)
+                                            try {
+                                                socket?.soTimeout = 500
+                                                val clseMsg = readPacket()
+                                                if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) {
+                                                    Log.d(TAG, "Download CLSE acknowledged")
+                                                }
+                                            } catch (_: Exception) {}
+                                            socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+                                            downloadSuccess = true
+                                            break
+                                        }
                                     }
-                                    sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                 }
-                                CMD_CLSE -> {
-                                    sendPacket(CMD_CLSE, sid, remoteId, null)
-                                    break
-                                }
+                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                            }
+                            CMD_CLSE -> {
+                                sendPacket(CMD_CLSE, sid, remoteId, null)
+                                break
                             }
                         }
                     }
-                    downloadSuccess
-                } catch (e: Exception) {
+                }
+                downloadSuccess
+            } catch (e: Exception) {
                 Log.e(TAG, "Download failed: ${e.message}", e)
                 LogCollector.e(TAG, "Download failed: ${e.message}", e)
                 // 关闭 sync 流，防止泄漏
                 try { sendPacket(CMD_CLSE, sid, remoteId, ByteArray(0)) } catch (_: Exception) {}
                 false
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "File operation failed: ${e.message}", e)
-                false
             }
+        } finally {
+            lock.unlock()
         }
     }
 
@@ -520,58 +508,75 @@ class AdbFileManagerClient(
     }
 
     fun deleteFile(path: String): Boolean {
-        synchronized(lock) {
-            return try {
-                val sid = localId.getAndIncrement()
-                val cmd = "shell:rm -rf ${shellEscape(path)}\u0000"
-                sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+        lock.lock()
+        return try {
+            drainStalePackets()
+            val sid = localId.getAndIncrement()
+            val cmd = "shell:rm -rf ${shellEscape(path)} 2>/dev/null; echo \$?\u0000"
+            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
-                var remoteId = 0
-                while (true) {
-                    val msg = readPacket()
-                    when (msg.command) {
-                        CMD_OKAY -> {
-                            if (msg.arg1 == sid) {
-                                remoteId = msg.arg0
-                            }
+            var remoteId = 0
+            val allOutput = StringBuilder()
+            while (true) {
+                val msg = readPacket()
+                when (msg.command) {
+                    CMD_OKAY -> {
+                        if (msg.arg1 == sid) {
+                            remoteId = msg.arg0
                         }
-                        CMD_WRTE -> {
-                            if (msg.arg1 == sid) {
-                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                            } else {
-                                sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
-                            }
+                    }
+                    CMD_WRTE -> {
+                        if (msg.arg1 == sid) {
+                            allOutput.append(String(msg.payload, Charsets.UTF_8))
+                            sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                        } else {
+                            sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
                         }
-                        CMD_CLSE -> {
-                            if (msg.arg1 == sid) {
-                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                                sendPacket(CMD_CLSE, sid, remoteId, null)
-                                break
-                            } else {
-                                sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
-                            }
+                    }
+                    CMD_CLSE -> {
+                        if (msg.arg1 == sid) {
+                            sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                            sendPacket(CMD_CLSE, sid, remoteId, null)
+                            break
+                        } else {
+                            sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                         }
                     }
                 }
-                true
-            } catch (e: Exception) {
-                Log.e(TAG, "Delete failed: ${e.message}", e)
-                false
             }
+            
+            val exitCode = allOutput.toString()
+                .split('\n')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .lastOrNull()
+                ?.toIntOrNull() ?: -1
+            
+            Log.d(TAG, "Delete command exit code: $exitCode, path: $path")
+            val success = exitCode == 0
+            if (!success) {
+                Log.e(TAG, "Delete failed with exit code: $exitCode, path: $path")
+            }
+            success
+        } catch (e: Exception) {
+            Log.e(TAG, "Delete failed: ${e.message}", e)
+            false
+        } finally {
+            lock.unlock()
         }
     }
 
     fun copyFile(sourcePath: String, destPath: String): Boolean {
-        synchronized(lock) {
-            return try {
-                val sid = localId.getAndIncrement()
-                val cmd = "shell:cp -rf \"$sourcePath\" \"$destPath\"\u0000"
-                sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+        lock.lock()
+        return try {
+            val sid = localId.getAndIncrement()
+            val cmd = "shell:cp -rf \"$sourcePath\" \"$destPath\"\u0000"
+            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
-                var remoteId = 0
-                while (true) {
-                    val msg = readPacket()
-                    when (msg.command) {
+            var remoteId = 0
+            while (true) {
+                val msg = readPacket()
+                when (msg.command) {
                     CMD_OKAY -> {
                         if (msg.arg1 == sid) {
                             remoteId = msg.arg0
@@ -590,7 +595,7 @@ class AdbFileManagerClient(
                             sendPacket(CMD_CLSE, sid, remoteId, null)
                             break
                         } else {
-                            sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                            sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                         }
                     }
                 }
@@ -599,21 +604,22 @@ class AdbFileManagerClient(
         } catch (e: Exception) {
             Log.e(TAG, "Copy failed: ${e.message}", e)
             false
-        }
+        } finally {
+            lock.unlock()
         }
     }
 
     fun renameFile(oldPath: String, newPath: String): Boolean {
-        synchronized(lock) {
-            return try {
-                val sid = localId.getAndIncrement()
-                val cmd = "shell:mv ${shellEscape(oldPath)} ${shellEscape(newPath)}\u0000"
-                sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+        lock.lock()
+        return try {
+            val sid = localId.getAndIncrement()
+            val cmd = "shell:mv ${shellEscape(oldPath)} ${shellEscape(newPath)}\u0000"
+            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
-                var remoteId = 0
-                while (true) {
-                    val msg = readPacket()
-                    when (msg.command) {
+            var remoteId = 0
+            while (true) {
+                val msg = readPacket()
+                when (msg.command) {
                     CMD_OKAY -> {
                         if (msg.arg1 == sid) {
                             remoteId = msg.arg0
@@ -632,7 +638,7 @@ class AdbFileManagerClient(
                             sendPacket(CMD_CLSE, sid, remoteId, null)
                             break
                         } else {
-                            sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                            sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                         }
                     }
                 }
@@ -641,69 +647,74 @@ class AdbFileManagerClient(
         } catch (e: Exception) {
             Log.e(TAG, "Rename failed: ${e.message}", e)
             false
-        }
+        } finally {
+            lock.unlock()
         }
     }
 
     fun createFolder(path: String): Boolean {
-        synchronized(lock) {
-            return try {
-                val sid = localId.getAndIncrement()
-                val cmd = "shell:mkdir -p \"$path\"\u0000"
-                sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+        lock.lock()
+        return try {
+            val sid = localId.getAndIncrement()
+            val cmd = "shell:mkdir -p \"$path\"\u0000"
+            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
-                var remoteId = 0
-                while (true) {
-                    val msg = readPacket()
-                    when (msg.command) {
-                        CMD_OKAY -> {
-                            if (msg.arg1 == sid) {
-                                remoteId = msg.arg0
-                            }
+            var remoteId = 0
+            while (true) {
+                val msg = readPacket()
+                when (msg.command) {
+                    CMD_OKAY -> {
+                        if (msg.arg1 == sid) {
+                            remoteId = msg.arg0
                         }
-                        CMD_WRTE -> {
-                            if (msg.arg1 == sid) {
-                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                            } else {
-                                sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
-                            }
+                    }
+                    CMD_WRTE -> {
+                        if (msg.arg1 == sid) {
+                            sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                        } else {
+                            sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
                         }
-                        CMD_CLSE -> {
-                            if (msg.arg1 == sid) {
-                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                                sendPacket(CMD_CLSE, sid, remoteId, null)
-                                break
-                            } else {
-                                sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
-                            }
+                    }
+                    CMD_CLSE -> {
+                        if (msg.arg1 == sid) {
+                            sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                            sendPacket(CMD_CLSE, sid, remoteId, null)
+                            break
+                        } else {
+                            sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                         }
                     }
                 }
-                true
-            } catch (e: Exception) {
-                Log.e(TAG, "Create folder failed: ${e.message}", e)
-                false
             }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Create folder failed: ${e.message}", e)
+            false
+        } finally {
+            lock.unlock()
         }
     }
     
     /** 获取存储空间信息 */
     fun getStorageInfo(path: String): StorageInfo? {
-        synchronized(lock) {
-            return try {
-                // 直接使用 df 获取 /storage/emulated 存储信息
-                return getStorageInfoByDeviceInternal("/storage/emulated")
-            } catch (e: Exception) {
-                Log.e(TAG, "Get storage info failed: ${e.message}", e)
-                return null
-            }
+        lock.lock()
+        return try {
+            getStorageInfoByDeviceInternal("/storage/emulated")
+        } catch (e: Exception) {
+            Log.e(TAG, "Get storage info failed: ${e.message}", e)
+            null
+        } finally {
+            lock.unlock()
         }
     }
 
     private fun getStorageInfoByDeviceInternal(device: String): StorageInfo? {
         return try {
+            if (!isConnected()) {
+                Log.w(TAG, "getStorageInfoByDeviceInternal: not connected, skipping")
+                return null
+            }
             val sid = localId.getAndIncrement()
-            // 使用 df 获取存储信息
             val cmd = "shell:df $device\u0000"
             sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
@@ -738,7 +749,7 @@ class AdbFileManagerClient(
                             sendPacket(CMD_CLSE, sid, remoteId, null)
                             break
                         } else {
-                            sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                            sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                         }
                     }
                 }
@@ -771,10 +782,10 @@ class AdbFileManagerClient(
                 }
             }
             Log.d(TAG, "Could not parse storage info")
-            return null
+            null
         } catch (e: Exception) {
             Log.e(TAG, "Get storage info from device failed: ${e.message}", e)
-            return null
+            null
         }
     }
     
@@ -825,33 +836,47 @@ class AdbFileManagerClient(
         }
     }
 
-    fun uploadFile(localPath: String, remotePath: String): Boolean {
-        synchronized(lock) {
-            return try {
-                val file = File(localPath)
-                if (!file.exists()) {
-                    Log.e(TAG, "Local file not found: $localPath")
-                    return false
+    fun uploadFile(localPath: String, remotePath: String, retryCount: Int = 0): Boolean {
+        lock.lock()
+        return try {
+            var uploadOk = false
+            drainStalePackets()
+            if (!isConnected()) {
+                Log.i(TAG, "Connection not alive before upload, reconnecting...")
+                // 先释放锁再重连，避免 connect() 阻塞锁
+                lock.unlock()
+                try {
+                    disconnect()
+                    Thread.sleep(300)
+                    if (!connect { }) {
+                        Log.e(TAG, "Reconnect failed")
+                        return false
+                    }
+                } finally {
+                    lock.lock()
                 }
+            }
 
-                Log.d(TAG, "Upload file: $localPath -> $remotePath, file size: ${file.length()}")
+            val file = File(localPath)
+            if (!file.exists()) {
+                Log.e(TAG, "Local file not found: $localPath")
+                return false
+            }
 
-                // 先确保目录存在
-                val remoteDir = remotePath.substringBeforeLast('/', "/")
-                if (remoteDir.isNotEmpty() && remoteDir != "/") {
-                    val mkdirCmd = "shell:mkdir -p ${shellEscape(remoteDir)}\u0000"
-                    executeShellCommandInternal(mkdirCmd)
-                    Log.d(TAG, "Creating directory: $remoteDir")
-                }
+            Log.d(TAG, "Upload file: $localPath -> $remotePath, file size: ${file.length()}")
 
-                // 使用 sync 服务上传
-                val sid = localId.getAndIncrement()
-                val cmd = "sync:\u0000"
-                sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+            val remoteDir = remotePath.substringBeforeLast('/', "/")
+            if (remoteDir.isNotEmpty() && remoteDir != "/") {
+                val mkdirCmd = "shell:mkdir -p ${shellEscape(remoteDir)}\u0000"
+                executeShellCommandInternal(mkdirCmd)
+                Log.d(TAG, "Creating directory: $remoteDir")
+            }
+
+            val sid = localId.getAndIncrement()
+            val cmd = "sync:\u0000"
+            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
             var remoteId = 0
-
-            // 等待 sync 服务打开
             while (true) {
                 val msg = readPacket()
                 when (msg.command) {
@@ -861,14 +886,16 @@ class AdbFileManagerClient(
                         break
                     }
                     CMD_CLSE -> {
-                        Log.e(TAG, "Sync service open failed, falling back to shell")
-                        return uploadFileShell(file, remotePath)
+                        if (msg.arg1 == sid) {
+                            Log.e(TAG, "Sync service open failed")
+                            return uploadFileShell(file, remotePath)
+                        }
+                        // 其他流的 CLSE，发送 CLSE 完全关闭流
+                        sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                     }
                 }
             }
 
-            // SEND 命令: "SEND" + 4字节长度 + 路径 + ",mode"
-            // mode: 0644 = 33188 (普通文件权限)
             val sendPath = "$remotePath,33188"
             val sendPathBytes = sendPath.toByteArray(Charsets.UTF_8)
             val sendCmd = ByteArray(8 + sendPathBytes.size)
@@ -878,31 +905,33 @@ class AdbFileManagerClient(
             sendCmd[6] = ((sendPathBytes.size shr 16) and 0xFF).toByte()
             sendCmd[7] = ((sendPathBytes.size shr 24) and 0xFF).toByte()
             System.arraycopy(sendPathBytes, 0, sendCmd, 8, sendPathBytes.size)
-            
             sendPacket(CMD_WRTE, sid, remoteId, sendCmd)
 
-            // 等待 OKAY
             var waitForOkay = true
             while (waitForOkay) {
                 val msg = readPacket()
                 when (msg.command) {
                     CMD_OKAY -> waitForOkay = false
                     CMD_CLSE -> {
-                        Log.e(TAG, "SEND command failed")
-                        return uploadFileShell(file, remotePath)
+                        if (msg.arg1 == sid) {
+                            Log.e(TAG, "SEND command failed")
+                            return uploadFileShell(file, remotePath)
+                        }
+                        // 其他流的 CLSE，发送 CLSE 完全关闭流
+                        sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                     }
                 }
             }
 
-            // 分块发送数据，每块最大 64KB
-            val chunkSize = 64 * 1024
+            val chunkSize = 256 * 1024
+            val pipelineDepth = 4
             var totalSent = 0L
-            
+            var pendingAcks = 0
+
             file.inputStream().use { fis ->
                 val buffer = ByteArray(chunkSize)
                 var bytesRead: Int
                 while (fis.read(buffer).also { bytesRead = it } > 0) {
-                    // DATA 命令: "DATA" + 4字节数据长度 + 数据
                     val dataCmd = ByteArray(8 + bytesRead)
                     System.arraycopy("DATA".toByteArray(Charsets.UTF_8), 0, dataCmd, 0, 4)
                     dataCmd[4] = (bytesRead and 0xFF).toByte()
@@ -910,30 +939,47 @@ class AdbFileManagerClient(
                     dataCmd[6] = ((bytesRead shr 16) and 0xFF).toByte()
                     dataCmd[7] = ((bytesRead shr 24) and 0xFF).toByte()
                     System.arraycopy(buffer, 0, dataCmd, 8, bytesRead)
-                    
+
                     sendPacket(CMD_WRTE, sid, remoteId, dataCmd)
                     totalSent += bytesRead
-                    
-                    // 等待 OKAY
-                    var waitData = true
-                    while (waitData) {
-                        val msg = readPacket()
-                        when (msg.command) {
-                            CMD_OKAY -> waitData = false
-                            CMD_CLSE -> {
-                                Log.e(TAG, "DATA command failed")
-                                return false
+                    pendingAcks++
+
+                    if (pendingAcks >= pipelineDepth) {
+                        while (pendingAcks > 0) {
+                            val msg = readPacket()
+                            when (msg.command) {
+                                CMD_OKAY -> pendingAcks--
+                                CMD_CLSE -> {
+                                    if (msg.arg1 == sid) {
+                                        Log.e(TAG, "DATA command failed")
+                                        return false
+                                    }
+                                    sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                                }
                             }
                         }
                     }
-                    
+
                     if (totalSent % (1024 * 1024) == 0L) {
                         Log.d(TAG, "Upload progress: $totalSent / ${file.length()}")
                     }
                 }
             }
 
-            // DONE 命令: "DONE" + 4字节时间戳
+            while (pendingAcks > 0) {
+                val msg = readPacket()
+                when (msg.command) {
+                    CMD_OKAY -> pendingAcks--
+                    CMD_CLSE -> {
+                        if (msg.arg1 == sid) {
+                            Log.e(TAG, "DATA command failed")
+                            return false
+                        }
+                        sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                    }
+                }
+            }
+
             val doneCmd = ByteArray(8)
             System.arraycopy("DONE".toByteArray(Charsets.UTF_8), 0, doneCmd, 0, 4)
             val timestamp = (System.currentTimeMillis() / 1000).toInt()
@@ -941,12 +987,10 @@ class AdbFileManagerClient(
             doneCmd[5] = ((timestamp shr 8) and 0xFF).toByte()
             doneCmd[6] = ((timestamp shr 16) and 0xFF).toByte()
             doneCmd[7] = ((timestamp shr 24) and 0xFF).toByte()
-            
             sendPacket(CMD_WRTE, sid, remoteId, doneCmd)
 
-            // 等待响应（超时由 socket.soTimeout 保护）
-            var uploadOk = false
             var gotFinalClse = false
+            var clseRetryCount = 0
             while (!gotFinalClse) {
                 val msg = readPacket()
                 when (msg.command) {
@@ -959,17 +1003,35 @@ class AdbFileManagerClient(
                                 sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                 Log.d(TAG, "Upload success")
                                 uploadOk = true
+                                sendPacket(CMD_CLSE, sid, remoteId, null)
+                                socket?.soTimeout = 500
+                                try {
+                                    val closeAck = readPacket()
+                                    if (closeAck.command == CMD_OKAY) {
+                                        Log.d(TAG, "CLSE acknowledged")
+                                    }
+                                } catch (_: Exception) {}
+                                socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+                                return true
                             } else if (cmdStr == "FAIL") {
-                                val errMsg = if (payload.size > 8) {
-                                    val errLen = ((payload[4].toInt() and 0xFF) or
-                                                  ((payload[5].toInt() and 0xFF) shl 8) or
-                                                  ((payload[6].toInt() and 0xFF) shl 16) or
-                                                  ((payload[7].toInt() and 0xFF) shl 24))
-                                    if (payload.size >= 8 + errLen) String(payload, 8, errLen, Charsets.UTF_8) else "?"
-                                } else "?"
+                                val errLen = ((payload[4].toInt() and 0xFF) or
+                                              ((payload[5].toInt() and 0xFF) shl 8) or
+                                              ((payload[6].toInt() and 0xFF) shl 16) or
+                                              ((payload[7].toInt() and 0xFF) shl 24))
+                                val errMsg = if (payload.size >= 8 + errLen) String(payload, 8, errLen, Charsets.UTF_8) else "?"
                                 Log.e(TAG, "Upload failed: FAIL response: $errMsg")
                                 sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                 uploadOk = false
+                                sendPacket(CMD_CLSE, sid, remoteId, null)
+                                socket?.soTimeout = 500
+                                try {
+                                    val closeAck = readPacket()
+                                    if (closeAck.command == CMD_OKAY) {
+                                        Log.d(TAG, "CLSE acknowledged after FAIL")
+                                    }
+                                } catch (_: Exception) {}
+                                socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+                                return false
                             }
                         }
                     }
@@ -977,20 +1039,28 @@ class AdbFileManagerClient(
                         if (msg.arg1 == sid) {
                             sendPacket(CMD_OKAY, sid, remoteId, null)
                             gotFinalClse = true
+                        } else {
+                            sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                            clseRetryCount++
+                            if (clseRetryCount > 3) {
+                                Log.w(TAG, "Received too many unrelated CLSE packets, breaking loop")
+                                gotFinalClse = true
+                            }
                         }
                     }
                 }
             }
 
-            // ⚠️ 关键：消费剩余的 CLSE（服务端可能有重复的 CLSE 包）
+            // Ensure sync stream is closed even if while loop exits without OKAY/FAIL
+            sendPacket(CMD_CLSE, sid, remoteId, null)
             try {
                 socket?.soTimeout = 500
-                while (true) {
-                    val leftover = readPacket()
-                    if (leftover.command == CMD_CLSE && leftover.arg1 == sid) {
-                        sendPacket(CMD_OKAY, sid, leftover.arg0, null)
-                    }
-                    // 其他包直接丢弃——不是当前 stream 的了
+                val closeAck = readPacket()
+                if (closeAck.command == CMD_OKAY) {
+                    Log.d(TAG, "CLSE acknowledged after fallthrough")
+                }
+                if (closeAck.command == CMD_CLSE && closeAck.arg1 == sid) {
+                    Log.d(TAG, "CLSE from daemon after fallthrough")
                 }
             } catch (_: Exception) {}
             socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
@@ -999,21 +1069,33 @@ class AdbFileManagerClient(
         } catch (e: Exception) {
             Log.e(TAG, "Upload failed: ${e.message}", e)
             LogCollector.e(TAG, "Upload failed: ${e.message}", e)
+            if (retryCount < 1 && (e is java.net.SocketException || e is java.io.IOException)) {
+                try {
+                    Log.i(TAG, "Connection lost, attempting reconnect...")
+                    disconnect()
+                    Thread.sleep(500)
+                    if (connect { }) {
+                        Log.i(TAG, "Reconnected, retrying upload (attempt ${retryCount + 1})...")
+                        return uploadFile(localPath, remotePath, retryCount + 1)
+                    }
+                } catch (_: Exception) {}
+            }
             false
-        }
+        } finally {
+            lock.unlock()
         }
     }
     
     private fun uploadFileShell(file: File, remotePath: String): Boolean {
         Log.d(TAG, "Using shell to upload: ${file.name}")
         
-        // shell 路径转义：用单引号包裹，路径内含单引号时用 '\'' 模式
         fun shellEscape(s: String): String = "'${s.replace("'", "'\\''")}'"
         val escapedRemotePath = shellEscape(remotePath)
         
-        // 使用分块追加方式上传（8KB 块，避免 base64 后命令行过长）
-        val chunkSize = 8 * 1024
+        val chunkSize = 64 * 1024
         var isFirst = true
+        var totalSent = 0L
+        val startTime = System.currentTimeMillis()
         
         var allSuccess = true
         file.inputStream().use { fis ->
@@ -1024,11 +1106,16 @@ class AdbFileManagerClient(
                 val base64 = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP)
                 
                 val redirect = if (isFirst) ">" else ">>"
-                // base64 在单引号内，路径也在单引号内，无 shell 注入风险
                 val cmd = "shell:echo '$base64' | base64 -d $redirect $escapedRemotePath\u0000"
                 
                 try {
                     executeShellCommandInternal(cmd)
+                    totalSent += bytesRead
+                    if (totalSent % (1024 * 1024) == 0L) {
+                        val elapsed = System.currentTimeMillis() - startTime
+                        val speed = (totalSent / 1024.0) / (elapsed / 1000.0)
+                        Log.d(TAG, "Shell upload progress: $totalSent / ${file.length()}, speed: ${String.format("%.1f", speed)} KB/s")
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Shell upload chunk failed: ${e.message}")
                     allSuccess = false
@@ -1041,7 +1128,10 @@ class AdbFileManagerClient(
 
         if (!allSuccess) return false
 
-        // 验证文件大小（使用 wc -c，POSIX 兼容，鸿蒙/Android 均支持）
+        val elapsed = System.currentTimeMillis() - startTime
+        val speed = (totalSent / 1024.0) / (elapsed / 1000.0)
+        Log.d(TAG, "Shell upload completed in ${elapsed}ms, speed: ${String.format("%.1f", speed)} KB/s")
+
         val checkCmd = "shell:wc -c < $escapedRemotePath 2>/dev/null || echo 0\u0000"
         val checkResult = try {
             executeShellCommandInternal(checkCmd).trim()
@@ -1056,63 +1146,83 @@ class AdbFileManagerClient(
         return success
     }
     
-    private fun executeShellCommandInternal(cmd: String): String {
-        val sid = localId.getAndIncrement()
+    private fun executeShellCommandInternal(cmd: String, retryOnFail: Boolean = true): String {
+        lock.lock()
         try {
-            sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
-        } catch (e: Exception) {
-            adbSessionAlive = false
-            throw e
-        }
-
-        var remoteId = 0
-        val output = StringBuilder()
-
-        while (true) {
-            val msg = readPacket()
-            when (msg.command) {
-                CMD_OKAY -> {
-                    if (msg.arg1 == sid) {
-                        remoteId = msg.arg0
+            val sid = localId.getAndIncrement()
+            try {
+                sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
+            } catch (e: Exception) {
+                adbSessionAlive = false
+                if (retryOnFail && (e is java.net.SocketException || e is java.io.IOException)) {
+                    Log.i(TAG, "Connection lost in shell cmd, reconnecting...")
+                    try { socket?.close() } catch (_: Exception) {}
+                    socket = null; inputStream = null; outputStream = null
+                    Thread.sleep(500)
+                    if (connect { }) {
+                        Log.i(TAG, "Reconnected, retrying shell cmd...")
+                        return executeShellCommandInternal(cmd, false)
                     }
                 }
-                CMD_WRTE -> {
-                    if (msg.arg1 == sid) {
-                        output.append(String(msg.payload, Charsets.UTF_8))
-                        sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                    } else {
-                        sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                throw e
+            }
+
+            var remoteId = 0
+            val output = StringBuilder()
+
+            while (true) {
+                val msg = readPacket()
+                when (msg.command) {
+                    CMD_OKAY -> {
+                        if (msg.arg1 == sid) {
+                            remoteId = msg.arg0
+                        }
                     }
-                }
-                CMD_CLSE -> {
-                    if (msg.arg1 == sid) {
-                        sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                        sendPacket(CMD_CLSE, sid, remoteId, null)
-                        // 消费服务端的 CLSE 响应（仅消费当前 stream 的）
-                        try {
-                            while (true) {
+                    CMD_WRTE -> {
+                        if (msg.arg1 == sid) {
+                            output.append(String(msg.payload, Charsets.UTF_8))
+                            sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                        } else {
+                            sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                        }
+                    }
+                    CMD_CLSE -> {
+                        if (msg.arg1 == sid) {
+                            sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                            sendPacket(CMD_CLSE, sid, remoteId, null)
+                            try {
+                                socket?.soTimeout = 500
                                 val clseMsg = readPacket()
-                                if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) break
-                            }
-                        } catch (_: Exception) {}
-                        break
-                    } else {
-                        sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                                if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) {
+                                    Log.d(TAG, "executeShellCommandInternal: CLSE acknowledged")
+                                }
+                            } catch (_: Exception) {}
+                            socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+                            break
+                        } else {
+                            sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
+                        }
                     }
                 }
             }
+            
+            return output.toString()
+        } finally {
+            lock.unlock()
         }
-        
-        return output.toString()
     }
     
     fun executeShellCommand(cmd: String): String {
-        synchronized(lock) {
+        lock.lock()
+        try {
             return executeShellCommandInternal("shell:$cmd\u0000")
+        } finally {
+            lock.unlock()
         }
     }
 
     fun isAppInstalled(packageName: String): Boolean {
+        lock.lock()
         return try {
             val sid = localId.getAndIncrement()
             val cmd = "shell:pm list packages $packageName\u0000"
@@ -1143,10 +1253,13 @@ class AdbFileManagerClient(
         } catch (e: Exception) {
             Log.e(TAG, "Check app install status failed: ${e.message}", e)
             false
+        } finally {
+            lock.unlock()
         }
     }
 
     fun launchApp(packageName: String, activityClass: String = ""): Boolean {
+        lock.lock()
         return try {
             val sid = localId.getAndIncrement()
             val activity = if (activityClass.isNotEmpty()) activityClass else ".MainActivity"
@@ -1176,6 +1289,8 @@ class AdbFileManagerClient(
         } catch (e: Exception) {
             Log.e(TAG, "Launch app failed: ${e.message}", e)
             false
+        } finally {
+            lock.unlock()
         }
     }
 
@@ -1246,14 +1361,10 @@ class AdbFileManagerClient(
     }
 
     fun isConnected(): Boolean {
-        val tcpAlive = socket?.isConnected == true && socket?.isClosed == false
-        val alive = tcpAlive && adbSessionAlive
-        Log.d(TAG, "isConnected: $alive (tcp=$tcpAlive, session=$adbSessionAlive)")
-        return alive
+        return socket?.isConnected == true && socket?.isClosed == false && adbSessionAlive
     }
 
     fun disconnect() {
-        stopHeartbeat()
         adbSessionAlive = false
         try { socket?.close() } catch (_: Exception) {}
         socket = null
@@ -1263,13 +1374,14 @@ class AdbFileManagerClient(
     
     /** 读取文件内容（用于预览） */
     fun readFileContent(path: String, maxSize: Int = 1024 * 1024): String? {
-        synchronized(lock) {
-            return try {
-                readFileContentInternal(path, maxSize)
-            } catch (e: Exception) {
-                Log.e(TAG, "Read file content failed: ${e.message}", e)
-                null
-            }
+        lock.lock()
+        return try {
+            readFileContentInternal(path, maxSize)
+        } catch (e: Exception) {
+            Log.e(TAG, "Read file content failed: ${e.message}", e)
+            null
+        } finally {
+            lock.unlock()
         }
     }
     

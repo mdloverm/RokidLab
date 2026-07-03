@@ -1,4 +1,4 @@
-﻿package com.rokidlab.phone.store
+package com.rokidlab.phone.store
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
@@ -71,7 +72,7 @@ internal fun AppIcon(app: BrewApp, iconLoader: IconLoader, mediaLoader: MediaLoa
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
-            .background(BrewPanelHi)
+            .background(Color.Black)
             .border(1.dp, BrewBorder, RoundedCornerShape(14.dp)),
         contentAlignment = Alignment.Center,
     ) {

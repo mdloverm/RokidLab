@@ -14,9 +14,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import androidx.compose.runtime.produceState
 
 @Composable
 fun AdbToolsScreen(
@@ -142,13 +139,13 @@ fun AdbToolsScreen(
     if (showAppMgr) AppMgrDialog(client, connected, scope, { cb -> getOrConnect(cb) }) { showAppMgr = false }
     if (showTimer) TimerDialog(client, connected, scope, { cb -> getOrConnect(cb) }) { showTimer = false }
     if (showKeyBtn) {
-        val appPackages by produceState<List<String>>(emptyList(), client) {
-            value = withContext(Dispatchers.IO) { client?.listPackages(false) ?: emptyList() }
-        }
         KeyButtonDialog(
             onLaunchAppViaSdk = onLaunchAppViaSdk,
             onSendKeyButtonConfig = onSendKeyButtonConfig,
-            appPackages = appPackages,
+            client = client,
+            connected = connected,
+            scope = scope,
+            getOrConnect = { cb -> getOrConnect(cb) },
             onDismiss = { showKeyBtn = false },
         )
     }

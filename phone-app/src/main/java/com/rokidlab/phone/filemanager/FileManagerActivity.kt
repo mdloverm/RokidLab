@@ -59,6 +59,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.Executors
 
 fun formatSize(bytes: Long): String {
     return when {
@@ -576,6 +577,7 @@ class FileManagerActivity : ComponentActivity() {
 
     private var adbClient: AdbFileManagerClient? = null
     private lateinit var prefs: SharedPreferences
+    private val ioExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "fm-io").also { it.isDaemon = true } }
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { uploadFile(it) }
@@ -747,6 +749,7 @@ class FileManagerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        ioExecutor.shutdownNow()
         adbClient?.disconnect()
     }
 
@@ -775,7 +778,11 @@ class FileManagerActivity : ComponentActivity() {
                     if (success) {
                         isConnected = true
                         adbClient = client
-                        loadFiles()
+                        try {
+                            loadFiles()
+                        } catch (e: java.util.concurrent.RejectedExecutionException) {
+                            Log.w(TAG, "Executor shut down, skipping loadFiles")
+                        }
                     } else {
                         connectionError = getString(R.string.connection_failed_check_ip)
                     }
@@ -798,10 +805,10 @@ class FileManagerActivity : ComponentActivity() {
         val targetPath = currentPath
         val loadId = ++loadFilesCounter
         
-        Thread {
+        ioExecutor.execute {
             try {
-                // 检查连接状态，防止心跳断开后用户无感知
-                if (adbClient?.isConnected() != true) {
+                val client = adbClient
+                if (client?.isConnected() != true) {
                     runOnUiThread {
                         if (loadId == loadFilesCounter) {
                             isLoading = false
@@ -809,19 +816,21 @@ class FileManagerActivity : ComponentActivity() {
                             connectionError = getString(R.string.connection_lost_reconnect)
                         }
                     }
-                    return@Thread
+                    return@execute
                 }
                 
-                val result = adbClient?.listFiles(targetPath) ?: emptyList()
+                val result = client.listFiles(targetPath)
                 
                 runOnUiThread {
                     if (loadId == loadFilesCounter) {
                         files = result
                         isLoading = false
-                        loadStorageInfo()
+                        // 同步加载存储信息（不额外开线程）
+                        loadStorageInfoSync()
                     }
                 }
             } catch (e: Exception) {
+                Log.e(TAG, "loadFiles error: ${e.message}", e)
                 runOnUiThread {
                     if (loadId == loadFilesCounter) {
                         isLoading = false
@@ -830,16 +839,20 @@ class FileManagerActivity : ComponentActivity() {
                     }
                 }
             }
-        }.start()
+        }
     }
 
-    private fun loadStorageInfo() {
-        Thread {
-            val info = adbClient?.getStorageInfo(currentPath)
-            runOnUiThread {
-                storageInfo = info
+    private fun loadStorageInfoSync() {
+        ioExecutor.execute {
+            try {
+                val client = adbClient
+                if (client?.isConnected() != true) return@execute
+                val info = client.getStorageInfo(currentPath)
+                runOnUiThread { storageInfo = info }
+            } catch (e: Exception) {
+                Log.e(TAG, "loadStorageInfo error: ${e.message}", e)
             }
-        }.start()
+        }
     }
 
     private fun navigateUp() {
@@ -987,9 +1000,14 @@ class FileManagerActivity : ComponentActivity() {
         isLoading = true
         statusMessage = getString(R.string.download_status)
         
-        Thread {
+        ioExecutor.execute {
+            val client = adbClient
+            if (client?.isConnected() != true) {
+                runOnUiThread { isLoading = false; isConnected = false }
+                return@execute
+            }
             val localPath = cacheDir.absolutePath + "/" + file.name
-            val success = adbClient?.downloadFile(file.path, localPath) ?: false
+            val success = client.downloadFile(file.path, localPath)
             
             if (!success) {
                 LogCollector.e(TAG, "Download failed: ${file.path}")
@@ -1012,16 +1030,26 @@ class FileManagerActivity : ComponentActivity() {
                 isLoading = false
                 statusMessage = if (success) getString(R.string.download_success) else getString(R.string.download_failed)
             }
-        }.start()
+        }
     }
 
     private fun uploadFile(uri: Uri) {
         isLoading = true
         statusMessage = getString(R.string.upload_status)
         
-        Thread {
+        ioExecutor.execute {
             val fileName = uri.getFileName() ?: "unknown"
             val targetPath = buildPath(currentPath, fileName)
+            
+            val client = adbClient
+            if (client?.isConnected() != true) {
+                runOnUiThread {
+                    isLoading = false
+                    statusMessage = getString(R.string.connection_lost_reconnect)
+                    isConnected = false
+                }
+                return@execute
+            }
             
             val localPath = cacheDir.absolutePath + "/" + fileName
             try {
@@ -1031,10 +1059,10 @@ class FileManagerActivity : ComponentActivity() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Copy file failed: ${e.message}")
+                Log.e(TAG, "Copy file failed: ${e.message}", e)
             }
             
-            val success = adbClient?.uploadFile(localPath, targetPath) ?: false
+            val success = client.uploadFile(localPath, targetPath)
             File(localPath).delete()
             
             if (!success) {
@@ -1050,16 +1078,21 @@ class FileManagerActivity : ComponentActivity() {
                     statusMessage = getString(R.string.file_upload_failed)
                 }
             }
-        }.start()
+        }
     }
 
     private fun createNewFolder(name: String) {
         showNewFolderDialog = false
         isLoading = true
         
-        Thread {
+        ioExecutor.execute {
+            val client = adbClient
+            if (client?.isConnected() != true) {
+                runOnUiThread { isLoading = false; isConnected = false }
+                return@execute
+            }
             val newPath = buildPath(currentPath, name)
-            val success = adbClient?.createFolder(newPath) ?: false
+            val success = client.createFolder(newPath)
             
             if (!success) {
                 LogCollector.e(TAG, "Create folder failed: $newPath")
@@ -1070,7 +1103,7 @@ class FileManagerActivity : ComponentActivity() {
                 statusMessage = if (success) getString(R.string.folder_create_success) else getString(R.string.folder_create_failed)
                 if (success) loadFiles()
             }
-        }.start()
+        }
     }
 
     private fun renameSelected() {
@@ -1091,9 +1124,14 @@ class FileManagerActivity : ComponentActivity() {
         showRenameDialog = false
         isLoading = true
         
-        Thread {
+        ioExecutor.execute {
+            val client = adbClient
+            if (client?.isConnected() != true) {
+                runOnUiThread { isLoading = false; isConnected = false }
+                return@execute
+            }
             val newPath = buildPath(currentPath, newName)
-            val success = adbClient?.renameFile(targetFile!!.path, newPath) ?: false
+            val success = client.renameFile(targetFile!!.path, newPath)
             
             if (!success) {
                 LogCollector.e(TAG, "Rename failed: ${targetFile!!.path} -> $newPath")
@@ -1106,7 +1144,7 @@ class FileManagerActivity : ComponentActivity() {
                 renameText = ""
                 if (success) loadFiles()
             }
-        }.start()
+        }
     }
 
     private fun copySelected() {
@@ -1128,19 +1166,24 @@ class FileManagerActivity : ComponentActivity() {
             isLoading = true
             statusMessage = getString(R.string.pasting_status)
             
-            Thread {
+            ioExecutor.execute {
+                val client = adbClient
+                if (client?.isConnected() != true) {
+                    runOnUiThread { isLoading = false; isConnected = false }
+                    return@execute
+                }
                 var successCount = 0
                 val failedPaths = mutableListOf<String>()
                 paths.forEach { path ->
                     val fileName = path.substringAfterLast('/')
                     val newPath = buildPath(currentPath, fileName)
                     if (action == ClipboardAction.COPY) {
-                        if (adbClient?.copyFile(path, newPath) == true) successCount++
+                        if (client.copyFile(path, newPath)) successCount++
                         else failedPaths.add(path)
                     } else {
                         // Move = copy + delete
-                        if (adbClient?.copyFile(path, newPath) == true) {
-                            adbClient?.deleteFile(path)
+                        if (client.copyFile(path, newPath)) {
+                            client.deleteFile(path)
                             successCount++
                         } else {
                             failedPaths.add(path)
@@ -1164,7 +1207,7 @@ class FileManagerActivity : ComponentActivity() {
                     }
                     loadFiles()
                 }
-            }.start()
+            }
         }
     }
 
@@ -1178,11 +1221,16 @@ class FileManagerActivity : ComponentActivity() {
         isLoading = true
         statusMessage = getString(R.string.deleting_status)
         
-        Thread {
+        ioExecutor.execute {
+            val client = adbClient
+            if (client?.isConnected() != true) {
+                runOnUiThread { isLoading = false; isConnected = false }
+                return@execute
+            }
             var successCount = 0
             val failedPaths = mutableListOf<String>()
             selectedFiles.forEach { path ->
-                if (adbClient?.deleteFile(path) == true) successCount++
+                if (client.deleteFile(path)) successCount++
                 else failedPaths.add(path)
             }
             
@@ -1200,7 +1248,7 @@ class FileManagerActivity : ComponentActivity() {
                 selectedFiles = emptySet()
                 loadFiles()
             }
-        }.start()
+        }
     }
 
     private fun installApk(file: FileItem) {

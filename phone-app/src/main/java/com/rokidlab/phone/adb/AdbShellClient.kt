@@ -194,7 +194,20 @@ class AdbShellClient(
         }
     }
 
+    // 包名缓存，避免每次打开设置都重新查询
+    private var cachedPackages: List<String>? = null
+    private var cachedPackagesTime: Long = 0L
+    private val packageCacheTtlMs = 60_000L // 缓存 60 秒
+
     fun listPackages(includeSystem: Boolean = false): List<String> {
+        // 使用缓存加速
+        val now = System.currentTimeMillis()
+        val cached = cachedPackages
+        if (!includeSystem && cached != null && (now - cachedPackagesTime) < packageCacheTtlMs) {
+            Log.i(TAG, "listPackages: returning cached ${cached.size} packages")
+            return cached
+        }
+
         val cmd = if (includeSystem) "pm list packages" else "pm list packages -3"
         val result = executeShellCommand(cmd)
         val lines = result.lines()
@@ -203,6 +216,11 @@ class AdbShellClient(
             .filter { it.isNotBlank() }
             .sorted()
         Log.i(TAG, "listPackages(includeSystem=$includeSystem) lines=${lines.size}")
+
+        if (!includeSystem) {
+            cachedPackages = lines
+            cachedPackagesTime = now
+        }
         return lines
     }
 

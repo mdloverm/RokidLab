@@ -1,11 +1,13 @@
 package com.rokidlab.rokidlink
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -39,34 +41,20 @@ class KeyButtonBridgeActivity : Activity() {
                 }
                 "com.android.action.ACTION_SPRITE_BUTTON_UP" -> {
                     val down = KeyButtonService.downTimeMs
+                    KeyButtonService.downTimeMs = 0L
                     if (down <= 0) return
                     val elapsed = System.currentTimeMillis() - down
-                    val isLong = elapsed >= 500L
-                    Log.i(TAG, "UP elapsed=${elapsed}ms -> ${if (isLong) "LONG" else "SHORT"}")
-
-                    val pkg = prefs.getString(
-                        if (isLong) KeyButtonService.KEY_LONG_PKG
-                        else KeyButtonService.KEY_SHORT_PKG, ""
-                    ) ?: ""
-                    val act = prefs.getString(
-                        if (isLong) KeyButtonService.KEY_LONG_ACT
-                        else KeyButtonService.KEY_SHORT_ACT, ".MainActivity"
-                    ) ?: ".MainActivity"
-
-                    KeyButtonService.downTimeMs = 0L
-                    if (pkg.isBlank()) {
-                        Log.w(TAG, "No target configured")
-                        return
-                    }
-                    if (isDuplicateLaunch()) return
-                    abortBroadcast()
-                    launchTarget(pkg, act)
+                    Log.i(TAG, "UP elapsed=${elapsed}ms")
+                    launchTargetByDuration(prefs, elapsed)
                 }
                 "com.android.action.ACTION_SPRITE_BUTTON_CLICK" -> {
-                    Log.i(TAG, "CLICK (legacy) — ignored")
+                    Log.i(TAG, "CLICK → SHORT")
+                    launchConfiguredTarget(prefs, isLong = false)
                 }
                 "com.android.action.ACTION_SPRITE_BUTTON_LONG_PRESS" -> {
-                    Log.i(TAG, "LONG_PRESS (legacy) — ignored")
+                    Log.i(TAG, "LONG_PRESS → LONG")
+                    KeyButtonService.downTimeMs = 0L
+                    launchConfiguredTarget(prefs, isLong = true)
                 }
             }
         }
@@ -77,26 +65,113 @@ class KeyButtonBridgeActivity : Activity() {
             lastLaunchMs = now
             return false
         }
-    }
 
-    private fun launchTarget(pkg: String, activity: String) {
-        val fullAct = if (activity.startsWith(".")) "$pkg$activity" else activity
-        try {
-            val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
-            if (launchIntent != null) {
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                startActivity(launchIntent)
-                Log.i(TAG, "Launched: $pkg (launchIntent)")
-            } else {
-                Intent(Intent.ACTION_MAIN).apply {
-                    component = ComponentName(pkg, fullAct)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(this)
-                }
-                Log.i(TAG, "Launched: $pkg/$fullAct (explicit)")
+        private fun launchTargetByDuration(prefs: android.content.SharedPreferences, elapsedMs: Long) {
+            val pkg = prefs.getString(
+                if (elapsedMs >= 500L) KeyButtonService.KEY_LONG_PKG
+                else KeyButtonService.KEY_SHORT_PKG, ""
+            ) ?: ""
+            val act = prefs.getString(
+                if (elapsedMs >= 500L) KeyButtonService.KEY_LONG_ACT
+                else KeyButtonService.KEY_SHORT_ACT, ".MainActivity"
+            ) ?: ".MainActivity"
+            if (pkg.isBlank()) {
+                Log.w(TAG, "No target for ${if (elapsedMs >= 500L) "LONG" else "SHORT"} (elapsed=${elapsedMs}ms)")
+                return
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "launchTarget failed: ${e::class.simpleName}: ${e.message}")
+            if (isDuplicateLaunch()) return
+            abortBroadcast()
+            launchTargetAndLog(pkg, act, "duration=${if (elapsedMs >= 500L) "LONG" else "SHORT"}")
+        }
+
+        private fun launchConfiguredTarget(prefs: android.content.SharedPreferences, isLong: Boolean) {
+            val pkg = prefs.getString(
+                if (isLong) KeyButtonService.KEY_LONG_PKG
+                else KeyButtonService.KEY_SHORT_PKG, ""
+            ) ?: ""
+            val act = prefs.getString(
+                if (isLong) KeyButtonService.KEY_LONG_ACT
+                else KeyButtonService.KEY_SHORT_ACT, ".MainActivity"
+            ) ?: ".MainActivity"
+
+            KeyButtonService.downTimeMs = 0L
+            if (pkg.isBlank()) {
+                Log.w(TAG, "No configured target for ${if (isLong) "LONG" else "SHORT"}")
+                return
+            }
+            if (isDuplicateLaunch()) return
+            abortBroadcast()
+            launchTargetAndLog(pkg, act, if (isLong) "LONG" else "SHORT")
+        }
+
+        private fun launchTargetAndLog(pkg: String, activity: String, mode: String) {
+            val fullAct = if (activity.startsWith(".")) "$pkg$activity" else activity
+            try {
+                // 1. 优先使用系统 launch intent
+                val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    startActivity(launchIntent)
+                    Log.i(TAG, "Launched ($mode): $pkg (launchIntent)")
+                    return
+                }
+
+                // 2. 尝试显式 activity
+                try {
+                    Intent(Intent.ACTION_MAIN).apply {
+                        component = ComponentName(pkg, fullAct)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }.also { startActivity(it) }
+                    Log.i(TAG, "Launched ($mode): $pkg/$fullAct (explicit)")
+                    return
+                } catch (_: ActivityNotFoundException) {
+                    // 3. 显式失败 → 自动查包的实际 launcher
+                }
+
+                // 4. 用 getPackageInfo 查包的所有 activity，找第一个可导出的
+                try {
+                    val pkgInfo = packageManager.getPackageInfo(pkg, PackageManager.GET_ACTIVITIES)
+                    val firstActivity = pkgInfo.activities?.firstOrNull { it.exported }?.name
+                    if (firstActivity != null) {
+                        Intent(Intent.ACTION_MAIN).apply {
+                            component = ComponentName(pkg, firstActivity)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(this)
+                        }
+                        Log.i(TAG, "Launched ($mode): $pkg/$firstActivity (auto)")
+                        return
+                    } else {
+                        Log.w(TAG, "No exported activity in manifest for $pkg ($mode)")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "getPackageInfo failed for $pkg ($mode): ${e::class.simpleName}: ${e.message}")
+                }
+
+                // 5. 最终兜底：用 pm resolve-activity 命令行
+                try {
+                    val process = Runtime.getRuntime().exec("pm resolve-activity --brief $pkg")
+                    val output = java.io.BufferedReader(java.io.InputStreamReader(process.inputStream)).readText().trim()
+                    process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+                    if (output.isNotBlank() && !output.contains("Error") && !output.contains("No activity")) {
+                        val actLine = output.lines().firstOrNull { it.startsWith(pkg) }
+                        if (actLine != null) {
+                            val activityName = actLine.removePrefix("$pkg/")
+                            Intent(Intent.ACTION_MAIN).apply {
+                                component = ComponentName(pkg, activityName)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                startActivity(this)
+                            }
+                            Log.i(TAG, "Launched ($mode): $pkg/$activityName (pm)")
+                            return
+                        }
+                    }
+                    Log.e(TAG, "pm resolve-activity gave no result for $pkg ($mode): $output")
+                } catch (e: Exception) {
+                    Log.w(TAG, "pm resolve-activity failed for $pkg ($mode): ${e.message}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "launchTarget failed ($mode): ${e::class.simpleName}: ${e.message}")
+            }
         }
     }
 
