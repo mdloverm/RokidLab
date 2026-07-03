@@ -1,4 +1,4 @@
-{
+﻿{
     "schemaVersion": 1,
     "generatedAt": "2026-07-03T00:00:00.000Z",
     "brewVersion": "2.0",
@@ -402,6 +402,120 @@
                     "notes": "Clean ebook reader for Rokid Glasses.",
                     "changes": [
                         "Community Rokid glasses app listing."
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "rokid-zoom-camera",
+            "name": "Rokid Zoom Camera",
+            "category": "Camera",
+            "type": "glasses",
+            "version": "0.1.0",
+            "publishedAt": "2026-07-02T09:36:04Z",
+            "summary": "Unofficial Rokid Glasses camera prototype with temple-swipe zoom and physical-button capture",
+            "description": "Rokid Zoom Camera is an unofficial glasses-side camera prototype with stepped zoom control from temple swipes and physical button capture.",
+            "phoneRequired": false,
+            "artifacts": [
+                {
+                    "target": "glasses",
+                    "url": "https://ghproxy.net/https://raw.githubusercontent.com/tenru-do/----/main/rokid/rokid-zoom-camera/dist/RokidZoomCamera-v0.1.0-debug.apk",
+                    "sha256": "3a0f05d4e1f7f24d6f68d5b2ec6275bd6b263d8e7209803023bfa73ac43b8cf5",
+                    "sizeBytes": 30995,
+                    "packageName": "com.example.rokidzoomcamera",
+                    "versionCode": 1,
+                    "versionName": "0.1.0"
+                }
+            ],
+            "author": "tenru-do",
+            "sourceUrl": "https://ghproxy.net/https://github.com/tenru-do/----/tree/main/rokid/rokid-zoom-camera",
+            "iconUrl": "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-zoom-camera.png",
+            "screenshotUrls": [],
+            "featured": false,
+            "newUntil": "2026-07-10T09:36:04.000Z",
+            "listing": {
+                "descriptionMarkdown": "Rokid Zoom Camera is an unofficial camera prototype for Rokid Glasses. It is designed for quick zoomed capture with a small, dim preview that avoids filling the glasses display.\n\n- Camera2 preview on Rokid Glasses\n- Temple swipe forward or backward to step zoom in or out\n- Physical button short press captures a zoomed photo\n- Physical button long press starts or stops zoomed video recording\n- Saves photos and videos locally to DCIM/Camera"
+            },
+            "releases": [
+                {
+                    "version": "0.1.0",
+                    "date": "2026-07-02T09:36:04Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/tenru-do/----/commit/95e6188dd60b057b3c5fd533d4fc1ff36b3be15b",
+                    "notes": "Initial prototype APK. Adds Camera2 preview, stepped temple-swipe zoom, physical-button photo capture, physical-button video recording, local DCIM/Camera saves.",
+                    "changes": [
+                        "Camera2 preview for Rokid Glasses.",
+                        "Stepped zoom controlled by temple swipe.",
+                        "Zoomed photo capture with the physical button.",
+                        "Zoomed video recording with REC indicator.",
+                        "Local media saves through Android MediaStore."
+                    ]
+                }
+            ]
+        },
+
+        {
+            "id": "rokid-relay",
+            "name": "Rokid Relay",
+            "category": "Accessibility",
+            "type": "combo",
+            "version": "0.1.14",
+            "featured": true,
+            "featuredRank": 1,
+            "publishedAt": "2026-06-13T23:07:48Z",
+            "summary": "Reply to Android phone notifications from Rokid glasses.",
+            "description": "Phone relay for replyable Android notifications, with a compact glasses overlay, glasses microphone speech-to-text, Android direct reply, and bundled glasses helper deployment through Hi Rokid.",
+            "phoneRequired": true,
+            "artifacts": [
+                {
+                    "target": "phone",
+                    "url": "https://ghproxy.net/https://github.com/Anezium/Rokid-Relay/releases/download/v0.1.14/rokid-relay-phone-v0.1.14-vc15-debug.apk",
+                    "sha256": "eb27aa8ce5d79d88e890d837a2470851c8e250857b3180eed2a768efdf7751c1",
+                    "sizeBytes": 13731549,
+                    "packageName": "com.anezium.rokidrelay.phone",
+                    "versionCode": 15,
+                    "versionName": "0.1.14"
+                }
+            ],
+            "author": "Anezium",
+            "sourceUrl": "https://ghproxy.net/https://github.com/Anezium/Rokid-Relay",
+            "iconUrl": "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-relay.png",
+            "screenshotUrls": [
+                "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-relay-phone-home.png",
+                "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-relay-phone-notifications.png",
+                "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-relay-phone-speech.png"
+            ],
+            "newUntil": "2026-07-13T23:07:48.000Z",
+            "listing": {
+                "descriptionMarkdown": "Rokid Relay lets you reply to Android phone notifications directly from Rokid AR glasses.\n\n- Forwards replyable Android notifications to glasses\n- Compact green overlay on glasses for notifications\n- Voice reply using glasses microphone and speech-to-text\n- Supports Android built-in and cloud STT engines (OpenAI, ElevenLabs)\n- Inbox on glasses to browse recent notifications\n\n## Requirements\n- Android phone running Android 12 or higher\n- Rokid glasses connected via Global Hi Rokid"
+            },
+            "releases": [
+                {
+                    "version": "0.1.14",
+                    "date": "2026-06-13T23:07:48Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/Anezium/Rokid-Relay/releases/tag/v0.1.14",
+                    "notes": "Rokid Relay v0.1.14 development-preview update.",
+                    "changes": [
+                        "Added an opt-in Image previews on glasses setting.",
+                        "Extracted notification images from large icons, MessagingStyle image messages, BigPicture notifications.",
+                        "Added a rokid_relay.media transfer channel for compact image payloads.",
+                        "Added a bounded image cache on the glasses helper and HUD rendering.",
+                        "Added diagnostics image notification test.",
+                        "Replaced the project logo with the white Rokid wordmark on black.",
+                        "Added CHANGELOG.md and refreshed README."
+                    ]
+                },
+                {
+                    "version": "0.1.13",
+                    "date": "2026-06-11T11:14:42Z",
+                    "sourceReleaseUrl": "https://ghproxy.net/https://github.com/Anezium/Rokid-Relay/releases/tag/v0.1.13",
+                    "notes": "Rokid Relay v0.1.13 focusing on glasses input reliability and QA.",
+                    "changes": [
+                        "Reworked glasses input interpreter.",
+                        "Fixed physical swipe aliasing.",
+                        "Fixed RRLL-style combo detection.",
+                        "Reworked long notification paging.",
+                        "Added transcription language selection.",
+                        "Added Azure Speech provider support."
                     ]
                 }
             ]
