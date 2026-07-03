@@ -80,8 +80,7 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/OverlayRec/main/OverlayRec-screenshot2.jpg"
                                         ],
                      "phoneRequired":  false,
-                     "featured":  true,
-                     "featuredRank":  2,
+                     "featured":  false,
                      "publishedAt":  "2026-06-24T00:00:00.000Z",
                      "artifacts":  [
                                        {
@@ -222,7 +221,8 @@
 
                                         ],
                      "phoneRequired":  false,
-                     "featured":  false,
+                     "featured":  true,
+                     "featuredRank":  1,
                      "publishedAt":  "2026-06-24T00:00:00.000Z",
                      "artifacts":  [
                                        {
@@ -270,8 +270,7 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/Rokid-DragonBallScouter/main/Screenshot_livecam.png"
                                         ],
                      "phoneRequired":  false,
-                     "featured":  true,
-                     "featuredRank":  2,
+                     "featured":  false,
                      "publishedAt":  "2026-06-24T00:00:00.000Z",
                      "artifacts":  [
                                        {
@@ -499,8 +498,7 @@
                      "category":  "Accessibility",
                      "type":  "combo",
                      "version":  "0.1.14",
-                     "featured":  true,
-                     "featuredRank":  1,
+                     "featured":  false,
                      "publishedAt":  "2026-06-13T23:07:48Z",
                      "summary":  "Reply to Android phone notifications from Rokid glasses.",
                      "description":  "Phone relay for replyable Android notifications, with a compact glasses overlay, glasses microphone speech-to-text, Android direct reply, and bundled glasses helper deployment through Hi Rokid.",
@@ -569,8 +567,7 @@
                      "category":  "Navigation",
                      "type":  "glasses",
                      "version":  "1.4.7",
-                     "featured":  true,
-                     "featuredRank":  2,
+                     "featured":  false,
                      "summary":  "Use the R08 smart ring as a navigation controller for Rokid glasses",
                      "description":  "R08 Access Bridge pairs an R08 smart ring via Bluetooth LE to control Rokid glasses navigation. It translates ring input into launcher navigation, app focus movement, activation, and Back actions using an Accessibility Service.",
                      "author":  "Anezium",
@@ -698,8 +695,7 @@
                      "category":  "Utility",
                      "type":  "glasses",
                      "version":  "1.0.0",
-                     "featured":  true,
-                     "featuredRank":  3,
+                     "featured":  false,
                      "publishedAt":  "2026-05-29",
                      "summary":  "Run Meta-display web apps on Rokid glasses.",
                      "description":  "Utility for running games and apps developed for Meta display on Rokid glasses, with a built-in program list and support for adding and managing custom apps by QR code.",
@@ -749,8 +745,7 @@
                      "category":  "Media",
                      "type":  "combo",
                      "version":  "0.1.5",
-                     "featured":  true,
-                     "featuredRank":  4,
+                     "featured":  false,
                      "publishedAt":  "2026-06-09T10:58:26Z",
                      "summary":  "Stream Rokid glasses camera and mic to YouTube or Twitch via your phone with chat overlay support",
                      "description":  "Rokid Live Studio streams your Rokid Glasses camera and microphone through your phone to YouTube or Twitch. It supports both stream key and OAuth modes, including live chat display on the glasses overlay. The app uses Wi-Fi Direct for direct glasses-to-phone connection without a router.",
@@ -870,8 +865,7 @@
                                                       ]
                                       }
                                   ],
-                     "featured":  true,
-                     "featuredRank":  5,
+                     "featured":  false,
                      "phoneRequired":  true,
                      "artifacts":  [
                                        {
@@ -910,8 +904,7 @@
                      "category":  "Utility",
                      "type":  "glasses",
                      "version":  "1.0.0",
-                     "featured":  true,
-                     "featuredRank":  6,
+                     "featured":  false,
                      "publishedAt":  "2026-05-27",
                      "summary":  "app uninstall program",
                      "description":  "EK Remover is a simple and intuitive app uninstall program.",
@@ -959,8 +952,7 @@
                      "category":  "Navigation",
                      "type":  "combo",
                      "version":  "1.0.2",
-                     "featured":  true,
-                     "featuredRank":  7,
+                     "featured":  false,
                      "publishedAt":  "2026-05-29T22:02:46Z",
                      "summary":  "Turn-by-turn navigation for Rokid AR glasses.",
                      "description":  "Phone plus glasses navigation workflow with a HUD for directions. Install both APKs for the full experience.",
@@ -3175,7 +3167,8 @@
                      "iconUrl":  "https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/assets/icons/dm40.png",
                      "screenshotUrls":  [],
                      "phoneRequired":  false,
-                     "featured":  false,
+                     "featured":  true,
+                     "featuredRank":  2,
                      "publishedAt":  "2026-07-03T00:00:00.000Z",
                      "artifacts":  [
                                        {
