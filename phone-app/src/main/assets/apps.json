@@ -1,4 +1,4 @@
-{
+﻿{
     "schemaVersion":  1,
     "generatedAt":  "2026-07-03T00:00:00.000Z",
     "brewVersion":  "2.0",
@@ -65,7 +65,7 @@
                  },
                  {
                      "id":  "com.rokid.overlayrec",
-                     "name":  "叠加录制",
+                     "name":  "OverlayRec",
                      "type":  "glasses",
                      "category":  "Tool",
                      "version":  "0.1.0",
@@ -161,7 +161,7 @@
                  },
                  {
                      "id":  "com.kupstudio.touchmouse",
-                     "name":  "凝视鼠标",
+                     "name":  "GazeMou",
                      "type":  "glasses",
                      "category":  "Tool",
                      "version":  "1.6.0",
@@ -208,7 +208,7 @@
                  },
                  {
                      "id":  "com.osagem.photodel4rokidglasses",
-                     "name":  "照片删除",
+                     "name":  "PhotoDel",
                      "type":  "glasses",
                      "category":  "Tool",
                      "version":  "1.0.2",
@@ -255,7 +255,7 @@
                  },
                  {
                      "id":  "io.github.anezium.rokiddragonballscouter",
-                     "name":  "龙珠探测器",
+                     "name":  "DragonBall Scouter",
                      "type":  "glasses",
                      "category":  "Game",
                      "version":  "0.1.1",
@@ -304,7 +304,7 @@
                  },
                  {
                      "id":  "com.rokidgames.headpong",
-                     "name":  "游戏合集",
+                     "name":  "Game Collection",
                      "type":  "glasses",
                      "category":  "Game",
                      "version":  "0.1.0",
@@ -350,7 +350,7 @@
                  },
                  {
                      "id":  "com.snorlytics.browser_glasses",
-                     "name":  "Rokid 浏览器",
+                     "name":  "Rokid Browser",
                      "type":  "glasses",
                      "category":  "Productivity",
                      "version":  "1.0.1",
@@ -397,7 +397,7 @@
                  },
                  {
                      "id":  "kr.pe.eung.ekreader",
-                     "name":  "EK 阅读器",
+                     "name":  "EK Reader",
                      "type":  "glasses",
                      "category":  "Education",
                      "version":  "1.4.0",
@@ -444,7 +444,7 @@
                  },
                  {
                      "id":  "rokid-zoom-camera",
-                     "name":  "Rokid 变焦相机",
+                     "name":  "Rokid Zoom Camera",
                      "category":  "Camera",
                      "type":  "glasses",
                      "version":  "0.1.0",
@@ -495,7 +495,7 @@
                  },
                  {
                      "id":  "rokid-relay",
-                     "name":  "Rokid 中继器",
+                     "name":  "Rokid Relay",
                      "category":  "Accessibility",
                      "type":  "combo",
                      "version":  "0.1.14",
@@ -565,7 +565,7 @@
                  },
                  {
                      "id":  "r08-access-bridge",
-                     "name":  "R08 无障碍桥",
+                     "name":  "R08 Access Bridge",
                      "category":  "Navigation",
                      "type":  "glasses",
                      "version":  "1.4.7",
@@ -694,7 +694,7 @@
                  },
                  {
                      "id":  "ek-meta-player",
-                     "name":  "元播放器",
+                     "name":  "EK Meta Player",
                      "category":  "Utility",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -745,7 +745,7 @@
                  },
                  {
                      "id":  "rokid-live-studio",
-                     "name":  "Rokid 直播工作室",
+                     "name":  "Rokid Live Studio",
                      "category":  "Media",
                      "type":  "combo",
                      "version":  "0.1.5",
@@ -837,7 +837,7 @@
                  },
                  {
                      "id":  "dew-browser",
-                     "name":  "露珠浏览器",
+                     "name":  "Dew Browser",
                      "category":  "Browser",
                      "type":  "combo",
                      "version":  "1.1.1",
@@ -906,7 +906,7 @@
                  },
                  {
                      "id":  "ek-remover",
-                     "name":  "背景移除",
+                     "name":  "EK Remover",
                      "category":  "Utility",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -955,7 +955,7 @@
                  },
                  {
                      "id":  "rokid-gmaps",
-                     "name":  "Rokid 地图",
+                     "name":  "Rokid GMaps",
                      "category":  "Navigation",
                      "type":  "combo",
                      "version":  "1.0.2",
@@ -1028,7 +1028,7 @@
                  },
                  {
                      "id":  "assist-bridge",
-                     "name":  "辅助桥",
+                     "name":  "Assist Bridge",
                      "category":  "AI",
                      "type":  "combo",
                      "version":  "0.3.1",
@@ -1098,7 +1098,7 @@
                  },
                  {
                      "id":  "dcim-server",
-                     "name":  "相机服务器",
+                     "name":  "DCIM Server",
                      "category":  "Utility",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -1145,7 +1145,7 @@
                  },
                  {
                      "id":  "dragonball-scouter",
-                     "name":  "龙珠探测器",
+                     "name":  "DragonBall Scouter",
                      "category":  "Experiment",
                      "type":  "glasses",
                      "version":  "0.1.1",
@@ -1200,7 +1200,7 @@
                  },
                  {
                      "id":  "ek-arrow",
-                     "name":  "射手箭",
+                     "name":  "EK Arrow",
                      "category":  "Games",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -1248,7 +1248,7 @@
                  },
                  {
                      "id":  "ek-find",
-                     "name":  "物品查找",
+                     "name":  "EK Find",
                      "category":  "Shopping",
                      "type":  "glasses",
                      "version":  "1.1.0",
@@ -1297,7 +1297,7 @@
                  },
                  {
                      "id":  "ek-live-cam",
-                     "name":  "直播相机",
+                     "name":  "EK Live Cam",
                      "category":  "Camera",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -1347,7 +1347,7 @@
                  },
                  {
                      "id":  "ek-pilot",
-                     "name":  "导航员",
+                     "name":  "EK Pilot",
                      "category":  "Games",
                      "type":  "glasses",
                      "version":  "0.8.0",
@@ -1394,7 +1394,7 @@
                  },
                  {
                      "id":  "ek-timer",
-                     "name":  "计时器",
+                     "name":  "EK Timer",
                      "category":  "Utility",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -1441,7 +1441,7 @@
                  },
                  {
                      "id":  "ek-trans",
-                     "name":  "翻译助手",
+                     "name":  "EK Trans",
                      "category":  "Translation",
                      "type":  "glasses",
                      "version":  "2.0.0",
@@ -1488,7 +1488,7 @@
                  },
                  {
                      "id":  "ek-word-up",
-                     "name":  "单词向上",
+                     "name":  "EK Word Up",
                      "category":  "Learning",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -1536,7 +1536,7 @@
                  },
                  {
                      "id":  "ek-home",
-                     "name":  "智能家居",
+                     "name":  "EK Home",
                      "category":  "Launcher",
                      "type":  "glasses",
                      "version":  "1.2.0",
@@ -1594,7 +1594,7 @@
                  },
                  {
                      "id":  "ek-reader",
-                     "name":  "EK 阅读器",
+                     "name":  "EK Reader",
                      "category":  "Reader",
                      "type":  "glasses",
                      "version":  "1.4.0",
@@ -1681,7 +1681,7 @@
                  },
                  {
                      "id":  "gazemou",
-                     "name":  "凝视鼠标",
+                     "name":  "GazeMou",
                      "category":  "Launcher",
                      "type":  "glasses",
                      "version":  "1.6.0",
@@ -1741,7 +1741,7 @@
                  },
                  {
                      "id":  "glasses-reader",
-                     "name":  "眼镜阅读器",
+                     "name":  "Glasses Reader",
                      "category":  "Reader",
                      "type":  "combo",
                      "version":  "1.2.2",
@@ -1827,7 +1827,7 @@
                  },
                  {
                      "id":  "hubu",
-                     "name":  "虎步",
+                     "name":  "HuBu",
                      "category":  "Fitness",
                      "type":  "glasses",
                      "version":  "0.1.8",
@@ -1967,7 +1967,7 @@
                  },
                  {
                      "id":  "lc-hot100",
-                     "name":  "力扣热题",
+                     "name":  "LC Hot 100",
                      "category":  "Learning",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -1999,7 +1999,7 @@
                  },
                  {
                      "id":  "m365-rokid-hud",
-                     "name":  "M365 HUD",
+                     "name":  "M365 Rokid HUD",
                      "category":  "Mobility",
                      "type":  "combo",
                      "version":  "1.1",
@@ -2059,7 +2059,7 @@
                  },
                  {
                      "id":  "matrix-vision",
-                     "name":  "矩阵视觉",
+                     "name":  "Matrix Vision",
                      "category":  "Camera",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -2107,7 +2107,7 @@
                  },
                  {
                      "id":  "memora-rokid",
-                     "name":  "记忆罗卡",
+                     "name":  "Memora Rokid",
                      "category":  "Learning",
                      "type":  "phone",
                      "version":  "1.0.0",
@@ -2141,7 +2141,7 @@
                  },
                  {
                      "id":  "neuroglasses",
-                     "name":  "神经眼镜",
+                     "name":  "NeuroGlasses",
                      "category":  "AI",
                      "type":  "phone",
                      "version":  "1.0.0-beta",
@@ -2181,7 +2181,7 @@
                  },
                  {
                      "id":  "overlayrec",
-                     "name":  "叠加录制",
+                     "name":  "OverlayRec",
                      "category":  "Media",
                      "type":  "glasses",
                      "version":  "0.2.0",
@@ -2243,7 +2243,7 @@
                  },
                  {
                      "id":  "photo-del",
-                     "name":  "照片删除",
+                     "name":  "Photo Del",
                      "category":  "Utility",
                      "type":  "glasses",
                      "version":  "1.0.2",
@@ -2321,7 +2321,7 @@
                  },
                  {
                      "id":  "rokid-ai-assistant",
-                     "name":  "Rokid AI 助手",
+                     "name":  "Rokid AI Assistant",
                      "category":  "AI",
                      "type":  "combo",
                      "version":  "0.12.0",
@@ -2399,7 +2399,7 @@
                  },
                  {
                      "id":  "rokid-connect-hud",
-                     "name":  "Rokid 连接 HUD",
+                     "name":  "Rokid Connect HUD",
                      "category":  "Navigation",
                      "type":  "combo",
                      "version":  "1.2.0",
@@ -2456,7 +2456,7 @@
                  },
                  {
                      "id":  "rokid-lyrics",
-                     "name":  "Rokid 歌词",
+                     "name":  "Rokid Lyrics",
                      "category":  "Media",
                      "type":  "combo",
                      "version":  "0.3.1",
@@ -2549,7 +2549,7 @@
                  },
                  {
                      "id":  "rokid-manager",
-                     "name":  "Rokid 管理器",
+                     "name":  "Rokid Manager",
                      "category":  "Utility",
                      "type":  "glasses",
                      "version":  "1.5",
@@ -2585,7 +2585,7 @@
                  },
                  {
                      "id":  "rokid-manga-viewer",
-                     "name":  "Rokid 漫画阅读器",
+                     "name":  "Rokid Manga Viewer",
                      "category":  "Reader",
                      "type":  "glasses",
                      "version":  "1.0.5",
@@ -2629,7 +2629,7 @@
                  },
                  {
                      "id":  "music-score",
-                     "name":  "乐谱",
+                     "name":  "Music Score",
                      "category":  "Music",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -2661,7 +2661,7 @@
                  },
                  {
                      "id":  "rokid-shell",
-                     "name":  "Rokid 文件管理器",
+                     "name":  "Rokid Shell",
                      "category":  "Utility",
                      "type":  "glasses",
                      "version":  "0.1.0",
@@ -2708,7 +2708,7 @@
                  },
                  {
                      "id":  "rokid-smart-life",
-                     "name":  "Rokid 智能生活",
+                     "name":  "Rokid Smart Life",
                      "category":  "Navigation",
                      "type":  "glasses",
                      "version":  "1.0.0",
@@ -2742,7 +2742,7 @@
                  },
                  {
                      "id":  "rokid-ssh-terminal",
-                     "name":  "Rokid SSH 终端",
+                     "name":  "Rokid SSH Terminal",
                      "category":  "Developer",
                      "type":  "glasses",
                      "version":  "0.1.0-dev",
@@ -2784,7 +2784,7 @@
                  },
                  {
                      "id":  "rokid-apks",
-                     "name":  "Rokid 安装包",
+                     "name":  "Rokid APKs",
                      "category":  "Developer",
                      "type":  "combo",
                      "version":  "1.2.3",
@@ -2890,7 +2890,7 @@
                  },
                  {
                      "id":  "rokid-scribe",
-                     "name":  "Rokid 记录员",
+                     "name":  "Rokid Scribe",
                      "category":  "Utility",
                      "type":  "combo",
                      "version":  "1.1.2",
@@ -2960,7 +2960,7 @@
                  },
                  {
                      "id":  "tasker-bridge",
-                     "name":  "Tasker 桥接",
+                     "name":  "Tasker Bridge",
                      "category":  "Utility",
                      "type":  "phone",
                      "version":  "0.2.8-bt",
@@ -3042,7 +3042,7 @@
                  },
                  {
                      "id":  "texthome",
-                     "name":  "文字主页",
+                     "name":  "TextHome",
                      "category":  "Launcher",
                      "type":  "glasses",
                      "version":  "1.1.1",
@@ -3102,7 +3102,7 @@
                  },
                  {
                      "id":  "your-voice",
-                     "name":  "你的声音",
+                     "name":  "Your Voice",
                      "category":  "Accessibility",
                      "type":  "combo",
                      "version":  "1.0.0",
