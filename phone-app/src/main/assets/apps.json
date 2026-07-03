@@ -1,20 +1,21 @@
 {
     "schemaVersion": 1,
-    "generatedAt": "2026-06-28T00:00:00.000Z",
-    "brewVersion": "1.9",
-    "brewVersionCode": 10,
+    "generatedAt": "2026-07-03T00:00:00.000Z",
+    "brewVersion": "2.0",
+    "brewVersionCode": 11,
     "brewIconUrl": "",
-    "brewApkUrl": "https://gitee.com/dlover1314/RokidLab/releases/download/v1.9/RokidLab-v1.9-release.apk",
-    "brewReleaseUrl": "https://gitee.com/dlover1314/RokidLab/releases/tag/v1.9",
-    "brewNotes": "心跳保活 + 鸿蒙兼容 + 按键设置",
+    "brewApkUrl": "https://gitee.com/dlover1314/RokidLab/releases/download/v2.0/RokidLab-v2.0-release.apk",
+    "brewReleaseUrl": "https://gitee.com/dlover1314/RokidLab/releases/tag/v2.0",
+    "brewNotes": "ADB协议修复 + 眼镜长按修复 + 国际化",
     "brewChanges": [
-        "添加 ADB 心跳保活机制，防止鸿蒙系统断开空闲 TCP 连接",
-        "修复 uploadFile() CLSE 包泄漏导致上传后后续操作全部失败",
-        "修复 uploadFileShell() 中 stat -c %s 在鸿蒙不兼容的问题",
-        "添加按键设置功能，可在 ADB Tools 中自定义眼镜功能键启动第三方应用",
-        "文件管理器支持复制/剪切/粘贴功能",
-        "退出 App 时自动清空日志",
-        "文件管理器/ADB 客户端关键失败路径添加 LogCollector 错误记录"
+        "修复 ADB sync 协议 CLSE 误判导致文件上传回退到 shell 慢速方式",
+        "修复 ADB 流关闭协议错误导致 daemon 无限重传 CLSE 包",
+        "修复眼镜端长按忽略系统 LONG_PRESS 广播导致长按失效",
+        "添加 WakeLock + SCREEN_ON + 心跳自检，修复按键过一会失效",
+        "新增 pm resolve-activity 命令行兜底，支持非标准 Activity 应用",
+        "按键设置第三方应用改为下拉列表，长列表可滚动",
+        "应用商店图标增加黑色底，视觉更统一",
+        "listPackages 60秒缓存，二次打开秒开"
     ],
     "apps": [
         {
