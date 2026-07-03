@@ -3159,26 +3159,34 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/your-voice-4.jpg"
                                         ],
                      "nameZh":  "你的声音"
-                 },
+                 }
+,
                  {
                      "id":  "dm40",
                      "name":  "DM40",
                      "nameZh":  "DM40",
-                     "packageName":  "com.osagem.dm40atrokid",
-                     "version":  "1.0.0",
-                     "versionCode":  1,
-                     "author":  "osagem",
                      "type":  "glasses",
-                     "categories":  ["Utility"],
+                     "category":  "Utility",
+                     "version":  "1.0.0",
+                     "summary":  "DM40万用表测量数据实时显示",
+                     "description":  "DM40万用表测量数据实时显示",
+                     "author":  "osagem",
                      "iconAsset":  "dm40.png",
-                     "iconUrl":  "https://ghproxy.net/https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/assets/icons/dm40.png",
+                     "iconUrl":  "https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/assets/icons/dm40.png",
                      "screenshotUrls":  [],
-                     "apkAsset":  "com.osagem.dm40atrokid.apk",
-                     "downloadUrl":  "https://ghproxy.net/https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/assets/apks/com.osagem.dm40atrokid.apk",
-                     "platforms":  ["glasses"],
+                     "phoneRequired":  false,
                      "featured":  false,
-                     "new":  true,
-                     "publishedAt":  "2026-07-03",
+                     "publishedAt":  "2026-07-03T00:00:00.000Z",
+                     "artifacts":  [
+                                       {
+                                           "target":  "glasses",
+                                           "url":  "https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/assets/apks/com.osagem.dm40atrokid.apk",
+                                           "packageName":  "com.osagem.dm40atrokid",
+                                           "versionCode":  1,
+                                           "sha256":  "0be42af21b471b932a089f326da6e8e6bab766bef4103858af4fdc61a88e98b2",
+                                           "sizeBytes":  2514793
+                                       }
+                                   ],
                      "listing":  {
                                      "summary":  "DM40 digital multimeter real-time measurement display",
                                      "summaryZh":  "DM40万用表测量数据实时显示",
@@ -3186,9 +3194,13 @@
                                      "about":  "DM40万用表测量数据实时显示",
                                      "aboutZh":  "DM40万用表测量数据实时显示"
                                  },
-                     "releaseNotes":  {
-                                          "1.0.0":  "Initial release"
+                     "releases":  [
+                                      {
+                                          "version":  "1.0.0",
+                                          "date":  "2026-07-03T00:00:00.000Z",
+                                          "notes":  "Initial release"
                                       }
+                                  ]
                  }
              ]
 }
