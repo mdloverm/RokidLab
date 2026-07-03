@@ -1,4 +1,4 @@
-﻿{
+{
     "schemaVersion":  1,
     "generatedAt":  "2026-07-03T00:00:00.000Z",
     "brewVersion":  "2.0",
@@ -95,7 +95,9 @@
                                    ],
                      "listing":  {
                                      "about":  "Triggers Rokid AR screenshots and AR recording from the glasses with a two-finger gesture overlay.",
-                                     "descriptionMarkdown":  "Triggers Rokid AR screenshots and AR recording from the glasses with a two-finger gesture overlay."
+                                     "descriptionMarkdown":  "Triggers Rokid AR screenshots and AR recording from the glasses with a two-finger gesture overlay.",
+                                     "summaryZh":  "通过双指手势触发 AR 截图和录制",
+                                     "aboutZh":  "通过双指手势在 Rokid 眼镜上触发 AR 截图和录制。"
                                  },
                      "releases":  [
                                       {
@@ -107,7 +109,8 @@
                                                           "Community Rokid glasses app listing."
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "叠加录制"
                  },
                  {
                      "id":  "com.rokid.shell",
@@ -139,7 +142,9 @@
                                    ],
                      "listing":  {
                                      "about":  "Native file explorer for Rokid glasses with APK install flow and a local HTTP transfer server.",
-                                     "descriptionMarkdown":  "Native file explorer for Rokid glasses with APK install flow and a local HTTP transfer server."
+                                     "descriptionMarkdown":  "Native file explorer for Rokid glasses with APK install flow and a local HTTP transfer server.",
+                                     "summaryZh":  "眼镜端文件浏览器和 APK 安装工具",
+                                     "aboutZh":  "Rokid 眼镜原生文件浏览器，支持 APK 安装和 HTTP 传输。"
                                  },
                      "releases":  [
                                       {
@@ -151,7 +156,8 @@
                                                           "Community Rokid glasses app listing."
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "Rokid Shell"
                  },
                  {
                      "id":  "com.kupstudio.touchmouse",
@@ -183,7 +189,9 @@
                                    ],
                      "listing":  {
                                      "about":  "Head-gesture cursor, wake mode, favorites, and app drawer utility for Rokid Glasses.",
-                                     "descriptionMarkdown":  "Head-gesture cursor, wake mode, favorites, and app drawer utility for Rokid Glasses."
+                                     "descriptionMarkdown":  "Head-gesture cursor, wake mode, favorites, and app drawer utility for Rokid Glasses.",
+                                     "summaryZh":  "头部姿态光标、唤醒模式和收藏夹工具",
+                                     "aboutZh":  "头部姿态控制光标、唤醒模式、收藏夹和应用抽屉工具。"
                                  },
                      "releases":  [
                                       {
@@ -195,7 +203,8 @@
                                                           "Community Rokid glasses app listing."
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "凝视鼠标"
                  },
                  {
                      "id":  "com.osagem.photodel4rokidglasses",
@@ -227,7 +236,9 @@
                                    ],
                      "listing":  {
                                      "about":  "Simple utility to view and delete photos or videos directly on Rokid glasses.",
-                                     "descriptionMarkdown":  "Simple utility to view and delete photos or videos directly on Rokid glasses."
+                                     "descriptionMarkdown":  "Simple utility to view and delete photos or videos directly on Rokid glasses.",
+                                     "summaryZh":  "在眼镜上直接查看和删除照片视频",
+                                     "aboutZh":  "在 Rokid 眼镜上直接查看和删除照片或视频。"
                                  },
                      "releases":  [
                                       {
@@ -239,7 +250,8 @@
                                                           "Community Rokid glasses app listing."
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "照片删除"
                  },
                  {
                      "id":  "io.github.anezium.rokiddragonballscouter",
@@ -273,7 +285,9 @@
                                    ],
                      "listing":  {
                                      "about":  "Dragon Ball inspired scouter HUD with live face lock, pseudo-AR mode, and battle power reveal.",
-                                     "descriptionMarkdown":  "Dragon Ball inspired scouter HUD with live face lock, pseudo-AR mode, and battle power reveal."
+                                     "descriptionMarkdown":  "Dragon Ball inspired scouter HUD with live face lock, pseudo-AR mode, and battle power reveal.",
+                                     "summaryZh":  "龙珠风格探测器 HUD",
+                                     "aboutZh":  "龙珠风格探测器 HUD，集成实时人脸锁定、伪 AR 模式和战斗力显示功能。"
                                  },
                      "releases":  [
                                       {
@@ -285,7 +299,8 @@
                                                           "Community Rokid glasses app listing."
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "龙珠探测器"
                  },
                  {
                      "id":  "com.rokidgames.headpong",
@@ -316,7 +331,9 @@
                                    ],
                      "listing":  {
                                      "about":  "Retro-style mini-game collection for Rokid Glasses with touchpad controls and head-tracked gameplay.",
-                                     "descriptionMarkdown":  "Retro-style mini-game collection for Rokid Glasses with touchpad controls and head-tracked gameplay."
+                                     "descriptionMarkdown":  "Retro-style mini-game collection for Rokid Glasses with touchpad controls and head-tracked gameplay.",
+                                     "summaryZh":  "怀旧风格小游戏合集",
+                                     "aboutZh":  "为 Rokid 眼镜打造的怀旧风格小游戏合集，支持触摸板控制和头部跟踪玩法。"
                                  },
                      "releases":  [
                                       {
@@ -328,7 +345,8 @@
                                                           "Community Rokid glasses app listing."
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "游戏合集"
                  },
                  {
                      "id":  "com.snorlytics.browser_glasses",
@@ -360,7 +378,9 @@
                                    ],
                      "listing":  {
                                      "about":  "Glasses-side web browser controlled by the Rokid Remote phone companion over Bluetooth.",
-                                     "descriptionMarkdown":  "Glasses-side web browser controlled by the Rokid Remote phone companion over Bluetooth."
+                                     "descriptionMarkdown":  "Glasses-side web browser controlled by the Rokid Remote phone companion over Bluetooth.",
+                                     "summaryZh":  "眼镜端网页浏览器",
+                                     "aboutZh":  "由手机端 Rokid Remote 伴侣应用通过蓝牙控制的眼镜端网页浏览器。"
                                  },
                      "releases":  [
                                       {
@@ -372,7 +392,8 @@
                                                           "Community Rokid glasses app listing."
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "Rokid 浏览器"
                  },
                  {
                      "id":  "kr.pe.eung.ekreader",
@@ -404,7 +425,9 @@
                                    ],
                      "listing":  {
                                      "about":  "Clean ebook reader for Rokid Glasses.",
-                                     "descriptionMarkdown":  "Clean ebook reader for Rokid Glasses."
+                                     "descriptionMarkdown":  "Clean ebook reader for Rokid Glasses.",
+                                     "summaryZh":  "清爽的眼镜端电子书阅读器",
+                                     "aboutZh":  "一款清爽简洁的 Rokid 眼镜电子书阅读器。"
                                  },
                      "releases":  [
                                       {
@@ -416,7 +439,8 @@
                                                           "Community Rokid glasses app listing."
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "EK 阅读器"
                  },
                  {
                      "id":  "rokid-zoom-camera",
@@ -448,7 +472,9 @@
                      "featured":  false,
                      "newUntil":  "2026-07-10T09:36:04.000Z",
                      "listing":  {
-                                     "descriptionMarkdown":  "Rokid Zoom Camera is an unofficial camera prototype for Rokid Glasses. It is designed for quick zoomed capture with a small, dim preview that avoids filling the glasses display.\n\n- Camera2 preview on Rokid Glasses\n- Temple swipe forward or backward to step zoom in or out\n- Physical button short press captures a zoomed photo\n- Physical button long press starts or stops zoomed video recording\n- Saves photos and videos locally to DCIM/Camera"
+                                     "descriptionMarkdown":  "Rokid Zoom Camera is an unofficial camera prototype for Rokid Glasses. It is designed for quick zoomed capture with a small, dim preview that avoids filling the glasses display.\n\n- Camera2 preview on Rokid Glasses\n- Temple swipe forward or backward to step zoom in or out\n- Physical button short press captures a zoomed photo\n- Physical button long press starts or stops zoomed video recording\n- Saves photos and videos locally to DCIM/Camera",
+                                     "summaryZh":  "眼镜端变焦相机原型，支持滑动手势变焦",
+                                     "aboutZh":  "Rokid 眼镜变焦相机原型，通过镜腿滑动变焦，物理按键拍照录像。"
                                  },
                      "releases":  [
                                       {
@@ -464,7 +490,8 @@
                                                           "Local media saves through Android MediaStore."
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "Rokid 变焦相机"
                  },
                  {
                      "id":  "rokid-relay",
@@ -499,7 +526,9 @@
                                         ],
                      "newUntil":  "2026-07-13T23:07:48.000Z",
                      "listing":  {
-                                     "descriptionMarkdown":  "Rokid Relay lets you reply to Android phone notifications directly from Rokid AR glasses.\n\n- Forwards replyable Android notifications to glasses\n- Compact green overlay on glasses for notifications\n- Voice reply using glasses microphone and speech-to-text\n- Supports Android built-in and cloud STT engines (OpenAI, ElevenLabs)\n- Inbox on glasses to browse recent notifications\n\n## Requirements\n- Android phone running Android 12 or higher\n- Rokid glasses connected via Global Hi Rokid"
+                                     "descriptionMarkdown":  "Rokid Relay lets you reply to Android phone notifications directly from Rokid AR glasses.\n\n- Forwards replyable Android notifications to glasses\n- Compact green overlay on glasses for notifications\n- Voice reply using glasses microphone and speech-to-text\n- Supports Android built-in and cloud STT engines (OpenAI, ElevenLabs)\n- Inbox on glasses to browse recent notifications\n\n## Requirements\n- Android phone running Android 12 or higher\n- Rokid glasses connected via Global Hi Rokid",
+                                     "summaryZh":  "从眼镜回复手机通知",
+                                     "aboutZh":  "从 Rokid 眼镜直接回复 Android 手机通知，支持语音转文字。"
                                  },
                      "releases":  [
                                       {
@@ -531,7 +560,8 @@
                                                           "Added Azure Speech provider support."
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "Rokid 中继器"
                  },
                  {
                      "id":  "r08-access-bridge",
@@ -646,7 +676,9 @@
                                       }
                                   ],
                      "listing":  {
-                                     "descriptionMarkdown":  "# About\nR08 Access Bridge lets you use an R08 smart ring as a one-axis navigation controller for Rokid glasses. It pairs with the ring over Bluetooth LE and converts ring inputs into launcher navigation, app focus movement, activation, and Android Back actions.\n\n# Key Features\n- Connects or reconnects to an R08 ring via Bluetooth LE\n- Default Stable mode emits media key events for reliable one-step launcher navigation\n- Supports Fast mode with accelerated launcher swipes and Touch fallback mode\n- Remap triple and quadruple tap actions directly from the glasses UI\n- Provides an AppType probe screen for testing ring output modes\n- Safe Forget R08 flow to remove Bluetooth bond and pair again\n\n# Controls\n- Forward/backward ring slides move launcher or app focus\n- Single tap activates the focused item\n- Double tap performs Android Back\n- Triple and quadruple taps are configurable (default triple tap opens Rokid AI assistant)\n\n# Requirements\n- Rokid glasses with Android SDK 28+\n- R08 smart ring with Bluetooth LE\n- Accessibility permission enabled for R08 Access Bridge\n\n# Notes\n- Stable mode is recommended for most users\n- Fast mode is for devices with stable visual focus alignment\n- Touch fallback is for debugging or when media key input is unavailable\n- Designed specifically for Rokid glasses HUD, not phone-first UI"
+                                     "descriptionMarkdown":  "# About\nR08 Access Bridge lets you use an R08 smart ring as a one-axis navigation controller for Rokid glasses. It pairs with the ring over Bluetooth LE and converts ring inputs into launcher navigation, app focus movement, activation, and Android Back actions.\n\n# Key Features\n- Connects or reconnects to an R08 ring via Bluetooth LE\n- Default Stable mode emits media key events for reliable one-step launcher navigation\n- Supports Fast mode with accelerated launcher swipes and Touch fallback mode\n- Remap triple and quadruple tap actions directly from the glasses UI\n- Provides an AppType probe screen for testing ring output modes\n- Safe Forget R08 flow to remove Bluetooth bond and pair again\n\n# Controls\n- Forward/backward ring slides move launcher or app focus\n- Single tap activates the focused item\n- Double tap performs Android Back\n- Triple and quadruple taps are configurable (default triple tap opens Rokid AI assistant)\n\n# Requirements\n- Rokid glasses with Android SDK 28+\n- R08 smart ring with Bluetooth LE\n- Accessibility permission enabled for R08 Access Bridge\n\n# Notes\n- Stable mode is recommended for most users\n- Fast mode is for devices with stable visual focus alignment\n- Touch fallback is for debugging or when media key input is unavailable\n- Designed specifically for Rokid glasses HUD, not phone-first UI",
+                                     "summaryZh":  "Rokid 眼镜无障碍服务桥接",
+                                     "aboutZh":  "为 Rokid 眼镜提供无障碍服务桥接功能。"
                                  },
                      "publishedAt":  "2026-06-28T11:02:53Z",
                      "newUntil":  "2026-06-30T11:02:53.000Z",
@@ -657,7 +689,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/r08-access-bridge-2.png",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/r08-access-bridge-3.png",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/r08-access-bridge-4.png"
-                                        ]
+                                        ],
+                     "nameZh":  "R08 无障碍桥"
                  },
                  {
                      "id":  "ek-meta-player",
@@ -685,7 +718,9 @@
                      "author":  "EUNG SOFT",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/eung3392/eungsoft/tree/main/download/RokidGlasses/EKMeta",
                      "listing":  {
-                                     "descriptionMarkdown":  "**EK Meta Player** is a utility that helps you run games and apps developed for Meta display on **Rokid Glasses**.\n\n**[Key Features]**\n- Provides a basic, built-in program list\n- Allows users to easily add and manage custom apps\n\n### Recommendations \u0026 Operations\n\n**1. Device Connection**\nWe highly recommend connecting external devices such as a **Bluetooth keyboard** for easier navigation.\n\n**2. Add Apps**\nYou can quickly add custom apps by scanning a **QR code**.\n\n**3. QR Code Generator**\nIf you need to generate a QR code, please use our online tool below:\n[Go to QR Code Generator -\u003e](https://eung.pe.kr/webapp/qr-generator.html)"
+                                     "descriptionMarkdown":  "**EK Meta Player** is a utility that helps you run games and apps developed for Meta display on **Rokid Glasses**.\n\n**[Key Features]**\n- Provides a basic, built-in program list\n- Allows users to easily add and manage custom apps\n\n### Recommendations \u0026 Operations\n\n**1. Device Connection**\nWe highly recommend connecting external devices such as a **Bluetooth keyboard** for easier navigation.\n\n**2. Add Apps**\nYou can quickly add custom apps by scanning a **QR code**.\n\n**3. QR Code Generator**\nIf you need to generate a QR code, please use our online tool below:\n[Go to QR Code Generator -\u003e](https://eung.pe.kr/webapp/qr-generator.html)",
+                                     "summaryZh":  "眼镜端媒体播放器",
+                                     "aboutZh":  "在 Rokid 眼镜上播放媒体文件。"
                                  },
                      "releases":  [
                                       {
@@ -705,7 +740,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-meta-player.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-meta-player-2.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-meta-player-3.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "元播放器"
                  },
                  {
                      "id":  "rokid-live-studio",
@@ -720,7 +756,9 @@
                      "description":  "Rokid Live Studio streams your Rokid Glasses camera and microphone through your phone to YouTube or Twitch. It supports both stream key and OAuth modes, including live chat display on the glasses overlay. The app uses Wi-Fi Direct for direct glasses-to-phone connection without a router.",
                      "listing":  {
                                      "about":  "Rokid Live Studio turns the phone into a small broadcast desk for Rokid glasses. It receives the glasses camera and microphone feed, gives you a local preview, then helps stream to YouTube or Twitch.\n\nIt supports stream-key mode, OAuth flows for YouTube and Twitch, and optional chat messages that can be rendered back into the glasses helper overlay. The phone carries the streaming setup and account work, while the glasses remain the capture device.\n\nUse it for demos, live walkthroughs, developer streams, or quick wearable-camera tests where seeing and managing the feed from the phone matters.",
-                                     "descriptionMarkdown":  "# About\nRokid Live Studio streams the camera and microphone feed from your Rokid Glasses to YouTube or Twitch using your phone. It supports preview, encoding, and live chat display on the glasses overlay.\n\n# Key Features\n- Stream Rokid Glasses camera and mic to YouTube or Twitch\n- Supports stream key and OAuth modes for both platforms\n- Displays live chat messages inside the glasses helper overlay\n- Uses Wi-Fi Direct for direct glasses-to-phone connection without needing a home router\n- Phone handles preview, rotation, encoding, and platform API calls\n\n# How It Works\n1. Phone connects to Rokid Glasses via Wi-Fi Direct\n2. Glasses send H.264 video and AAC audio to the phone\n3. Phone encodes and streams to YouTube or Twitch\n4. Chat messages can be fetched and shown on the glasses overlay in OAuth mode\n\n# Requirements\n- Rokid Glasses with helper app installed\n- Android phone running Android 31 or higher\n- YouTube or Twitch account for streaming\n\n# Notes\n- Rokid Glasses may overheat and drain battery quickly during long streams; use external power if needed\n- Stream key mode offers simpler setup but limited metadata control\n- OAuth mode enables live metadata control and chat integration\n- Outdoor streaming possible without a home router thanks to Wi-Fi Direct"
+                                     "descriptionMarkdown":  "# About\nRokid Live Studio streams the camera and microphone feed from your Rokid Glasses to YouTube or Twitch using your phone. It supports preview, encoding, and live chat display on the glasses overlay.\n\n# Key Features\n- Stream Rokid Glasses camera and mic to YouTube or Twitch\n- Supports stream key and OAuth modes for both platforms\n- Displays live chat messages inside the glasses helper overlay\n- Uses Wi-Fi Direct for direct glasses-to-phone connection without needing a home router\n- Phone handles preview, rotation, encoding, and platform API calls\n\n# How It Works\n1. Phone connects to Rokid Glasses via Wi-Fi Direct\n2. Glasses send H.264 video and AAC audio to the phone\n3. Phone encodes and streams to YouTube or Twitch\n4. Chat messages can be fetched and shown on the glasses overlay in OAuth mode\n\n# Requirements\n- Rokid Glasses with helper app installed\n- Android phone running Android 31 or higher\n- YouTube or Twitch account for streaming\n\n# Notes\n- Rokid Glasses may overheat and drain battery quickly during long streams; use external power if needed\n- Stream key mode offers simpler setup but limited metadata control\n- OAuth mode enables live metadata control and chat integration\n- Outdoor streaming possible without a home router thanks to Wi-Fi Direct",
+                                     "summaryZh":  "眼镜端直播推流工具",
+                                     "aboutZh":  "Rokid 眼镜直播推流工具，支持多平台直播。"
                                  },
                      "releases":  [
                                       {
@@ -794,7 +832,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-live-studio-youtube.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-live-studio-twitch.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-live-studio-chat.png"
-                                        ]
+                                        ],
+                     "nameZh":  "Rokid 直播工作室"
                  },
                  {
                      "id":  "dew-browser",
@@ -807,7 +846,9 @@
                      "description":  "Key Features of Dew Browser Dew Browser is not just a simple mobile browser. It is optimized for the Rokid Glasses environment and offers the following features: - AI Page Summary: AI (Gemma) summarizes news or blog posts for you. - Smartphone Mouse Mode: You can use your smartphone as a touchpad for precise mouse and keyboard control. - Dedicated AR Interface: Provides a clean UI that lets you see necessary information at a glance. - Gesture Control: Supports a convenient feature that scrolls web pages using your head movements (tilts). Notes - Network: A Wi-Fi connection is required for smooth web surfing and the AI summary feature. - Supported Devices: Requires a smartphone running the Android OS. With Dew Browser, you can smartly enjoy the web on your Rokid Glasses. Enjoy searching for news and watching YouTube videos.",
                      "listing":  {
                                      "about":  "Dew Browser is a Rokid-first web browser built around the split between glasses display and phone input. Browse pages on the glasses while using the phone as a mouse and keyboard, which makes text entry and pointer control more comfortable than trying to do everything on the wearable.\n\nIt is useful for quick web lookups, dashboards, documentation, and lightweight browsing sessions where the glasses are the screen but the phone remains the control surface.\n\nInstall both targets from RokidBrew for the intended phone-plus-glasses experience.",
-                                     "descriptionMarkdown":  "### Key Features of Dew Browser\n\nDew Browser is not just a simple mobile browser. It is optimized for the Rokid Glasses environment and offers the following features:\n\n- **AI Page Summary:** AI (Gemma) summarizes news or blog posts for you.\n- **Smartphone Mouse Mode:** You can use your smartphone as a touchpad for precise mouse and keyboard control.\n- **Dedicated AR Interface:** Provides a clean UI that lets you see necessary information at a glance.\n- **Gesture Control:** Supports a convenient feature that scrolls web pages using your head movements (tilts).\n\n### Notes\n\n- **Network:** A Wi-Fi connection is required for smooth web surfing and the AI summary feature.\n- **Supported Devices:** Requires a smartphone running the Android OS.\n\nWith Dew Browser, you can smartly enjoy the web on your Rokid Glasses. Enjoy searching for news and watching YouTube videos.\n\n### Key Buttons and Functions\n\n**Top Toolbar**\n\n- **Bookmarks List (Icon):** Check your saved bookmark list at a glance and navigate instantly.\n- **Page Summary (Pencil Icon):** AI analyzes the content of the current web page and summarizes it in a popup.\n- **Address Bar:** You can directly enter URLs or search terms. Clicking the address bar provides a list of recently viewed pages.\n- **Add to Bookmarks (Star Icon):** If you like the current page, add it to your bookmarks with a single click.\n- **Go (Go Button):** Quickly loads the page at the entered address.\n- **Menu (More):** Opens a sidebar where you can configure detailed browser settings.\n\n**Side Menu (Additional Features)**\n\n- **Share:** Sends the current web URL to your smartphone\u0027s clipboard.\n- **Page Capture:** Saves or sends the current web screen as an image.\n- **Image Downloader:** Easily extracts and saves images from the page.\n- **Zoom (+/-):** Adjusts the screen size to match your vision, starting from 100%.\n- **Gesture Scroll Toggle:** Turns the feature to scroll the page by moving your head up and down on or off.\n\n### Installation and Connection\n\n**Installation**\n\n- Please install the downloaded APK file on both your Android smartphone and Rokid Glasses. (iOS is not supported.)\n\n**Connection**\n\n- **Connecting Smartphone and Glasses:** Launch the app on your Rokid Glasses. Launch the app on your smartphone as well and click the connect button. When you launch the app for the first time on your smartphone, it downloads the AI engine model. Once the download is complete, it will connect to your Rokid Glasses.\n- **Bluetooth Pairing:**\n- The browser screen will be displayed on the glasses, and the smartphone will change to a \u0027Phone Mouse\u0027 screen.\n\n- **Controls:** Once connected, the smartphone screen becomes a touchpad. Slide your finger to move the cursor, and tap to click. Touching with two fingers together scrolls the screen. When focus goes to an input field, the keyboard automatically appears on the phone. You can send text directly to the glasses screen via keyboard input."
+                                     "descriptionMarkdown":  "### Key Features of Dew Browser\n\nDew Browser is not just a simple mobile browser. It is optimized for the Rokid Glasses environment and offers the following features:\n\n- **AI Page Summary:** AI (Gemma) summarizes news or blog posts for you.\n- **Smartphone Mouse Mode:** You can use your smartphone as a touchpad for precise mouse and keyboard control.\n- **Dedicated AR Interface:** Provides a clean UI that lets you see necessary information at a glance.\n- **Gesture Control:** Supports a convenient feature that scrolls web pages using your head movements (tilts).\n\n### Notes\n\n- **Network:** A Wi-Fi connection is required for smooth web surfing and the AI summary feature.\n- **Supported Devices:** Requires a smartphone running the Android OS.\n\nWith Dew Browser, you can smartly enjoy the web on your Rokid Glasses. Enjoy searching for news and watching YouTube videos.\n\n### Key Buttons and Functions\n\n**Top Toolbar**\n\n- **Bookmarks List (Icon):** Check your saved bookmark list at a glance and navigate instantly.\n- **Page Summary (Pencil Icon):** AI analyzes the content of the current web page and summarizes it in a popup.\n- **Address Bar:** You can directly enter URLs or search terms. Clicking the address bar provides a list of recently viewed pages.\n- **Add to Bookmarks (Star Icon):** If you like the current page, add it to your bookmarks with a single click.\n- **Go (Go Button):** Quickly loads the page at the entered address.\n- **Menu (More):** Opens a sidebar where you can configure detailed browser settings.\n\n**Side Menu (Additional Features)**\n\n- **Share:** Sends the current web URL to your smartphone\u0027s clipboard.\n- **Page Capture:** Saves or sends the current web screen as an image.\n- **Image Downloader:** Easily extracts and saves images from the page.\n- **Zoom (+/-):** Adjusts the screen size to match your vision, starting from 100%.\n- **Gesture Scroll Toggle:** Turns the feature to scroll the page by moving your head up and down on or off.\n\n### Installation and Connection\n\n**Installation**\n\n- Please install the downloaded APK file on both your Android smartphone and Rokid Glasses. (iOS is not supported.)\n\n**Connection**\n\n- **Connecting Smartphone and Glasses:** Launch the app on your Rokid Glasses. Launch the app on your smartphone as well and click the connect button. When you launch the app for the first time on your smartphone, it downloads the AI engine model. Once the download is complete, it will connect to your Rokid Glasses.\n- **Bluetooth Pairing:**\n- The browser screen will be displayed on the glasses, and the smartphone will change to a \u0027Phone Mouse\u0027 screen.\n\n- **Controls:** Once connected, the smartphone screen becomes a touchpad. Slide your finger to move the cursor, and tap to click. Touching with two fingers together scrolls the screen. When focus goes to an input field, the keyboard automatically appears on the phone. You can send text directly to the glasses screen via keyboard input.",
+                                     "summaryZh":  "为 Rokid 眼镜打造的网页浏览器",
+                                     "aboutZh":  "一款专为 Rokid 眼镜打造的网页浏览器。"
                                  },
                      "releases":  [
                                       {
@@ -860,7 +901,8 @@
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/dew-browser.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/dew-browser-2.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "露珠浏览器"
                  },
                  {
                      "id":  "ek-remover",
@@ -874,7 +916,9 @@
                      "summary":  "app uninstall program",
                      "description":  "EK Remover is a simple and intuitive app uninstall program.",
                      "listing":  {
-                                     "descriptionMarkdown":  "EK Remover is a simple and intuitive app uninstall program.\n\n### Key Features and Operation\n\nNavigate the installed apps and uninstall by selecting them."
+                                     "descriptionMarkdown":  "EK Remover is a simple and intuitive app uninstall program.\n\n### Key Features and Operation\n\nNavigate the installed apps and uninstall by selecting them.",
+                                     "summaryZh":  "眼镜端图片背景移除工具",
+                                     "aboutZh":  "在 Rokid 眼镜上快速移除图片背景。"
                                  },
                      "releases":  [
                                       {
@@ -906,7 +950,8 @@
                      "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/ek-remover.png",
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-remover.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "背景移除"
                  },
                  {
                      "id":  "rokid-gmaps",
@@ -943,7 +988,9 @@
                      "author":  "Anezium",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/Anezium/Rokid-GMaps",
                      "listing":  {
-                                     "descriptionMarkdown":  "## About\nRokid GMaps is a navigation app designed for Rokid AR glasses paired with a phone. It offers turn-by-turn directions displayed on a HUD in the glasses, while the phone handles search and route calculation.\n\n## Key Features\n- Phone app manages UI, place search, and route calculation\n- Glasses app displays navigation HUD\n- Supports Google Places and Routes APIs as well as OSM/Nominatim/OSRM fallback\n- Provider selection configurable in phone app settings\n\n## How It Works\n- The phone app calculates routes and streams navigation data to the glasses via Bluetooth\n- The glasses app renders directions using the original Rokid-Maps architecture\n\n## Requirements\n- Both phone and glasses APKs must be installed\n- Optional Google API key setup for enhanced search and routing\n- Bluetooth connection between phone and glasses\n\n## Notes\n- Google API usage requires enabling billing and APIs in Google Cloud\n- Google provider features are optional and disabled by default"
+                                     "descriptionMarkdown":  "## About\nRokid GMaps is a navigation app designed for Rokid AR glasses paired with a phone. It offers turn-by-turn directions displayed on a HUD in the glasses, while the phone handles search and route calculation.\n\n## Key Features\n- Phone app manages UI, place search, and route calculation\n- Glasses app displays navigation HUD\n- Supports Google Places and Routes APIs as well as OSM/Nominatim/OSRM fallback\n- Provider selection configurable in phone app settings\n\n## How It Works\n- The phone app calculates routes and streams navigation data to the glasses via Bluetooth\n- The glasses app renders directions using the original Rokid-Maps architecture\n\n## Requirements\n- Both phone and glasses APKs must be installed\n- Optional Google API key setup for enhanced search and routing\n- Bluetooth connection between phone and glasses\n\n## Notes\n- Google API usage requires enabling billing and APIs in Google Cloud\n- Google provider features are optional and disabled by default",
+                                     "summaryZh":  "眼镜端 Google 地图导航",
+                                     "aboutZh":  "在 Rokid 眼镜上使用 Google 地图导航。"
                                  },
                      "releases":  [
                                       {
@@ -976,7 +1023,8 @@
                                   ],
                      "newUntil":  "2026-05-31T22:02:46.000Z",
                      "iconAsset":  "rokid-gmaps.png",
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-gmaps.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-gmaps.png",
+                     "nameZh":  "Rokid 地图"
                  },
                  {
                      "id":  "assist-bridge",
@@ -1011,7 +1059,9 @@
                      "author":  "Anezium",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/Anezium/AssistBridge",
                      "listing":  {
-                                     "descriptionMarkdown":  "## About\nAssistBridge relays visible Gemini and Google Assistant answers from an Android phone to a Rokid glasses HUD. The phone app captures assistant reply text through Android Accessibility, sends it through Global Hi Rokid CXR-L, and the glasses app renders the answer as a readable AR popup.\n\n## Key Features\n- Captures visible Gemini / Google Assistant answer text on the phone\n- Displays replies on Rokid glasses with a black, AR-safe popup and green accents\n- Uses Global Hi Rokid CXR-L for the phone-to-glasses relay\n- Bundles the glasses APK inside the phone APK for authorized CXR-L install / update flows\n- Includes setup buttons for both phone and glasses accessibility services\n- Lets the phone adjust the glasses HUD font size\n\n## Controls\n- Tap / OK / Back on glasses to dismiss the popup\n- Swipe left / right on glasses to scroll long answers\n- Adjust the HUD font size from the phone app\n\n## Requirements\n- Android phone with Gemini or Google Assistant\n- Rokid glasses paired with the Global Hi Rokid app\n- Android Accessibility enabled for AssistBridge on the phone\n- AssistBridge accessibility enabled on the glasses for overlay keys and swipe handling\n- Hi Rokid CXR-L authorization accepted on the phone\n\n## Notes\n- Android may require Allow restricted settings before sideloaded accessibility services can be enabled.\n- Assistant replies over the lock screen depend on Gemini / Google Assistant lock-screen settings.\n- Assistant UI capture is best-effort and may need updates if Google changes app accessibility surfaces."
+                                     "descriptionMarkdown":  "## About\nAssistBridge relays visible Gemini and Google Assistant answers from an Android phone to a Rokid glasses HUD. The phone app captures assistant reply text through Android Accessibility, sends it through Global Hi Rokid CXR-L, and the glasses app renders the answer as a readable AR popup.\n\n## Key Features\n- Captures visible Gemini / Google Assistant answer text on the phone\n- Displays replies on Rokid glasses with a black, AR-safe popup and green accents\n- Uses Global Hi Rokid CXR-L for the phone-to-glasses relay\n- Bundles the glasses APK inside the phone APK for authorized CXR-L install / update flows\n- Includes setup buttons for both phone and glasses accessibility services\n- Lets the phone adjust the glasses HUD font size\n\n## Controls\n- Tap / OK / Back on glasses to dismiss the popup\n- Swipe left / right on glasses to scroll long answers\n- Adjust the HUD font size from the phone app\n\n## Requirements\n- Android phone with Gemini or Google Assistant\n- Rokid glasses paired with the Global Hi Rokid app\n- Android Accessibility enabled for AssistBridge on the phone\n- AssistBridge accessibility enabled on the glasses for overlay keys and swipe handling\n- Hi Rokid CXR-L authorization accepted on the phone\n\n## Notes\n- Android may require Allow restricted settings before sideloaded accessibility services can be enabled.\n- Assistant replies over the lock screen depend on Gemini / Google Assistant lock-screen settings.\n- Assistant UI capture is best-effort and may need updates if Google changes app accessibility surfaces.",
+                                     "summaryZh":  "在 Rokid 眼镜上运行辅助功能服务",
+                                     "aboutZh":  "在 Rokid 眼镜上运行标准 Android 辅助功能服务的桥接工具。"
                                  },
                      "releases":  [
                                       {
@@ -1043,7 +1093,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/assist-bridge-phone.png",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/assist-bridge-glasses-setup.png",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/assist-bridge-glasses-popup.png"
-                                        ]
+                                        ],
+                     "nameZh":  "辅助桥"
                  },
                  {
                      "id":  "dcim-server",
@@ -1055,7 +1106,9 @@
                      "summary":  "로키드 글래스에서 갤러리를 웹서버로 서비스합니다.",
                      "description":  "Dcim Server is a Rokid Glasses app that serves the gallery as a web server. You can browse and download photos and videos taken with Rokid Glasses through a web browser without connecting a cable.",
                      "listing":  {
-                                     "descriptionMarkdown":  "**Dcim Server** is a **Rokid Glasses** app that serves the gallery as a web server. You can browse and download photos and videos taken with Rokid Glasses through a web browser without connecting a cable.\n\n### Usage / Controls\n\nAfter running the app, connect to Wi-Fi. Access it with a web browser on the same Wi-Fi."
+                                     "descriptionMarkdown":  "**Dcim Server** is a **Rokid Glasses** app that serves the gallery as a web server. You can browse and download photos and videos taken with Rokid Glasses through a web browser without connecting a cable.\n\n### Usage / Controls\n\nAfter running the app, connect to Wi-Fi. Access it with a web browser on the same Wi-Fi.",
+                                     "summaryZh":  "在 Rokid 眼镜上浏览和管理照片视频",
+                                     "aboutZh":  "在 Rokid 眼镜上浏览和管理照片与视频。"
                                  },
                      "releases":  [
                                       {
@@ -1087,7 +1140,8 @@
                      "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/dcim-server.png",
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/dcim-server.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "相机服务器"
                  },
                  {
                      "id":  "dragonball-scouter",
@@ -1112,7 +1166,9 @@
                      "author":  "Anezium",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/Anezium/Rokid-DragonBallScouter",
                      "listing":  {
-                                     "descriptionMarkdown":  "## About\nDragonBall Scouter transforms Rokid glasses into a Dragon Ball-inspired scouter HUD featuring live face lock and battle power reveal.\n\n## Key Features\n- Two modes: ANGULAR HUD (pseudo-AR display) and LIVE CAM LOCK (camera overlay)\n- On-device face detection with stable battle power values\n- 6-second scan sequence with scramble animation and audio reveal\n- Tap to start scan, swipe to switch modes\n- Designed for Rokid glasses monochrome green display\n\n## How It Works\n- Detects faces locally using ML Kit\n- Maintains consistent power level per tracked face\n- Scan stops if face tracking is lost\n\n## Usage\n- Grant camera permission on first run\n- Tap screen to start scanning\n- Keep face in frame until power reveal\n- Swipe left/right to toggle modes\n\n## Notes\n- Camera alignment may vary by device and fit\n- No cloud or backend dependencies"
+                                     "descriptionMarkdown":  "## About\nDragonBall Scouter transforms Rokid glasses into a Dragon Ball-inspired scouter HUD featuring live face lock and battle power reveal.\n\n## Key Features\n- Two modes: ANGULAR HUD (pseudo-AR display) and LIVE CAM LOCK (camera overlay)\n- On-device face detection with stable battle power values\n- 6-second scan sequence with scramble animation and audio reveal\n- Tap to start scan, swipe to switch modes\n- Designed for Rokid glasses monochrome green display\n\n## How It Works\n- Detects faces locally using ML Kit\n- Maintains consistent power level per tracked face\n- Scan stops if face tracking is lost\n\n## Usage\n- Grant camera permission on first run\n- Tap screen to start scanning\n- Keep face in frame until power reveal\n- Swipe left/right to toggle modes\n\n## Notes\n- Camera alignment may vary by device and fit\n- No cloud or backend dependencies",
+                                     "summaryZh":  "龙珠风格探测器 HUD，带人脸锁定和战斗力显示",
+                                     "aboutZh":  "龙珠风格探测器 HUD，集成实时人脸锁定、伪 AR 模式和战斗力显示功能。"
                                  },
                      "releases":  [
                                       {
@@ -1139,7 +1195,8 @@
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/dragonball-scouter-hud.png",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/dragonball-scouter-livecam.png"
-                                        ]
+                                        ],
+                     "nameZh":  "龙珠探测器"
                  },
                  {
                      "id":  "ek-arrow",
@@ -1151,7 +1208,9 @@
                      "summary":  "Mini Archery Game",
                      "description":  "EK Arrow is a first-person one-button arcade archery game where you aim for the bullseye. Its vertical layout is perfect for one-handed play and it is fully optimized for Rokid Glass smart glasses.",
                      "listing":  {
-                                     "descriptionMarkdown":  "**EK Arrow** is a first-person **one-button arcade archery game** where you aim for the bullseye.\nIts vertical layout is perfect for one-handed play and it is **fully optimized for Rokid Glass** smart glasses.\n\n### Usage / Controls\n\nControls are dead simple!\n- **Touch or Button Click:** Shoot an arrow.\n- No complex inputs needed; everything comes down to **\u0027timing\u0027**."
+                                     "descriptionMarkdown":  "**EK Arrow** is a first-person **one-button arcade archery game** where you aim for the bullseye.\nIts vertical layout is perfect for one-handed play and it is **fully optimized for Rokid Glass** smart glasses.\n\n### Usage / Controls\n\nControls are dead simple!\n- **Touch or Button Click:** Shoot an arrow.\n- No complex inputs needed; everything comes down to **\u0027timing\u0027**.",
+                                     "summaryZh":  "眼镜端射箭瞄准辅助应用",
+                                     "aboutZh":  "眼镜端射箭瞄准辅助应用，帮助提高射击精度。"
                                  },
                      "releases":  [
                                       {
@@ -1184,7 +1243,8 @@
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-arrow.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-arrow-2.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "射手箭"
                  },
                  {
                      "id":  "ek-find",
@@ -1196,7 +1256,9 @@
                      "summary":  "Take a picture with the camera and search for the price on Naver.",
                      "description":  "A price comparison utility that scans product names with the camera and searches for the lowest price on Naver Shopping. By aligning the product name within the camera frame, the app uses AI (OCR) to recognize text and displays search results from Naver Shopping.",
                      "listing":  {
-                                     "descriptionMarkdown":  "A price comparison utility that scans product names with the camera and searches for the **lowest price on Naver Shopping**.\nBy aligning the product name within the camera frame, the app uses AI (OCR) to recognize text and displays search results from Naver Shopping.\n\n### Usage / Controls\n\n- **Scan:** Align the product name within the rectangular frame of the app.\n- **Select:** Touch or press Enter on the desired product name from the list of recognized text.\n- **Confirm:** Browse the Naver Shopping search results to find the best deal!"
+                                     "descriptionMarkdown":  "A price comparison utility that scans product names with the camera and searches for the **lowest price on Naver Shopping**.\nBy aligning the product name within the camera frame, the app uses AI (OCR) to recognize text and displays search results from Naver Shopping.\n\n### Usage / Controls\n\n- **Scan:** Align the product name within the rectangular frame of the app.\n- **Select:** Touch or press Enter on the desired product name from the list of recognized text.\n- **Confirm:** Browse the Naver Shopping search results to find the best deal!",
+                                     "summaryZh":  "通过眼镜相机快速查找物品",
+                                     "aboutZh":  "利用 Rokid 眼镜摄像头快速定位和查找物品。"
                                  },
                      "releases":  [
                                       {
@@ -1230,7 +1292,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-find.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-find-2.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-find-3.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "物品查找"
                  },
                  {
                      "id":  "ek-live-cam",
@@ -1242,7 +1305,9 @@
                      "summary":  "Stream the camera of Rokid Glasses in real time.",
                      "description":  "EK LiveCam allows you to view the camera screen of Rokid Glasses in real time using only a web browser on a device (PC, smartphone, tablet, etc.) on the same Wi-Fi network, without complex settings. Key Features - Real-time Streaming: Supports video transmission with minimal delay using the MJPEG (Motion JPEG) method. - High-Definition Optimization: Optimized for 1280x720 (720p) resolution to provide clear image quality. - Easy Access: Connect by simply entering the URL in a web browser (Chrome, Safari, etc.) without installing a separate viewer app. - Status Display: Displays the current streaming status, number of connected users, and streaming URL in real time on the screen. - Hardware Integration: Streaming can be started/stopped not only by touching the screen but also by using the \u0027Enter\u0027 key on the remote control or Rokid Glasses.",
                      "listing":  {
-                                     "descriptionMarkdown":  "EK LiveCam allows you to view the camera screen of Rokid Glasses in real time using only a web browser on a device (PC, smartphone, tablet, etc.) on the same Wi-Fi network, without complex settings.\n\n**Key Features**\n- **Real-time Streaming:** Supports video transmission with minimal delay using the MJPEG (Motion JPEG) method.\n- **High-Definition Optimization:** Optimized for 1280x720 (720p) resolution to provide clear image quality.\n- **Easy Access:** Connect by simply entering the URL in a web browser (Chrome, Safari, etc.) without installing a separate viewer app.\n- **Status Display:** Displays the current streaming status, number of connected users, and streaming URL in real time on the screen.\n- **Hardware Integration:** Streaming can be started/stopped not only by touching the screen but also by using the \u0027Enter\u0027 key on the remote control or Rokid Glasses.\n\n### Usage / Controls\n\n- **1. App Launch:** When you open the app, a camera preview screen appears and the Standby status is displayed at the bottom.\n- **2. Start Streaming:**\n- Touch anywhere on the screen or press the Enter (Confirm) key on the connected controller.\n- The status will change to Streaming and a red LIVE badge will appear.\n- **3. View Video (Viewer):**\n- Check the URL displayed at the bottom center of the app screen (e.g., http://192.168.x.x:8080).\n- Enter the URL in the address bar of a web browser on another device and connect."
+                                     "descriptionMarkdown":  "EK LiveCam allows you to view the camera screen of Rokid Glasses in real time using only a web browser on a device (PC, smartphone, tablet, etc.) on the same Wi-Fi network, without complex settings.\n\n**Key Features**\n- **Real-time Streaming:** Supports video transmission with minimal delay using the MJPEG (Motion JPEG) method.\n- **High-Definition Optimization:** Optimized for 1280x720 (720p) resolution to provide clear image quality.\n- **Easy Access:** Connect by simply entering the URL in a web browser (Chrome, Safari, etc.) without installing a separate viewer app.\n- **Status Display:** Displays the current streaming status, number of connected users, and streaming URL in real time on the screen.\n- **Hardware Integration:** Streaming can be started/stopped not only by touching the screen but also by using the \u0027Enter\u0027 key on the remote control or Rokid Glasses.\n\n### Usage / Controls\n\n- **1. App Launch:** When you open the app, a camera preview screen appears and the Standby status is displayed at the bottom.\n- **2. Start Streaming:**\n- Touch anywhere on the screen or press the Enter (Confirm) key on the connected controller.\n- The status will change to Streaming and a red LIVE badge will appear.\n- **3. View Video (Viewer):**\n- Check the URL displayed at the bottom center of the app screen (e.g., http://192.168.x.x:8080).\n- Enter the URL in the address bar of a web browser on another device and connect.",
+                                     "summaryZh":  "眼镜端直播相机应用",
+                                     "aboutZh":  "使用 Rokid 眼镜进行直播的相机应用。"
                                  },
                      "releases":  [
                                       {
@@ -1277,7 +1342,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-live-cam-2.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-live-cam-3.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-live-cam-4.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "直播相机"
                  },
                  {
                      "id":  "ek-pilot",
@@ -1289,7 +1355,9 @@
                      "summary":  "EK Pilot is an aerial mission game based on a 3D flight engine. Control by tilting your head.",
                      "description":  "EK Pilot is an aerial mission game based on a 3D flight engine. Players take on the role of a fighter pilot, soaring through the skies and shooting down floating targets within 5 minutes.",
                      "listing":  {
-                                     "descriptionMarkdown":  "EK Pilot is an aerial mission game based on a 3D flight engine. Players take on the role of a fighter pilot, soaring through the skies and shooting down floating targets within 5 minutes.\n\n### Usage / Controls\n\n- Pitch: Tilt your head up/down to change altitude.\n- Roll: Tilt your head left/right to turn.\n- Touch to shoot targets.\n- Touch swipe to change flight speed."
+                                     "descriptionMarkdown":  "EK Pilot is an aerial mission game based on a 3D flight engine. Players take on the role of a fighter pilot, soaring through the skies and shooting down floating targets within 5 minutes.\n\n### Usage / Controls\n\n- Pitch: Tilt your head up/down to change altitude.\n- Roll: Tilt your head left/right to turn.\n- Touch to shoot targets.\n- Touch swipe to change flight speed.",
+                                     "summaryZh":  "眼镜端导航辅助应用",
+                                     "aboutZh":  "为 Rokid 眼镜提供导航辅助功能。"
                                  },
                      "releases":  [
                                       {
@@ -1321,7 +1389,8 @@
                      "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/ek-pilot.png",
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-pilot.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "导航员"
                  },
                  {
                      "id":  "ek-timer",
@@ -1333,7 +1402,9 @@
                      "summary":  "Simple timer for Rokid Glasses",
                      "description":  "EK Timer is a simple and intuitive timer app.",
                      "listing":  {
-                                     "descriptionMarkdown":  "EK Timer is a simple and intuitive timer app.\n\n### Key Features and Operation\n\n**1. Time Setting**\n\n- **Add Minutes:** Press the Minute button to increase the time by 1 minute (up to 99 minutes).\n- **Add Seconds:** Press the Second button to increase the time by 10 seconds. (Automatically converted to minutes if it exceeds 60 seconds)\n- **Note:** You cannot change the time while the timer is running.\n\n**2. Timer Control**\n\n- **Start/Stop:** Press the Start button when time is set to begin the countdown. Press it while running to pause the timer.\n- **Reset:** Resets the timer to 00:00 and stops it.\n\n**3. End Alert**\n\n- When the set time reaches 0, the countdown ends automatically, accompanied by a **beep sound** and vibration.\n\n**4. Control Methods**\n\n- **Touch:** Tap each button on the screen directly to control the timer.\n- **Swipe:** Swipe to move the focus between buttons."
+                                     "descriptionMarkdown":  "EK Timer is a simple and intuitive timer app.\n\n### Key Features and Operation\n\n**1. Time Setting**\n\n- **Add Minutes:** Press the Minute button to increase the time by 1 minute (up to 99 minutes).\n- **Add Seconds:** Press the Second button to increase the time by 10 seconds. (Automatically converted to minutes if it exceeds 60 seconds)\n- **Note:** You cannot change the time while the timer is running.\n\n**2. Timer Control**\n\n- **Start/Stop:** Press the Start button when time is set to begin the countdown. Press it while running to pause the timer.\n- **Reset:** Resets the timer to 00:00 and stops it.\n\n**3. End Alert**\n\n- When the set time reaches 0, the countdown ends automatically, accompanied by a **beep sound** and vibration.\n\n**4. Control Methods**\n\n- **Touch:** Tap each button on the screen directly to control the timer.\n- **Swipe:** Swipe to move the focus between buttons.",
+                                     "summaryZh":  "眼镜端计时器应用",
+                                     "aboutZh":  "Rokid 眼镜专用计时器应用。"
                                  },
                      "releases":  [
                                       {
@@ -1365,7 +1436,8 @@
                      "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/ek-timer.png",
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-timer.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "计时器"
                  },
                  {
                      "id":  "ek-trans",
@@ -1377,7 +1449,9 @@
                      "summary":  "Offline English-Korean text translation application.",
                      "description":  "EK Trans is a dedicated offline English-Korean translation app for Rokid Glasses. Powered by Google ML Kit, it allows for fast and stable translation without an active internet connection after the initial model download. ※ Download password: eung.pe.kr",
                      "listing":  {
-                                     "descriptionMarkdown":  "**EK Trans** is a dedicated **offline English-Korean translation** app for Rokid Glasses.\nPowered by Google ML Kit, it allows for fast and stable translation **without an active internet connection** after the initial model download.\n\n※ Download password: **eung.pe.kr**\n\n### Usage / Controls\n\n- **Initial Setup:** Connect to **Wi-Fi** on the first run to download the 30MB translation model.\n- **Offline Use:** Once the model is cached, no cellular or Wi-Fi data is needed for translation.\n- **How to Translate:** Align English text within the top frame and touch the right temple of the glasses to scan."
+                                     "descriptionMarkdown":  "**EK Trans** is a dedicated **offline English-Korean translation** app for Rokid Glasses.\nPowered by Google ML Kit, it allows for fast and stable translation **without an active internet connection** after the initial model download.\n\n※ Download password: **eung.pe.kr**\n\n### Usage / Controls\n\n- **Initial Setup:** Connect to **Wi-Fi** on the first run to download the 30MB translation model.\n- **Offline Use:** Once the model is cached, no cellular or Wi-Fi data is needed for translation.\n- **How to Translate:** Align English text within the top frame and touch the right temple of the glasses to scan.",
+                                     "summaryZh":  "眼镜端实时翻译应用",
+                                     "aboutZh":  "在 Rokid 眼镜上提供实时翻译功能。"
                                  },
                      "releases":  [
                                       {
@@ -1409,7 +1483,8 @@
                      "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/ek-trans.png",
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-trans.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "翻译助手"
                  },
                  {
                      "id":  "ek-word-up",
@@ -1421,7 +1496,9 @@
                      "summary":  "Just nod your head! Hands-Free Rokid Glasses dedicated vocabulary book. Let\u0027s share good resources.",
                      "description":  "It\u0027s a learning vocabulary program. It basically contains 500 English words for Korean, the world capital. 1. Just nod your head! \u0027Motion Control\u0027 Learning (Hands-Free) 🤚🚫 No need to touch your smartphone screen. Put on the AR glasses and tilt your head slightly to the right for the next card, or to the left for the previous card. Control everything from checking answers to moving to the next word using only your motion! 2. Infinite Expandability! \u0027My Own JSON Vocabulary Book\u0027 📂 Just add a JSON file created with a notepad or VS Code, and your own memorization book is complete. TOEIC, civil service exams, certification studies—anything is possible. Connect your glasses via the \u0027Web Install\u0027 menu and transfer the data JSON file using the \u0027EK Word Up\u0027 button. 3. Smart Learning Continuity (Smart Save) 📍 Don\u0027t worry if you turn off the app while studying. The app remembers how far you\u0027ve memorized. You can resume studying right where you left off next time, without breaking your flow. 4. Maximize Memorization Effect! \u0027Shuffle Mode\u0027 🔀 Turn on Shuffle Mode to mix up the word order randomly and test your real skills!",
                      "listing":  {
-                                     "descriptionMarkdown":  "It\u0027s a learning vocabulary program.\nIt basically contains 500 English words for Korean, the world capital.\n\n**1. Just nod your head! \u0027Motion Control\u0027 Learning (Hands-Free) 🤚🚫**\nNo need to touch your smartphone screen. Put on the AR glasses and tilt your head slightly to the right for the next card, or to the left for the previous card. Control everything from checking answers to moving to the next word using only your motion!\n\n**2. Infinite Expandability! \u0027My Own JSON Vocabulary Book\u0027 📂**\nJust add a JSON file created with a notepad or VS Code, and your own memorization book is complete. TOEIC, civil service exams, certification studies—anything is possible.\nConnect your glasses via the \u0027Web Install\u0027 menu and transfer the data JSON file using the \u0027EK Word Up\u0027 button.\n\n**3. Smart Learning Continuity (Smart Save) 📍**\nDon\u0027t worry if you turn off the app while studying. The app remembers how far you\u0027ve memorized. You can resume studying right where you left off next time, without breaking your flow.\n\n**4. Maximize Memorization Effect! \u0027Shuffle Mode\u0027 🔀**\nTurn on Shuffle Mode to mix up the word order randomly and test your real skills!\n\n### Usage / Controls\n\n**• Data Selection:** Press the \u0027Select\u0027 button to choose the vocabulary set to study. You can check all internal data and externally uploaded files in the list.\n**Random** : Turn on the \u0027Random\u0027 switch to shuffle the word order (if off, it resumes from the last learning position).\n**Start** : Press the \u0027Start\u0027 button to enter the card screen."
+                                     "descriptionMarkdown":  "It\u0027s a learning vocabulary program.\nIt basically contains 500 English words for Korean, the world capital.\n\n**1. Just nod your head! \u0027Motion Control\u0027 Learning (Hands-Free) 🤚🚫**\nNo need to touch your smartphone screen. Put on the AR glasses and tilt your head slightly to the right for the next card, or to the left for the previous card. Control everything from checking answers to moving to the next word using only your motion!\n\n**2. Infinite Expandability! \u0027My Own JSON Vocabulary Book\u0027 📂**\nJust add a JSON file created with a notepad or VS Code, and your own memorization book is complete. TOEIC, civil service exams, certification studies—anything is possible.\nConnect your glasses via the \u0027Web Install\u0027 menu and transfer the data JSON file using the \u0027EK Word Up\u0027 button.\n\n**3. Smart Learning Continuity (Smart Save) 📍**\nDon\u0027t worry if you turn off the app while studying. The app remembers how far you\u0027ve memorized. You can resume studying right where you left off next time, without breaking your flow.\n\n**4. Maximize Memorization Effect! \u0027Shuffle Mode\u0027 🔀**\nTurn on Shuffle Mode to mix up the word order randomly and test your real skills!\n\n### Usage / Controls\n\n**• Data Selection:** Press the \u0027Select\u0027 button to choose the vocabulary set to study. You can check all internal data and externally uploaded files in the list.\n**Random** : Turn on the \u0027Random\u0027 switch to shuffle the word order (if off, it resumes from the last learning position).\n**Start** : Press the \u0027Start\u0027 button to enter the card screen.",
+                                     "summaryZh":  "眼镜端英语单词学习应用",
+                                     "aboutZh":  "在 Rokid 眼镜上学习英语单词。"
                                  },
                      "releases":  [
                                       {
@@ -1454,7 +1531,8 @@
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-word-up.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-word-up-2.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "单词向上"
                  },
                  {
                      "id":  "ek-home",
@@ -1466,7 +1544,9 @@
                      "summary":  "Use your own home launcher app.",
                      "description":  "A minimalist launcher app designed for Rokid Glasses. Stripping away the complexity of the default system UI, it focuses on providing the fastest access to your 5-6 most-used apps. Built on the principle of \"Use with touch, set with mouse.\"",
                      "listing":  {
-                                     "descriptionMarkdown":  "A **minimalist launcher app** designed for Rokid Glasses.\nStripping away the complexity of the default system UI, it focuses on providing the fastest access to your 5-6 most-used apps. Built on the principle of **\"Use with touch, set with mouse.\"**\n\n### Usage / Controls\n\n- **Favorites:** Touch the app drawer icon to add your frequently used apps.\n- **Setup Mode:** Connect a Bluetooth mouse to detailedly edit favorites and widgets.\n- **Widget Management:** Click the gear icon at the top right to activate widgets and drag them to your preferred positions."
+                                     "descriptionMarkdown":  "A **minimalist launcher app** designed for Rokid Glasses.\nStripping away the complexity of the default system UI, it focuses on providing the fastest access to your 5-6 most-used apps. Built on the principle of **\"Use with touch, set with mouse.\"**\n\n### Usage / Controls\n\n- **Favorites:** Touch the app drawer icon to add your frequently used apps.\n- **Setup Mode:** Connect a Bluetooth mouse to detailedly edit favorites and widgets.\n- **Widget Management:** Click the gear icon at the top right to activate widgets and drag them to your preferred positions.",
+                                     "summaryZh":  "在眼镜上控制智能家居设备",
+                                     "aboutZh":  "在 Rokid 眼镜上便捷控制智能家居设备。"
                                  },
                      "releases":  [
                                       {
@@ -1509,7 +1589,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-home.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-home-2.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-home-3.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "智能家居"
                  },
                  {
                      "id":  "ek-reader",
@@ -1521,7 +1602,9 @@
                      "summary":  "Clean and intuitive E-book reader app for Rokid Glasses.",
                      "description":  "EKReader is a clean and intuitive e-book reader application supporting TXT and EPUB files. Key Screen Layout - Main Screen: Shows the list of books on the device in a card format, distinguishing file types (TXT, EPUB) with icons. - Reader Screen: The book title is displayed at the top, and contents can be read in the wide central area. The current reading progress (%) and a progress bar are displayed at the bottom. Core Features - Visual Comfort: Applies an optimized contrast ratio on a black background for eye comfort during long reading sessions. - Simple UI: Minimizes complex buttons and focuses on essential functions (navigation, font size). - Operation Optimization: Rokid Glasses environment optimized for swiping and touch operation.",
                      "listing":  {
-                                     "descriptionMarkdown":  "EKReader is a clean and intuitive e-book reader application supporting TXT and EPUB files.\n\n**Key Screen Layout**\n- **Main Screen:** Shows the list of books on the device in a card format, distinguishing file types (TXT, EPUB) with icons.\n- **Reader Screen:** The book title is displayed at the top, and contents can be read in the wide central area. The current reading progress (%) and a progress bar are displayed at the bottom.\n\n**Core Features**\n- **Visual Comfort:** Applies an optimized contrast ratio on a black background for eye comfort during long reading sessions.\n- **Simple UI:** Minimizes complex buttons and focuses on essential functions (navigation, font size).\n- **Operation Optimization:** Rokid Glasses environment optimized for swiping and touch operation.\n\n### Usage / Controls\n\n- **Open Menu:** Call the main menu touchs on the reader screen.\n- **Jump to Page/Location:**\n- Adjust location by 5% increments using swipe in the \u0027Jump to\u0027 dialog, then touchs.\n- **Font Size:** Select desired size from Small, Normal, Large, X-Large in the font size dialog.\n- **Check Progress:** Real-time current location (%) and progress bar are displayed at the bottom.\n- **File Transfer (Web Install):** Materials such as txt and epub can be transferred easily using the file upload button dedicated to EKReader after connecting the smart glasses from the Web Install menu on the site."
+                                     "descriptionMarkdown":  "EKReader is a clean and intuitive e-book reader application supporting TXT and EPUB files.\n\n**Key Screen Layout**\n- **Main Screen:** Shows the list of books on the device in a card format, distinguishing file types (TXT, EPUB) with icons.\n- **Reader Screen:** The book title is displayed at the top, and contents can be read in the wide central area. The current reading progress (%) and a progress bar are displayed at the bottom.\n\n**Core Features**\n- **Visual Comfort:** Applies an optimized contrast ratio on a black background for eye comfort during long reading sessions.\n- **Simple UI:** Minimizes complex buttons and focuses on essential functions (navigation, font size).\n- **Operation Optimization:** Rokid Glasses environment optimized for swiping and touch operation.\n\n### Usage / Controls\n\n- **Open Menu:** Call the main menu touchs on the reader screen.\n- **Jump to Page/Location:**\n- Adjust location by 5% increments using swipe in the \u0027Jump to\u0027 dialog, then touchs.\n- **Font Size:** Select desired size from Small, Normal, Large, X-Large in the font size dialog.\n- **Check Progress:** Real-time current location (%) and progress bar are displayed at the bottom.\n- **File Transfer (Web Install):** Materials such as txt and epub can be transferred easily using the file upload button dedicated to EKReader after connecting the smart glasses from the Web Install menu on the site.",
+                                     "summaryZh":  "清爽的眼镜端电子书阅读器",
+                                     "aboutZh":  "一款清爽简洁的 Rokid 眼镜电子书阅读器。"
                                  },
                      "releases":  [
                                       {
@@ -1593,7 +1676,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-reader-3.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-reader-4.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/ek-reader-5.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "EK 阅读器"
                  },
                  {
                      "id":  "gazemou",
@@ -1604,7 +1688,9 @@
                      "summary":  "Head-gesture cursor and app drawer utility.",
                      "description":  "RokidAppMaker / GazeMou provides gaze cursor controls, favorites, wake mode and app drawer tools for Rokid glasses.",
                      "listing":  {
-                                     "descriptionMarkdown":  "GazeMou adds a head-controlled cursor and launcher-style app drawer to Rokid glasses.\n\nUse it to move a pointer with head gestures, open favorite apps faster, switch interaction modes, and wake the interface with supported gestures when the screen is off.\n\n### Key features\n\n- Head-gesture cursor control for glasses-only interaction\n- Favorites and app drawer access for quicker launches\n- Dwell click, scroll, and cursor-off modes\n- Awake mode and auto cursor options\n- Accessibility-service based control layer"
+                                     "descriptionMarkdown":  "GazeMou adds a head-controlled cursor and launcher-style app drawer to Rokid glasses.\n\nUse it to move a pointer with head gestures, open favorite apps faster, switch interaction modes, and wake the interface with supported gestures when the screen is off.\n\n### Key features\n\n- Head-gesture cursor control for glasses-only interaction\n- Favorites and app drawer access for quicker launches\n- Dwell click, scroll, and cursor-off modes\n- Awake mode and auto cursor options\n- Accessibility-service based control layer",
+                                     "summaryZh":  "头部姿态光标、唤醒模式和收藏夹工具",
+                                     "aboutZh":  "头部姿态控制光标、唤醒模式、收藏夹和应用抽屉工具。"
                                  },
                      "phoneRequired":  false,
                      "artifacts":  [
@@ -1650,7 +1736,8 @@
                                       }
                                   ],
                      "iconAsset":  "gazemou.png",
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/gazemou.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/gazemou.png",
+                     "nameZh":  "凝视鼠标"
                  },
                  {
                      "id":  "glasses-reader",
@@ -1676,7 +1763,9 @@
                      "author":  "conclean",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/conclean/RokidGlassesReader",
                      "listing":  {
-                                     "descriptionMarkdown":  "About GlassesReader\n\nGlassesReader is an Android companion app that captures visible text from the phone screen using accessibility services and streams it in real time to Rokid smart glasses via Bluetooth. It is designed primarily for Chinese reading apps such as WeChat Reading but also supports other reading scenarios where text is accessible.\n\nKey features\n\n- Intelligent text capture from foreground apps using accessibility service\n- Real-time text streaming to Rokid glasses with custom display pages\n- Automatic reconnection to previously paired Rokid devices\n- Dual control interfaces: main floating action button and draggable floating toggle\n- Adjustable display settings including brightness, font size, and text processing options\n\nHow it works\n\n- Requires enabling accessibility service, overlay permissions, and Bluetooth permissions\n- Connects to Rokid glasses via Bluetooth SDK\n- Captures screen text changes and pushes updates to glasses\n\nControls\n\n- Main floating action button to start/pause text streaming service\n- Floating toggle button to show/hide overlay and control service\n\nRequirements\n\n- Android 10 or higher\n- Bluetooth-enabled Android phone\n- Rokid smart glasses in pairing mode (disconnect official app first)\n\nNotes\n\n- Only one app can connect to Rokid glasses at a time; disconnect official app before connecting\n- Text capture depends on accessibility node availability; some apps using custom rendering may not be fully supported\n- UI is Chinese only\n\nFor more details and APK downloads, visit the [project homepage](https://glassesreader.conclean.top/) or the [GitHub repository](https://github.com/conclean/GlassesReader)."
+                                     "descriptionMarkdown":  "About GlassesReader\n\nGlassesReader is an Android companion app that captures visible text from the phone screen using accessibility services and streams it in real time to Rokid smart glasses via Bluetooth. It is designed primarily for Chinese reading apps such as WeChat Reading but also supports other reading scenarios where text is accessible.\n\nKey features\n\n- Intelligent text capture from foreground apps using accessibility service\n- Real-time text streaming to Rokid glasses with custom display pages\n- Automatic reconnection to previously paired Rokid devices\n- Dual control interfaces: main floating action button and draggable floating toggle\n- Adjustable display settings including brightness, font size, and text processing options\n\nHow it works\n\n- Requires enabling accessibility service, overlay permissions, and Bluetooth permissions\n- Connects to Rokid glasses via Bluetooth SDK\n- Captures screen text changes and pushes updates to glasses\n\nControls\n\n- Main floating action button to start/pause text streaming service\n- Floating toggle button to show/hide overlay and control service\n\nRequirements\n\n- Android 10 or higher\n- Bluetooth-enabled Android phone\n- Rokid smart glasses in pairing mode (disconnect official app first)\n\nNotes\n\n- Only one app can connect to Rokid glasses at a time; disconnect official app before connecting\n- Text capture depends on accessibility node availability; some apps using custom rendering may not be fully supported\n- UI is Chinese only\n\nFor more details and APK downloads, visit the [project homepage](https://glassesreader.conclean.top/) or the [GitHub repository](https://github.com/conclean/GlassesReader).",
+                                     "summaryZh":  "眼镜端文本阅读应用",
+                                     "aboutZh":  "在 Rokid 眼镜上阅读文本内容。"
                                  },
                      "releases":  [
                                       {
@@ -1733,7 +1822,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/glasses-reader-overlay.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/glasses-reader-reading.png",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/glasses-reader-settings.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "眼镜阅读器"
                  },
                  {
                      "id":  "hubu",
@@ -1758,7 +1848,9 @@
                      "author":  "hanabix",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/hanabix/hubu",
                      "listing":  {
-                                     "descriptionMarkdown":  "About hubu\n\nhubu is a fitness HUD app for Rokid Glasses that connects to low-energy Bluetooth devices like Garmin watches to display real-time workout metrics.\n\nKey features\n\n- Displays pace (mm\u0027ss\"), heart rate (bpm), and cadence on the glasses\n- Shows current time, connected device name, and glasses battery percentage\n- Supports Heart Rate Service and Running Speed and Cadence Service over BLE\n- Automatically scans and connects to compatible devices\n- Provides a \"Tap to Reconnect\" option if no device is found\n\nKnown limitations\n\n- Only supports running speed and cadence necessary measurements (speed and cadence)\n- Does not support cycling speed, cadence, or power services\n- Does not allow manual device selection\n\nFor more details, visit the [GitHub repository](https://github.com/hanabix/hubu)."
+                                     "descriptionMarkdown":  "About hubu\n\nhubu is a fitness HUD app for Rokid Glasses that connects to low-energy Bluetooth devices like Garmin watches to display real-time workout metrics.\n\nKey features\n\n- Displays pace (mm\u0027ss\"), heart rate (bpm), and cadence on the glasses\n- Shows current time, connected device name, and glasses battery percentage\n- Supports Heart Rate Service and Running Speed and Cadence Service over BLE\n- Automatically scans and connects to compatible devices\n- Provides a \"Tap to Reconnect\" option if no device is found\n\nKnown limitations\n\n- Only supports running speed and cadence necessary measurements (speed and cadence)\n- Does not support cycling speed, cadence, or power services\n- Does not allow manual device selection\n\nFor more details, visit the [GitHub repository](https://github.com/hanabix/hubu).",
+                                     "summaryZh":  "眼镜端步行导航应用",
+                                     "aboutZh":  "Rokid 眼镜步行导航应用。"
                                  },
                      "releases":  [
                                       {
@@ -1808,7 +1900,8 @@
                                       }
                                   ],
                      "iconAsset":  "hubu.png",
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/hubu.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/hubu.png",
+                     "nameZh":  "虎步"
                  },
                  {
                      "id":  "jsos",
@@ -1843,7 +1936,9 @@
                      "author":  "IWhatsskill",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/IWhatsskill/JSOS",
                      "listing":  {
-                                     "descriptionMarkdown":  "# About JSOS\n\nJSOS is a spatial operating system interface designed for Rokid smart glasses and a companion Android phone app. It connects to a local or private OpenClaw Gateway to manage AI sessions, voice input, and HUD deployment.\n\n## Key Features\n\n- **JSOS Core (Phone App):** Connects to OpenClaw Gateway, manages sessions, voice input, TTS settings, camera handoff, Rokid pairing, and HUD deployment.\n- **JSOS HUD (Glasses App):** Renders a green monochrome HUD on Rokid glasses, handles touchpad and ring gestures, staged voice input, session display, photo capture, and AR scene triggers.\n- **Voice Input:** Supports OpenAI Realtime speech-to-text, Android SpeechRecognizer fallback, and OpenClaw Live Talk.\n- **Bluetooth Media-Ring Control:** Experimental support for HUD navigation via phone-side media button events.\n- **Session Management:** Session listing, switching, chat streaming, and history.\n- **Experimental Admin Codex Bridge:** Optional private bridge for CLI-style output on phone and glasses.\n\n## How It Works\n\n- The phone app (JSOS Core) connects to the OpenClaw Gateway over WebSocket and to the glasses via Bluetooth CXR.\n- JSOS Core handles voice recognition, session routing, and HUD deployment.\n- JSOS HUD runs on Rokid glasses, displaying chat, managing input, and controlling AR camera features.\n\n## Controls (Glasses HUD)\n\n- Swipe forward/backward to navigate HUD items.\n- Tap to confirm actions or scroll.\n- Double tap to focus menus or cancel overlays.\n- Long press to start voice input.\n- Use bottom menu buttons for photo capture, session picker, voice mode toggle, display size, commands, and options.\n\n## Requirements\n\n- Android phone with JSOS Core installed.\n- Rokid glasses with JSOS HUD installed.\n- Access to a running OpenClaw Gateway reachable by the phone.\n- Rokid CXR SDK credentials.\n- Optional OpenAI and ElevenLabs API keys for enhanced voice and TTS features.\n\n## Notes\n\n- JSOS is a development-preview project and not a finished consumer product.\n- The Admin Codex bridge and some voice features are experimental.\n- Installation typically involves side-loading APKs from GitHub Releases.\n- Rokid glasses firmware and proprietary SDK are required for full functionality."
+                                     "descriptionMarkdown":  "# About JSOS\n\nJSOS is a spatial operating system interface designed for Rokid smart glasses and a companion Android phone app. It connects to a local or private OpenClaw Gateway to manage AI sessions, voice input, and HUD deployment.\n\n## Key Features\n\n- **JSOS Core (Phone App):** Connects to OpenClaw Gateway, manages sessions, voice input, TTS settings, camera handoff, Rokid pairing, and HUD deployment.\n- **JSOS HUD (Glasses App):** Renders a green monochrome HUD on Rokid glasses, handles touchpad and ring gestures, staged voice input, session display, photo capture, and AR scene triggers.\n- **Voice Input:** Supports OpenAI Realtime speech-to-text, Android SpeechRecognizer fallback, and OpenClaw Live Talk.\n- **Bluetooth Media-Ring Control:** Experimental support for HUD navigation via phone-side media button events.\n- **Session Management:** Session listing, switching, chat streaming, and history.\n- **Experimental Admin Codex Bridge:** Optional private bridge for CLI-style output on phone and glasses.\n\n## How It Works\n\n- The phone app (JSOS Core) connects to the OpenClaw Gateway over WebSocket and to the glasses via Bluetooth CXR.\n- JSOS Core handles voice recognition, session routing, and HUD deployment.\n- JSOS HUD runs on Rokid glasses, displaying chat, managing input, and controlling AR camera features.\n\n## Controls (Glasses HUD)\n\n- Swipe forward/backward to navigate HUD items.\n- Tap to confirm actions or scroll.\n- Double tap to focus menus or cancel overlays.\n- Long press to start voice input.\n- Use bottom menu buttons for photo capture, session picker, voice mode toggle, display size, commands, and options.\n\n## Requirements\n\n- Android phone with JSOS Core installed.\n- Rokid glasses with JSOS HUD installed.\n- Access to a running OpenClaw Gateway reachable by the phone.\n- Rokid CXR SDK credentials.\n- Optional OpenAI and ElevenLabs API keys for enhanced voice and TTS features.\n\n## Notes\n\n- JSOS is a development-preview project and not a finished consumer product.\n- The Admin Codex bridge and some voice features are experimental.\n- Installation typically involves side-loading APKs from GitHub Releases.\n- Rokid glasses firmware and proprietary SDK are required for full functionality.",
+                                     "summaryZh":  "眼镜端智能 HUD 操作系统",
+                                     "aboutZh":  "为 Rokid 眼镜打造的智能 HUD 操作系统。"
                                  },
                      "releases":  [
                                       {
@@ -1867,7 +1962,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/jsos-hud-session-chat.png",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/jsos-hud-options.png",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/jsos-hud-commands.png"
-                                        ]
+                                        ],
+                     "nameZh":  "JSOS"
                  },
                  {
                      "id":  "lc-hot100",
@@ -1892,11 +1988,14 @@
                      "author":  "bcefghj",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/bcefghj/rokid-collection/tree/main/rokid-lc-hot100",
                      "listing":  {
-                                     "descriptionMarkdown":  "## About\nLC Hot100 is a voice-first learning app for studying the LeetCode Hot100 problem set offline on Rokid AR glasses.\n\n## Key features\n- Offline access to LeetCode Hot100 problems\n- Voice-driven interaction optimized for AR glasses\n\n## Requirements\n- Designed specifically for Rokid AR glasses\n- No phone connection required"
+                                     "descriptionMarkdown":  "## About\nLC Hot100 is a voice-first learning app for studying the LeetCode Hot100 problem set offline on Rokid AR glasses.\n\n## Key features\n- Offline access to LeetCode Hot100 problems\n- Voice-driven interaction optimized for AR glasses\n\n## Requirements\n- Designed specifically for Rokid AR glasses\n- No phone connection required",
+                                     "summaryZh":  "眼镜端 LeetCode 刷题应用",
+                                     "aboutZh":  "在 Rokid 眼镜上刷 LeetCode 热门题目。"
                                  },
                      "releases":  [
 
-                                  ]
+                                  ],
+                     "nameZh":  "力扣热题"
                  },
                  {
                      "id":  "m365-rokid-hud",
@@ -1930,7 +2029,9 @@
                      "author":  "zero2005x",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/zero2005x/M365-Rokid-HUD",
                      "listing":  {
-                                     "descriptionMarkdown":  "# About\nM365 Rokid HUD is an Android app that connects to Xiaomi/Ninebot M365 electric scooters via Bluetooth Low Energy (BLE) and displays real-time telemetry on Rokid AR glasses as a heads-up display (HUD).\n\n# Key Features\n- Automatic BLE scanning and discovery of nearby M365 scooters\n- Secure pairing with ECDH key exchange and token-based login\n- Real-time telemetry including speed, battery, temperature, and mileage\n- Remote motor lock/unlock and tail light control\n- Signal quality and data freshness indicators on the HUD\n- Multi-language support (11 languages)\n- Modern UI built with Jetpack Compose and Material3\n\n# How It Works\n- The phone app connects to the scooter via BLE and handles all communication.\n- Enable the \"Rokid HUD Gateway\" on the phone app to broadcast telemetry data.\n- The Rokid glasses app scans for the phone\u0027s gateway and displays telemetry in AR.\n\n# Requirements\n- Android 10 (API 29) or higher on the phone\n- Bluetooth and Location permissions for BLE scanning\n- Rokid AR glasses with the companion HUD app installed\n\n# Notes\n- Registration unpairs the scooter from other apps; register only your own devices.\n- Disable battery optimization on the phone app to maintain stable BLE connection.\n- The HUD shows speed, scooter battery, phone battery, glasses battery, current time, and signal quality.\n\n# Source\n[GitHub Repository](https://github.com/zero2005x/M365-Rokid-HUD)"
+                                     "descriptionMarkdown":  "# About\nM365 Rokid HUD is an Android app that connects to Xiaomi/Ninebot M365 electric scooters via Bluetooth Low Energy (BLE) and displays real-time telemetry on Rokid AR glasses as a heads-up display (HUD).\n\n# Key Features\n- Automatic BLE scanning and discovery of nearby M365 scooters\n- Secure pairing with ECDH key exchange and token-based login\n- Real-time telemetry including speed, battery, temperature, and mileage\n- Remote motor lock/unlock and tail light control\n- Signal quality and data freshness indicators on the HUD\n- Multi-language support (11 languages)\n- Modern UI built with Jetpack Compose and Material3\n\n# How It Works\n- The phone app connects to the scooter via BLE and handles all communication.\n- Enable the \"Rokid HUD Gateway\" on the phone app to broadcast telemetry data.\n- The Rokid glasses app scans for the phone\u0027s gateway and displays telemetry in AR.\n\n# Requirements\n- Android 10 (API 29) or higher on the phone\n- Bluetooth and Location permissions for BLE scanning\n- Rokid AR glasses with the companion HUD app installed\n\n# Notes\n- Registration unpairs the scooter from other apps; register only your own devices.\n- Disable battery optimization on the phone app to maintain stable BLE connection.\n- The HUD shows speed, scooter battery, phone battery, glasses battery, current time, and signal quality.\n\n# Source\n[GitHub Repository](https://github.com/zero2005x/M365-Rokid-HUD)",
+                                     "summaryZh":  "小米滑板车眼镜 HUD 仪表盘",
+                                     "aboutZh":  "小米电动滑板车的 Rokid 眼镜 HUD 仪表盘。"
                                  },
                      "releases":  [
                                       {
@@ -1953,7 +2054,8 @@
                                       }
                                   ],
                      "iconAsset":  "m365-rokid-hud.png",
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/m365-rokid-hud.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/m365-rokid-hud.png",
+                     "nameZh":  "M365 HUD"
                  },
                  {
                      "id":  "matrix-vision",
@@ -1965,7 +2067,9 @@
                      "summary":  "See the world through Matrix.",
                      "description":  "A unique camera app that transforms your world into a scene from The Matrix in real time. By extracting object silhouettes, it visualizes the world as digital code and allows you to record these stylized views.",
                      "listing":  {
-                                     "descriptionMarkdown":  "A unique camera app that transforms your world into a scene from **The Matrix** in real time.\nBy extracting object silhouettes, it visualizes the world as digital code and allows you to record these stylized views.\n\n### Usage / Controls\n\n- **Start Recording:** Touch the right side of the glasses (or press Enter) to begin capturing.\n- **End Recording:** Touch again to stop and save the matrix-styled video file.\n- **Check Files:** View your saved videos in the system gallery or via the default app sync."
+                                     "descriptionMarkdown":  "A unique camera app that transforms your world into a scene from **The Matrix** in real time.\nBy extracting object silhouettes, it visualizes the world as digital code and allows you to record these stylized views.\n\n### Usage / Controls\n\n- **Start Recording:** Touch the right side of the glasses (or press Enter) to begin capturing.\n- **End Recording:** Touch again to stop and save the matrix-styled video file.\n- **Check Files:** View your saved videos in the system gallery or via the default app sync.",
+                                     "summaryZh":  "眼镜端矩阵风格视觉特效",
+                                     "aboutZh":  "Rokid 眼镜矩阵风格视觉特效应用。"
                                  },
                      "releases":  [
                                       {
@@ -1998,7 +2102,8 @@
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/matrix-vision.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/matrix-vision-2.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "矩阵视觉"
                  },
                  {
                      "id":  "memora-rokid",
@@ -2024,12 +2129,15 @@
                      "sourceUrl":  "https://ghproxy.net/https://github.com/e7naq3y/Memora_rokid",
                      "iconAsset":  "memora-rokid.png",
                      "listing":  {
-                                     "descriptionMarkdown":  "About Memora\n\nMemora is an immersive language learning app designed for Rokid AR glasses. It uses a heads-up display (HUD) to present learning content in real time, integrating Baidu AI for intelligent scenario dialogues and image recognition.\n\nKey Features\n\n- Four learning modes: scenario dialogue, visual recognition, AI-generated mnemonics, and spaced repetition (SRS).\n- Scenario dialogue mode enables multi-turn AI conversations with voice input and HUD subtitles.\n- Visual recognition mode captures images via glasses and extracts keywords using AI.\n- Personalized mnemonic hints help memorize difficult vocabulary.\n- Spaced repetition schedules reviews based on the Ebbinghaus curve with adjustable intensity.\n\nApp Interface\n\n- Learning data dashboard with statistics, vocabulary radar, and review calendar.\n- Multi-language vocabulary management and daily goal settings.\n- AI chat coach providing learning analysis and review suggestions.\n- Device management for Bluetooth connection, HUD control, and media recording.\n\nRokid Glasses Integration\n\n- Bluetooth device management including battery, brightness, and volume.\n- Custom HUD views with smooth incremental updates.\n- Audio/video recording and Wi-Fi P2P media synchronization.\n\nRequirements\n\n- Android phone with Bluetooth to connect Rokid AR glasses.\n- Rokid AR glasses for HUD display (app UI can run without glasses)."
+                                     "descriptionMarkdown":  "About Memora\n\nMemora is an immersive language learning app designed for Rokid AR glasses. It uses a heads-up display (HUD) to present learning content in real time, integrating Baidu AI for intelligent scenario dialogues and image recognition.\n\nKey Features\n\n- Four learning modes: scenario dialogue, visual recognition, AI-generated mnemonics, and spaced repetition (SRS).\n- Scenario dialogue mode enables multi-turn AI conversations with voice input and HUD subtitles.\n- Visual recognition mode captures images via glasses and extracts keywords using AI.\n- Personalized mnemonic hints help memorize difficult vocabulary.\n- Spaced repetition schedules reviews based on the Ebbinghaus curve with adjustable intensity.\n\nApp Interface\n\n- Learning data dashboard with statistics, vocabulary radar, and review calendar.\n- Multi-language vocabulary management and daily goal settings.\n- AI chat coach providing learning analysis and review suggestions.\n- Device management for Bluetooth connection, HUD control, and media recording.\n\nRokid Glasses Integration\n\n- Bluetooth device management including battery, brightness, and volume.\n- Custom HUD views with smooth incremental updates.\n- Audio/video recording and Wi-Fi P2P media synchronization.\n\nRequirements\n\n- Android phone with Bluetooth to connect Rokid AR glasses.\n- Rokid AR glasses for HUD display (app UI can run without glasses).",
+                                     "summaryZh":  "眼镜端记忆辅助应用",
+                                     "aboutZh":  "Rokid 眼镜记忆辅助应用。"
                                  },
                      "releases":  [
 
                                   ],
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/memora-rokid.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/memora-rokid.png",
+                     "nameZh":  "记忆罗卡"
                  },
                  {
                      "id":  "neuroglasses",
@@ -2054,7 +2162,9 @@
                      "author":  "ECHO-HELLO-WORLD424",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/ECHO-HELLO-WORLD424/NeuroGlasses",
                      "listing":  {
-                                     "descriptionMarkdown":  "# About NeuroGlasses\nNeuroGlasses is an Android phone application that bridges Rokid AR glasses with AI chat capabilities using OpenAI-compatible APIs. It streams AI responses as text and audio directly to the glasses\u0027 HUD for an immersive augmented reality experience.\n\n## Key Features\n- Vision Language Model (VLM) support to analyze camera input from the glasses\n- Automatic Speech Recognition (ASR) for voice command input\n- Text-to-Speech (TTS) with streaming audio playback\n- Extensible architecture allowing middleware integration for API translation and enhancements\n\n## How It Works\n- Pair your Rokid glasses with your Android device using Bluetooth\n- Configure your OpenAI-compatible API credentials and model settings in the app\n- Use voice commands or predefined instructions to interact with AI\n- AI responses appear on the glasses\u0027 HUD and optionally play via TTS\n\n## Requirements\n- Android device with API level 30 or higher\n- Rokid AR glasses with green HUD\n- OpenAI-compatible API key and endpoint\n\n## Notes\n- The app is experimental and may require re-pairing glasses after disconnects\n- No chat history support yet\n- TTS voice configuration is important for proper audio playback\n- Use caution as the app may crash or behave unexpectedly due to SDK limitations"
+                                     "descriptionMarkdown":  "# About NeuroGlasses\nNeuroGlasses is an Android phone application that bridges Rokid AR glasses with AI chat capabilities using OpenAI-compatible APIs. It streams AI responses as text and audio directly to the glasses\u0027 HUD for an immersive augmented reality experience.\n\n## Key Features\n- Vision Language Model (VLM) support to analyze camera input from the glasses\n- Automatic Speech Recognition (ASR) for voice command input\n- Text-to-Speech (TTS) with streaming audio playback\n- Extensible architecture allowing middleware integration for API translation and enhancements\n\n## How It Works\n- Pair your Rokid glasses with your Android device using Bluetooth\n- Configure your OpenAI-compatible API credentials and model settings in the app\n- Use voice commands or predefined instructions to interact with AI\n- AI responses appear on the glasses\u0027 HUD and optionally play via TTS\n\n## Requirements\n- Android device with API level 30 or higher\n- Rokid AR glasses with green HUD\n- OpenAI-compatible API key and endpoint\n\n## Notes\n- The app is experimental and may require re-pairing glasses after disconnects\n- No chat history support yet\n- TTS voice configuration is important for proper audio playback\n- Use caution as the app may crash or behave unexpectedly due to SDK limitations",
+                                     "summaryZh":  "眼镜端神经科学可视化应用",
+                                     "aboutZh":  "Rokid 眼镜神经科学可视化应用。"
                                  },
                      "releases":  [
                                       {
@@ -2066,7 +2176,8 @@
 
                                                       ]
                                       }
-                                  ]
+                                  ],
+                     "nameZh":  "神经眼镜"
                  },
                  {
                      "id":  "overlayrec",
@@ -2093,7 +2204,9 @@
                      "sourceUrl":  "https://ghproxy.net/https://github.com/Anezium/OverlayRec",
                      "iconAsset":  "overlayrec.png",
                      "listing":  {
-                                     "descriptionMarkdown":  "# About\nOverlayRec lets you trigger AR screenshots and video recordings directly from Rokid glasses using a two-finger slide gesture, without needing to open the Hi Rokid app.\n\n# Key features\n- Activate AR Screenshot or AR Record from an on-glass overlay menu\n- Open menu with a two-finger slide left left right right gesture\n- Confirm actions immediately or wait 5 seconds for auto-confirm\n- Stop AR recording using the physical glasses button\n- Keeps the current app visible beneath the overlay\n- Restores volume after gesture activation\n\n# How it works\nOverlayRec runs as an Android Accessibility Service on the glasses, listening for specific two-finger swipe broadcasts. It then sends internal scene commands to start AR media capture. Hi Rokid remains available for media import and processing.\n\n# Controls\n- Open menu: two finger slide left left right right\n- Select AR Screenshot: two finger slide left\n- Select AR Record: two finger slide right\n- Confirm: OK button or auto-confirm after 5 seconds\n- Stop AR Record: physical glasses button\n\n# Notes\nOverlayRec is experimental and designed for Rokid glasses firmware supporting the required two-finger swipe broadcasts. It does not merge camera and HUD videos; this is handled by Rokid\u0027s AR Record flow and Hi Rokid app."
+                                     "descriptionMarkdown":  "# About\nOverlayRec lets you trigger AR screenshots and video recordings directly from Rokid glasses using a two-finger slide gesture, without needing to open the Hi Rokid app.\n\n# Key features\n- Activate AR Screenshot or AR Record from an on-glass overlay menu\n- Open menu with a two-finger slide left left right right gesture\n- Confirm actions immediately or wait 5 seconds for auto-confirm\n- Stop AR recording using the physical glasses button\n- Keeps the current app visible beneath the overlay\n- Restores volume after gesture activation\n\n# How it works\nOverlayRec runs as an Android Accessibility Service on the glasses, listening for specific two-finger swipe broadcasts. It then sends internal scene commands to start AR media capture. Hi Rokid remains available for media import and processing.\n\n# Controls\n- Open menu: two finger slide left left right right\n- Select AR Screenshot: two finger slide left\n- Select AR Record: two finger slide right\n- Confirm: OK button or auto-confirm after 5 seconds\n- Stop AR Record: physical glasses button\n\n# Notes\nOverlayRec is experimental and designed for Rokid glasses firmware supporting the required two-finger swipe broadcasts. It does not merge camera and HUD videos; this is handled by Rokid\u0027s AR Record flow and Hi Rokid app.",
+                                     "summaryZh":  "通过双指手势触发 AR 截图和录制",
+                                     "aboutZh":  "通过双指手势在 Rokid 眼镜上触发 AR 截图和录制。"
                                  },
                      "releases":  [
                                       {
@@ -2125,7 +2238,8 @@
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/overlayrec-main.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/overlayrec-overlay.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "叠加录制"
                  },
                  {
                      "id":  "photo-del",
@@ -2150,7 +2264,9 @@
                      "author":  "osagem",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/osagem/photoDel4rokidglasses",
                      "listing":  {
-                                     "descriptionMarkdown":  "## About\nPhotoDel is a utility app for Rokid glasses that enables viewing and deleting photos and videos directly on the device.\n\n## Key Features\n- Navigate menus and media using the glasses\u0027 touchpad\n- View photos and loop-play videos\n- Delete photos or videos with confirmation prompts\n- Exit the app cleanly via on-screen options\n\n## Controls\n- Swipe forward/backward on the touchpad to select options or media\n- Tap to confirm selections or execute actions\n- Swipe down to advance to the next photo\n\n## Notes\n- Videos automatically loop during playback\n- Bluetooth mouse or ring devices can be used via the Rokid AI phone app for alternative control\n- This is an open-source, experimental project; feedback and bug reports are welcome"
+                                     "descriptionMarkdown":  "## About\nPhotoDel is a utility app for Rokid glasses that enables viewing and deleting photos and videos directly on the device.\n\n## Key Features\n- Navigate menus and media using the glasses\u0027 touchpad\n- View photos and loop-play videos\n- Delete photos or videos with confirmation prompts\n- Exit the app cleanly via on-screen options\n\n## Controls\n- Swipe forward/backward on the touchpad to select options or media\n- Tap to confirm selections or execute actions\n- Swipe down to advance to the next photo\n\n## Notes\n- Videos automatically loop during playback\n- Bluetooth mouse or ring devices can be used via the Rokid AI phone app for alternative control\n- This is an open-source, experimental project; feedback and bug reports are welcome",
+                                     "summaryZh":  "在眼镜上直接查看和删除照片视频",
+                                     "aboutZh":  "在 Rokid 眼镜上直接查看和删除照片或视频。"
                                  },
                      "releases":  [
                                       {
@@ -2200,7 +2316,8 @@
                                       }
                                   ],
                      "iconAsset":  "photo-del.png",
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/photo-del.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/photo-del.png",
+                     "nameZh":  "照片删除"
                  },
                  {
                      "id":  "rokid-ai-assistant",
@@ -2234,7 +2351,9 @@
                      "author":  "zero2005x",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/zero2005x/RokidAIAssistant",
                      "listing":  {
-                                     "descriptionMarkdown":  "## About\nRokid AI Assistant is an AI-powered voice and vision assistant designed for Rokid AR glasses. It uses a companion phone app to handle AI queries and connectivity, providing a wearable interface on the glasses.\n\n## Key Features\n- Voice-to-text transcription and AI chat via glasses\n- Photo capture with AI image analysis from glasses camera\n- Communication between phone and glasses using Rokid CXR SDK\n- Support for multiple AI providers (e.g., Gemini, OpenAI, Anthropic)\n- Support for multiple speech-to-text providers\n- Conversation history persistence with Room database\n- Multi-language support (13 languages)\n\n## Requirements\n- Rokid AR glasses paired with a phone\n- GEMINI_API_KEY (or other AI provider keys) for AI processing\n- Phone app required for AI processing; glasses app provides interface\n\n## Notes\n- Standalone glasses operation without phone is not supported\n- Offline AI inference is not available\n- No video streaming or real-time AR overlays included"
+                                     "descriptionMarkdown":  "## About\nRokid AI Assistant is an AI-powered voice and vision assistant designed for Rokid AR glasses. It uses a companion phone app to handle AI queries and connectivity, providing a wearable interface on the glasses.\n\n## Key Features\n- Voice-to-text transcription and AI chat via glasses\n- Photo capture with AI image analysis from glasses camera\n- Communication between phone and glasses using Rokid CXR SDK\n- Support for multiple AI providers (e.g., Gemini, OpenAI, Anthropic)\n- Support for multiple speech-to-text providers\n- Conversation history persistence with Room database\n- Multi-language support (13 languages)\n\n## Requirements\n- Rokid AR glasses paired with a phone\n- GEMINI_API_KEY (or other AI provider keys) for AI processing\n- Phone app required for AI processing; glasses app provides interface\n\n## Notes\n- Standalone glasses operation without phone is not supported\n- Offline AI inference is not available\n- No video streaming or real-time AR overlays included",
+                                     "summaryZh":  "Rokid 眼镜 AI 智能助手",
+                                     "aboutZh":  "Rokid 眼镜 AI 智能助手应用。"
                                  },
                      "releases":  [
                                       {
@@ -2275,7 +2394,8 @@
                                       }
                                   ],
                      "iconAsset":  "rokid-ai-assistant.png",
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-ai-assistant.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-ai-assistant.png",
+                     "nameZh":  "Rokid AI 助手"
                  },
                  {
                      "id":  "rokid-connect-hud",
@@ -2287,7 +2407,9 @@
                      "summary":  "Navigation HUD App for Phone (korean ver)",
                      "description":  "A companion app that mirrors your smartphone\u0027s navigation (TMap, Naver Map) as a HUD on your Rokid Glasses. Install this version on your Android phone. It must be paired with the Glasses-side HUD app for full functionality.",
                      "listing":  {
-                                     "descriptionMarkdown":  "A companion app that mirrors your smartphone\u0027s navigation (TMap, Naver Map) as a **HUD on your Rokid Glasses**.\nInstall this version on your **Android phone**. It must be paired with the **Glasses-side HUD app** for full functionality.\n\n### Usage / Controls\n\n- **Connect:** Select **\u0027Connect\u0027** in the phone app menu.\n- **Start Mirroring:** Press the large **\u0027Mirroring\u0027** button.\n- **Preferences:** Adjust layouts, mirroring areas, and opacity in the settings."
+                                     "descriptionMarkdown":  "A companion app that mirrors your smartphone\u0027s navigation (TMap, Naver Map) as a **HUD on your Rokid Glasses**.\nInstall this version on your **Android phone**. It must be paired with the **Glasses-side HUD app** for full functionality.\n\n### Usage / Controls\n\n- **Connect:** Select **\u0027Connect\u0027** in the phone app menu.\n- **Start Mirroring:** Press the large **\u0027Mirroring\u0027** button.\n- **Preferences:** Adjust layouts, mirroring areas, and opacity in the settings.",
+                                     "summaryZh":  "眼镜端连接状态 HUD 显示",
+                                     "aboutZh":  "在 Rokid 眼镜上显示连接状态信息的 HUD。"
                                  },
                      "releases":  [
                                       {
@@ -2329,7 +2451,8 @@
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-connect-hud.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-connect-hud-2.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "Rokid 连接 HUD"
                  },
                  {
                      "id":  "rokid-lyrics",
@@ -2364,7 +2487,9 @@
                      "sourceUrl":  "https://ghproxy.net/https://github.com/Anezium/Rokid-Lyrics",
                      "publishedAt":  "2026-05-26T17:18:23Z",
                      "listing":  {
-                                     "descriptionMarkdown":  "# About\nRokid Lyrics streams synchronized song lyrics from your Android phone to Rokid AR glasses using Bluetooth Classic SPP. It detects the current track from Android media sessions and displays time-synced lyrics on the glasses HUD.\n\n# Key features\n- Time-synced lyrics displayed live on Rokid AR glasses\n- Multi-provider lyrics lookup pipeline (Musixmatch, Netease, LRCLIB) with graceful fallback\n- Works with any Android media session, not limited to a single music player\n- Bluetooth streaming between phone and glasses with no internet required on glasses\n- Press Enter on the glasses to play or pause music on the phone\n\n# How it works\nThe phone app monitors the active media session, fetches synced lyrics from providers, and streams a full lyrics snapshot plus progress sync events to the glasses. The glasses display lyrics in real time, staying in sync with the music.\n\n# Requirements\n- Android phone with the Rokid Lyrics phone app installed\n- Rokid AR glasses with the Rokid Lyrics glasses app installed\n- Bluetooth pairing between phone and glasses\n- Notification access permission granted on the phone\n\n# Notes\nFor improved lyrics accuracy, signing in to Musixmatch in the phone app is recommended but optional."
+                                     "descriptionMarkdown":  "# About\nRokid Lyrics streams synchronized song lyrics from your Android phone to Rokid AR glasses using Bluetooth Classic SPP. It detects the current track from Android media sessions and displays time-synced lyrics on the glasses HUD.\n\n# Key features\n- Time-synced lyrics displayed live on Rokid AR glasses\n- Multi-provider lyrics lookup pipeline (Musixmatch, Netease, LRCLIB) with graceful fallback\n- Works with any Android media session, not limited to a single music player\n- Bluetooth streaming between phone and glasses with no internet required on glasses\n- Press Enter on the glasses to play or pause music on the phone\n\n# How it works\nThe phone app monitors the active media session, fetches synced lyrics from providers, and streams a full lyrics snapshot plus progress sync events to the glasses. The glasses display lyrics in real time, staying in sync with the music.\n\n# Requirements\n- Android phone with the Rokid Lyrics phone app installed\n- Rokid AR glasses with the Rokid Lyrics glasses app installed\n- Bluetooth pairing between phone and glasses\n- Notification access permission granted on the phone\n\n# Notes\nFor improved lyrics accuracy, signing in to Musixmatch in the phone app is recommended but optional.",
+                                     "summaryZh":  "眼镜端歌词显示应用",
+                                     "aboutZh":  "在 Rokid 眼镜上实时显示歌曲歌词。"
                                  },
                      "releases":  [
                                       {
@@ -2419,7 +2544,8 @@
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-lyrics-phone.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-lyrics-glasses.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "Rokid 歌词"
                  },
                  {
                      "id":  "rokid-manager",
@@ -2446,13 +2572,16 @@
                      "iconAsset":  "rokid-manager.png",
                      "publishedAt":  "2026-05-25T23:45:12Z",
                      "listing":  {
-                                     "descriptionMarkdown":  "About Rokid Manager\n\nRokid Manager is a glasses-side utility app that allows users to access and manage advanced settings on Rokid AR glasses.\n\nKey features\n\n- Manage connectivity options\n- Access installed apps\n- Monitor and control storage usage\n- Adjust sound and battery settings\n- Control camera and file management\n- Operate various device controls\n\nRequirements\n\n- Designed for Rokid AR glasses\n- No phone companion app required"
+                                     "descriptionMarkdown":  "About Rokid Manager\n\nRokid Manager is a glasses-side utility app that allows users to access and manage advanced settings on Rokid AR glasses.\n\nKey features\n\n- Manage connectivity options\n- Access installed apps\n- Monitor and control storage usage\n- Adjust sound and battery settings\n- Control camera and file management\n- Operate various device controls\n\nRequirements\n\n- Designed for Rokid AR glasses\n- No phone companion app required",
+                                     "summaryZh":  "眼镜端应用管理器",
+                                     "aboutZh":  "Rokid 眼镜应用管理器。"
                                  },
                      "releases":  [
 
                                   ],
                      "newUntil":  "2026-05-27T23:45:12.000Z",
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-manager.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-manager.png",
+                     "nameZh":  "Rokid 管理器"
                  },
                  {
                      "id":  "rokid-manga-viewer",
@@ -2489,11 +2618,14 @@
                                       }
                                   ],
                      "listing":  {
-                                     "descriptionMarkdown":  "About Rokid Manga Viewer\n\nRokid Manga Viewer is a glasses-native manga and comic reader for Rokid AR glasses. It reads ZIP archives directly, so books do not need to be unpacked before reading.\n\nKey features\n\n- Direct ZIP loading for manga and comic archives\n- Touchpad, side-tap, DPAD, keyboard, media-key, and Rokid R08 Ring controls\n- Inverted-color mode for high-contrast reading\n- Left-to-right reading mode for Western comics and artbooks\n- Single-page and spread view modes\n- Automatic per-book progress saving and resume\n\nControls\n\n- Book selector: swipe or use DPAD to move through books and options, then tap or press center/enter to open or toggle.\n- Reader: swipe left/right or use DPAD/media keys to turn pages.\n- Reader: tap or press center/enter to switch between single-page and spread view.\n- Reader: double tap or press Back/Escape to return to the book list.\n\nSetup\n\n- Install the glasses APK and grant file/media access when prompted.\n- Put `.zip` books in the app\u0027s `MangaViewer` folder. The app also checks `Documents/MangaViewer` on devices that allow legacy document access.\n- ZIP entries can contain JPG, JPEG, PNG, or WebP pages; pages are naturally sorted by filename.\n\nNotes\n\n- This is a glasses app and does not require a phone companion.\n- The APK is currently distributed as a debug build by the upstream project."
+                                     "descriptionMarkdown":  "About Rokid Manga Viewer\n\nRokid Manga Viewer is a glasses-native manga and comic reader for Rokid AR glasses. It reads ZIP archives directly, so books do not need to be unpacked before reading.\n\nKey features\n\n- Direct ZIP loading for manga and comic archives\n- Touchpad, side-tap, DPAD, keyboard, media-key, and Rokid R08 Ring controls\n- Inverted-color mode for high-contrast reading\n- Left-to-right reading mode for Western comics and artbooks\n- Single-page and spread view modes\n- Automatic per-book progress saving and resume\n\nControls\n\n- Book selector: swipe or use DPAD to move through books and options, then tap or press center/enter to open or toggle.\n- Reader: swipe left/right or use DPAD/media keys to turn pages.\n- Reader: tap or press center/enter to switch between single-page and spread view.\n- Reader: double tap or press Back/Escape to return to the book list.\n\nSetup\n\n- Install the glasses APK and grant file/media access when prompted.\n- Put `.zip` books in the app\u0027s `MangaViewer` folder. The app also checks `Documents/MangaViewer` on devices that allow legacy document access.\n- ZIP entries can contain JPG, JPEG, PNG, or WebP pages; pages are naturally sorted by filename.\n\nNotes\n\n- This is a glasses app and does not require a phone companion.\n- The APK is currently distributed as a debug build by the upstream project.",
+                                     "summaryZh":  "眼镜端漫画和压缩包阅读器",
+                                     "aboutZh":  "专为 Rokid AR 眼镜优化的漫画和 ZIP 压缩包阅读器，支持触摸板、DPAD 和 R08 戒指控制。"
                                  },
                      "newUntil":  "2026-06-30T00:00:00.000Z",
                      "iconAsset":  "rokid-manga-viewer.png",
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-manga-viewer.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-manga-viewer.png",
+                     "nameZh":  "Rokid 漫画阅读器"
                  },
                  {
                      "id":  "music-score",
@@ -2518,11 +2650,14 @@
                      "author":  "bcefghj",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/bcefghj/rokid-collection/tree/main/rokid-music-score",
                      "listing":  {
-                                     "descriptionMarkdown":  "# About\nRokid Music Score is a piano score viewer designed specifically for Rokid AR glasses. It features built-in classic simplified piano scores by Jay Chou.\n\n# Key features\n- View piano scores directly on Rokid AR glasses\n- Includes classic Jay Chou simplified scores for practice\n\n# Requirements\n- Compatible with Rokid AR glasses\n- No phone required"
+                                     "descriptionMarkdown":  "# About\nRokid Music Score is a piano score viewer designed specifically for Rokid AR glasses. It features built-in classic simplified piano scores by Jay Chou.\n\n# Key features\n- View piano scores directly on Rokid AR glasses\n- Includes classic Jay Chou simplified scores for practice\n\n# Requirements\n- Compatible with Rokid AR glasses\n- No phone required",
+                                     "summaryZh":  "眼镜端乐谱显示应用",
+                                     "aboutZh":  "在 Rokid 眼镜上显示乐谱。"
                                  },
                      "releases":  [
 
-                                  ]
+                                  ],
+                     "nameZh":  "乐谱"
                  },
                  {
                      "id":  "rokid-shell",
@@ -2547,7 +2682,9 @@
                      "author":  "Anezium",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/Anezium/Rokid-Shell",
                      "listing":  {
-                                     "descriptionMarkdown":  "About Rokid Shell\n\nRokid Shell is a native Android file explorer designed specifically for Rokid glasses. It offers an AR-friendly monochrome user interface, a built-in HTTP transfer server, and a seamless APK installation process.\n\nKey features\n\n- AR-optimized monochrome UI for clear visibility on Rokid glasses\n- Access shared Android folders like Download, DCIM, Pictures, Movies, Music, and Documents\n- Built-in local HTTP server to transfer files from another device on the same network\n- Direct APK install flow within the file explorer for easy app management"
+                                     "descriptionMarkdown":  "About Rokid Shell\n\nRokid Shell is a native Android file explorer designed specifically for Rokid glasses. It offers an AR-friendly monochrome user interface, a built-in HTTP transfer server, and a seamless APK installation process.\n\nKey features\n\n- AR-optimized monochrome UI for clear visibility on Rokid glasses\n- Access shared Android folders like Download, DCIM, Pictures, Movies, Music, and Documents\n- Built-in local HTTP server to transfer files from another device on the same network\n- Direct APK install flow within the file explorer for easy app management",
+                                     "summaryZh":  "眼镜端文件浏览器和 APK 安装工具",
+                                     "aboutZh":  "Rokid 眼镜原生文件浏览器，支持 APK 安装和 HTTP 传输。"
                                  },
                      "releases":  [
                                       {
@@ -2566,7 +2703,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-shell-menu.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-shell-server.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-shell-web.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "Rokid 文件管理器"
                  },
                  {
                      "id":  "rokid-smart-life",
@@ -2591,13 +2729,16 @@
                      "author":  "bcefghj",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/bcefghj/rokid-collection/tree/main/RokidSmartLife",
                      "listing":  {
-                                     "descriptionMarkdown":  "## About\nRokid SmartLife is a local life and POI navigation app tailored for Rokid AI glasses, featuring D-pad control for seamless interaction.\n\n## Key features\n- Search points of interest (POI) across 12 categories\n- Navigation assistance for local life needs\n- Designed specifically for Rokid AI glasses with D-pad control\n\n## How it works\nUsers navigate through local POIs and access navigation features using the glasses\u0027 D-pad, enabling hands-free, convenient operation."
+                                     "descriptionMarkdown":  "## About\nRokid SmartLife is a local life and POI navigation app tailored for Rokid AI glasses, featuring D-pad control for seamless interaction.\n\n## Key features\n- Search points of interest (POI) across 12 categories\n- Navigation assistance for local life needs\n- Designed specifically for Rokid AI glasses with D-pad control\n\n## How it works\nUsers navigate through local POIs and access navigation features using the glasses\u0027 D-pad, enabling hands-free, convenient operation.",
+                                     "summaryZh":  "眼镜端智能生活助手",
+                                     "aboutZh":  "Rokid 眼镜智能生活助手应用。"
                                  },
                      "releases":  [
 
                                   ],
                      "iconAsset":  "rokid-smart-life.png",
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-smart-life.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-smart-life.png",
+                     "nameZh":  "Rokid 智能生活"
                  },
                  {
                      "id":  "rokid-ssh-terminal",
@@ -2622,7 +2763,9 @@
                      "author":  "bzerk",
                      "sourceUrl":  "https://ghproxy.net/https://github.com/bzerk/rokid-ssh-terminal",
                      "listing":  {
-                                     "descriptionMarkdown":  "## About\nRokid SSH Terminal is a glasses-native SSH client and tmux control surface designed specifically for Rokid AR glasses. It connects directly over Wi-Fi to remote machines, enabling terminal access without a phone companion.\n\n## Key Features\n- Direct SSH connection over Wi-Fi from the glasses\n- Supports password and pasted private-key authentication\n- TOFU host fingerprint persistence with mismatch rejection\n- tmux-first workflow for managing sessions: list, create, select, attach\n- Full terminal rendering with green-on-black UI optimized for glasses\n- Explicit boxed focus states for navigation\n- Bluetooth keyboard friendly for efficient terminal input\n\n## How It Works\nThe app provides two main interfaces:\n- **ControlSurfaceActivity**: directional navigation and session management\n- **TerminalActivity**: interactive SSH terminal session\n\n## Requirements\n- Remote host must have tmux installed\n- Bluetooth keyboard strongly recommended for terminal use\n\n## Notes\n- SSH settings are stored locally on the device\n- The app is currently intended for sideload testing and debug builds\n- No phone companion app is required or active in the launcher flow"
+                                     "descriptionMarkdown":  "## About\nRokid SSH Terminal is a glasses-native SSH client and tmux control surface designed specifically for Rokid AR glasses. It connects directly over Wi-Fi to remote machines, enabling terminal access without a phone companion.\n\n## Key Features\n- Direct SSH connection over Wi-Fi from the glasses\n- Supports password and pasted private-key authentication\n- TOFU host fingerprint persistence with mismatch rejection\n- tmux-first workflow for managing sessions: list, create, select, attach\n- Full terminal rendering with green-on-black UI optimized for glasses\n- Explicit boxed focus states for navigation\n- Bluetooth keyboard friendly for efficient terminal input\n\n## How It Works\nThe app provides two main interfaces:\n- **ControlSurfaceActivity**: directional navigation and session management\n- **TerminalActivity**: interactive SSH terminal session\n\n## Requirements\n- Remote host must have tmux installed\n- Bluetooth keyboard strongly recommended for terminal use\n\n## Notes\n- SSH settings are stored locally on the device\n- The app is currently intended for sideload testing and debug builds\n- No phone companion app is required or active in the launcher flow",
+                                     "summaryZh":  "眼镜端 SSH 远程终端",
+                                     "aboutZh":  "在 Rokid 眼镜上使用 SSH 远程连接服务器。"
                                  },
                      "releases":  [
                                       {
@@ -2636,7 +2779,8 @@
                                       }
                                   ],
                      "iconAsset":  "rokid-ssh-terminal.png",
-                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-ssh-terminal.png"
+                     "iconUrl":  "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/icons/rokid-ssh-terminal.png",
+                     "nameZh":  "Rokid SSH 终端"
                  },
                  {
                      "id":  "rokid-apks",
@@ -2648,7 +2792,9 @@
                      "description":  "Rokid-APKs lets you install Android APKs on Rokid glasses from your phone with four transfer modes: official CXR-M, Hi Rokid CXR-L, Bluetooth SPP, or Wi-Fi LAN. No desktop or cloud relay is needed. Requires a companion app on glasses for some modes.",
                      "listing":  {
                                      "about":  "Rokid-APKs is a developer-focused installer for getting APKs onto Rokid glasses without a desktop helper. It exposes several transfer paths so you can pick the one that fits the current device state: official CXR-M, Hi Rokid CXR-L, Bluetooth SPP, or Wi-Fi LAN with a glasses companion.\n\nUse it when you are testing local builds, sharing internal tools, or recovering from a flow where the normal install path is not convenient. The app keeps the transfer modes explicit, so it is easier to understand what is happening before an APK is pushed to the glasses.\n\nInstall both the phone and glasses APKs when you want the companion-assisted paths. CXR-L installs can also use the selected Rokid host app from RokidBrew.",
-                                     "descriptionMarkdown":  "# About\n\nRokid-APKs enables installation of Android APKs on Rokid glasses directly from your phone. It supports four explicit transfer modes to suit different connection setups.\n\n# Key Features\n\n- Four transfer modes: \n  - `CXR-M / OFFICIAL`: Official Rokid BLE + Wi-Fi Direct, no glasses companion app needed\n  - `CXR-L / HI ROKID`: Uses Hi Rokid global authorization and CXR-L install path, requires Hi Rokid app\n  - `SPP / SLOW`: Bluetooth SPP streaming via glasses companion app, fully local and offline\n  - `WIFI LAN / FAST`: Bluetooth control plus APK transfer over Wi-Fi LAN or hotspot with companion app\n- Direct APK install confirmation on glasses via Android PackageInstaller\n- Phone UI provides live status and phase feedback\n\n# How It Works\n\n- Official CXR-M mode scans and connects to glasses over BLE and Wi-Fi Direct to upload APK\n- Hi Rokid CXR-L mode uses Hi Rokid app authorization and upload session\n- Companion modes require installing a glasses companion app and Bluetooth pairing\n- APK is transferred locally and installed with user confirmation on the glasses\n\n# Requirements\n\n- Phone app installed on Android phone\n- For `SPP` and `WIFI LAN` modes: glasses companion app installed and Bluetooth paired\n- For `CXR-L` mode: Hi Rokid app installed and phone Wi-Fi enabled\n\n# Notes\n\n- No desktop helper or cloud relay involved; all transfers are local\n- `WIFI LAN / FAST` mode requires phone and glasses on the same Wi-Fi or hotspot\n- Manual mode switching is needed; no automatic fallback between modes"
+                                     "descriptionMarkdown":  "# About\n\nRokid-APKs enables installation of Android APKs on Rokid glasses directly from your phone. It supports four explicit transfer modes to suit different connection setups.\n\n# Key Features\n\n- Four transfer modes: \n  - `CXR-M / OFFICIAL`: Official Rokid BLE + Wi-Fi Direct, no glasses companion app needed\n  - `CXR-L / HI ROKID`: Uses Hi Rokid global authorization and CXR-L install path, requires Hi Rokid app\n  - `SPP / SLOW`: Bluetooth SPP streaming via glasses companion app, fully local and offline\n  - `WIFI LAN / FAST`: Bluetooth control plus APK transfer over Wi-Fi LAN or hotspot with companion app\n- Direct APK install confirmation on glasses via Android PackageInstaller\n- Phone UI provides live status and phase feedback\n\n# How It Works\n\n- Official CXR-M mode scans and connects to glasses over BLE and Wi-Fi Direct to upload APK\n- Hi Rokid CXR-L mode uses Hi Rokid app authorization and upload session\n- Companion modes require installing a glasses companion app and Bluetooth pairing\n- APK is transferred locally and installed with user confirmation on the glasses\n\n# Requirements\n\n- Phone app installed on Android phone\n- For `SPP` and `WIFI LAN` modes: glasses companion app installed and Bluetooth paired\n- For `CXR-L` mode: Hi Rokid app installed and phone Wi-Fi enabled\n\n# Notes\n\n- No desktop helper or cloud relay involved; all transfers are local\n- `WIFI LAN / FAST` mode requires phone and glasses on the same Wi-Fi or hotspot\n- Manual mode switching is needed; no automatic fallback between modes",
+                                     "summaryZh":  "眼镜端 APK 安装和管理工具",
+                                     "aboutZh":  "在 Rokid 眼镜上安装和管理 APK 应用。"
                                  },
                      "releases":  [
                                       {
@@ -2739,7 +2885,8 @@
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-apks-phone.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-apks-glasses.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "Rokid 安装包"
                  },
                  {
                      "id":  "rokid-scribe",
@@ -2751,7 +2898,9 @@
                      "description":  "Record voice notes on Rokid glasses and import them to your phone via Wi-Fi or Bluetooth. Transcribe locally using multiple providers and export transcripts as TXT or PDF files.",
                      "listing":  {
                                      "about":  "Rokid-Scribe turns the glasses into a lightweight voice-note capture tool. Start recordings on the glasses, then bring them back to the phone over Wi-Fi LAN or Bluetooth SPP for transcription and export.\n\nThe phone app is where the heavier workflow lives: provider setup, transcription, review, and TXT or PDF export. The glasses app stays focused on quick capture, so it can be useful during meetings, field notes, demos, or any moment where pulling out a phone breaks the flow.\n\nInstall both APKs for the full workflow. The glasses side captures notes, while the phone side handles import, transcription providers, and export.",
-                                     "descriptionMarkdown":  "# About Rokid-Scribe\n\nRokid-Scribe lets you record voice notes directly on Rokid glasses and import them to your phone for local transcription and export.\n\n## Key Features\n\n- Glasses-side voice note capture with crash-tolerant recording\n- Phone-initiated import over Wi-Fi LAN (preferred) or Bluetooth SPP\n- Automatic deletion of notes from glasses after successful import\n- Local storage of audio, metadata, and transcripts on phone\n- Supports multiple transcription providers: ElevenLabs, AssemblyAI, Speechmatics, Deepgram, and Groq\n- Multi-speaker transcript support where available\n- Rename notes in-app without changing audio files\n- Export transcripts as TXT or PDF\n- In-app provider API key management and usage monitoring\n\n## How It Works\n\n1. Record notes on Rokid glasses.\n2. Use the phone app to import pending notes over local network or Bluetooth.\n3. Transcribe audio locally on the phone using your chosen provider.\n4. Review, rename, copy, or export transcripts.\n\n## Requirements\n\n- Rokid glasses with Rokid-Scribe glasses app installed\n- Android phone with Rokid-Scribe phone app installed\n- Bluetooth pairing between phone and glasses\n\n## Notes\n\n- Wi-Fi LAN import via phone hotspot is the preferred and faster method.\n- Transcription providers require API keys entered in the phone app.\n- Exported transcripts are saved to the device\u0027s Download/Rokid-Scribe folder when permitted."
+                                     "descriptionMarkdown":  "# About Rokid-Scribe\n\nRokid-Scribe lets you record voice notes directly on Rokid glasses and import them to your phone for local transcription and export.\n\n## Key Features\n\n- Glasses-side voice note capture with crash-tolerant recording\n- Phone-initiated import over Wi-Fi LAN (preferred) or Bluetooth SPP\n- Automatic deletion of notes from glasses after successful import\n- Local storage of audio, metadata, and transcripts on phone\n- Supports multiple transcription providers: ElevenLabs, AssemblyAI, Speechmatics, Deepgram, and Groq\n- Multi-speaker transcript support where available\n- Rename notes in-app without changing audio files\n- Export transcripts as TXT or PDF\n- In-app provider API key management and usage monitoring\n\n## How It Works\n\n1. Record notes on Rokid glasses.\n2. Use the phone app to import pending notes over local network or Bluetooth.\n3. Transcribe audio locally on the phone using your chosen provider.\n4. Review, rename, copy, or export transcripts.\n\n## Requirements\n\n- Rokid glasses with Rokid-Scribe glasses app installed\n- Android phone with Rokid-Scribe phone app installed\n- Bluetooth pairing between phone and glasses\n\n## Notes\n\n- Wi-Fi LAN import via phone hotspot is the preferred and faster method.\n- Transcription providers require API keys entered in the phone app.\n- Exported transcripts are saved to the device\u0027s Download/Rokid-Scribe folder when permitted.",
+                                     "summaryZh":  "眼镜端录音转文字应用",
+                                     "aboutZh":  "Rokid 眼镜录音转文字应用，支持会议记录。"
                                  },
                      "releases":  [
                                       {
@@ -2806,7 +2955,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-scribe-record.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-scribe-glasses.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/rokid-scribe-glasses-recording.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "Rokid 记录员"
                  },
                  {
                      "id":  "tasker-bridge",
@@ -2832,7 +2982,9 @@
                                        }
                                    ],
                      "listing":  {
-                                     "descriptionMarkdown":  "## About\nTasker Bridge lets you run Android Tasker automations from a compact Rokid glasses HUD. Install the phone APK, use it to install or launch the bundled glasses helper, then choose a Tasker task directly from the glasses.\n\n## Key Features\n- Lists named Tasker tasks on the Rokid glasses HUD\n- Launches selected Tasker tasks from the glasses through the phone\n- Uses Bluetooth RFCOMM for runtime task lists and launch commands\n- Uses Global Hi Rokid CXR-L only for helper install, update, and launch\n- Pairs by the Tasker Bridge service endpoint rather than the public device name\n- Keeps Tasker access and execution on the Android phone\n- Refreshes Tasker on HUD open or resume instead of polling continuously\n\n## Controls\n- Swipe forward or back on the glasses to move through tasks\n- Tap or OK to launch the selected task\n- Back hides the HUD\n- DPAD key events are supported for ADB testing\n\n## Requirements\n- Android 31+ phone with Tasker installed\n- Rokid glasses paired with the phone\n- Global Hi Rokid installed on the phone\n- Tasker external access and run-task permission granted\n- Wi-Fi enabled for CXR-L helper upload/install\n\n## Notes\n- Only the phone APK needs to be installed manually; it embeds the glasses helper APK.\n- Runtime commands use Bluetooth, so CXR-L disconnects after setup.\n- Use Forget Bluetooth pairing if you need to pair a different phone or glasses endpoint."
+                                     "descriptionMarkdown":  "## About\nTasker Bridge lets you run Android Tasker automations from a compact Rokid glasses HUD. Install the phone APK, use it to install or launch the bundled glasses helper, then choose a Tasker task directly from the glasses.\n\n## Key Features\n- Lists named Tasker tasks on the Rokid glasses HUD\n- Launches selected Tasker tasks from the glasses through the phone\n- Uses Bluetooth RFCOMM for runtime task lists and launch commands\n- Uses Global Hi Rokid CXR-L only for helper install, update, and launch\n- Pairs by the Tasker Bridge service endpoint rather than the public device name\n- Keeps Tasker access and execution on the Android phone\n- Refreshes Tasker on HUD open or resume instead of polling continuously\n\n## Controls\n- Swipe forward or back on the glasses to move through tasks\n- Tap or OK to launch the selected task\n- Back hides the HUD\n- DPAD key events are supported for ADB testing\n\n## Requirements\n- Android 31+ phone with Tasker installed\n- Rokid glasses paired with the phone\n- Global Hi Rokid installed on the phone\n- Tasker external access and run-task permission granted\n- Wi-Fi enabled for CXR-L helper upload/install\n\n## Notes\n- Only the phone APK needs to be installed manually; it embeds the glasses helper APK.\n- Runtime commands use Bluetooth, so CXR-L disconnects after setup.\n- Use Forget Bluetooth pairing if you need to pair a different phone or glasses endpoint.",
+                                     "summaryZh":  "Rokid 眼镜 Tasker 自动化桥接",
+                                     "aboutZh":  "将 Tasker 自动化扩展到 Rokid 眼镜的桥接工具。"
                                  },
                      "releases":  [
                                       {
@@ -2885,7 +3037,8 @@
                      "screenshotUrls":  [
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/tasker-bridge.png",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/tasker-bridge-2.png"
-                                        ]
+                                        ],
+                     "nameZh":  "Tasker 桥接"
                  },
                  {
                      "id":  "texthome",
@@ -2897,7 +3050,9 @@
                      "summary":  "Text-based simple home launcher app, supports widgets, background images, clock, weather, battery, text widgets.",
                      "description":  "A minimalist launcher app designed for Rokid Glasses. Stripping away the complexity of the default system UI, it focuses on providing the fastest access to your most-used apps. You can add widgets to the home screen with basic touch. Built on the principle of \"Use with touch, set with mouse.\"",
                      "listing":  {
-                                     "descriptionMarkdown":  "A **minimalist launcher app** designed for Rokid Glasses.\nStripping away the complexity of the default system UI, it focuses on providing the fastest access to your most-used apps. You can add widgets to the home screen with basic touch. Built on the principle of **\"Use with touch, set with mouse.\"**\n\n### Usage / Controls\n\n- **Favorites:** Recently used apps are automatically added to favorites.\n- **Setup Mode:** Connect a Bluetooth mouse to detailedly edit favorites and widgets.\n- **Widget Management:** Drag widgets to adjust their positions."
+                                     "descriptionMarkdown":  "A **minimalist launcher app** designed for Rokid Glasses.\nStripping away the complexity of the default system UI, it focuses on providing the fastest access to your most-used apps. You can add widgets to the home screen with basic touch. Built on the principle of **\"Use with touch, set with mouse.\"**\n\n### Usage / Controls\n\n- **Favorites:** Recently used apps are automatically added to favorites.\n- **Setup Mode:** Connect a Bluetooth mouse to detailedly edit favorites and widgets.\n- **Widget Management:** Drag widgets to adjust their positions.",
+                                     "summaryZh":  "眼镜端文字阅读应用",
+                                     "aboutZh":  "Rokid 眼镜文字阅读应用。"
                                  },
                      "releases":  [
                                       {
@@ -2942,7 +3097,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/texthome-3.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/texthome-4.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/texthome-5.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "文字主页"
                  },
                  {
                      "id":  "your-voice",
@@ -2955,7 +3111,9 @@
                      "description":  "Experience your voice as subtitles. \u0027Your Voice\u0027 is a real-time voice recognition subtitle transmission solution for the hearing impaired or those who need conversation in long-distance or noisy environments. It instantly converts the voice recognized through the smartphone microphone into text and displays it as real-time subtitles on a Bluetooth-connected smart glass (such as Rokid) or other smart device screens. The phone acts as a microphone. For example, by placing the phone on an instructor\u0027s table, you can see the instructor\u0027s voice as subtitles in your glasses even when listening to a lecture from afar. It operates within the distance where Bluetooth transmission is possible. ✨ Key Features - Real-time Speech Recognition (STT): Generates subtitles in real-time through a high-performance speech recognition engine. - Bluetooth Subtitle Transmission: Transfers recognized subtitles from the smartphone to smart glasses, allowing you to check conversation content through the lenses. - Smart Glass Optimization: Automatically detects major AR glass devices such as Rokid and provides an optimized UI/UX for the glass environment. - Standalone Mode: Allows using the real-time subtitle function with just a smartphone without a separate device connection. - Custom User Settings: Freely adjust subtitle font size (10~100sp) and display position (Top/Middle/Bottom). - Background Maintenance: Optimized to ensure voice recognition continues even when the screen is turned off.",
                      "listing":  {
                                      "about":  "Your Voice is a real-time subtitle bridge for smart glasses. The phone listens, performs speech recognition, and sends the recognized text to Rokid glasses or another receiver so spoken words can become readable captions.\n\nIt is designed for accessibility and communication moments where live text helps: noisy spaces, hearing support, language practice, or quick demos of phone-to-glasses captioning.\n\nInstall the app on the phone and glasses when you want the full Rokid workflow. The same APK is currently used for both targets in the registry.",
-                                     "descriptionMarkdown":  "**Experience your voice as subtitles.**\n\n\u0027Your Voice\u0027 is a **real-time voice recognition subtitle transmission solution** for the hearing impaired or those who need conversation in long-distance or noisy environments.\nIt instantly converts the voice recognized through the smartphone microphone into text and displays it as real-time subtitles on a Bluetooth-connected smart glass (such as Rokid) or other smart device screens.\nThe phone acts as a microphone. For example, by placing the phone on an instructor\u0027s table, you can see the instructor\u0027s voice as subtitles in your glasses even when listening to a lecture from afar. It operates within the distance where Bluetooth transmission is possible.\n\n**✨ Key Features**\n- **Real-time Speech Recognition (STT):** Generates subtitles in real-time through a high-performance speech recognition engine.\n- **Bluetooth Subtitle Transmission:** Transfers recognized subtitles from the smartphone to smart glasses, allowing you to check conversation content through the lenses.\n- **Smart Glass Optimization:** Automatically detects major AR glass devices such as Rokid and provides an optimized UI/UX for the glass environment.\n- **Standalone Mode:** Allows using the real-time subtitle function with just a smartphone without a separate device connection.\n- **Custom User Settings:** Freely adjust subtitle font size (10~100sp) and display position (Top/Middle/Bottom).\n- **Background Maintenance:** Optimized to ensure voice recognition continues even when the screen is turned off.\n\n### Usage / Controls\n\nThis app connects two devices: a **transmitting device (smartphone)** and a **receiving device (smart glass)**. Please install the app on both.\n\n**1. Getting Ready**\n- Run the app on both devices and allow all necessary permissions (microphone, Bluetooth, battery optimization exclusion, etc.).\n- Both devices must be pre-paired via Bluetooth.\n\n**2. Receiver Setup (The person who will see the subtitles - Smart Glass, etc.)**\n- Click the **[Receive (Text)]** button on the main screen.\n- Once the status becomes \u0027Waiting for data...\u0027, wait for the transmitter to connect.\n\n**3. Transmitter Setup (The person who will speak - Smartphone)**\n- Click the **[Send (Mic)]** button on the main screen.\n- Select the pre-paired **receiving device (Glasses, etc.)** from the device list.\n- When the connection is complete, the prompt \u0027Please speak\u0027 will appear.\n\n**4. Start Conversation**\n- When the transmitter speaks into the smartphone microphone, subtitles will be displayed on the receiver\u0027s screen in real-time.\n- In **Settings (gear icon)**, you can adjust the subtitle size and position to fit the receiver\u0027s field of vision.\n\n**5. Standalone Execution (When there is only one device)**\n- If you want to check the other person\u0027s speech directly on your phone, select **[Send (Mic)] -\u003e [Standalone Mode]**.\n\n**⚠️ Tips for Smooth Usage**\n- **Microphone Permission:** Microphone permission is essential for accurate recognition.\n- **Battery Optimization:** We recommend setting \u0027Exclude from battery optimization\u0027 to prevent the app from closing during conversations.\n- **Environment:** Recognition rate is highest when used at a distance where the speaker\u0027s voice is clearly heard, rather than in very noisy places."
+                                     "descriptionMarkdown":  "**Experience your voice as subtitles.**\n\n\u0027Your Voice\u0027 is a **real-time voice recognition subtitle transmission solution** for the hearing impaired or those who need conversation in long-distance or noisy environments.\nIt instantly converts the voice recognized through the smartphone microphone into text and displays it as real-time subtitles on a Bluetooth-connected smart glass (such as Rokid) or other smart device screens.\nThe phone acts as a microphone. For example, by placing the phone on an instructor\u0027s table, you can see the instructor\u0027s voice as subtitles in your glasses even when listening to a lecture from afar. It operates within the distance where Bluetooth transmission is possible.\n\n**✨ Key Features**\n- **Real-time Speech Recognition (STT):** Generates subtitles in real-time through a high-performance speech recognition engine.\n- **Bluetooth Subtitle Transmission:** Transfers recognized subtitles from the smartphone to smart glasses, allowing you to check conversation content through the lenses.\n- **Smart Glass Optimization:** Automatically detects major AR glass devices such as Rokid and provides an optimized UI/UX for the glass environment.\n- **Standalone Mode:** Allows using the real-time subtitle function with just a smartphone without a separate device connection.\n- **Custom User Settings:** Freely adjust subtitle font size (10~100sp) and display position (Top/Middle/Bottom).\n- **Background Maintenance:** Optimized to ensure voice recognition continues even when the screen is turned off.\n\n### Usage / Controls\n\nThis app connects two devices: a **transmitting device (smartphone)** and a **receiving device (smart glass)**. Please install the app on both.\n\n**1. Getting Ready**\n- Run the app on both devices and allow all necessary permissions (microphone, Bluetooth, battery optimization exclusion, etc.).\n- Both devices must be pre-paired via Bluetooth.\n\n**2. Receiver Setup (The person who will see the subtitles - Smart Glass, etc.)**\n- Click the **[Receive (Text)]** button on the main screen.\n- Once the status becomes \u0027Waiting for data...\u0027, wait for the transmitter to connect.\n\n**3. Transmitter Setup (The person who will speak - Smartphone)**\n- Click the **[Send (Mic)]** button on the main screen.\n- Select the pre-paired **receiving device (Glasses, etc.)** from the device list.\n- When the connection is complete, the prompt \u0027Please speak\u0027 will appear.\n\n**4. Start Conversation**\n- When the transmitter speaks into the smartphone microphone, subtitles will be displayed on the receiver\u0027s screen in real-time.\n- In **Settings (gear icon)**, you can adjust the subtitle size and position to fit the receiver\u0027s field of vision.\n\n**5. Standalone Execution (When there is only one device)**\n- If you want to check the other person\u0027s speech directly on your phone, select **[Send (Mic)] -\u003e [Standalone Mode]**.\n\n**⚠️ Tips for Smooth Usage**\n- **Microphone Permission:** Microphone permission is essential for accurate recognition.\n- **Battery Optimization:** We recommend setting \u0027Exclude from battery optimization\u0027 to prevent the app from closing during conversations.\n- **Environment:** Recognition rate is highest when used at a distance where the speaker\u0027s voice is clearly heard, rather than in very noisy places.",
+                                     "summaryZh":  "眼镜端语音助手应用",
+                                     "aboutZh":  "Rokid 眼镜语音助手应用。"
                                  },
                      "releases":  [
                                       {
@@ -2999,7 +3157,8 @@
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/your-voice-2.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/your-voice-3.jpg",
                                             "https://ghproxy.net/https://raw.githubusercontent.com/Anezium/RokidBrew-Registry/main/assets/screenshots/your-voice-4.jpg"
-                                        ]
+                                        ],
+                     "nameZh":  "你的声音"
                  }
              ]
 }
