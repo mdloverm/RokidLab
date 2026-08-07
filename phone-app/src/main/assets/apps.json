@@ -1,21 +1,21 @@
 {
     "schemaVersion":  1,
     "generatedAt":  "2026-07-03T00:00:00.000Z",
-    "brewVersion":  "2.0",
-    "brewVersionCode":  11,
+    "brewVersion":  "2.2",
+    "brewVersionCode":  13,
     "brewIconUrl":  "",
-    "brewApkUrl":  "https://gitee.com/dlover1314/RokidLab/releases/download/v2.0/RokidLab-v2.0-release.apk",
-    "brewReleaseUrl":  "https://gitee.com/dlover1314/RokidLab/releases/tag/v2.0",
-    "brewNotes":  "ADB协议修复 + 眼镜长按修复 + 国际化",
+    "brewApkUrl":  "https://gitee.com/dlover1314/RokidLab/releases/download/v2.2/RokidLab-v2.2-release.apk",
+    "brewReleaseUrl":  "https://gitee.com/dlover1314/RokidLab/releases/tag/v2.2",
+    "brewNotes":  "双线路自动切换 + 蓝牙通道优化 + 移除WRITE_SETTINGS权限",
     "brewChanges":  [
-                        "修复 ADB sync 协议 CLSE 误判导致文件上传回退到 shell 慢速方式",
-                        "修复 ADB 流关闭协议错误导致 daemon 无限重传 CLSE 包",
-                        "修复眼镜端长按忽略系统 LONG_PRESS 广播导致长按失效",
-                        "添加 WakeLock + SCREEN_ON + 心跳自检，修复按键过一会失效",
-                        "新增 pm resolve-activity 命令行兜底，支持非标准 Activity 应用",
-                        "按键设置第三方应用改为下拉列表，长列表可滚动",
-                        "应用商店图标增加黑色底，视觉更统一",
-                        "listPackages 60秒缓存，二次打开秒开"
+                        "双线路自动切换：优先 WiFi，不可达时自动走蓝牙隧道",
+                        "蓝牙隧道通过 RFCOMM Socket 透明转发 TCP 流量",
+                        "投屏/镜像双套参数：WiFi 高质量 + 蓝牙低画质高速度",
+                        "蓝牙投屏跳帧机制防止积压卡顿",
+                        "引导完成后自动启动眼镜端 RokidLink 服务",
+                        "眼镜端无 WiFi 时 RokidLink 后台运行不显示界面",
+                        "移除 WRITE_SETTINGS 权限请求（厂家ROM已锁定）",
+                        "修复 isWifiConnected 误判蓝牙网络共享为 WiFi"
                     ],
     "apps":  [
                  {
