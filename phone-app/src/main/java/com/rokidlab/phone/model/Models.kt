@@ -489,6 +489,8 @@ enum class GuideStep {
     SELECT_HOST_APP,
     SELECT_MIRROR_SOURCE,
     AUTHORIZE,
+    INSTALL_LINK,
+    CONFIGURE_WIFI,
     READY
 }
 
@@ -498,12 +500,15 @@ data class PrerequisitesState(
     val mirrorSourceSelected: Boolean = false,
     val authorized: Boolean = false,
     val rokidLinkInstalled: Boolean = false,
+    val wifiConfigured: Boolean = false,
 ) {
     val currentGuideStep: GuideStep
         get() = when {
             hostApp == null -> GuideStep.SELECT_HOST_APP
             !mirrorSourceSelected -> GuideStep.SELECT_MIRROR_SOURCE
             !authorized -> GuideStep.AUTHORIZE
+            !rokidLinkInstalled -> GuideStep.INSTALL_LINK
+            !wifiConfigured -> GuideStep.CONFIGURE_WIFI
             else -> GuideStep.READY
         }
     

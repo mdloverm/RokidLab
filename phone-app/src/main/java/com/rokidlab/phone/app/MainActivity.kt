@@ -27,6 +27,8 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.widget.Toast
@@ -242,13 +244,37 @@ class MainActivity : AppCompatActivity() {
                 isMirroring = true,
                 connectionStatus = this@MainActivity.getString(R.string.screen_projection)
             )
-            PhoneMirrorService.startService(
-                this,
-                app.phoneMirrorIp,
-                app.phoneMirrorPort.toIntOrNull() ?: 7654,
-                result.resultCode,
-                data
-            )
+            // 异步路由判断：WiFi 可达则直连，否则走蓝牙隧道
+            val wifiIp = app.phoneMirrorIp
+            val wifiPort = app.phoneMirrorPort.toIntOrNull() ?: 7654
+            Thread {
+                val route = kotlinx.coroutines.runBlocking {
+                    app.routeManager.resolve(wifiIp, wifiPort)
+                }
+                val (targetIp, targetPort, isBT) = when (route) {
+                    is com.rokidlab.phone.connection.ConnectionRoute.Wifi -> Triple(route.ip, route.port, false)
+                    is com.rokidlab.phone.connection.ConnectionRoute.Bluetooth -> Triple(route.ip, route.localPort, true)
+                    is com.rokidlab.phone.connection.ConnectionRoute.None -> {
+                        runOnUiThread {
+                            log("No route to glasses (WiFi and BT both unavailable)")
+                            phoneMirrorState = phoneMirrorState.copy(
+                                isMirroring = false,
+                                connectionStatus = getString(R.string.mirror_connection_failed)
+                            )
+                        }
+                        return@Thread
+                    }
+                }
+                Log.i("MainActivity", "PhoneMirror route: $route → $targetIp:$targetPort (BT=$isBT)")
+                PhoneMirrorService.startService(
+                    this@MainActivity,
+                    targetIp,
+                    targetPort,
+                    result.resultCode,
+                    data,
+                    isBluetooth = isBT
+                )
+            }.start()
         } else {
             log(getString(R.string.log_mediaprojection_denied))
             phoneMirrorState = phoneMirrorState.copy(
@@ -454,6 +480,37 @@ class MainActivity : AppCompatActivity() {
                             com.rokidlab.phone.util.LocalizationManager.setLocale(this@MainActivity, code)
                             // Recreate activity to apply language
                             recreate()
+                        },
+                        onSendWifiConfig = { ssid, password, onDone ->
+                            cxrL.sendWifiConfig(ssid, password) { success, errorMsg ->
+                                if (success) {
+                                    prerequisitesState = prerequisitesState.copy(wifiConfigured = true)
+                                    autoStartRokidLink()
+                                }
+                                onDone(success, errorMsg)
+                            }
+                        },
+                        onInstallLink = { onDone ->
+                            installRokidLinkForGuide { success ->
+                                if (success) {
+                                    prerequisitesState = prerequisitesState.copy(rokidLinkInstalled = true)
+                                }
+                                onDone(success)
+                            }
+                        },
+                        onSkipGuideStep = {
+                            when (prerequisitesState.currentGuideStep) {
+                                GuideStep.INSTALL_LINK -> {
+                                    prerequisitesState = prerequisitesState.copy(rokidLinkInstalled = true)
+                                }
+                                GuideStep.CONFIGURE_WIFI -> {
+                                    prerequisitesState = prerequisitesState.copy(wifiConfigured = true)
+                                    autoStartRokidLink()
+                                }
+                                else -> {
+                                    // 其他步骤不支持跳过
+                                }
+                            }
                         },
                     ),
                     iconLoader = iconLoader,
@@ -1230,6 +1287,62 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 引导流程中安装 RokidLink 到眼镜（带结果回调） */
+    private fun installRokidLinkForGuide(onResult: (Boolean) -> Unit) {
+        lifecycleScope.launch {
+            updateBusy(true)
+            android.util.Log.i("RokidLinkInstall", "=== 开始安装 RokidLink 到眼镜 ===")
+            log(getString(R.string.log_installing_rokidlink))
+            runCatching {
+                android.util.Log.i("RokidLinkInstall", "正在从 assets 读取 RokidLink.apk")
+                val apkInputStream = assets.open("RokidLink.apk")
+                val tempFile = File(cacheDir, "RokidLink.apk")
+                val size = apkInputStream.available()
+                android.util.Log.i("RokidLinkInstall", "APK 大小: ${size / 1024} KB")
+                apkInputStream.use { input ->
+                    tempFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                android.util.Log.i("RokidLinkInstall", "临时文件已准备: ${tempFile.absolutePath}")
+                android.util.Log.i("RokidLinkInstall", "调用 cxrL.installApk()...")
+                cxrL.installApk(tempFile) { installed ->
+                    if (installed) {
+                        android.util.Log.i("RokidLinkInstall", "=== 安装成功 ===")
+                        log(getString(R.string.log_rokidlink_installed))
+                        (application as LabApplication).setRokidLinkInstalled(true)
+                        // 安装后自动启动 RokidLink，使其 KeyButtonService 开始运行并 subscribe 消息
+                        android.util.Log.i("RokidLinkInstall", "正在启动 RokidLink...")
+                        cxrL.launchApp("com.rokidlab.rokidlink", onLaunchResult = { launched ->
+                            runOnUiThread {
+                                updateBusy(false)
+                                if (launched) {
+                                    android.util.Log.i("RokidLinkInstall", "RokidLink 启动成功")
+                                } else {
+                                    android.util.Log.w("RokidLinkInstall", "RokidLink 启动失败，WiFi 配置可能不可用")
+                                }
+                                onResult(true)
+                            }
+                        })
+                    } else {
+                        runOnUiThread {
+                            updateBusy(false)
+                            android.util.Log.w("RokidLinkInstall", "=== 安装失败 ===")
+                            log(getString(R.string.log_rokidlink_install_failed))
+                            onResult(false)
+                        }
+                    }
+                    tempFile.delete()
+                }
+            }.onFailure { e ->
+                updateBusy(false)
+                android.util.Log.e("RokidLinkInstall", "安装异常: ${e.javaClass.simpleName}: ${e.message}")
+                log(getString(R.string.install_failed_simple, e.message))
+                onResult(false)
+            }
+        }
+    }
+
     private var isOpeningRokidLink = false
 
     /**
@@ -1351,7 +1464,8 @@ class MainActivity : AppCompatActivity() {
         prerequisitesState = prerequisitesState.copy(
             hostApp = null,
             mirrorSourceSelected = false,
-            authorized = false
+            authorized = false,
+            wifiConfigured = false,
         )
         log(getString(R.string.log_guide_step))
         Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.reset_guide), Toast.LENGTH_SHORT).show()
@@ -1364,6 +1478,22 @@ class MainActivity : AppCompatActivity() {
             logMessages.add(message)
             if (logMessages.size > 100) logMessages.removeFirst()
         }
+    }
+
+    /** 引导完成后自动启动眼镜端 RokidLink 服务 */
+    private fun autoStartRokidLink() {
+        if (prerequisitesState.currentGuideStep != GuideStep.READY) return
+        android.util.Log.i("RokidLab", "Guide completed, auto-starting RokidLink on glasses...")
+        cxrL.launchApp("com.rokidlab.rokidlink", onLaunchResult = { launched ->
+            runOnUiThread {
+                if (launched) {
+                    log(getString(R.string.log_rokidlink_autostarted))
+                    android.util.Log.i("RokidLab", "RokidLink auto-started on glasses")
+                } else {
+                    android.util.Log.w("RokidLab", "RokidLink auto-start failed")
+                }
+            }
+        })
     }
 
     /** 打开错误日志导出对话框 */
@@ -1432,8 +1562,10 @@ class MainActivity : AppCompatActivity() {
         cxrL.launchApp("com.rokidlab.rokidlink", activityClass = ".ScreenMirrorIntentActivity") { launched ->
             if (launched) {
                 log(getString(R.string.log_glasses_mirror_started))
-                // 打开手机端 ScreenMirrorActivity，它会连接眼镜端口 6556 接收画面
-                startActivity(ScreenMirrorActivity.createIntent(this))
+                // 延迟 2 秒等待 CXR-L 蓝牙通信完成，避免与 BT 隧道冲突
+                Handler(Looper.getMainLooper()).postDelayed({
+                    startActivity(ScreenMirrorActivity.createIntent(this))
+                }, 2000)
             } else {
                 log(getString(R.string.log_glasses_start_failed))
                 screenMirrorState = screenMirrorState.copy(connectionStatus = this@MainActivity.getString(R.string.starting_glasses_failed))

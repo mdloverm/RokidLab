@@ -200,12 +200,44 @@
     <string name="guide_select_source_step">选择源</string>
     <string name="guide_authorize_step">授权</string>
     <string name="guide_ready_step">完成</string>
+    <string name="guide_install_link_step">安装</string>
+    <string name="guide_install_link_title">第四步：安装眼镜端应用</string>
+    <string name="guide_install_link_desc">需要将眼镜端应用安装到眼镜上，已使用 Rokid Link 功能</string>
+    <string name="guide_install_link_hint">请确保眼镜已通过蓝牙连接到手机</string>
+    <string name="guide_install_link_btn">开始安装到眼镜</string>
+    <string name="guide_reinstall_link_btn">重新安装到眼镜</string>
+    <string name="guide_install_link_progress">正在安装中，请耐心等待…</string>
+    <string name="guide_install_link_success">RokidLink 已安装成功</string>
+    <string name="guide_install_link_continue_hint">安装成功，自动进入下一步</string>
+    <string name="guide_install_link_fail">安装失败</string>
+    <string name="guide_install_link_fail_hint">请确保眼镜已通过蓝牙连接，然后重试</string>
+    <string name="guide_retry_btn">重新安装</string>
+    <string name="guide_ready_title">全部就绪</string>
     <string name="guide_step1_title_local">第一步：选择 Rokid AI 版本</string>
     <string name="guide_step1_desc">请选择您使用的 Rokid 眼镜型号</string>
     <string name="guide_step2_title_local">第二步：选择商店源</string>
     <string name="guide_step2_desc">选择应用商店的镜像源</string>
     <string name="guide_step3_title_local">第三步：授权眼镜</string>
     <string name="guide_step3_desc">需要在眼镜端授权此应用</string>
+    <string name="guide_wifi_step">WiFi</string>
+    <string name="guide_step4_title_local">第五步：配置眼镜 WiFi</string>
+    <string name="guide_step4_desc">为眼镜设置与手机 WiFi 网络</string>
+    <string name="wifi_ssid_label">WiFi 名称</string>
+    <string name="wifi_password_label">WiFi 密码</string>
+    <string name="show_password">显示密码</string>
+    <string name="hide_password">隐藏密码</string>
+    <string name="wifi_send_to_glasses">眼镜连接 WiFi</string>
+    <string name="guide_skip_btn">跳过</string>
+    <string name="wifi_sending">发送中…</string>
+    <string name="wifi_configured_success">WiFi 配置已发送</string>
+    <string name="wifi_disabled_prompt">WiFi 已关闭，请先开启 WiFi</string>
+    <string name="wifi_open_settings">打开系统设置</string>
+    <string name="wifi_location_permission_hint">需要位置权限才能扫描 WiFi 网络</string>
+    <string name="wifi_grant_permission">授权位置权限</string>
+    <string name="wifi_scanning">正在扫描 WiFi 网络…</string>
+    <string name="wifi_no_networks">未发现可用 WiFi 网络</string>
+    <string name="wifi_manual_input">手动输入网络名称</string>
+    <string name="wifi_change_network">更换</string>
 
     <!-- Connection -->
     <string name="glasses_connection">眼镜连接</string>
@@ -658,6 +690,12 @@
     <string name="key_btn_sending">正在发送按键配置到眼镜…短按=%1$s，长按=%2$s</string>
     <string name="key_btn_security_note">⚠️ 安全提醒：直接启动第三方应用的 Activity 可能绕过应用的授权/付费验证。请确认你拥有该应用的使用权，或仅启动你自己的应用。RokidLab 不对因不当使用造成的授权问题负责。</string>
 
+    <!-- WiFi 配置 -->
+    <string name="wifi_config_timeout">发送 WiFi 配置超时</string>
+    <string name="wifi_config_failed">WiFi 配置发送失败</string>
+    <string name="wifi_config_sent">WiFi 配置已发送到眼镜：%1$s，结果=%2$d</string>
+    <string name="wifi_config_success">WiFi 配置成功，眼镜已连接到 %1$s</string>
+
     <!-- 系统信息 -->
     <string name="section_device_info">设备信息</string>
     <string name="label_manufacturer">制造商</string>
@@ -725,6 +763,7 @@
     <string name="log_uninstalling_rokidlink">正在卸载眼镜端 RokidLink…</string>
     <string name="log_rokidlink_uninstalled">RokidLink 卸载成功</string>
     <string name="log_rokidlink_uninstall_failed">RokidLink 卸载失败</string>
+    <string name="log_rokidlink_autostarted">引导完成，RokidLink 已自动启动</string>
     <string name="log_host_set">CXR-L 主机已设置为 %s。安装眼镜应用前请重新授权。</string>
     <string name="log_guide_step">用户导航到引导步骤 1</string>
     <string name="log_starting_glasses_mirror">正在启动眼镜投屏服务...</string>

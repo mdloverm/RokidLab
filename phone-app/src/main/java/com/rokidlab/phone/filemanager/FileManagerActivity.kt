@@ -2,6 +2,7 @@ package com.rokidlab.phone.filemanager
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
+import com.rokidlab.phone.connection.ConnectionRoute
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.filemanager.*
 import com.rokidlab.phone.glasses.*
@@ -761,11 +762,26 @@ class FileManagerActivity : ComponentActivity() {
         isConnecting = true
         connectionError = null
         Log.i(TAG, "Starting connection: $ipAddress:${AppConfig.DEFAULT_ADB_PORT}")
-        
+
         Thread {
             try {
-                Log.i(TAG, "Creating AdbFileManagerClient")
-                val client = AdbFileManagerClient(this@FileManagerActivity, ipAddress, AppConfig.DEFAULT_ADB_PORT)
+                val app = application as LabApplication
+                val route = kotlinx.coroutines.runBlocking {
+                    app.routeManager.resolve(ipAddress, AppConfig.DEFAULT_ADB_PORT)
+                }
+                val (targetIp, targetPort) = when (route) {
+                    is ConnectionRoute.Wifi -> route.ip to route.port
+                    is ConnectionRoute.Bluetooth -> route.ip to route.localPort
+                    is ConnectionRoute.None -> {
+                        runOnUiThread {
+                            isConnecting = false
+                            connectionError = "No route to glasses (WiFi and BT both unavailable)"
+                        }
+                        return@Thread
+                    }
+                }
+                Log.i(TAG, "Route: $route, connecting to $targetIp:$targetPort")
+                val client = AdbFileManagerClient(this@FileManagerActivity, targetIp, targetPort)
                 Log.i(TAG, "Calling connect method")
                 val success = client.connect { status ->
                     Log.i(TAG, "Connection status: $status")

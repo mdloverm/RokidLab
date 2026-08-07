@@ -14,6 +14,38 @@ object AppConfig {
     /** 投屏基准分辨率（短边） */
     const val MIRROR_BASE_SIZE = 640
 
+    // ── 投屏/镜像双套参数（WiFi vs 蓝牙） ──
+
+    /** WiFi 投屏分辨率（宽x高，竖屏） */
+    const val MIRROR_WIFI_WIDTH = 480
+    const val MIRROR_WIFI_HEIGHT = 640
+    /** WiFi 投屏目标帧率 */
+    const val MIRROR_WIFI_FPS = 30
+    /** WiFi 投屏 Socket 接收缓冲区（字节） */
+    const val MIRROR_WIFI_BUFFER_SIZE = 16384
+
+    /** 蓝牙投屏分辨率（牺牲画质换速度，眼镜端 FIT_CENTER 自动拉伸全屏） */
+    const val MIRROR_BT_WIDTH = 240
+    const val MIRROR_BT_HEIGHT = 320
+    /** 蓝牙投屏目标帧率（降低以减少带宽占用） */
+    const val MIRROR_BT_FPS = 12
+    /** 蓝牙投屏 Socket 接收缓冲区（更小，加快 flush） */
+    const val MIRROR_BT_BUFFER_SIZE = 4096
+
+    /** WiFi 镜像 scrcpy 视频码率 */
+    const val SCRCPY_WIFI_BITRATE = 4000000
+    /** WiFi 镜像 scrcpy max_size */
+    const val SCRCPY_WIFI_MAX_SIZE = 640
+    /** WiFi 镜像 Socket 超时（ms） */
+    const val SCRCPY_WIFI_TIMEOUT_MS = 80
+
+    /** 蓝牙镜像 scrcpy 视频码率（降低以减少带宽） */
+    const val SCRCPY_BT_BITRATE = 800000
+    /** 蓝牙镜像 scrcpy max_size */
+    const val SCRCPY_BT_MAX_SIZE = 360
+    /** 蓝牙镜像 Socket 超时（ms，蓝牙更敏感延迟） */
+    const val SCRCPY_BT_TIMEOUT_MS = 120
+
     /** ADB 连接超时时间（毫秒） */
     const val ADB_CONNECT_TIMEOUT_MS = 10000
 

@@ -2,6 +2,7 @@ package com.rokidlab.phone.mirror
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
+import com.rokidlab.phone.connection.ConnectionRoute
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.filemanager.*
 import com.rokidlab.phone.glasses.*
@@ -111,16 +112,6 @@ class PhoneMirrorActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        
-        // 从 LabApplication 读取 IP 和端口
-        val app = application as LabApplication
-        ipAddress = app.phoneMirrorIp
-        port = app.phoneMirrorPort
-        
-        // 启动时自动开始连接
-        isConnecting = true
-        connectionStatus = getString(R.string.connecting_glasses)
-        startConnection()
 
         setContent {
             RokidLabTheme {
@@ -135,7 +126,7 @@ class PhoneMirrorActivity : ComponentActivity() {
                         status = connectionStatus,
                         ipAddress = ipAddress,
                         port = port,
-                        onRetry = { 
+                        onRetry = {
                             connectionFailed = false
                             isConnecting = true
                             connectionStatus = getString(R.string.connecting_glasses)
@@ -149,8 +140,39 @@ class PhoneMirrorActivity : ComponentActivity() {
                 }
             }
         }
+
+        // 异步路由判断：WiFi 可达则直连，否则走蓝牙隧道
+        isConnecting = true
+        connectionStatus = getString(R.string.connecting_glasses)
+        val app = application as LabApplication
+        val wifiIp = app.phoneMirrorIp
+        val wifiPort = (app.phoneMirrorPort.toIntOrNull() ?: DEFAULT_PORT)
+        Thread {
+            val route = kotlinx.coroutines.runBlocking {
+                app.routeManager.resolve(wifiIp, wifiPort)
+            }
+            when (route) {
+                is ConnectionRoute.Wifi -> {
+                    ipAddress = route.ip
+                    port = route.port.toString()
+                }
+                is ConnectionRoute.Bluetooth -> {
+                    ipAddress = route.ip
+                    port = route.localPort.toString()
+                }
+                is ConnectionRoute.None -> {
+                    runOnUiThread {
+                        connectionFailed = true
+                        connectionStatus = getString(R.string.mirror_connection_failed)
+                        isConnecting = false
+                    }
+                    return@Thread
+                }
+            }
+            runOnUiThread { startConnection() }
+        }.start()
     }
-    
+
     @Composable
     private fun ConnectingUI(status: String) {
         val ctx = LocalContext.current

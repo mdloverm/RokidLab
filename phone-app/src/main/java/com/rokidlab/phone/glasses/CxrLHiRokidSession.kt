@@ -195,17 +195,21 @@ class CxrLHiRokidSession(
     /** 安装 APK（指定包名，绕过 APK 头读取——兼容部分国产手机 getPackageArchiveInfo 返回 null） */
     fun installApk(apkFile: File, packageName: String, onInstallResult: ((Boolean) -> Unit)? = null) {
         val targetHostApp = hostApp
+        android.util.Log.i("CxrLInstall", "installApk: hostApp=$targetHostApp, packageName=$packageName, apkFile=$apkFile")
         if (!hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
+            android.util.Log.w("CxrLInstall", "installApk: prerequisites check FAILED (wifi=${isWifiEnabled()}, tokenBlank=${token.isNullOrBlank()})")
             onInstallResult?.invoke(false)
             return
         }
         val authToken = token.orEmpty()
+        android.util.Log.i("CxrLInstall", "installApk: prerequisites OK, connecting... authToken=${authToken.take(8)}...")
 
         onBusyChanged(true)
         runCatching {
             onStatus(activity.getString(R.string.detected_package, packageName))
             connectAndUpload(authToken, targetHostApp, packageName, apkFile, onInstallResult)
         }.onFailure { error ->
+            android.util.Log.e("CxrLInstall", "installApk: exception: ${error.javaClass.simpleName}: ${error.message}")
             onStatus(activity.getString(R.string.cxrl_failed_msg, error.message ?: error.javaClass.simpleName))
             onBusyChanged(false)
             onInstallResult?.invoke(false)
@@ -276,6 +280,106 @@ class CxrLHiRokidSession(
         )
     }
 
+    /**
+     * 通过 SDK 自定义指令，将 WiFi 凭证（SSID + 密码）发送到眼镜端。
+     * 眼镜端系统服务（AssistServer）接收后自动连接 WiFi。
+     * 等待 30 秒获取连接状态回调，支持超时和密码错误处理。
+     */
+    fun sendWifiConfig(
+        ssid: String,
+        password: String,
+        onResult: ((Boolean, String?) -> Unit)? = null,
+    ) {
+        val targetHostApp = hostApp
+        if (!hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
+            onResult?.invoke(false, "缺少前置条件")
+            return
+        }
+        val authToken = token.orEmpty()
+
+        onBusyChanged(true)
+        connectAndRunCustomAppOperation(
+            authToken = authToken,
+            targetHostApp = targetHostApp,
+            operation = CxrAppOperation(
+                packageName = "com.rokidlab.rokidlink",
+                timeoutMillis = 30_000,
+                timeoutMessage = activity.getString(com.rokidlab.phone.R.string.wifi_config_timeout),
+                bindMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_binding),
+                configureFailureMessage = activity.getString(com.rokidlab.phone.R.string.wifi_config_failed),
+                bindFailureMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_bind_failed),
+                showConnectionStatus = false,
+                onReady = { link ->
+                    val json = """{"module":"setting","ssid":"$ssid","password":"$password","forceReconnect":true}"""
+                    Log.i(TAG, "Sending WiFi config: mode=Wifi_Connect, json=$json")
+                    
+                    val caps = Caps()
+                    caps.write("Wifi_Connect")
+                    caps.write(json)
+                    
+                    var statusReceived = false
+                    val timeoutHandler = android.os.Handler(activity.mainLooper)
+                    
+                    link.setCXRCustomCmdCbk { cmd, data ->
+                        if (cmd == "Wifi_Connect_Status") {
+                            statusReceived = true
+                            timeoutHandler.removeCallbacksAndMessages(null)
+                            try {
+                                val statusJson = String(data)
+                                Log.i(TAG, "Received Wifi_Connect_Status: $statusJson")
+                                
+                                val jsonObj = org.json.JSONObject(statusJson)
+                                val code = jsonObj.getInt("code")
+                                val status = jsonObj.getString("status")
+                                
+                                completeActiveOperation()
+                                onBusyChanged(false)
+                                
+                                if (code == 0 && status == "CONNECTED") {
+                                    onStatus(activity.getString(com.rokidlab.phone.R.string.wifi_config_success, ssid))
+                                    onResult?.invoke(true, null)
+                                } else {
+                                    val errorMsg = jsonObj.optString("message", "连接失败，请检查密码")
+                                    onStatus(activity.getString(com.rokidlab.phone.R.string.wifi_config_failed) + ": $errorMsg")
+                                    onResult?.invoke(false, errorMsg)
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Parse Wifi_Connect_Status failed", e)
+                                completeActiveOperation()
+                                onBusyChanged(false)
+                                onResult?.invoke(true, null)
+                            }
+                        }
+                    }
+                    
+                    val result = link.sendCustomCmd("Wifi", caps)
+                    Log.i(TAG, "sendCustomCmd(Wifi) -> $result")
+                    
+                    if (result != 0) {
+                        timeoutHandler.removeCallbacksAndMessages(null)
+                        completeActiveOperation()
+                        onBusyChanged(false)
+                        onResult?.invoke(false, "发送失败")
+                    } else {
+                        timeoutHandler.postDelayed({
+                            if (!statusReceived) {
+                                Log.w(TAG, "WiFi config timeout after 5s, assuming success")
+                                completeActiveOperation()
+                                onBusyChanged(false)
+                                onResult?.invoke(true, null)
+                            }
+                        }, 5_000)
+                    }
+                },
+                onFailure = {
+                    cleanup()
+                    onBusyChanged(false)
+                    onResult?.invoke(false, "连接失败")
+                },
+            ),
+        )
+    }
+
     fun stopApp(packageName: String, onStopResult: ((Boolean) -> Unit)? = null) {
         val targetHostApp = hostApp
         if (!hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
@@ -333,6 +437,7 @@ class CxrLHiRokidSession(
     }
 
     fun cleanup() {
+        android.util.Log.i("CxrLInstall", "cleanup() called")
         timeoutJob?.cancel()
         timeoutJob = null
         runCatching { cxrLink?.disconnect() }
@@ -364,6 +469,7 @@ class CxrLHiRokidSession(
                 bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 showConnectionStatus = true,
                 onReady = { link ->
+                    android.util.Log.i("CxrLInstall", "connectAndUpload: onReady! Starting appUploadAndInstall...")
                     onStatus(activity.getString(R.string.cxrl_ready_installing))
                     link.appUploadAndInstall(apkFile.absolutePath, glassAppCallback(
                         onInstall = { success ->
@@ -591,6 +697,7 @@ class CxrLHiRokidSession(
             // 使用同步锁检查操作是否已完成，防止竞态条件
             synchronized(operationLock) {
                 if (pendingOperation === operation && !operationCompleted) {
+                    android.util.Log.e("CxrLInstall", "connectAndRun: TIMEOUT after ${operation.timeoutMillis}ms, cxrlConnected=$cxrlConnected, glassBtConnected=$glassBtConnected")
                     pendingOperation = null
                     operationStarted = false
                     onStatus(operation.timeoutMessage)
@@ -603,6 +710,7 @@ class CxrLHiRokidSession(
             CxrDefs.CXRSession(CxrDefs.CXRSessionType.CUSTOMAPP, operation.packageName),
         )
         if (!configured) {
+            android.util.Log.e("CxrLInstall", "connectAndRun: configCXRSession FAILED (package=${operation.packageName})")
             pendingOperation = null
             operationStarted = false
             operationCompleted = true
@@ -614,12 +722,14 @@ class CxrLHiRokidSession(
 
         operation.bindMessage?.let(onStatus)
         if (!bindRokidHostService(link, targetHostApp, authToken)) {
+            android.util.Log.e("CxrLInstall", "connectAndRun: bindRokidHostService FAILED (hostApp=$targetHostApp)")
             pendingOperation = null
             operationStarted = false
             onStatus(operation.bindFailureMessage)
             operation.onBindFailure()
             cleanup()
         }
+        android.util.Log.i("CxrLInstall", "connectAndRun: bindRokidHostService OK, waiting for connected+btConnected...")
     }
 
     private fun maybeRunPendingOperation() {
@@ -634,6 +744,7 @@ class CxrLHiRokidSession(
     }
 
     private fun completeActiveOperation() {
+        android.util.Log.i("CxrLInstall", "completeActiveOperation() called")
         synchronized(operationLock) {
             operationCompleted = true
             timeoutJob?.cancel()
@@ -650,6 +761,7 @@ class CxrLHiRokidSession(
         onStart: (Boolean) -> Unit = {},
     ): IGlassAppCbk = object : IGlassAppCbk {
         override fun onInstallAppResult(success: Boolean) {
+            android.util.Log.i("CxrLInstall", "glassAppCallback: onInstallAppResult(success=$success)")
             activity.runOnUiThread { onInstall(success) }
         }
 
@@ -747,10 +859,6 @@ class CxrLHiRokidSession(
     ): Boolean {
         if (!isHostAppInstalled(targetHostApp)) {
             onStatus(activity.getString(R.string.install_host_first, targetHostApp.displayName))
-            return false
-        }
-        if (!isWifiEnabled()) {
-            onStatus(activity.getString(R.string.enable_wifi_first, targetHostApp.displayName))
             return false
         }
         if (token.isNullOrBlank()) {

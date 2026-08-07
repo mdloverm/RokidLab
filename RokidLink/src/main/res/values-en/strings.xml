@@ -5,6 +5,9 @@
     <string name="status_wifi_disabled">WiFi is disabled</string>
     <string name="status_wifi_disconnected">WiFi disconnected</string>
     <string name="status_not_connected_wifi">Not connected to WiFi</string>
+    <string name="status_wifi_connected">WiFi: %1$s</string>
+    <string name="status_bt_ready">BT Ready</string>
+    <string name="status_bt_ready_desc">Bluetooth channel ready, no WiFi needed</string>
     <string name="status_checking_adb">Checking ADB status...</string>
     <string name="status_ready">Ready</string>
     <string name="status_enabling_adb">Enabling ADB...</string>

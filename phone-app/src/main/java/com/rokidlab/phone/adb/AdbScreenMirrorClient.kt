@@ -173,10 +173,15 @@ class AdbScreenMirrorClient(
      * 高帧率模式：使用 scrcpy-server (tunnel_forward=true) 输出 H.264 流。
      * 通过 ADB CMD_OPEN localabstract:scrcpy 隧道连接 scrcpy LocalServerSocket，
      * 视频数据通过 WRTE 包返回。
+     *
+     * @param decoder 视频解码器
+     * @param onStatus 状态回调
+     * @param isBluetooth 是否蓝牙通道（影响 scrcpy 参数）
      */
     fun startH264Streaming(
         decoder: ScreenStreamDecoder?,
         onStatus: (String) -> Unit,
+        isBluetooth: Boolean = false,
     ) {
         if (decoder == null) {
             Log.w(TAG, "Decoder not ready, falling back to screencap")
@@ -303,11 +308,15 @@ class AdbScreenMirrorClient(
                     val encoderArg = ManufacturerUtils.getRecommendedEncoder()?.let {
                         "video_encoder=$it "
                     } ?: ""
+                    // 根据连接类型选择 scrcpy 参数
+                    val bitrate = if (isBluetooth) AppConfig.SCRCPY_BT_BITRATE else AppConfig.SCRCPY_WIFI_BITRATE
+                    val maxSize = if (isBluetooth) AppConfig.SCRCPY_BT_MAX_SIZE else AppConfig.SCRCPY_WIFI_MAX_SIZE
+                    Log.i(TAG, "scrcpy config: bitrate=$bitrate, max_size=$maxSize (BT=$isBluetooth)")
                     val shellCmd = ("shell:nohup app_process -Djava.class.path=/data/local/tmp/scrcpy-server.jar " +
                             "/ com.genymobile.scrcpy.Server 3.3.4 " +
                             "stay_awake=true " +
-                            "tunnel_forward=true video_bit_rate=4000000 " +
-                            "max_size=640 " +
+                            "tunnel_forward=true video_bit_rate=$bitrate " +
+                            "max_size=$maxSize " +
                             "${encoderArg}" +
                             "video=true audio=false control=false cleanup=false " +
                             "> /dev/null 2>&1 &\nsleep 3\necho ok\n\u0000")
@@ -404,8 +413,9 @@ class AdbScreenMirrorClient(
                     videoStreamId = streamId
                     videoStreamRemoteId = streamRemoteId
 
-                    // 设置 socket 超时 80ms 以便及时处理触控
-                    try { socket?.soTimeout = AppConfig.SCRCPY_STREAM_TIMEOUT_MS } catch (_: Exception) {}
+                    // 设置 socket 超时以便及时处理触控
+                    val streamTimeout = if (isBluetooth) AppConfig.SCRCPY_BT_TIMEOUT_MS else AppConfig.SCRCPY_WIFI_TIMEOUT_MS
+                    try { socket?.soTimeout = streamTimeout } catch (_: Exception) {}
 
                     onStatus(context.getString(R.string.mirror_streaming))
                     Log.i(TAG, "Starting H.264 stream reading...")

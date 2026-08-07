@@ -11,12 +11,20 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
+import android.provider.Settings
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import android.net.wifi.WifiConfiguration
+import android.net.wifi.WifiManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkRequest
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiNetworkSpecifier
 import com.rokid.cxr.CXRServiceBridge
 import com.rokid.cxr.Caps
 
@@ -216,6 +224,7 @@ class KeyButtonService : Service() {
         internal const val KEY_LONG_PKG = "long_pkg"
         internal const val KEY_LONG_ACT = "long_act"
         internal const val TOPIC = "rokidlab_key_config"
+        internal const val WIFI_TOPIC = "wifi_config"
 
         /** 按键按下时间戳 */
         @Volatile
@@ -223,7 +232,11 @@ class KeyButtonService : Service() {
 
         /** 启动此服务 */
         fun start(ctx: Context) {
-            ctx.startService(Intent(ctx, KeyButtonService::class.java))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ctx.startForegroundService(Intent(ctx, KeyButtonService::class.java))
+            } else {
+                ctx.startService(Intent(ctx, KeyButtonService::class.java))
+            }
         }
     }
 
@@ -404,6 +417,11 @@ class KeyButtonService : Service() {
                 handleConfig(args)
             })
             Log.i(TAG, "subscribe($TOPIC) -> $result")
+
+            val wifiResult = bridge?.subscribe(WIFI_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
+                handleWifiConfig(args)
+            })
+            Log.i(TAG, "subscribe($WIFI_TOPIC) -> $wifiResult")
         } catch (e: Exception) {
             Log.e(TAG, "initCxrBridge failed", e)
         }
@@ -429,6 +447,220 @@ class KeyButtonService : Service() {
                   "long=${args.at(3).getString()}/${args.at(4).getString()}")
         } catch (e: Exception) {
             Log.e(TAG, "handleConfig error", e)
+        }
+    }
+
+    private fun handleWifiConfig(args: Caps) {
+        try {
+            if (args.size() < 3) {
+                Log.w(TAG, "Invalid wifi config size: ${args.size()}")
+                return
+            }
+            val action = args.at(0).getString()
+            if (action != "wifi_connect") return
+
+            val ssid = args.at(1).getString()
+            val password = args.at(2).getString()
+            Log.i(TAG, "Received wifi config: ssid=$ssid, password_length=${password?.length ?: 0}, caps_size=${args.size()}")
+
+            connectToWifi(ssid, password)
+        } catch (e: Exception) {
+            Log.e(TAG, "handleWifiConfig error", e)
+        }
+    }
+
+    private fun connectToWifi(ssid: String, password: String) {
+        try {
+            val wifiManager = getSystemService(WIFI_SERVICE) as? WifiManager ?: run {
+                Log.e(TAG, "WifiManager not available")
+                return
+            }
+
+            val currentSsid = wifiManager.connectionInfo?.ssid?.trim('"')
+            if (currentSsid == ssid) {
+                Log.i(TAG, "Already connected to $ssid, skipping")
+                return
+            }
+
+            connectToWifiLegacy(wifiManager, ssid, password)
+        } catch (e: Exception) {
+            Log.e(TAG, "connectToWifi error", e)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun connectToWifiLegacy(wifiManager: WifiManager, ssid: String, password: String) {
+        if (!wifiManager.isWifiEnabled) {
+            Log.i(TAG, "WiFi is disabled, enabling...")
+            val enabled = wifiManager.setWifiEnabled(true)
+            Log.i(TAG, "setWifiEnabled(true) -> $enabled")
+            if (!enabled) {
+                Log.e(TAG, "Failed to enable WiFi")
+                return
+            }
+            var waitCount = 0
+            while (!wifiManager.isWifiEnabled && waitCount < 30) {
+                Thread.sleep(100)
+                waitCount++
+            }
+            if (!wifiManager.isWifiEnabled) {
+                Log.e(TAG, "WiFi enable timeout")
+                return
+            }
+            Log.i(TAG, "WiFi enabled successfully")
+        }
+
+        val config = WifiConfiguration().apply {
+            SSID = "\"$ssid\""
+            preSharedKey = "\"$password\""
+            status = WifiConfiguration.Status.ENABLED
+            allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK)
+        }
+
+        val netId = wifiManager.addNetwork(config)
+        if (netId == -1) {
+            Log.e(TAG, "Failed to add wifi network $ssid")
+            return
+        }
+
+        wifiManager.disconnect()
+        Thread.sleep(500)
+
+        val enabled = wifiManager.enableNetwork(netId, true)
+        Log.i(TAG, "enableNetwork($netId) -> $enabled")
+        wifiManager.reconnect()
+
+        Log.i(TAG, "WiFi config applied (legacy): ssid=$ssid")
+    }
+
+    private fun connectToWifiApi29(wifiManager: WifiManager, ssid: String, password: String) {
+        val connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager ?: run {
+            Log.e(TAG, "ConnectivityManager not available")
+            return
+        }
+
+        if (!wifiManager.isWifiEnabled) {
+            Log.i(TAG, "WiFi is disabled, trying multiple methods to enable...")
+            
+            val methods = listOf(
+                { enableWifiViaCXRBridge() },
+                { enableWifiViaShellCommand() },
+                { enableWifiViaReflection(wifiManager) },
+                { enableWifiViaSettingsApi(); true }
+            )
+            
+            var success = false
+            for ((index, method) in methods.withIndex()) {
+                try {
+                    Log.i(TAG, "Trying method ${index + 1}...")
+                    success = method.invoke()
+                    if (success) {
+                        Log.i(TAG, "WiFi enabled via method ${index + 1}")
+                        break
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Method ${index + 1} failed: ${e.message}")
+                }
+            }
+            
+            if (!success) {
+                Log.e(TAG, "All methods failed to enable WiFi")
+                return
+            }
+            
+            var waitCount = 0
+            while (!wifiManager.isWifiEnabled && waitCount < 30) {
+                Thread.sleep(100)
+                waitCount++
+            }
+            if (!wifiManager.isWifiEnabled) {
+                Log.e(TAG, "WiFi enable timeout")
+                return
+            }
+        }
+
+        Log.i(TAG, "Building WiFi network specifier for $ssid, password_len=${password.length}...")
+        val specifier = WifiNetworkSpecifier.Builder()
+            .setSsid(ssid)
+            .setWpa2Passphrase(password)
+            .build()
+        Log.i(TAG, "Network specifier created: $specifier")
+
+        val networkRequest = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .setNetworkSpecifier(specifier)
+            .build()
+
+        val networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                Log.i(TAG, "WiFi connected to $ssid, network=${network.networkHandle}")
+                connectivityManager.unregisterNetworkCallback(this)
+            }
+
+            override fun onUnavailable() {
+                Log.e(TAG, "WiFi connection to $ssid via ConnectivityManager failed, trying legacy method...")
+                connectivityManager.unregisterNetworkCallback(this)
+                connectToWifiLegacy(wifiManager, ssid, password)
+            }
+
+            override fun onLost(network: Network) {
+                Log.w(TAG, "WiFi connection lost: $ssid")
+                connectivityManager.unregisterNetworkCallback(this)
+            }
+        }
+
+        Log.i(TAG, "Requesting network for $ssid via ConnectivityManager (API 29+)...")
+        connectivityManager.requestNetwork(networkRequest, networkCallback)
+
+        Log.i(TAG, "WiFi connection requested: ssid=$ssid")
+    }
+
+    private fun enableWifiViaReflection(wifiManager: WifiManager): Boolean {
+        return try {
+            val method = wifiManager.javaClass.getMethod("setWifiEnabled", Boolean::class.javaPrimitiveType)
+            method.isAccessible = true
+            method.invoke(wifiManager, true) as Boolean
+        } catch (e: Exception) {
+            Log.e(TAG, "enableWifiViaReflection failed: ${e::class.simpleName}: ${e.message}")
+            false
+        }
+    }
+
+    private fun enableWifiViaSettingsApi() {
+        try {
+            val contentResolver = contentResolver
+            val wifiOnKey = "wifi_on"
+            val result = Settings.System.putInt(contentResolver, wifiOnKey, 1)
+            Log.i(TAG, "Settings.System.putInt(wifi_on, 1) -> $result")
+        } catch (e: Exception) {
+            Log.e(TAG, "enableWifiViaSettingsApi failed: ${e::class.simpleName}: ${e.message}")
+        }
+    }
+
+    private fun enableWifiViaCXRBridge(): Boolean {
+        return try {
+            val args = Caps()
+            args.write("wifi_enable")
+            args.write(true)
+            val result = bridge?.sendMessage("system.wifi", args)
+            Log.i(TAG, "enableWifiViaCXRBridge: sendMessage(system.wifi) -> $result")
+            result == 0
+        } catch (e: Exception) {
+            Log.e(TAG, "enableWifiViaCXRBridge failed: ${e::class.simpleName}: ${e.message}")
+            false
+        }
+    }
+
+    private fun enableWifiViaShellCommand(): Boolean {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("svc", "wifi", "enable"))
+            val exitCode = process.waitFor()
+            Log.i(TAG, "enableWifiViaShellCommand: svc wifi enable -> exitCode=$exitCode")
+            exitCode == 0
+        } catch (e: Exception) {
+            Log.e(TAG, "enableWifiViaShellCommand failed: ${e::class.simpleName}: ${e.message}")
+            false
         }
     }
 }

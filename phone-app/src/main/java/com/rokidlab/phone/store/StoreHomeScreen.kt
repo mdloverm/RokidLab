@@ -3,6 +3,7 @@ package com.rokidlab.phone.store
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.AdbShellClient
 import com.rokidlab.phone.adb.*
+import com.rokidlab.phone.connection.ConnectionRoute
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.filemanager.*
 import com.rokidlab.phone.glasses.*
@@ -201,6 +202,12 @@ internal data class StoreActions(
     val onLaunchGlassAppViaSdk: (String, String) -> Unit = { _, _ -> },
     // ADB 工具 — 通过 SDK 自定义指令发送按键配置到眼镜端
     val onSendKeyButtonConfig: (String, String, String, String, (Boolean) -> Unit) -> Unit = { _, _, _, _, _ -> },
+    // 引导 — 发送 WiFi 配置到眼镜
+    val onSendWifiConfig: ((String, String, (Boolean, String?) -> Unit) -> Unit)? = null,
+    // 引导 — 安装 RokidLink 到眼镜
+    val onInstallLink: ((onComplete: (Boolean) -> Unit) -> Unit)? = null,
+    // 引导 — 跳过当前步骤
+    val onSkipGuideStep: (() -> Unit)? = null,
 )
 
 // ===== 应用入口 =====
@@ -239,9 +246,13 @@ internal fun BrewPhoneApp(
                 selectedHostApp = state.selectedHostApp,
                 authorized = state.prerequisites.authorized,
                 hostAppInstalled = state.hostAppInstalled,
+                rokidLinkInstalled = state.prerequisites.rokidLinkInstalled,
                 onSelectHostApp = actions.onHostAppSelected,
                 onSelectMirrorSource = actions.onSelectMirrorSource,
                 onAuthorize = actions.onAuthorize,
+                onInstallLink = actions.onInstallLink,
+                onSendWifiConfig = actions.onSendWifiConfig,
+                onSkip = actions.onSkipGuideStep,
             )
         } else {
             MainInterface(
@@ -565,10 +576,19 @@ private fun AdbToolsModule(
         }
         // ADB 工具使用自己的 IP 配置（adb_prefs），与投屏/文件管理器独立
         val adbPrefs = ctx.getSharedPreferences("adb_prefs", 0)
-        val ip = adbPrefs.getString("ip", "192.168.1.168") ?: "192.168.1.168"
+        val wifiIp = adbPrefs.getString("ip", "192.168.1.168") ?: "192.168.1.168"
         scope.launch(Dispatchers.IO) {
             try {
-                val c = AdbShellClient(app, ip)
+                val route = app.routeManager.resolve(wifiIp, 5555)
+                val (targetIp, targetPort) = when (route) {
+                    is ConnectionRoute.Wifi -> route.ip to route.port
+                    is ConnectionRoute.Bluetooth -> route.ip to route.localPort
+                    is ConnectionRoute.None -> {
+                        withContext(Dispatchers.Main) { onConnected(null) }
+                        return@launch
+                    }
+                }
+                val c = AdbShellClient(app, targetIp, targetPort)
                 val ok = c.connect()
                 withContext(Dispatchers.Main) {
                     if (ok) {

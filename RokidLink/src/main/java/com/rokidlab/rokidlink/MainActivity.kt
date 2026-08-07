@@ -10,7 +10,9 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -19,6 +21,7 @@ import android.util.Log
 import android.view.View
 import android.widget.TextView
 import android.widget.Toast
+import com.rokid.cxr.CXRServiceBridge
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
@@ -31,7 +34,7 @@ class MainActivity : Activity() {
     /** ADB 启用线程引用，用于 onDestroy 时中断 */
     private var enableAdbThread: Thread? = null
 
-    // WiFi 状态实时监听
+    // 网络状态实时监听（WiFi/以太网）
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             Log.i(TAG, getString(R.string.log_network_recovered))
@@ -43,22 +46,29 @@ class MainActivity : Activity() {
         override fun onLost(network: Network) {
             Log.i(TAG, getString(R.string.log_wifi_disconnected))
             Handler(Looper.getMainLooper()).post {
-                setDotColor(DOT_ERROR)
-                statusText.text = getString(R.string.status_wifi_disconnected)
-                ipText.text = "0.0.0.0"
-                openWifiSettings()
+                // WiFi 断开时不强制跳转设置，更新状态显示即可
+                val ip = getIPAddress()
+                ipText.text = if (ip != "0.0.0.0") ip else getString(R.string.status_bt_ready)
+                statusText.text = if (ip != "0.0.0.0") {
+                    getString(R.string.status_wifi_connected, ip)
+                } else {
+                    getString(R.string.status_bt_ready_desc)
+                }
+                setDotColor(DOT_CHECKING)
             }
         }
 
         override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-            if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
-                !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+            val hasWifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                          caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+            if (!hasWifi) {
                 Log.i(TAG, getString(R.string.log_network_switched))
                 Handler(Looper.getMainLooper()).post {
-                    setDotColor(DOT_ERROR)
-                    statusText.text = getString(R.string.status_wifi_disconnected)
-                    ipText.text = "0.0.0.0"
-                    openWifiSettings()
+                    // 网络切换时不强制跳转设置，更新状态显示即可
+                    val ip = getIPAddress()
+                    ipText.text = getString(R.string.status_bt_ready)
+                    statusText.text = getString(R.string.status_bt_ready_desc)
+                    setDotColor(DOT_CHECKING)
                 }
             }
         }
@@ -72,6 +82,8 @@ class MainActivity : Activity() {
         }
     }
 
+    private var cxrBridge: CXRServiceBridge? = null
+
     companion object {
         private const val TAG = "RokidLink"
         private const val REQUEST_WIFI = 100
@@ -84,17 +96,29 @@ class MainActivity : Activity() {
         private const val DOT_CHECKING= 0xFFFFD200.toInt()  // 黄 — 检查中
         private const val DOT_READY   = 0xFF00CC66.toInt()  // 绿 — 已就绪
         private const val DOT_ERROR   = 0xFFFF3333.toInt()  // 红 — 异常
+
+        private const val WIFI_TOPIC = "wifi_config"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 始终启动后台服务（KeyButtonService + BtTunnelService），无论是否有 WiFi
+        startBackgroundServices()
+
+        // 检查 WiFi 状态：有 WiFi 则显示界面（方便用户看 IP），无 WiFi 则直接 finish
+        val wifiConnected = isWifiConnected()
+        Log.i(TAG, "onCreate: isWifiConnected=$wifiConnected")
+        if (!wifiConnected) {
+            Log.i(TAG, "No WiFi connected, running in BT-only mode, finishing activity")
+            finish()
+            return
+        }
+
         setContentView(R.layout.activity_main)
 
         // 启动文本输入 TCP 服务器（端口 7656）
         TextInputServer.start(this)
-
-        // 启动按键映射服务（接收手机端下发的按键配置并监听物理按键）
-        KeyButtonService.start(this)
 
         statusText = findViewById(R.id.statusText)
         ipText = findViewById(R.id.ipText)
@@ -115,6 +139,23 @@ class MainActivity : Activity() {
 
         // 注册关闭广播接收器，当 PhoneMirrorActivity 启动时自动结束本页面
         registerReceiver(finishMainReceiver, IntentFilter(ACTION_FINISH_MAIN))
+
+        initCxrBridge()
+    }
+
+    /** 启动后台服务：KeyButtonService + BtTunnelService */
+    private fun startBackgroundServices() {
+        try {
+            startService(Intent(this, KeyButtonService::class.java))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start KeyButtonService", e)
+        }
+        BtTunnelService.start(this)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        initCxrBridge()
     }
 
     override fun onDestroy() {
@@ -129,6 +170,7 @@ class MainActivity : Activity() {
         }
         // 注销关闭广播接收器
         runCatching { unregisterReceiver(finishMainReceiver) }
+        // BtTunnelService 是前台服务，不随 Activity 销毁
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -141,36 +183,30 @@ class MainActivity : Activity() {
     }
 
     private fun startSetup() {
-        statusText.text = getString(R.string.status_checking_wifi)
-        
-        // 1. 检查 WiFi 硬件开关是否开启
-        if (!isWifiEnabled()) {
-            statusText.text = getString(R.string.status_wifi_disabled)
-            setDotColor(DOT_ERROR)
-            ipText.text = "0.0.0.0"
-            openWifiSettings()
-            return
-        }
-        
-        // 3. 检查是否已连接到 WiFi 网络并获取有效 IP
+        // WiFi 状态仅用于显示，不再强制要求连接
+        val wifiEnabled = isWifiEnabled()
+        val wifiConnected = isWifiConnected()
         val ip = getIPAddress()
-        ipText.text = ip
         
-        if (!isWifiConnected() || ip == "0.0.0.0") {
-            statusText.text = getString(R.string.status_not_connected_wifi)
-            setDotColor(DOT_ERROR)
-            openWifiSettings()
-            return
+        // 更新 IP 显示
+        ipText.text = if (wifiConnected && ip != "0.0.0.0") ip else getString(R.string.status_bt_ready)
+        
+        // 更新状态文本：WiFi 可用则显示 IP，否则显示蓝牙通道就绪
+        statusText.text = if (wifiConnected && ip != "0.0.0.0") {
+            getString(R.string.status_wifi_connected, ip)
+        } else {
+            getString(R.string.status_bt_ready_desc)
         }
 
-        statusText.text = getString(R.string.status_checking_adb)
+        // 检查 ADB 是否就绪
+        statusText.append(getString(R.string.status_checking_adb))
         if (isAdbTcpListening()) {
             setDotColor(DOT_READY)
             statusText.text = getString(R.string.status_ready)
             return
         }
 
-        statusText.text = getString(R.string.status_enabling_adb)
+        statusText.append(getString(R.string.status_enabling_adb))
         setDotColor(DOT_CHECKING)
         enableAdbTcp()
     }
@@ -192,8 +228,8 @@ class MainActivity : Activity() {
         val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(network) ?: return false
-        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-               caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        // 只检查 WiFi，不检查 ETHERNET（蓝牙网络共享可能映射为 ETHERNET）
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
     }
 
     private fun openWifiSettings() {
@@ -298,5 +334,118 @@ class MainActivity : Activity() {
             Log.e(TAG, getString(R.string.log_get_ip_failed), e)
         }
         return "0.0.0.0"
+    }
+
+    private fun initCxrBridge() {
+        if (cxrBridge != null) return
+        try {
+            cxrBridge = CXRServiceBridge()
+            cxrBridge?.setStatusListener(object : CXRServiceBridge.StatusListener {
+                override fun onConnected(name: String, address: String, type: Int) {
+                    Log.i(TAG, "CXR connected: name=$name, address=$address")
+                }
+                override fun onDisconnected() {}
+                override fun onConnecting(name: String, address: String, type: Int) {}
+                override fun onARTCStatus(health: Float, reset: Boolean) {}
+                override fun onRokidAccountChanged(account: String) {}
+            })
+
+            val result = cxrBridge?.subscribe(WIFI_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
+                handleWifiConfig(args)
+            })
+            Log.i(TAG, "subscribe($WIFI_TOPIC) -> $result")
+        } catch (e: Exception) {
+            Log.e(TAG, "initCxrBridge failed", e)
+            cxrBridge = null
+        }
+    }
+
+    private fun handleWifiConfig(args: com.rokid.cxr.Caps) {
+        try {
+            if (args.size() < 3) {
+                Log.w(TAG, "Invalid wifi config size: ${args.size()}")
+                return
+            }
+            val action = args.at(0).getString()
+            if (action != "wifi_connect") return
+
+            val ssid = args.at(1).getString()
+            val password = args.at(2).getString()
+            Log.i(TAG, "Received wifi config: ssid=$ssid, password_length=${password?.length ?: 0}")
+
+            connectToWifi(ssid, password)
+        } catch (e: Exception) {
+            Log.e(TAG, "handleWifiConfig error", e)
+        }
+    }
+
+    private fun connectToWifi(ssid: String, password: String) {
+        Log.i(TAG, "Trying to connect to WiFi via CXR system service: $ssid")
+
+        try {
+            val args = com.rokid.cxr.Caps()
+            args.write("wifi_connect")
+            args.write(ssid)
+            args.write(password)
+
+            val channels = listOf("Wifi", "Dev", "Sys", "system.wifi", "sys.wifi")
+            var success = false
+            for (channel in channels) {
+                val result = cxrBridge?.sendMessage(channel, args)
+                Log.i(TAG, "sendMessage($channel) -> $result")
+                if (result == 0) {
+                    success = true
+                    Log.i(TAG, "WiFi connect request sent via channel: $channel")
+                    break
+                }
+            }
+
+            if (!success) {
+                Log.e(TAG, "All channels failed, trying fallback")
+                connectToWifiFallback(ssid, password)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send WiFi command via CXR", e)
+            connectToWifiFallback(ssid, password)
+        }
+    }
+
+    private fun connectToWifiFallback(ssid: String, password: String) {
+        try {
+            val wifiManager = getSystemService(WIFI_SERVICE) as? WifiManager ?: run {
+                Log.e(TAG, "WifiManager not available")
+                return
+            }
+
+            val currentSsid = wifiManager.connectionInfo?.ssid?.trim('"')
+            if (currentSsid == ssid) {
+                Log.i(TAG, "Already connected to $ssid, skipping")
+                return
+            }
+
+            val config = WifiConfiguration().apply {
+                SSID = "\"$ssid\""
+                preSharedKey = "\"$password\""
+                status = WifiConfiguration.Status.ENABLED
+                allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK)
+            }
+
+            val netId = wifiManager.addNetwork(config)
+            if (netId == -1) {
+                Log.e(TAG, "Failed to add wifi network $ssid (no permission)")
+                return
+            }
+
+            wifiManager.disconnect()
+            Thread.sleep(500)
+
+            val enabled = wifiManager.enableNetwork(netId, true)
+            Log.i(TAG, "enableNetwork($netId) -> $enabled")
+            wifiManager.reconnect()
+
+            Log.i(TAG, "WiFi config applied: ssid=$ssid")
+        } catch (e: Exception) {
+            Log.e(TAG, "connectToWifiFallback error", e)
+        }
     }
 }

@@ -1,5 +1,7 @@
 package com.rokidlab.phone.app
 
+import com.rokidlab.phone.connection.ConnectionRoute
+import com.rokidlab.phone.connection.ConnectionRouteManager
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import com.rokidlab.phone.hid.BluetoothHidManager
 import com.rokidlab.phone.util.LocalizationManager
@@ -9,6 +11,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.SharedPreferences
 import android.util.Log
+import kotlinx.coroutines.runBlocking
 import java.security.Provider
 import java.security.Security
 
@@ -20,6 +23,9 @@ class LabApplication : Application() {
         private set
 
     lateinit var hidManager: BluetoothHidManager
+        private set
+
+    lateinit var routeManager: ConnectionRouteManager
         private set
 
     // 运行时 RokidLink 安装状态缓存
@@ -52,6 +58,8 @@ class LabApplication : Application() {
         LocalizationManager.applyLocale(LocalizationManager.getCurrentLocaleCode())
 
         hidManager = BluetoothHidManager(this)
+
+        routeManager = ConnectionRouteManager(this)
 
         prefs = getSharedPreferences("rokidbrew", MODE_PRIVATE)
         
@@ -138,6 +146,7 @@ class LabApplication : Application() {
 
     fun cleanup() {
         hidManager.destroy()
+        routeManager.stopTunnel()
         if (::cxrL.isInitialized) {
             cxrL.cleanup()
         }

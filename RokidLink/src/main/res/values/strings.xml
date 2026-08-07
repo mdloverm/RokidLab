@@ -5,6 +5,9 @@
     <string name="status_wifi_disabled">WiFi 未开启</string>
     <string name="status_wifi_disconnected">WiFi 已断开</string>
     <string name="status_not_connected_wifi">未连接 WiFi</string>
+    <string name="status_wifi_connected">WiFi: %1$s</string>
+    <string name="status_bt_ready">BT Ready</string>
+    <string name="status_bt_ready_desc">蓝牙通道就绪，无需 WiFi</string>
     <string name="status_checking_adb">检查 ADB 状态...</string>
     <string name="status_ready">已就绪</string>
     <string name="status_enabling_adb">正在开启 ADB...</string>

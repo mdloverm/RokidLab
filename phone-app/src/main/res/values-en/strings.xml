@@ -200,12 +200,41 @@
     <string name="guide_select_source_step">Select Source</string>
     <string name="guide_authorize_step">Authorize</string>
     <string name="guide_ready_step">Done</string>
+    <string name="guide_install_link_step">Install</string>
+    <string name="guide_install_link_title">Step 4: Install Glasses App</string>
+    <string name="guide_install_link_desc">Install the glasses companion app to enable Rokid Link features</string>
+    <string name="guide_install_link_hint">Ensure the glasses are connected via Bluetooth</string>
+    <string name="guide_install_link_btn">Install on Glasses</string>
+    <string name="guide_install_link_progress">Installing, please wait…</string>
+    <string name="guide_install_link_success">RokidLink installed successfully</string>
+    <string name="guide_install_link_continue_hint">Installation successful, proceeding to next step</string>
+    <string name="guide_install_link_fail">Installation Failed</string>
+    <string name="guide_install_link_fail_hint">Ensure the glasses are connected via Bluetooth, then retry</string>
+    <string name="guide_retry_btn">Retry Installation</string>
     <string name="guide_step1_title_local">Step 1: Select Rokid AI Version</string>
     <string name="guide_step1_desc">Please select your Rokid glasses model</string>
     <string name="guide_step2_title_local">Step 2: Select Mirror Source</string>
     <string name="guide_step2_desc">Select app store mirror source</string>
     <string name="guide_step3_title_local">Step 3: Authorize Glasses</string>
     <string name="guide_step3_desc">Authorization is required on the glasses</string>
+    <string name="guide_wifi_step">WiFi</string>
+    <string name="guide_step4_title_local">Step 5: Configure Glasses WiFi</string>
+    <string name="guide_step4_desc">Configure WiFi network for glasses</string>
+    <string name="wifi_ssid_label">WiFi Name</string>
+    <string name="wifi_password_label">WiFi Password</string>
+    <string name="show_password">Show Password</string>
+    <string name="hide_password">Hide Password</string>
+    <string name="wifi_send_to_glasses">Connect Glasses to WiFi</string>
+    <string name="wifi_sending">Sending…</string>
+    <string name="wifi_configured_success">WiFi Config Sent</string>
+    <string name="wifi_disabled_prompt">WiFi is disabled. Please turn it on.</string>
+    <string name="wifi_open_settings">Open System Settings</string>
+    <string name="wifi_location_permission_hint">Location permission is required to scan WiFi</string>
+    <string name="wifi_grant_permission">Grant Location Permission</string>
+    <string name="wifi_scanning">Scanning WiFi networks…</string>
+    <string name="wifi_no_networks">No WiFi networks found</string>
+    <string name="wifi_manual_input">Enter SSID manually</string>
+    <string name="wifi_change_network">Change</string>
 
     <!-- Connection -->
     <string name="glasses_connection">Glasses Connection</string>
@@ -656,6 +685,11 @@
     <string name="key_btn_sending">Sending key config to glasses... short=%1$s, long=%2$s</string>
     <string name="key_btn_security_note">⚠️ Security Notice: Launching a third-party app\'s Activity directly may bypass its authorization/payment verification. Ensure you have the right to use the app, or only launch your own apps. RokidLab is not responsible for any authorization issues arising from improper use.</string>
 
+    <!-- WiFi Config -->
+    <string name="wifi_config_timeout">WiFi config send timeout</string>
+    <string name="wifi_config_failed">WiFi config send failed</string>
+    <string name="wifi_config_sent">WiFi config sent to glasses: %1$s, result=%2$d</string>
+
     <!-- System Info -->
     <string name="section_device_info">Device Info</string>
     <string name="label_manufacturer">Manufacturer</string>
@@ -723,6 +757,7 @@
     <string name="log_uninstalling_rokidlink">Uninstalling RokidLink from glasses…</string>
     <string name="log_rokidlink_uninstalled">RokidLink uninstalled successfully</string>
     <string name="log_rokidlink_uninstall_failed">RokidLink uninstall failed</string>
+    <string name="log_rokidlink_autostarted">Guide completed, RokidLink auto-started</string>
     <string name="log_host_set">CXR-L host set to %s. Please re-authorize before installing glasses apps.</string>
     <string name="log_guide_step">User navigated to guide step 1</string>
     <string name="log_starting_glasses_mirror">Starting glasses screen mirror service...</string>

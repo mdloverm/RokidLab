@@ -42,12 +42,13 @@ class PhoneMirrorService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "PhoneMirror"
 
-        fun startService(context: Context, glassesIp: String, port: Int, resultCode: Int, data: Intent) {
+        fun startService(context: Context, glassesIp: String, port: Int, resultCode: Int, data: Intent, isBluetooth: Boolean = false) {
             val intent = Intent(context, PhoneMirrorService::class.java).apply {
                 putExtra("glassesIp", glassesIp)
                 putExtra("port", port)
                 putExtra("resultCode", resultCode)
                 putExtra("data", data)
+                putExtra("isBluetooth", isBluetooth)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -85,6 +86,8 @@ class PhoneMirrorService : Service() {
     private var port: Int = AppConfig.DEFAULT_MIRROR_PORT
     private var resultCode: Int = -1
     private var projectionData: Intent? = null
+    /** 是否蓝牙通道（影响投屏分辨率/帧率参数） */
+    private var isBluetoothRoute: Boolean = false
     @Volatile
     private var isMirrorRunning = false
     private var orientationListener: OrientationEventListener? = null
@@ -104,8 +107,11 @@ class PhoneMirrorService : Service() {
     private var reusableSendBuffer: ByteArray? = null
     /** 帧率控制：上次发送时间 */
     private var lastFrameTime = 0L
-    /** 目标帧率（fps） */
-    private val TARGET_FPS = 30
+    /** 目标帧率（fps，根据连接类型在运行时选择） */
+    private var TARGET_FPS_RUNTIME = 30
+    /** 跳帧机制：标记上一帧是否正在发送，避免数据积压 */
+    @Volatile
+    private var isSendingFrame = false
     /** 帧健康检查：记录上次收到帧的时间，超时未收到则重启 VirtualDisplay */
     private var lastImageTime = 0L
     /** 帧健康检查定时器 */
@@ -139,8 +145,9 @@ class PhoneMirrorService : Service() {
             port = intent.getIntExtra("port", AppConfig.DEFAULT_MIRROR_PORT)
             resultCode = intent.getIntExtra("resultCode", -1)
             projectionData = intent.getParcelableExtra("data")
+            isBluetoothRoute = intent.getBooleanExtra("isBluetooth", false)
 
-            Log.i(TAG, "Received params: glassesIp=$glassesIp, port=$port, resultCode=$resultCode, data=${projectionData != null}")
+            Log.i(TAG, "Received params: glassesIp=$glassesIp, port=$port, resultCode=$resultCode, BT=$isBluetoothRoute, data=${projectionData != null}")
 
             if (resultCode == android.app.Activity.RESULT_OK && projectionData != null && glassesIp.isNotEmpty()) {
                 Log.i(TAG, "Params complete, starting mirror")
@@ -203,6 +210,19 @@ class PhoneMirrorService : Service() {
                     screenHeight = metrics.heightPixels
                     screenDensity = metrics.densityDpi
 
+                    // ── 根据连接类型选择投屏参数（WiFi vs 蓝牙） ──
+                    if (isBluetoothRoute) {
+                        mirrorWidth = AppConfig.MIRROR_BT_WIDTH
+                        mirrorHeight = AppConfig.MIRROR_BT_HEIGHT
+                        TARGET_FPS_RUNTIME = AppConfig.MIRROR_BT_FPS
+                        Log.i(TAG, "BT route: mirror=${mirrorWidth}x${mirrorHeight} @ ${TARGET_FPS_RUNTIME}fps")
+                    } else {
+                        mirrorWidth = AppConfig.MIRROR_WIFI_WIDTH
+                        mirrorHeight = AppConfig.MIRROR_WIFI_HEIGHT
+                        TARGET_FPS_RUNTIME = AppConfig.MIRROR_WIFI_FPS
+                        Log.i(TAG, "WiFi route: mirror=${mirrorWidth}x${mirrorHeight} @ ${TARGET_FPS_RUNTIME}fps")
+                    }
+
                     // ── 兼容性适配：检测设备并应用修复 ──
                     if (ManufacturerUtils.isMediaProjectionBlacklisted()) {
                         Log.w(TAG, "Device is in MediaProjection blacklist, applying compatibility fixes")
@@ -223,8 +243,14 @@ class PhoneMirrorService : Service() {
                     socket?.connect(InetSocketAddress(glassesIp, port), AppConfig.MIRROR_CONNECT_TIMEOUT_MS)
                     socket?.tcpNoDelay = true
                     socket?.keepAlive = true
+                    // 根据连接类型调整 Socket 缓冲区
+                    val bufSize = if (isBluetoothRoute) AppConfig.MIRROR_BT_BUFFER_SIZE else AppConfig.MIRROR_WIFI_BUFFER_SIZE
+                    try {
+                        socket?.setSendBufferSize(bufSize)
+                        socket?.setReceiveBufferSize(bufSize)
+                    } catch (_: Exception) {}
                     outputStream = socket?.getOutputStream()
-                    Log.i(TAG, "Connection successful")
+                    Log.i(TAG, "Connection successful (buffer=$bufSize)")
 
                     // 3. 获取 MediaProjection
                     val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -389,13 +415,16 @@ class PhoneMirrorService : Service() {
      */
     private fun sendFrame(data: ByteArray, w: Int, h: Int) {
         try {
+            // 跳帧机制：如果上一帧还在发送（蓝牙带宽不足），跳过当前帧避免积压
+            if (isSendingFrame) return
             // 帧率控制：限制发送频率，避免网络拥塞
             val now = System.currentTimeMillis()
-            val minInterval = 1000L / TARGET_FPS
+            val minInterval = 1000L / TARGET_FPS_RUNTIME
             if (now - lastFrameTime < minInterval) {
                 return
             }
             lastFrameTime = now
+            isSendingFrame = true
 
             if (socket == null || !socket!!.isConnected) {
                 reconnectSocket()
@@ -415,7 +444,9 @@ class PhoneMirrorService : Service() {
             System.arraycopy(data, 0, sendBuffer, header.size, data.size)
             // 不调用 flush()，让 TCP 自动合并发送，减少网络开销
             outputStream?.write(sendBuffer, 0, totalSize)
+            isSendingFrame = false
         } catch (e: Exception) {
+            isSendingFrame = false
             Log.w(TAG, "Send frame failed: ${e.message}")
             try { outputStream?.close() } catch (_: Exception) {}
             try { socket?.close() } catch (_: Exception) {}

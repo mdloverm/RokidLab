@@ -2,6 +2,7 @@ package com.rokidlab.phone.mirror
 
 import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
+import com.rokidlab.phone.connection.ConnectionRoute
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.R
 import android.graphics.SurfaceTexture
@@ -83,6 +84,8 @@ class ScreenMirrorActivity : ComponentActivity() {
     private var surface: Surface? = null
     private var glassesWidth by mutableIntStateOf(480)
     private var glassesHeight by mutableIntStateOf(640)
+    /** 当前连接是否蓝牙隧道线路 */
+    private var isBluetoothRoute = false
     @Volatile
     private var isDestroyed = false
 
@@ -147,7 +150,30 @@ class ScreenMirrorActivity : ComponentActivity() {
         isStreaming = true
 
         Thread {
-            val client = AdbScreenMirrorClient(this, ipAddress, GLASSES_ADB_PORT)
+            val app = application as LabApplication
+            val route = kotlinx.coroutines.runBlocking {
+                app.routeManager.resolve(ipAddress, GLASSES_ADB_PORT)
+            }
+            val (targetIp, targetPort) = when (route) {
+                is ConnectionRoute.Wifi -> {
+                    isBluetoothRoute = false
+                    route.ip to route.port
+                }
+                is ConnectionRoute.Bluetooth -> {
+                    isBluetoothRoute = true
+                    route.ip to route.localPort
+                }
+                is ConnectionRoute.None -> {
+                    runOnUiThread {
+                        connectionStatus = getString(R.string.mirror_connection_failed)
+                        connectionFailed = true
+                        isStreaming = false
+                    }
+                    isConnecting = false
+                    return@Thread
+                }
+            }
+            val client = AdbScreenMirrorClient(this, targetIp, targetPort)
             adbClient = client
             if (isDestroyed) { isConnecting = false; return@Thread }
 
@@ -186,7 +212,7 @@ class ScreenMirrorActivity : ComponentActivity() {
                 // 连接后的 ADB 端 shell 命令错误等重置
                 connectionStatus = getString(R.string.mirror_waiting_stream)
 
-                client.startH264Streaming(decoder) { status ->
+                client.startH264Streaming(decoder, onStatus = { status ->
                     runOnUiThread {
                         connectionStatus = status
                         if (status.contains("fail") || status.contains("interrupt")) {
@@ -194,7 +220,7 @@ class ScreenMirrorActivity : ComponentActivity() {
                             isStreaming = false
                         }
                     }
-                }
+                }, isBluetooth = isBluetoothRoute)
             } else {
                 // 降级：screencap 原始像素模式
                 client.startStreaming(
