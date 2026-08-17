@@ -2,6 +2,7 @@ package com.rokidlab.phone.app
 
 import com.rokidlab.phone.connection.ConnectionRoute
 import com.rokidlab.phone.connection.ConnectionRouteManager
+import com.rokidlab.phone.adb.TimerScheduler
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import com.rokidlab.phone.hid.BluetoothHidManager
 import com.rokidlab.phone.util.LocalizationManager
@@ -9,8 +10,14 @@ import com.rokidlab.phone.R
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Build
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import java.security.Provider
 import java.security.Security
@@ -18,6 +25,8 @@ import java.security.Security
 class LabApplication : Application() {
     companion object {
         private const val TAG = "LabApplication"
+        private const val PREFS_KEEP_ALIVE = "keep_alive_enabled"
+        private const val CHANNEL_KEEP_ALIVE_FGS = "keep_alive_fgs"
     }
     lateinit var cxrL: CxrLHiRokidSession
         private set
@@ -27,6 +36,14 @@ class LabApplication : Application() {
 
     lateinit var routeManager: ConnectionRouteManager
         private set
+
+    /** 定时任务调度器：任务持久化 + appScope 常驻触发（保活服务启动时恢复 running 任务） */
+    lateinit var timerScheduler: TimerScheduler
+        private set
+
+    /** 全局协程作用域：长驻任务（ASR 推送/轮询等）的宿主，不随 Activity 销毁取消。
+     *  配合保活前台服务，保证 Activity 退后台/销毁后 Lab 后台能力仍持续运行。 */
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     // 运行时 RokidLink 安装状态缓存
     var rokidLinkInstalled: Boolean? = null
@@ -47,6 +64,10 @@ class LabApplication : Application() {
 
     private lateinit var prefs: SharedPreferences
 
+    /** 后台保活开关（默认开启）：开启时 LabKeepAliveService 常驻通知栏，保证后台能力不被系统回收 */
+    var keepAliveEnabled: Boolean = true
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -61,7 +82,11 @@ class LabApplication : Application() {
 
         routeManager = ConnectionRouteManager(this)
 
+        timerScheduler = TimerScheduler(this)
+
         prefs = getSharedPreferences("rokidbrew", MODE_PRIVATE)
+        
+        keepAliveEnabled = prefs.getBoolean(PREFS_KEEP_ALIVE, true)
         
         // 从 SharedPreferences 恢复 IP 地址
         screenMirrorIp = prefs.getString("screen_mirror_ip", "192.168.1.168") ?: "192.168.1.168"
@@ -97,7 +122,53 @@ class LabApplication : Application() {
                 description = getString(R.string.phone_mirror_notification_channel_desc)
             }
             nm.createNotificationChannel(phoneMirrorChannel)
+
+            // 3. 后台保活前台服务通知渠道（常驻通知栏）
+            val keepAliveChannel = NotificationChannel(
+                CHANNEL_KEEP_ALIVE_FGS, getString(R.string.keep_alive_channel_name),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = getString(R.string.keep_alive_channel_desc)
+            }
+            nm.createNotificationChannel(keepAliveChannel)
         } catch (_: Exception) { }
+    }
+
+    /** 切换后台保活开关：开启时启动前台保活服务，关闭时停止 */
+    fun setKeepAliveEnabled(enabled: Boolean) {
+        keepAliveEnabled = enabled
+        prefs.edit().putBoolean(PREFS_KEEP_ALIVE, enabled).apply()
+        if (enabled) {
+            startKeepAliveService()
+        } else {
+            stopKeepAliveService()
+        }
+    }
+
+    /** 启动后台保活前台服务（App 打开时调用；保活开启时后台能力常驻） */
+    fun startKeepAliveService() {
+        if (!keepAliveEnabled) return
+        try {
+            val intent = Intent(this, com.rokidlab.phone.keepalive.LabKeepAliveService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            Log.i(TAG, "LabKeepAliveService start requested")
+        } catch (e: Exception) {
+            Log.w(TAG, "startKeepAliveService failed: ${e.message}")
+        }
+    }
+
+    /** 停止后台保活前台服务 */
+    fun stopKeepAliveService() {
+        try {
+            stopService(Intent(this, com.rokidlab.phone.keepalive.LabKeepAliveService::class.java))
+            Log.i(TAG, "LabKeepAliveService stop requested")
+        } catch (e: Exception) {
+            Log.w(TAG, "stopKeepAliveService failed: ${e.message}")
+        }
     }
 
     /** 注册 BouncyCastle Security Provider（直接 import，不依赖反射） */
@@ -114,6 +185,9 @@ class LabApplication : Application() {
     fun setCxrL(session: CxrLHiRokidSession) {
         cxrL = session
     }
+
+    /** 会话是否已创建（跨类访问 lateinit 的 isInitialized） */
+    fun hasCxrL(): Boolean = ::cxrL.isInitialized
 
     fun setScreenMirrorIp(ip: String) {
         screenMirrorIp = ip
@@ -145,6 +219,7 @@ class LabApplication : Application() {
     }
 
     fun cleanup() {
+        timerScheduler.shutdown()
         hidManager.destroy()
         routeManager.stopTunnel()
         if (::cxrL.isInitialized) {

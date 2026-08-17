@@ -34,6 +34,9 @@ class MainActivity : Activity() {
     /** ADB 启用线程引用，用于 onDestroy 时中断 */
     private var enableAdbThread: Thread? = null
 
+    /** 是否已获得过窗口焦点（首次聚焦后启动后台服务，避免 FGS 被 ROM 拒绝） */
+    private var hadWindowFocus = false
+
     // 网络状态实时监听（WiFi/以太网）
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -82,8 +85,6 @@ class MainActivity : Activity() {
         }
     }
 
-    private var cxrBridge: CXRServiceBridge? = null
-
     companion object {
         private const val TAG = "RokidLink"
         private const val REQUEST_WIFI = 100
@@ -96,26 +97,21 @@ class MainActivity : Activity() {
         private const val DOT_CHECKING= 0xFFFFD200.toInt()  // 黄 — 检查中
         private const val DOT_READY   = 0xFF00CC66.toInt()  // 绿 — 已就绪
         private const val DOT_ERROR   = 0xFFFF3333.toInt()  // 红 — 异常
-
-        private const val WIFI_TOPIC = "wifi_config"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 始终启动后台服务（KeyButtonService + BtTunnelService），无论是否有 WiFi
-        startBackgroundServices()
-
-        // 检查 WiFi 状态：有 WiFi 则显示界面（方便用户看 IP），无 WiFi 则直接 finish
-        val wifiConnected = isWifiConnected()
-        Log.i(TAG, "onCreate: isWifiConnected=$wifiConnected")
-        if (!wifiConnected) {
-            Log.i(TAG, "No WiFi connected, running in BT-only mode, finishing activity")
-            finish()
-            return
-        }
-
+        // 不根据 WiFi 状态 finish：App 需要保持前台可见，
+        // 否则会被系统标记为后台，导致服务重启触发 BackgroundServiceStartNotAllowedException。
+        // 无 WiFi 时 startSetup() 会显示蓝牙通道就绪状态。
+        // 注意：后台服务不在 onCreate 启动，等 onWindowFocusChanged 获得窗口焦点后再启动，
+        // 否则眼镜 ROM 的 FGS 启动限制会拒绝 startForegroundService（Background start not allowed）。
         setContentView(R.layout.activity_main)
+
+        // 申请电池优化豁免：RokidLink 是常驻服务（按键映射 + 蓝牙隧道 + AI ASR 拦截），
+        // 若被系统 app idle 停服务，唤醒词链路会失效（实测 3 分钟无操作被 am_stop_idle_service 停掉）。
+        requestBatteryOptimizationExemption()
 
         // 启动文本输入 TCP 服务器（端口 7656）
         TextInputServer.start(this)
@@ -137,25 +133,98 @@ class MainActivity : Activity() {
         setDotColor(DOT_IDLE)
         startSetup()
 
+        // 兜底：若 3 秒内未收到窗口焦点（眼镜 ROM 可能不回调 onWindowFocusChanged），直接启动服务
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!hadWindowFocus && !isServiceRunning(BtTunnelService::class.java)) {
+                Log.i(TAG, "startup fallback: starting background services")
+                startBackgroundServices()
+            }
+        }, 3000)
+
         // 注册关闭广播接收器，当 PhoneMirrorActivity 启动时自动结束本页面
         registerReceiver(finishMainReceiver, IntentFilter(ACTION_FINISH_MAIN))
-
-        initCxrBridge()
     }
 
-    /** 启动后台服务：KeyButtonService + BtTunnelService */
+    /** 启动后台服务：先 BtTunnelService（前台服务需 5 秒内 startForeground，先启避免被 KeyButtonService 的主线程初始化拖慢崩溃），再 KeyButtonService */
     private fun startBackgroundServices() {
+        runCatching { BtTunnelService.start(this) }
+            .onFailure { Log.e(TAG, "Failed to start BtTunnelService", it) }
         try {
-            startService(Intent(this, KeyButtonService::class.java))
+            // 必须用 startForegroundService（前台服务），Android 8+ 用 startService 会被后台限制拦截
+            KeyButtonService.start(this)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start KeyButtonService", e)
         }
-        BtTunnelService.start(this)
     }
 
     override fun onResume() {
         super.onResume()
-        initCxrBridge()
+        // 保活检查：核心服务不在运行则补启（崩溃/被系统清理后自愈）。
+        // 仅在已获得过窗口焦点后才保活（避免 onCreate 阶段误判导致重复 start 被 FGS 限制拒绝）。
+        if (!hadWindowFocus) return
+        runCatching {
+            if (!isServiceRunning(KeyButtonService::class.java)) {
+                Log.i(TAG, "KeyButtonService not running, restarting")
+                KeyButtonService.start(this)
+            }
+        }
+        runCatching {
+            if (!isServiceRunning(BtTunnelService::class.java)) {
+                Log.i(TAG, "BtTunnelService not running, restarting")
+                BtTunnelService.start(this)
+            }
+        }
+    }
+
+    /** 获得窗口焦点后启动后台服务（确保系统授予 FGS 启动权限，避免 Background start not allowed） */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && !hadWindowFocus) {
+            hadWindowFocus = true
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (!isServiceRunning(BtTunnelService::class.java)) {
+                    Log.i(TAG, "startBackgroundServices: BtTunnelService")
+                    BtTunnelService.start(this)
+                }
+                if (!isServiceRunning(KeyButtonService::class.java)) {
+                    Log.i(TAG, "startBackgroundServices: KeyButtonService")
+                    KeyButtonService.start(this)
+                }
+            }, 300)
+        }
+    }
+
+    /** 检查本应用服务是否在运行 */
+    private fun isServiceRunning(clazz: Class<*>): Boolean {
+        return try {
+            val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+            am.getRunningServices(100).any {
+                it.service.packageName == packageName && it.service.className == clazz.name
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "isServiceRunning failed", e)
+            false
+        }
+    }
+
+    /** 申请电池优化豁免：进入白名单后系统 app idle 不再停掉 RokidLink 的常驻服务 */
+    private fun requestBatteryOptimizationExemption() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            if (pm.isIgnoringBatteryOptimizations(packageName)) {
+                Log.i(TAG, "Battery optimization exemption already granted")
+                return
+            }
+            // 直接发起请求（Android 8+ 会弹系统对话框，用户确认后豁免）
+            val intent = android.content.Intent(
+                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                android.net.Uri.parse("package:$packageName")
+            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            Log.i(TAG, "Requesting battery optimization exemption")
+        } catch (e: Exception) {
+            Log.e(TAG, "requestBatteryOptimizationExemption failed: ${e.message}")
+        }
     }
 
     override fun onDestroy() {
@@ -336,116 +405,8 @@ class MainActivity : Activity() {
         return "0.0.0.0"
     }
 
-    private fun initCxrBridge() {
-        if (cxrBridge != null) return
-        try {
-            cxrBridge = CXRServiceBridge()
-            cxrBridge?.setStatusListener(object : CXRServiceBridge.StatusListener {
-                override fun onConnected(name: String, address: String, type: Int) {
-                    Log.i(TAG, "CXR connected: name=$name, address=$address")
-                }
-                override fun onDisconnected() {}
-                override fun onConnecting(name: String, address: String, type: Int) {}
-                override fun onARTCStatus(health: Float, reset: Boolean) {}
-                override fun onRokidAccountChanged(account: String) {}
-            })
-
-            val result = cxrBridge?.subscribe(WIFI_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
-                handleWifiConfig(args)
-            })
-            Log.i(TAG, "subscribe($WIFI_TOPIC) -> $result")
-        } catch (e: Exception) {
-            Log.e(TAG, "initCxrBridge failed", e)
-            cxrBridge = null
-        }
-    }
-
-    private fun handleWifiConfig(args: com.rokid.cxr.Caps) {
-        try {
-            if (args.size() < 3) {
-                Log.w(TAG, "Invalid wifi config size: ${args.size()}")
-                return
-            }
-            val action = args.at(0).getString()
-            if (action != "wifi_connect") return
-
-            val ssid = args.at(1).getString()
-            val password = args.at(2).getString()
-            Log.i(TAG, "Received wifi config: ssid=$ssid, password_length=${password?.length ?: 0}")
-
-            connectToWifi(ssid, password)
-        } catch (e: Exception) {
-            Log.e(TAG, "handleWifiConfig error", e)
-        }
-    }
-
-    private fun connectToWifi(ssid: String, password: String) {
-        Log.i(TAG, "Trying to connect to WiFi via CXR system service: $ssid")
-
-        try {
-            val args = com.rokid.cxr.Caps()
-            args.write("wifi_connect")
-            args.write(ssid)
-            args.write(password)
-
-            val channels = listOf("Wifi", "Dev", "Sys", "system.wifi", "sys.wifi")
-            var success = false
-            for (channel in channels) {
-                val result = cxrBridge?.sendMessage(channel, args)
-                Log.i(TAG, "sendMessage($channel) -> $result")
-                if (result == 0) {
-                    success = true
-                    Log.i(TAG, "WiFi connect request sent via channel: $channel")
-                    break
-                }
-            }
-
-            if (!success) {
-                Log.e(TAG, "All channels failed, trying fallback")
-                connectToWifiFallback(ssid, password)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to send WiFi command via CXR", e)
-            connectToWifiFallback(ssid, password)
-        }
-    }
-
-    private fun connectToWifiFallback(ssid: String, password: String) {
-        try {
-            val wifiManager = getSystemService(WIFI_SERVICE) as? WifiManager ?: run {
-                Log.e(TAG, "WifiManager not available")
-                return
-            }
-
-            val currentSsid = wifiManager.connectionInfo?.ssid?.trim('"')
-            if (currentSsid == ssid) {
-                Log.i(TAG, "Already connected to $ssid, skipping")
-                return
-            }
-
-            val config = WifiConfiguration().apply {
-                SSID = "\"$ssid\""
-                preSharedKey = "\"$password\""
-                status = WifiConfiguration.Status.ENABLED
-                allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK)
-            }
-
-            val netId = wifiManager.addNetwork(config)
-            if (netId == -1) {
-                Log.e(TAG, "Failed to add wifi network $ssid (no permission)")
-                return
-            }
-
-            wifiManager.disconnect()
-            Thread.sleep(500)
-
-            val enabled = wifiManager.enableNetwork(netId, true)
-            Log.i(TAG, "enableNetwork($netId) -> $enabled")
-            wifiManager.reconnect()
-
-            Log.i(TAG, "WiFi config applied: ssid=$ssid")
-        } catch (e: Exception) {
-            Log.e(TAG, "connectToWifiFallback error", e)
-        }
-    }
+    // CXR-S bridge 由 KeyButtonService 统一持有（单 bridge 原则）：
+    // 双 CXRServiceBridge 实例会导致 native 订阅注册表互相覆盖，
+    // 手机端下发的 rokidlab_key_config 无法路由到本应用。
+    // wifi_config 的订阅与处理已由 KeyButtonService 承担。
 }

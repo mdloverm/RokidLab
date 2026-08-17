@@ -24,6 +24,35 @@ object HttpClient {
         }
     }
 
+    /**
+     * 发送 POST 请求，返回响应文本。
+     * 用于调用 AI API（如 DeepSeek）等需要 JSON body 的接口。
+     */
+    fun postString(
+        url: String,
+        body: String,
+        connectTimeout: Int = 10000,
+        readTimeout: Int = 60000,
+        headers: Map<String, String> = emptyMap(),
+    ): String {
+        val connection = openConnection(url, connectTimeout, readTimeout, headers).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            useCaches = false
+        }
+        try {
+            connection.connect()
+            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            return stream?.bufferedReader()?.use { it.readText() }
+                ?: throw java.io.IOException("HTTP $code: ${connection.responseMessage}")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     fun download(url: String, output: File, connectTimeout: Int = 10000, readTimeout: Int = 30000) {
         val temp = File(output.parentFile, "${output.name}.tmp")
         val connection = openConnection(url, connectTimeout, readTimeout)

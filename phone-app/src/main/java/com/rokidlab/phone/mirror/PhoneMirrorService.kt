@@ -137,29 +137,57 @@ class PhoneMirrorService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "onStartCommand called")
-        startForeground(NOTIFICATION_ID, createNotification())
-        Log.i(TAG, "startForeground called")
 
-        if (intent != null) {
-            glassesIp = intent.getStringExtra("glassesIp") ?: ""
-            port = intent.getIntExtra("port", AppConfig.DEFAULT_MIRROR_PORT)
-            resultCode = intent.getIntExtra("resultCode", -1)
-            projectionData = intent.getParcelableExtra("data")
-            isBluetoothRoute = intent.getBooleanExtra("isBluetooth", false)
-
-            Log.i(TAG, "Received params: glassesIp=$glassesIp, port=$port, resultCode=$resultCode, BT=$isBluetoothRoute, data=${projectionData != null}")
-
-            if (resultCode == android.app.Activity.RESULT_OK && projectionData != null && glassesIp.isNotEmpty()) {
-                Log.i(TAG, "Params complete, starting mirror")
-                startMirror()
-            } else {
-                Log.e(TAG, "Incomplete params, cannot start mirror")
-                stopSelf()
-            }
-        } else {
+        if (intent == null) {
             Log.e(TAG, "Intent is null")
             stopSelf()
+            return START_NOT_STICKY
         }
+
+        glassesIp = intent.getStringExtra("glassesIp") ?: ""
+        port = intent.getIntExtra("port", AppConfig.DEFAULT_MIRROR_PORT)
+        resultCode = intent.getIntExtra("resultCode", -1)
+        projectionData = intent.getParcelableExtra("data")
+        isBluetoothRoute = intent.getBooleanExtra("isBluetooth", false)
+
+        Log.i(TAG, "Received params: glassesIp=$glassesIp, port=$port, resultCode=$resultCode, BT=$isBluetoothRoute, data=${projectionData != null}")
+
+        if (resultCode != android.app.Activity.RESULT_OK || projectionData == null || glassesIp.isNotEmpty() == false) {
+            Log.e(TAG, "Incomplete params, cannot start mirror")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // Android 14（API 34）时序要求：必须先启动 mediaProjection 类型的
+        // 前台服务，再调用 getMediaProjection()，否则 MediaProjectionManagerService
+        // 会抛 SecurityException（"Media projections require a foreground service
+        // of type FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION"）。
+        // MediaProjection token 由 MainActivity 的 createScreenCaptureIntent 授权获得。
+        try {
+            startForeground(NOTIFICATION_ID, createNotification())
+            Log.i(TAG, "startForeground called (before projection token)")
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground failed: ${e.message}", e)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        try {
+            val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = projectionManager.getMediaProjection(resultCode, projectionData!!)
+            if (mediaProjection == null) {
+                Log.e(TAG, "getMediaProjection returned null")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "getMediaProjection failed: ${e.message}", e)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        Log.i(TAG, "Params complete, starting mirror")
+        startMirror()
         return START_NOT_STICKY
     }
 
@@ -238,24 +266,30 @@ class PhoneMirrorService : Service() {
                     Log.i(TAG, "Screen size: ${screenWidth}x${screenHeight}, Mirror size: ${mirrorWidth}x${mirrorHeight}")
 
                     // 2. 连接眼镜（使用配置的超时时间）
+                    // 首连失败不致命：CXR-L 启动眼镜端 Activity 是异步的，Server 可能尚未监听。
+                    // 失败后置空 socket，继续创建 MediaProjection/VirtualDisplay，
+                    // 由 sendFrame 触发 reconnectSocket 在眼镜端就绪后自动恢复。
                     Log.i(TAG, "Connecting to glasses: $glassesIp:$port")
-                    socket = Socket()
-                    socket?.connect(InetSocketAddress(glassesIp, port), AppConfig.MIRROR_CONNECT_TIMEOUT_MS)
-                    socket?.tcpNoDelay = true
-                    socket?.keepAlive = true
-                    // 根据连接类型调整 Socket 缓冲区
-                    val bufSize = if (isBluetoothRoute) AppConfig.MIRROR_BT_BUFFER_SIZE else AppConfig.MIRROR_WIFI_BUFFER_SIZE
                     try {
-                        socket?.setSendBufferSize(bufSize)
-                        socket?.setReceiveBufferSize(bufSize)
-                    } catch (_: Exception) {}
-                    outputStream = socket?.getOutputStream()
-                    Log.i(TAG, "Connection successful (buffer=$bufSize)")
+                        socket = Socket()
+                        socket?.connect(InetSocketAddress(glassesIp, port), AppConfig.MIRROR_CONNECT_TIMEOUT_MS)
+                        socket?.tcpNoDelay = true
+                        socket?.keepAlive = true
+                        // 根据连接类型调整 Socket 缓冲区
+                        val bufSize = if (isBluetoothRoute) AppConfig.MIRROR_BT_BUFFER_SIZE else AppConfig.MIRROR_WIFI_BUFFER_SIZE
+                        try {
+                            socket?.setSendBufferSize(bufSize)
+                            socket?.setReceiveBufferSize(bufSize)
+                        } catch (_: Exception) {}
+                        outputStream = socket?.getOutputStream()
+                        Log.i(TAG, "Connection successful (buffer=$bufSize)")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Initial connect failed, will retry on frame send: ${e.message}")
+                        socket = null
+                        outputStream = null
+                    }
 
-                    // 3. 获取 MediaProjection
-                    val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                    mediaProjection = projectionManager.getMediaProjection(resultCode, projectionData!!)
-
+                    // 3. 使用已在 onStartCommand 创建的 MediaProjection（Android 14 时序要求）
                     mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                         override fun onStop() {
                             super.onStop()

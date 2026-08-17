@@ -250,12 +250,61 @@
 
     <!-- Navigation tab -->
     <string name="nav_store">App Store</string>
+    <string name="nav_chat">LeQi Chat</string>
     <string name="nav_screen_mirror">Screen Mirror</string>
     <string name="nav_phone_mirror">Phone Cast</string>
     <string name="nav_file_manager">File Manager</string>
     <string name="nav_adb_tools">ADB Tools</string>
     <string name="nav_hid_gamepad">Gamepad</string>
     <string name="nav_settings">Settings</string>
+
+    <!-- LeQi Chat -->
+    <string name="chat_title">LeQi Chat</string>
+    <string name="chat_subtitle">Text Chat · Spoken on Glasses</string>
+    <string name="chat_input_hint">Type a message...</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_key_dialog_cancel">Cancel</string>
+    <string name="chat_sending">Connecting to glasses...</string>
+    <string name="chat_send_failed">Send failed</string>
+    <string name="chat_reply_failed">AI reply failed</string>
+    <string name="chat_empty_hint">Start chatting with LeQi. Replies will be spoken on your glasses.</string>
+    <string name="chat_settings">AI Settings</string>
+    <string name="chat_settings_title">AI Service Settings</string>
+    <string name="chat_settings_hint">Supports OpenAI-compatible APIs (DeepSeek / Qwen / Kimi / Ollama, etc.)</string>
+    <string name="chat_settings_base_url">Base URL</string>
+    <string name="chat_settings_api_key">API Key</string>
+    <string name="chat_settings_model">Model</string>
+    <string name="chat_settings_quiz">Key Quiz Mode</string>
+    <string name="chat_settings_quiz_hint">When ON, a short press on the temple button = Photo &amp; Ask AI; short-press shortcut is overridden, long press is unaffected.</string>
+    <string name="chat_settings_ai_mode">Chat Model</string>
+    <string name="chat_settings_ai_mode_hint">ON = Custom model (Lab intercepts and replies); OFF = Official Leki</string>
+    <string name="chat_settings_tools">AI Tools</string>
+    <string name="chat_settings_tools_hint">When enabled, Leki can call these local capabilities during chat</string>
+    <string name="chat_settings_save">Save</string>
+    <string name="chat_settings_saved">Saved</string>
+    <string name="chat_settings_save_failed">Save failed, please retry</string>
+    <string name="chat_settings_model_fetch">Fetch model list</string>
+    <string name="chat_settings_model_refresh">Refresh model list</string>
+    <string name="chat_settings_model_fetching">Fetching model list...</string>
+    <string name="chat_settings_model_fetch_need_key">Please enter an API Key first</string>
+    <string name="chat_settings_model_fetch_failed">Failed to fetch models, you can type the model name manually</string>
+    <string name="chat_settings_model_fetch_empty">No models found, you can type the model name manually</string>
+    <string name="chat_photo_ask">Photo &amp; Ask AI</string>
+    <string name="chat_kb">Knowledge Base</string>
+    <string name="chat_photo_status">Asking glasses to take a photo...</string>
+    <string name="chat_ocr_status">Recognizing text from photo...</string>
+    <string name="chat_kb_status">Searching knowledge base...</string>
+    <string name="chat_ai_status">Generating answer...</string>
+    <string name="chat_ocr_empty">No text recognized. Please adjust the camera angle and retry.</string>
+    <string name="chat_photo_failed">Failed to take photo</string>
+    <string name="chat_kb_title">Knowledge Base</string>
+    <string name="chat_kb_subtitle">Import txt / pdf documents. They will be searched automatically when using Photo &amp; Ask AI.</string>
+    <string name="chat_kb_import">Import Document</string>
+    <string name="chat_kb_empty">Knowledge base is empty. Please import documents first.</string>
+    <string name="chat_kb_delete">Delete</string>
+    <string name="chat_kb_import_failed">Import failed (only txt / pdf supported)</string>
+    <string name="chat_kb_imported">Imported %1$s</string>
+    <string name="chat_kb_confirm_delete">Delete "%1$s"? This cannot be undone.</string>
 
     <!-- Store main interface -->
     <string name="featured_apps">Featured Apps</string>
@@ -332,6 +381,32 @@
     <string name="starting_glasses_failed">Failed to start glasses service</string>
     <string name="timer_channel_name">Timer Message</string>
     <string name="timer_channel_desc">Scheduled messages from ADB Tools</string>
+    <string name="keep_alive_channel_name">Background Keep-alive</string>
+    <string name="keep_alive_channel_desc">Rokid Lab background keep-alive service</string>
+    <string name="keep_alive_notification_title">Rokid Lab running in background</string>
+    <string name="keep_alive_notification_text">Voice assistant, Bluetooth keyboard and ADB tools stay available</string>
+    <string name="keep_alive_enabled">Background keep-alive</string>
+    <string name="keep_alive_on">Enabled</string>
+    <string name="keep_alive_off">Disabled</string>
+    <string name="keep_alive_desc">Keep the foreground notification so system won\'t kill background services</string>
+
+    <!-- AI Tools (ToolRegistry settings display) -->
+    <string name="ai_tool_search_knowledge_base_name">Knowledge Search</string>
+    <string name="ai_tool_search_knowledge_base_desc">Search imported documents (manuals, notes) for answers when the question involves them</string>
+    <string name="ai_tool_get_current_time_name">Current Time</string>
+    <string name="ai_tool_get_current_time_desc">Answer time questions like \"what time is it\", \"what\'s today\'s date\", \"day of week\"</string>
+    <string name="ai_tool_get_glasses_battery_name">Glasses Battery</string>
+    <string name="ai_tool_get_glasses_battery_desc">Check remaining battery of glasses, answer \"battery left\", \"need charging?\"</string>
+    <string name="ai_tool_get_glasses_device_info_name">Glasses System Info</string>
+    <string name="ai_tool_get_glasses_device_info_desc">Query glasses system info (model, manufacturer, OS version, SDK version, serial)</string>
+    <string name="ai_tool_get_glasses_storage_name">Glasses Storage</string>
+    <string name="ai_tool_get_glasses_storage_desc">Query glasses storage usage (used, available space)</string>
+    <string name="ai_tool_list_glasses_apps_name">Installed Apps</string>
+    <string name="ai_tool_list_glasses_apps_desc">List apps installed on glasses, answer \"which apps are installed\"</string>
+    <string name="ai_tool_launch_glasses_app_name">Open App</string>
+    <string name="ai_tool_launch_glasses_app_desc">Open an app installed on glasses, answer \"open Xiaozhi\", \"open browser\", \"open game\"</string>
+    <string name="ai_tool_set_timer_name">Timer</string>
+    <string name="ai_tool_set_timer_desc">Create timed reminders/tasks, answer \"remind me in 5 minutes\", \"wake me at 8am\", \"open Xiaozhi at 5pm\"</string>
     <string name="phone_mirror_channel">Phone Mirror</string>
     <string name="phone_mirror_channel_desc">Project phone screen to glasses</string>
     <string name="phone_mirror_projecting">Projecting screen to glasses</string>

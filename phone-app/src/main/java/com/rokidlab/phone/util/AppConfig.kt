@@ -24,11 +24,12 @@ object AppConfig {
     /** WiFi 投屏 Socket 接收缓冲区（字节） */
     const val MIRROR_WIFI_BUFFER_SIZE = 16384
 
-    /** 蓝牙投屏分辨率（牺牲画质换速度，眼镜端 FIT_CENTER 自动拉伸全屏） */
-    const val MIRROR_BT_WIDTH = 240
-    const val MIRROR_BT_HEIGHT = 320
-    /** 蓝牙投屏目标帧率（降低以减少带宽占用） */
-    const val MIRROR_BT_FPS = 12
+    /** 蓝牙投屏分辨率（牺牲画质换稳定：RFCOMM 实际吞吐约 1-2Mbps，
+     *  原 240x320@12fps≈7.2Mbps 远超带宽导致数据积压、断连、投屏失败） */
+    const val MIRROR_BT_WIDTH = 160
+    const val MIRROR_BT_HEIGHT = 213
+    /** 蓝牙投屏目标帧率（160x213@6fps≈1.6Mbps，配合跳帧机制可稳定传输） */
+    const val MIRROR_BT_FPS = 6
     /** 蓝牙投屏 Socket 接收缓冲区（更小，加快 flush） */
     const val MIRROR_BT_BUFFER_SIZE = 4096
 

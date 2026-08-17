@@ -105,6 +105,7 @@ private const val COLLAPSED_APP_COUNT = 5
 // ===== 导航页面枚举 =====
 enum class NavPage {
     STORE,
+    CHAT,
     SCREEN_MIRROR,
     PHONE_MIRROR,
     FILE_MANAGER,
@@ -198,6 +199,8 @@ internal data class StoreActions(
     val onSwitchLanguage: (String) -> Unit,
     // 设置页 — 导出日志
     val onExportLog: () -> Unit,
+    // 设置页 — 后台保活开关
+    val onToggleKeepAlive: () -> Unit = {},
     // ADB 工具 — 通过 SDK 启动眼镜端应用（替代 ADB shell）
     val onLaunchGlassAppViaSdk: (String, String) -> Unit = { _, _ -> },
     // ADB 工具 — 通过 SDK 自定义指令发送按键配置到眼镜端
@@ -1229,6 +1232,7 @@ private fun MainInterface(
                     onSelectApp = onSelectedAppChange,
                     onUpdateOpen = { onUpdateSheetVisibleChange(true) },
                 )
+                    NavPage.CHAT -> ChatModule(app = app)
                     NavPage.SCREEN_MIRROR -> ScreenMirrorModule(
                         state = state,
                         actions = actions,
@@ -1331,6 +1335,7 @@ private fun BottomNavigationBar(
         ) {
             val navItems = listOf(
                 NavPage.STORE to stringResource(R.string.nav_store),
+                NavPage.CHAT to stringResource(R.string.nav_chat),
                 NavPage.SCREEN_MIRROR to stringResource(R.string.nav_screen_mirror),
                 NavPage.PHONE_MIRROR to stringResource(R.string.nav_phone_mirror),
                 NavPage.FILE_MANAGER to stringResource(R.string.nav_file_manager),
@@ -1343,6 +1348,7 @@ private fun BottomNavigationBar(
                 val isSelected = currentPage == page
                 val color = when (page) {
                     NavPage.STORE -> BrewCoral
+                    NavPage.CHAT -> BrewChat
                     NavPage.SCREEN_MIRROR -> BrewCyan
                     NavPage.PHONE_MIRROR -> BrewPurple
                     NavPage.FILE_MANAGER -> BrewAmber

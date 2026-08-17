@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" tools:targetApi="34" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.BLUETOOTH_HID_DEVICE" />
     
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
@@ -43,7 +44,8 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:usesCleartextTraffic="${cleartextTrafficPermitted}"
         android:supportsRtl="true"
-        android:theme="@style/Theme.RokidLabPhone">
+        android:theme="@style/Theme.RokidLabPhone"
+        tools:replace="android:theme,android:allowBackup,android:label">
         <activity
             android:name=".app.MainActivity"
             android:exported="true"
@@ -94,5 +96,15 @@
             android:name=".mirror.PhoneMirrorService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- 后台保活前台服务：通知栏常驻，保证 Lab 全部后台能力（语音助手/蓝牙 HID/ADB 工具/定时任务）不被系统回收 -->
+        <service
+            android:name=".keepalive.LabKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="keep_alive_background_services" />
+        </service>
     </application>
 </manifest>

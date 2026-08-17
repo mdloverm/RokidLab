@@ -15,6 +15,22 @@
 -keep class com.google.gson.** { *; }
 -dontwarn com.google.gson.**
 
+# ── 本地 OCR（rapidocr4j + onnxruntime + opencv，JNI 静态注册需保留类名）──
+-keep class io.github.hzkitty.** { *; }
+-keep class ai.onnxruntime.** { *; }
+-keep class org.opencv.** { *; }
+-dontwarn io.github.hzkitty.**
+-dontwarn ai.onnxruntime.**
+-dontwarn org.opencv.**
+
+# ── PDFBox（反射解析字体/CMap）──
+-keep class com.tom_roush.** { *; }
+-dontwarn com.tom_roush.**
+
+# ── BouncyCastle（算法注册使用反射）──
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
+
 # ── Compose ──
 -keep class androidx.compose.** { *; }
 -dontwarn androidx.compose.**

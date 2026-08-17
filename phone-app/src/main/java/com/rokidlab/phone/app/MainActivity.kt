@@ -98,6 +98,8 @@ class MainActivity : AppCompatActivity() {
     private enum class InstallStateSource { CACHED, VERIFIED }
 
     private lateinit var cxrL: CxrLHiRokidSession
+    /** 【临时测试】用于 adb broadcast 触发 AI 文字指令测试 */
+    private var aiTextTestReceiver: android.content.BroadcastReceiver? = null
     private lateinit var downloader: ApkDownloader
     private lateinit var iconLoader: IconLoader
     private lateinit var mediaLoader: MediaLoader
@@ -316,6 +318,12 @@ class MainActivity : AppCompatActivity() {
         
         // 检查是否有从FileManagerActivity传来的APK安装请求
         handleIncomingApkInstall(intent = getIntent())
+        val app = application as LabApplication
+        // 保活残留的旧会话（上次退出未 cleanup）：先释放连接，新会话干净重连。
+        // 蓝牙 HID 等系统级能力不受影响（HID 注册与 Activity 无关）。
+        if (app.hasCxrL()) {
+            app.cxrL.cleanup()
+        }
         cxrL = CxrLHiRokidSession(
             activity = this,
             onStatus = ::log,
@@ -331,8 +339,12 @@ class MainActivity : AppCompatActivity() {
             },
             initialHostApp = selectedHostApp,
             authLauncher = authLauncher::launch,
+            // 长驻任务作用域：保活场景下 ASR 推送/轮询不随 Activity 销毁取消
+            appScope = (application as LabApplication).appScope,
         )
         (application as LabApplication).setCxrL(cxrL)
+        // 保活开启时启动前台保活服务（通知栏常驻，防系统回收后台能力）
+        (application as LabApplication).startKeepAliveService()
         // 如果之前已授权，同步前置条件状态
         if (cxrL.hasAuthorization()) {
             prerequisitesState = prerequisitesState.copy(authorized = true)
@@ -351,6 +363,26 @@ class MainActivity : AppCompatActivity() {
                 isMirroring = true,
                 connectionStatus = getString(R.string.screen_projection)
             )
+        }
+
+        // 【临时测试】注册广播接收器，用 adb broadcast 触发 AI 文字指令测试
+        // 用法: adb -s <phone> shell am broadcast -a com.rokidlab.phone.TEST_AI_TEXT --es text "你好"
+        aiTextTestReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                val text = intent?.getStringExtra("text") ?: return
+                Log.i(TAG, "TEST_AI_TEXT received: \"$text\"")
+                log("TEST_AI_TEXT: \"$text\"")
+                cxrL.sendAiTextMessage(text, onResult = { ok, msg ->
+                    Log.i(TAG, "TEST_AI_TEXT result: ok=$ok, msg=$msg")
+                    runOnUiThread { log("TEST_AI_TEXT result: ok=$ok, msg=$msg") }
+                })
+            }
+        }
+        val aiFilter = android.content.IntentFilter("com.rokidlab.phone.TEST_AI_TEXT")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(aiTextTestReceiver, aiFilter, android.content.Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(aiTextTestReceiver, aiFilter)
         }
 
         setContent {
@@ -415,7 +447,7 @@ class MainActivity : AppCompatActivity() {
                         onScreenMirrorConnect = { startScreenMirror() },
                         onScreenMirrorStart = { startScreenMirror() },
                         onScreenMirrorStop = { stopRokidLinkOnGlasses() },
-                        onScreenMirrorInstallRokidLink = { installRokidLinkToGlasses() },
+                        onScreenMirrorInstallRokidLink = { reinstallRokidLinkOnGlasses() },
                         onScreenMirrorOpenRokidLink = { openRokidLinkOnGlasses() },
                         onScreenMirrorRetry = { },
                         onScreenMirrorBack = { },
@@ -426,7 +458,7 @@ class MainActivity : AppCompatActivity() {
                             if (phoneMirrorState.isMirroring) stopPhoneMirror() else startPhoneMirror()
                         },
                         onPhoneMirrorStop = { stopRokidLinkOnGlasses() },
-                        onPhoneMirrorInstallRokidLink = { installRokidLinkToGlasses() },
+                        onPhoneMirrorInstallRokidLink = { reinstallRokidLinkOnGlasses() },
                         onPhoneMirrorOpenRokidLink = { openRokidLinkOnGlasses() },
                         onPhoneMirrorRetry = { },
                         onPhoneMirrorBack = { },
@@ -434,7 +466,7 @@ class MainActivity : AppCompatActivity() {
                         onFileManagerConnect = { startFileManager() },
                         onFileManagerDisconnect = { },
                         onFileManagerStop = { stopRokidLinkOnGlasses() },
-                        onFileManagerInstallRokidLink = { installRokidLinkToGlasses() },
+                        onFileManagerInstallRokidLink = { reinstallRokidLinkOnGlasses() },
                         onFileManagerOpenRokidLink = { openRokidLinkOnGlasses() },
                         onFileManagerRetry = { },
                         onFileManagerBack = { },
@@ -449,6 +481,7 @@ class MainActivity : AppCompatActivity() {
                         onExitApp = { finishAndRemoveTask() },
                         onSettingsReinstallRokidLink = { reinstallRokidLinkOnGlasses() },
                         onExportLog = { showExportLogDialog() },
+                        onToggleKeepAlive = { toggleKeepAlive() },
                         onLaunchGlassAppViaSdk = { pkg, activity ->
                             cxrL.launchApp(
                                 packageName = pkg,
@@ -864,8 +897,17 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         // 退出时清理日志，避免下次打开看到旧日志
         LogCollector.clear()
-        cxrL.cleanup()
-        (application as LabApplication).hidManager.destroy()
+        aiTextTestReceiver?.let { runCatching { unregisterReceiver(it) } }
+        aiTextTestReceiver = null
+        if ((application as LabApplication).keepAliveEnabled) {
+            // 保活开启：保留 CxrL 蓝牙链路 + 蓝牙 HID 注册，后台能力持续运行。
+            // 重开 App 时 onCreate 会对残留旧会话先 cleanup 再建新会话，此处无需断开。
+            Log.i(TAG, "keep-alive enabled: preserving background links on destroy")
+        } else {
+            // 保活关闭：彻底清理（现状行为）
+            cxrL.cleanup()
+            (application as LabApplication).hidManager.destroy()
+        }
         super.onDestroy()
     }
 
@@ -1227,7 +1269,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun installRokidLinkToGlasses() {
+    /** 将内置 RokidLink APK 上传安装到眼镜（纯安装，不含卸载） */
+    private fun installRokidLinkToGlasses(onResult: ((Boolean) -> Unit)? = null) {
         runWithPrerequisites {
             lifecycleScope.launch {
                 updateBusy(true)
@@ -1269,10 +1312,12 @@ class MainActivity : AppCompatActivity() {
                                 log(settingsReinstallError!!)
                                 Toast.makeText(this@MainActivity, getString(R.string.toast_rokidlink_install_failed), Toast.LENGTH_SHORT).show()
                             }
+                            onResult?.invoke(installed)
                         }
                         tempFile.delete()
                     }
                 }.onFailure { e ->
+                    onResult?.invoke(false)
                     settingsReinstallError = this@MainActivity.getString(R.string.install_failed_simple, e.message)
                     log(settingsReinstallError!!)
                     Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.install_failed_simple, e.message), Toast.LENGTH_LONG).show()
@@ -1287,59 +1332,85 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 引导流程中安装 RokidLink 到眼镜（带结果回调） */
+    /** 引导流程中安装 RokidLink 到眼镜（先停止并卸载旧版，再安装，带结果回调） */
     private fun installRokidLinkForGuide(onResult: (Boolean) -> Unit) {
         lifecycleScope.launch {
             updateBusy(true)
-            android.util.Log.i("RokidLinkInstall", "=== 开始安装 RokidLink 到眼镜 ===")
-            log(getString(R.string.log_installing_rokidlink))
-            runCatching {
-                android.util.Log.i("RokidLinkInstall", "正在从 assets 读取 RokidLink.apk")
-                val apkInputStream = assets.open("RokidLink.apk")
-                val tempFile = File(cacheDir, "RokidLink.apk")
-                val size = apkInputStream.available()
-                android.util.Log.i("RokidLinkInstall", "APK 大小: ${size / 1024} KB")
-                apkInputStream.use { input ->
-                    tempFile.outputStream().use { output ->
-                        input.copyTo(output)
+            android.util.Log.i("RokidLinkInstall", "=== 开始安装 RokidLink 到眼镜（先卸载旧版）===")
+            log(getString(R.string.log_closing_rokidlink))
+            // 先停止运行中的 RokidLink
+            cxrL.stopApp(
+                packageName = "com.rokidlab.rokidlink",
+                onStopResult = { success ->
+                    log(if (success) getString(R.string.log_rokidlink_closed) else getString(R.string.log_rokidlink_close_failed))
+                },
+            )
+            // 无论 stop 成功与否，都先卸载旧版本再重新安装
+            delay(300)
+            log(getString(R.string.log_uninstalling_rokidlink))
+            cxrL.uninstallApp(
+                packageName = "com.rokidlab.rokidlink",
+                onUninstallResult = { uninstalled ->
+                    log(if (uninstalled) getString(R.string.log_rokidlink_uninstalled) else getString(R.string.log_rokidlink_uninstall_failed))
+                    // 卸载完成后再执行安装（无论卸载成功与否都尝试安装）
+                    lifecycleScope.launch {
+                        delay(500)
+                        installRokidLinkForGuideCore(onResult)
                     }
+                },
+            )
+        }
+    }
+
+    /** 引导流程：卸载完成后上传安装 RokidLink，成功后自动启动 */
+    private fun installRokidLinkForGuideCore(onResult: (Boolean) -> Unit) {
+        log(getString(R.string.log_installing_rokidlink))
+        runCatching {
+            android.util.Log.i("RokidLinkInstall", "正在从 assets 读取 RokidLink.apk")
+            val apkInputStream = assets.open("RokidLink.apk")
+            val tempFile = File(cacheDir, "RokidLink.apk")
+            val size = apkInputStream.available()
+            android.util.Log.i("RokidLinkInstall", "APK 大小: ${size / 1024} KB")
+            apkInputStream.use { input ->
+                tempFile.outputStream().use { output ->
+                    input.copyTo(output)
                 }
-                android.util.Log.i("RokidLinkInstall", "临时文件已准备: ${tempFile.absolutePath}")
-                android.util.Log.i("RokidLinkInstall", "调用 cxrL.installApk()...")
-                cxrL.installApk(tempFile) { installed ->
-                    if (installed) {
-                        android.util.Log.i("RokidLinkInstall", "=== 安装成功 ===")
-                        log(getString(R.string.log_rokidlink_installed))
-                        (application as LabApplication).setRokidLinkInstalled(true)
-                        // 安装后自动启动 RokidLink，使其 KeyButtonService 开始运行并 subscribe 消息
-                        android.util.Log.i("RokidLinkInstall", "正在启动 RokidLink...")
-                        cxrL.launchApp("com.rokidlab.rokidlink", onLaunchResult = { launched ->
-                            runOnUiThread {
-                                updateBusy(false)
-                                if (launched) {
-                                    android.util.Log.i("RokidLinkInstall", "RokidLink 启动成功")
-                                } else {
-                                    android.util.Log.w("RokidLinkInstall", "RokidLink 启动失败，WiFi 配置可能不可用")
-                                }
-                                onResult(true)
-                            }
-                        })
-                    } else {
+            }
+            android.util.Log.i("RokidLinkInstall", "临时文件已准备: ${tempFile.absolutePath}")
+            android.util.Log.i("RokidLinkInstall", "调用 cxrL.installApk()...")
+            cxrL.installApk(tempFile) { installed ->
+                if (installed) {
+                    android.util.Log.i("RokidLinkInstall", "=== 安装成功 ===")
+                    log(getString(R.string.log_rokidlink_installed))
+                    (application as LabApplication).setRokidLinkInstalled(true)
+                    // 安装后自动启动 RokidLink，使其 KeyButtonService 开始运行并 subscribe 消息
+                    android.util.Log.i("RokidLinkInstall", "正在启动 RokidLink...")
+                    cxrL.launchApp("com.rokidlab.rokidlink", onLaunchResult = { launched ->
                         runOnUiThread {
                             updateBusy(false)
-                            android.util.Log.w("RokidLinkInstall", "=== 安装失败 ===")
-                            log(getString(R.string.log_rokidlink_install_failed))
-                            onResult(false)
+                            if (launched) {
+                                android.util.Log.i("RokidLinkInstall", "RokidLink 启动成功")
+                            } else {
+                                android.util.Log.w("RokidLinkInstall", "RokidLink 启动失败，WiFi 配置可能不可用")
+                            }
+                            onResult(true)
                         }
+                    })
+                } else {
+                    runOnUiThread {
+                        updateBusy(false)
+                        android.util.Log.w("RokidLinkInstall", "=== 安装失败 ===")
+                        log(getString(R.string.log_rokidlink_install_failed))
+                        onResult(false)
                     }
-                    tempFile.delete()
                 }
-            }.onFailure { e ->
-                updateBusy(false)
-                android.util.Log.e("RokidLinkInstall", "安装异常: ${e.javaClass.simpleName}: ${e.message}")
-                log(getString(R.string.install_failed_simple, e.message))
-                onResult(false)
+                tempFile.delete()
             }
+        }.onFailure { e ->
+            updateBusy(false)
+            android.util.Log.e("RokidLinkInstall", "安装异常: ${e.javaClass.simpleName}: ${e.message}")
+            log(getString(R.string.install_failed_simple, e.message))
+            onResult(false)
         }
     }
 
@@ -1397,7 +1468,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun reinstallRokidLinkOnGlasses() {
+    private fun reinstallRokidLinkOnGlasses(onDone: ((Boolean) -> Unit)? = null) {
         settingsReinstallError = null
         rokidLinkUserStarted = false
         runWithPrerequisites {
@@ -1424,7 +1495,7 @@ class MainActivity : AppCompatActivity() {
                         // 卸载完成后再重新安装（无论卸载成功与否都尝试安装）
                         lifecycleScope.launch {
                             delay(500)
-                            installRokidLinkToGlasses()
+                            installRokidLinkToGlasses(onResult = onDone)
                         }
                     },
                 )
@@ -1503,6 +1574,14 @@ class MainActivity : AppCompatActivity() {
             errorLogSaved = false
             showErrorLogDialog = true
         }
+    }
+
+    /** 切换后台保活开关：开启启动前台保活服务（通知栏常驻），关闭停止 */
+    private fun toggleKeepAlive() {
+        val app = application as LabApplication
+        app.setKeepAliveEnabled(!app.keepAliveEnabled)
+        val msg = if (app.keepAliveEnabled) getString(R.string.keep_alive_on) else getString(R.string.keep_alive_off)
+        log("${getString(R.string.keep_alive_enabled)}: $msg")
     }
 
     /** 保存错误日志到文件并分享 */

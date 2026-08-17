@@ -33,6 +33,7 @@ object VelvetDarkColors : BrewColors {
     // 七模块七色
     // ═══════════════════════════════════════════════════
     override val store: Color = Color(0xFFE85D3F)       // 商店 — 朱砂红
+    override val chat: Color = Color(0xFF6EE7B7)        // 乐奇聊天 — 青翠绿
     override val mirror: Color = Color(0xFF5B8FB9)       // 屏幕镜像 — 静谧蓝
     override val projection: Color = Color(0xFFD4A85C)  // 手机投屏 — 画廊金
     override val fileManager: Color = Color(0xFFA78BFA) // 文件管理 — 雾紫

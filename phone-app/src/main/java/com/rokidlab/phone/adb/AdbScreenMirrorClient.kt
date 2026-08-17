@@ -42,6 +42,8 @@ class AdbScreenMirrorClient(
     private var sentSignature = false
 
     private val touchQueue = java.util.concurrent.ConcurrentLinkedQueue<Runnable>()
+    /** 独立消费 touchQueue 的线程：视频帧稀疏/静止时触摸命令仍能及时发送 */
+    private var touchThread: Thread? = null
     private val streamLock = Any()
     @Volatile private var continuousStreamId = 0
     @Volatile private var continuousStreamRemoteId = 0
@@ -190,6 +192,7 @@ class AdbScreenMirrorClient(
         }
 
         isRunning = true
+        startTouchThread()
 
         Thread {
             while (isRunning) {
@@ -312,7 +315,9 @@ class AdbScreenMirrorClient(
                     val bitrate = if (isBluetooth) AppConfig.SCRCPY_BT_BITRATE else AppConfig.SCRCPY_WIFI_BITRATE
                     val maxSize = if (isBluetooth) AppConfig.SCRCPY_BT_MAX_SIZE else AppConfig.SCRCPY_WIFI_MAX_SIZE
                     Log.i(TAG, "scrcpy config: bitrate=$bitrate, max_size=$maxSize (BT=$isBluetooth)")
-                    val shellCmd = ("shell:nohup app_process -Djava.class.path=/data/local/tmp/scrcpy-server.jar " +
+                    // 无线连接下 scrcpy 的 stay_awake 不生效，显式把屏幕超时拉满，防止镜像期间眼镜息屏导致视频冻结
+                    val keepAwakeCmd = "settings put system screen_off_timeout 2147483647 && "
+                    val shellCmd = ("shell:${keepAwakeCmd}nohup app_process -Djava.class.path=/data/local/tmp/scrcpy-server.jar " +
                             "/ com.genymobile.scrcpy.Server 3.3.4 " +
                             "stay_awake=true " +
                             "tunnel_forward=true video_bit_rate=$bitrate " +
@@ -529,6 +534,7 @@ class AdbScreenMirrorClient(
         onStatus: (String) -> Unit,
     ) {
         isRunning = true
+        startTouchThread()
         Thread {
             try {
                 continuousStreamId = localId.getAndIncrement()
@@ -688,10 +694,13 @@ class AdbScreenMirrorClient(
     }
 
     fun sendTap(x: Int, y: Int) {
+        Log.i(TAG, "sendTap queued: $x,$y")
         touchQueue.add {
+            Log.i(TAG, "sendTap executed: $x,$y")
             try {
                 val sid = localId.getAndIncrement()
                 sendPacket(CMD_OPEN, sid, 0, "shell:input tap $x $y\u0000".toByteArray(Charsets.UTF_8))
+                Log.i(TAG, "sendTap sent via shell:input tap $x $y")
             } catch (e: Exception) {
                 Log.e(TAG, "sendTap failed: ${e.message}")
             }
@@ -699,7 +708,9 @@ class AdbScreenMirrorClient(
     }
 
     fun sendSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int = 300) {
+        Log.i(TAG, "sendSwipe queued: ($x1,$y1)->($x2,$y2)")
         touchQueue.add {
+            Log.i(TAG, "sendSwipe executed: ($x1,$y1)->($x2,$y2)")
             try {
                 val sid = localId.getAndIncrement()
                 sendPacket(CMD_OPEN, sid, 0, "shell:input swipe $x1 $y1 $x2 $y2 $durationMs\u0000".toByteArray(Charsets.UTF_8))
@@ -710,7 +721,9 @@ class AdbScreenMirrorClient(
     }
 
     fun sendKeyEvent(key: String) {
+        Log.i(TAG, "sendKeyEvent queued: $key")
         touchQueue.add {
+            Log.i(TAG, "sendKeyEvent executed: $key")
             try {
                 val sid = localId.getAndIncrement()
                 sendPacket(CMD_OPEN, sid, 0, "shell:input keyevent $key\u0000".toByteArray(Charsets.UTF_8))
@@ -720,7 +733,37 @@ class AdbScreenMirrorClient(
         }
     }
 
+    /** 独立消费 touchQueue 的线程：不依赖视频流读取循环，视频帧静止时触摸仍即时发送 */
+    private fun startTouchThread() {
+        stopTouchThread()
+        touchThread = Thread {
+            while (isRunning) {
+                val cmd = touchQueue.poll()
+                if (cmd == null) {
+                    try { Thread.sleep(15) } catch (_: InterruptedException) { break }
+                    continue
+                }
+                try {
+                    cmd.run()
+                } catch (e: Exception) {
+                    Log.e(TAG, "touch command failed: ${e.message}")
+                }
+            }
+        }.apply {
+            name = "scrcpy-touch"
+            isDaemon = true
+        }
+        touchThread?.start()
+        Log.i(TAG, "touch thread started")
+    }
+
+    private fun stopTouchThread() {
+        touchThread?.interrupt()
+        touchThread = null
+    }
+
     @Throws(Exception::class)
+    @Synchronized
     private fun sendPacket(command: Int, arg0: Int, arg1: Int, payload: ByteArray?) {
         val payloadLen = payload?.size ?: 0
         val totalLen = HEADER_LENGTH + payloadLen
@@ -790,11 +833,13 @@ class AdbScreenMirrorClient(
     /** 检查 /data/local/tmp/scrcpy-server.jar 是否存在，不存在则从 assets 推送 */
     fun disconnect() {
         // 先发送断开命令（保持流线程仍可处理 ADB 响应），再停止流线程
+        restoreScreenTimeout()
         killServer()
         goHome()
         // 短暂等待命令发送完成
         try { Thread.sleep(100) } catch (_: Exception) {}
         isRunning = false
+        stopTouchThread()
         touchQueue.clear()
         try { socket?.close() } catch (_: Exception) {}
         socket = null
@@ -802,6 +847,14 @@ class AdbScreenMirrorClient(
         outputStream = null
         reusableBitmap?.recycle()
         reusableBitmap = null
+    }
+
+    /** 恢复眼镜端屏幕超时（退出镜像后恢复 30 秒默认值） */
+    private fun restoreScreenTimeout() {
+        try {
+            val sid = localId.getAndIncrement()
+            sendPacket(CMD_OPEN, sid, 0, "shell:settings put system screen_off_timeout 30000\necho ok\u0000".toByteArray(Charsets.UTF_8))
+        } catch (_: Exception) {}
     }
 
     /** 发送命令杀死眼镜端的 scrcpy-server */

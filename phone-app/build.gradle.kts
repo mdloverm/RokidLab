@@ -23,11 +23,16 @@ android {
 
     defaultConfig {
         applicationId = "com.rokidlab.phone"
-        minSdk = 28
+        minSdk = 29
         targetSdk = 34
-        versionCode = 13
-        versionName = "2.2"
+        versionCode = 15
+        versionName = "3.0"
         manifestPlaceholders["cleartextTrafficPermitted"] = "false"
+
+        // 本地 OCR（onnxruntime + opencv）体积较大，只保留主流真机 ABI
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     signingConfigs {
@@ -48,7 +53,8 @@ android {
         release {
             signingConfig = signingConfigs.getByName("release")
             buildConfigField("String", "ROKIDBREW_REGISTRY_URL", "\"${releaseRegistryUrl.asBuildConfigString()}\"")
-            isMinifyEnabled = false
+            // R8 混淆压缩 dex，减小 APK 体积（so 必须未压缩以兼容 16KB 设备）
+            isMinifyEnabled = true
             manifestPlaceholders["cleartextTrafficPermitted"] = "true"
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -71,6 +77,14 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    // so 库未压缩存储（16KB 页面设备要求，Android 16 强制）
+    // 注意：so 压缩(useLegacyPackaging=true) 会导致 16KB 设备安装失败，必须保持未压缩
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
     }
 
     // ── APK 输出命名规则 ──
@@ -133,9 +147,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     
-    // CXR-L SDK v1.0.3 (本地 AAR)
-    implementation(files("libs/client-l-1.0.3.aar"))
-    implementation(files("libs/cxr-service-bridge-1.0.aar"))
+    // CXR-L SDK v1.1.0 (Maven, 自带 16KB 对齐的 jni so, 兼容 Android 16)
+    // 1.1.0 内置 CXRServiceBridge/Caps/CXRSocketProtocol, 不再需要单独的 cxr-service-bridge
+    implementation("com.rokid.cxr:client-l:1.1.0")
+    // 移除本地旧版 AAR (client-l-1.0.3 纯 Java; cxr-service-bridge-1.0 的 so 为 4KB 对齐, 不兼容 16KB 设备)
     
     // client-l SDK 内部依赖 Gson，需要显式引入
     implementation("com.google.code.gson:gson:2.10.1")
@@ -149,4 +164,18 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.material:material")
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // 本地 OCR（PP-OCRv4 模型，ONNX Runtime 推理，无需联网/无 GMS 依赖）
+    implementation("io.github.hzkitty:rapidocr4j-android:1.0.0") {
+        // 覆盖旧版 native 依赖为 16KB 对齐版本（兼容 Android 16 页面大小）
+        // opencv 4.9.0 / onnxruntime 1.18.0 的 so 为 4KB 对齐，16KB 设备上 dlopen 会崩溃
+        exclude(group = "org.opencv", module = "opencv")
+        exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
+    }
+    implementation("org.opencv:opencv:4.12.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+    // 知识库 PDF 解析（排除旧版 BouncyCastle，与 rapidocr4j 的 bcprov-jdk18on 冲突）
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0") {
+        exclude(group = "org.bouncycastle")
+    }
 }

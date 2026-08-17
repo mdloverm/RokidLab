@@ -72,12 +72,23 @@ class ConnectionRouteManager(private val context: Context) {
 
         /** 蓝牙隧道本地端口起始号（每个目标端口分配一个本地端口） */
         private const val BT_LOCAL_PORT_BASE = 5556
+
+        /** 线路缓存有效期：命中缓存直接复用上次线路，避免每轮重复 WiFi 探测（2s 超时） */
+        private const val ROUTE_CACHE_TTL_MS = 60_000L
     }
 
     private val tunnel = BtTunnelClient(context)
 
+    /** 最近一次 resolve 的线路选择（key = "ip:port"），60s 内复用 */
+    private data class CachedRoute(val route: ConnectionRoute, val time: Long)
+    private val routeCache = ConcurrentHashMap<String, CachedRoute>()
+
     /**
      * 自动判断最佳线路。
+     *
+     * 优先复用缓存线路（60s 有效），避免频繁 WiFi 探测：
+     * 蓝牙隧道场景下 WiFi 不可达，每次 probeTcp 都要等 2s 超时——
+     * 高频短连接（AI 轮询每 1s 一次）会被拖到 3s+。
      *
      * @param wifiIp  用户配置的眼镜 WiFi IP（如 192.168.1.100）
      * @param wifiPort 目标端口（ADB=5555, 投屏=7654）
@@ -85,23 +96,43 @@ class ConnectionRouteManager(private val context: Context) {
      */
     suspend fun resolve(wifiIp: String, wifiPort: Int): ConnectionRoute =
         withContext(Dispatchers.IO) {
-            // 1. WiFi 探测
+            val key = "$wifiIp:$wifiPort"
+            val now = System.currentTimeMillis()
+
+            // 1. 缓存命中：直接复用上次线路（隧道持续运行，start 幂等）
+            routeCache[key]?.let { cached ->
+                if (now - cached.time < ROUTE_CACHE_TTL_MS) {
+                    Log.i(TAG, "Route cache hit: ${cached.route}")
+                    return@withContext cached.route
+                }
+                routeCache.remove(key)
+            }
+
+            // 2. WiFi 探测
             if (wifiIp.isNotBlank() && probeTcp(wifiIp, wifiPort)) {
                 Log.i(TAG, "Route: WiFi $wifiIp:$wifiPort")
-                return@withContext ConnectionRoute.Wifi(wifiIp, wifiPort)
+                val route = ConnectionRoute.Wifi(wifiIp, wifiPort)
+                routeCache[key] = CachedRoute(route, now)
+                return@withContext route
             }
             Log.i(TAG, "WiFi unreachable ($wifiIp:$wifiPort), trying BT...")
 
-            // 2. 蓝牙隧道（支持任意端口）
+            // 3. 蓝牙隧道（支持任意端口）
             val localPort = BT_LOCAL_PORT_BASE + wifiPort - 5555
             if (tunnel.start(localPort, wifiPort)) {
                 Log.i(TAG, "Route: BT tunnel :$localPort → :$wifiPort")
-                return@withContext ConnectionRoute.Bluetooth(localPort, wifiPort)
+                val route = ConnectionRoute.Bluetooth(localPort, wifiPort)
+                routeCache[key] = CachedRoute(route, now)
+                return@withContext route
             }
 
             Log.w(TAG, "No route available")
+            routeCache.remove(key)
             ConnectionRoute.None
         }
+
+    /** 清除线路缓存（隧道断线等异常后调用，强制重新探测） */
+    fun clearRouteCache() = routeCache.clear()
 
     /** TCP 可达性探测 */
     private fun probeTcp(ip: String, port: Int): Boolean = try {
@@ -192,6 +223,8 @@ class BtTunnelClient(private val context: Context) {
                     try {
                         val tcpSocket = server.accept()
                         Log.i(TAG, "Client connected on :$localPort")
+                        // 注意：RFCOMM 蓝牙连接仅支持单连接，必须串行处理。
+                        // 后台轮询等长连接会独占隧道，其它 ADB 功能请走短连接或独立隧道。
                         handleConnection(tcpSocket, glasses, targetPort)
                     } catch (e: IOException) {
                         if (servers.containsKey(localPort)) Log.e(TAG, "Accept error: ${e.message}")

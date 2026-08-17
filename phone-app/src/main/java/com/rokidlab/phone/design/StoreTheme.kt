@@ -142,6 +142,7 @@ val BrewBorder: Color get() = BrewThemeManager.currentColors.border
 
 // 七模块七色（固定用途）
 val BrewCoral: Color get() = BrewThemeManager.currentColors.store      // 商店
+val BrewChat: Color get() = BrewThemeManager.currentColors.chat        // 乐奇聊天
 val BrewCyan: Color get() = BrewThemeManager.currentColors.mirror      // 屏幕镜像
 val BrewPurple: Color get() = BrewThemeManager.currentColors.projection // 手机投屏
 val BrewAmber: Color get() = BrewThemeManager.currentColors.fileManager  // 文件管理

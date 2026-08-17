@@ -253,12 +253,65 @@
 
     <!-- Navigation tab -->
     <string name="nav_store">应用商店</string>
+    <string name="nav_chat">乐奇聊天</string>
     <string name="nav_screen_mirror">屏幕镜像</string>
     <string name="nav_phone_mirror">手机投屏</string>
     <string name="nav_file_manager">文件管理</string>
     <string name="nav_adb_tools">ADB工具</string>
     <string name="nav_hid_gamepad">蓝牙手柄</string>
     <string name="nav_settings">设置</string>
+
+    <!-- 乐奇聊天 -->
+    <string name="chat_title">乐奇聊天</string>
+    <string name="chat_subtitle">文字对话 · 眼镜语音播报</string>
+    <string name="chat_input_hint">输入消息...</string>
+    <string name="chat_send">发送</string>
+    <string name="chat_key_dialog_cancel">取消</string>
+    <string name="chat_sending">正在连接眼镜发送中...</string>
+    <string name="chat_send_failed">发送失败</string>
+    <string name="chat_reply_failed">AI 回复失败</string>
+    <string name="chat_empty_hint">和乐奇开始聊天吧，回复将通过眼镜语音播报</string>
+
+    <!-- 乐奇聊天 - AI 服务设置 -->
+    <string name="chat_settings">AI 设置</string>
+    <string name="chat_settings_title">AI 服务设置</string>
+    <string name="chat_settings_hint">支持 OpenAI 兼容接口（DeepSeek / 通义 / Kimi / Ollama 等）</string>
+    <string name="chat_settings_base_url">服务地址</string>
+    <string name="chat_settings_api_key">API 密钥</string>
+    <string name="chat_settings_model">模型名</string>
+    <string name="chat_settings_quiz">按键答题</string>
+    <string name="chat_settings_quiz_hint">打开后短按镜腿按键 = 拍照问 AI，原短按功能失效，长按不受影响</string>
+    <string name="chat_settings_ai_mode">对话模型</string>
+    <string name="chat_settings_ai_mode_hint">打开 = 自定义模型（Lab 拦截并回复）；关闭 = 官方乐奇</string>
+    <string name="chat_settings_tools">AI 工具</string>
+    <string name="chat_settings_tools_hint">开启后，乐奇可在对话中调用以下本地能力</string>
+    <string name="chat_settings_save">保存</string>
+    <string name="chat_settings_saved">已保存</string>
+    <string name="chat_settings_save_failed">保存失败，请重试</string>
+    <string name="chat_settings_model_fetch">获取模型列表</string>
+    <string name="chat_settings_model_refresh">刷新模型列表</string>
+    <string name="chat_settings_model_fetching">正在获取模型列表...</string>
+    <string name="chat_settings_model_fetch_need_key">请先填写 API 密钥</string>
+    <string name="chat_settings_model_fetch_failed">获取模型失败，可手动输入模型名</string>
+    <string name="chat_settings_model_fetch_empty">未获取到模型，可手动输入模型名</string>
+
+    <!-- 乐奇聊天 - 拍照问 AI -->
+    <string name="chat_photo_ask">拍照问 AI</string>
+    <string name="chat_kb">知识库</string>
+    <string name="chat_photo_status">正在让眼镜拍照...</string>
+    <string name="chat_ocr_status">正在识别题目文字...</string>
+    <string name="chat_kb_status">正在检索知识库...</string>
+    <string name="chat_ai_status">正在生成答案...</string>
+    <string name="chat_ocr_empty">未能识别到文字，请调整拍摄角度后重试</string>
+    <string name="chat_photo_failed">拍照失败</string>
+    <string name="chat_kb_title">知识库</string>
+    <string name="chat_kb_subtitle">导入 txt / pdf 文档，拍照问 AI 时自动检索相关资料</string>
+    <string name="chat_kb_import">导入文档</string>
+    <string name="chat_kb_empty">知识库为空，请先导入文档</string>
+    <string name="chat_kb_delete">删除</string>
+    <string name="chat_kb_import_failed">导入失败（仅支持 txt / pdf）</string>
+    <string name="chat_kb_imported">已导入 %1$s</string>
+    <string name="chat_kb_confirm_delete">删除「%1$s」？删除后不可恢复</string>
 
     <!-- Store main interface -->
     <string name="featured_apps">精选应用</string>
@@ -335,6 +388,32 @@
     <string name="starting_glasses_failed">启动眼镜端失败</string>
     <string name="timer_channel_name">定时消息</string>
     <string name="timer_channel_desc">来自 ADB 工具的定时消息</string>
+    <string name="keep_alive_channel_name">后台保活</string>
+    <string name="keep_alive_channel_desc">Rokid Lab 后台保活服务通知</string>
+    <string name="keep_alive_notification_title">Rokid Lab 后台运行中</string>
+    <string name="keep_alive_notification_text">语音助手、蓝牙键盘、ADB 工具持续可用</string>
+    <string name="keep_alive_enabled">后台保活</string>
+    <string name="keep_alive_on">已开启</string>
+    <string name="keep_alive_off">已关闭</string>
+    <string name="keep_alive_desc">常驻通知栏，防止系统回收后台服务</string>
+
+    <!-- AI 工具（ToolRegistry 设置页展示） -->
+    <string name="ai_tool_search_knowledge_base_name">知识库检索</string>
+    <string name="ai_tool_search_knowledge_base_desc">当问题涉及已导入的文档资料（说明书、笔记等）时，自动检索知识库获取答案</string>
+    <string name="ai_tool_get_current_time_name">当前时间</string>
+    <string name="ai_tool_get_current_time_desc">回答"现在几点""今天几号""星期几"等时间问题</string>
+    <string name="ai_tool_get_glasses_battery_name">眼镜电量</string>
+    <string name="ai_tool_get_glasses_battery_desc">查询眼镜剩余电量，回答"眼镜还有多少电""要不要充电"</string>
+    <string name="ai_tool_get_glasses_device_info_name">眼镜系统信息</string>
+    <string name="ai_tool_get_glasses_device_info_desc">查询眼镜的系统信息（型号、厂商、系统版本、SDK 版本、序列号）</string>
+    <string name="ai_tool_get_glasses_storage_name">眼镜存储空间</string>
+    <string name="ai_tool_get_glasses_storage_desc">查询眼镜存储空间使用情况（已用、可用空间）</string>
+    <string name="ai_tool_list_glasses_apps_name">已装应用列表</string>
+    <string name="ai_tool_list_glasses_apps_desc">列出眼镜上安装的应用，回答"眼镜上装了哪些应用"</string>
+    <string name="ai_tool_launch_glasses_app_name">打开应用</string>
+    <string name="ai_tool_launch_glasses_app_desc">打开眼镜上安装的应用，回答"打开小智""打开浏览器""打开游戏"等</string>
+    <string name="ai_tool_set_timer_name">定时任务</string>
+    <string name="ai_tool_set_timer_desc">创建定时提醒/定时任务，回答"5分钟后提醒我喝水""明早8点叫我""17点打开小智"等</string>
     <string name="phone_mirror_channel">手机投屏</string>
     <string name="phone_mirror_channel_desc">手机屏幕投射到眼镜</string>
     <string name="phone_mirror_projecting">正在投射屏幕到眼镜</string>

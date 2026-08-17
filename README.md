@@ -1,6 +1,6 @@
 # RokidLab
 
-Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具、屏幕镜像、手机投屏、文件管理等功能。
+Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、蓝牙手柄、ADB工具、屏幕镜像、手机投屏、文件管理等功能。
 
 > 设计师请参考 [UI-DESIGN.md](./UI-DESIGN.md)，开发者请参考 [DEV_GUIDE.md](./DEV_GUIDE.md)。
 
@@ -40,6 +40,7 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - **定时功能**：
   - 定时消息：设定间隔和次数，通过 ADB 推送通知到眼镜（`cmd notification post` + 文件写入）
   - 定时打开应用：周期性在眼镜上启动指定应用
+  - **TTS 语音播报**：到点通过 CXR-L 通道让眼镜语音播报提醒内容（语音说"5分钟后提醒我喝水"自动创建，App 退后台也能到点触发）
 - **系统信息**：查看眼镜设备属性、电量信息，三大块（设备/存储/电池）使用不同导航栏色区分
 - **Shell 命令**：Shell> 前缀和回车键使用非标题色
 - **输入模拟**：发送文本、按键、点击、滑动事件
@@ -59,6 +60,21 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - **分类标签本地化**：22 种应用分类支持中英文标签，随语言切换自动变化
 - **本地 APK 安装**：支持从文件管理器选择本地 APK 文件安装到眼镜
 - **安装状态优化**：改进安装状态显示和错误处理，提供更清晰的安装反馈
+
+### 乐奇 AI 聊天
+- **文字对话**：与 AI 文字聊天，回复通过眼镜语音播报（OpenAI 兼容协议，默认 DeepSeek，可自由配置 baseUrl / apiKey / model 切换通义千问、Kimi、智谱、本地 Ollama 等任意服务商）
+- **多轮对话**：自动携带历史上下文，持续多轮交流
+- **眼镜语音播报**：AI 回复经 CXR-L 通道发送到眼镜端语音朗读
+- **拍照问 AI**：镜腿按键 / 手机按钮双入口触发 —— 眼镜拍照 → 本地 OCR 识别题目文字 → 知识库检索（RAG）→ AI 生成答案并语音播报
+- **本地 OCR**：完全离线识别（PP-OCRv4 模型 + ONNX Runtime 推理），无网络、无 GMS 依赖，16KB 页面设备兼容
+- **本地知识库**：支持导入 txt / PDF 文档，自动分块入库（SQLite）并关键词检索，为 AI 提供参考资料（RAG）
+- **按键答题开关**：开启后短按镜腿按键直接触发拍照问 AI，覆盖原自定义按键短按，长按不受影响
+- **AI 工具（语音控制）**：内置 8 个工具，一句话直达能力：
+  - **打开应用**："打开小智""打开浏览器"（自动名称匹配已装应用）
+  - **定时任务**："5分钟后提醒我喝水""明早8点叫我""17点打开小智"（到点眼镜语音播报，可同时打开应用）
+  - **查询类**：眼镜电量、系统信息、存储空间、已装应用、当前时间、知识库检索
+  - 工具开关在聊天设置 →「管理 AI 工具」子页面统一管理，支持中英文
+- **语音打断修复**：眼镜端下行过滤窗口仅由 Lab 完整下行序列触发，打断指令不再吞掉用户的真实提问
 
 ### 屏幕镜像
 - 将眼镜屏幕实时显示在手机上（ADB over TCP 自定义实现）
@@ -89,7 +105,7 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 ### 全品牌兼容性
 - **投屏黑屏修复**：华为 EMUI 12+、小米 MIUI 14+、OPPO ColorOS 13+、vivo Funtouch OS 13+ 自动禁用 HWC + 强制软件渲染
 - **芯片适配**：联发科/麒麟芯片自动降级投屏分辨率（640×480 → 320×426），编码器回退到 OMX.google.h264.encoder
-- **后台保活**：国产 ROM 自动引导电池优化白名单 + 自启动权限 + vivo 10分钟后台硬限制提示
+- **后台保活**：前台服务（通知栏常驻）保进程，国产 ROM 自动引导电池优化白名单 + 自启动权限 + vivo 10分钟后台硬限制提示
 - **三星适配**：Deep Sleep 检测日志，避免前台服务超 15 分钟被降权
 - **蓝牙兼容**：QTI（高通）蓝牙栈 HID sendReport 自动降级、HOGP 手动开启引导
 - **悬浮窗检测**：OPPO/vivo 悬浮窗权限检测，投屏前自动引导开启
@@ -112,17 +128,24 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - **多语言切换**：支持简体中文/English 随时切换，首次启动自动检测系统语言
 - 应用版本和更新
 - **系统日志面板**：提供实时日志查看功能，便于调试和问题排查
+- **提交应用**：开发者直接在设置页填写应用信息表单（图标/截图/版本/下载地址等），一键通过 Gitee API 提交到商店注册表，无需手动编辑 JSON
+- **后台保活开关**：前台服务（通知栏常驻）保证语音助手/蓝牙键盘/ADB 工具/定时任务在 App 退后台或 Activity 销毁后持续运行，防止系统回收（START_STICKY 自愈）
 
 ## 技术栈
 
 - **语言**: Kotlin
 - **UI**: Jetpack Compose (Material 3)
 - **本地化**: Android 原生资源系统（`values/` + `values-en/`），运行时 `AppCompatDelegate.setApplicationLocales()` 切换，Crowdin 云端翻译管理
-- **设计风格**: 双主题配色系统 — 丝绒炭黑（Velvet Dark，暖暗调） + 冰蓝冰川（Cool Blue，浅蓝冷调），7 模块 7 色配色体系，详见 [UI-DESIGN.md](./UI-DESIGN.md)
+- **设计风格**: 双主题配色系统 — 丝绒炭黑（Velvet Dark，暖暗调） + 冰蓝冰川（Cool Blue，浅蓝冷调），8 模块 8 色配色体系，详见 [UI-DESIGN.md](./UI-DESIGN.md)
 - **通信**:
-  - CXR-L SDK（手机-眼镜通信，用于安装/启动/卸载应用）
+  - CXR-L SDK（手机-眼镜通信，用于安装/启动/卸载应用、AI 语音播报）
   - ADB over TCP（自定义协议实现，无需 adb.exe，用于文件管理、ADB工具和屏幕镜像）
   - 蓝牙 HID Device 协议（手机模拟键盘/鼠标/游戏手柄）
+  - 蓝牙隧道（RFCOMM 转发）与 WiFi 直连双线路，`ConnectionRouteManager` 统一路由管理
+- **AI**:
+  - OpenAI 兼容协议客户端（`OpenAiService`，可切换任意服务商）
+  - 本地 OCR（RapidOCR / PP-OCRv4 + ONNX Runtime，完全离线）
+  - 本地知识库 RAG（txt / PDF 导入，SQLite 分块检索，PDFBox 解析）
 - **投屏**: MediaProjection API + Socket 传输
 - **统一 HTTP 工具**: `HttpClient` 对象封装（替代裸 `HttpURLConnection`）
 - **统一交互组件**: `BrewButton`/`BrewOutlineButton`/`BrewCompactButton`/`BrewIconButton` 标准按钮系统、`BrewDialog` 标准对话框（RokidLink 卡片样式：彩色标题栏 + 装饰分隔线 + 彩色边框）、`BrewStatusDot`/`BrewStatusPill`/`BrewStateCard` 标准状态指示器（详见 [UI-DESIGN.md](./UI-DESIGN.md)）
@@ -133,7 +156,7 @@ Rokid 眼镜配套手机应用，提供应用商店、蓝牙手柄、ADB工具�
 - **运行时语言切换**: 通过 `LocalizationManager` + `AppCompatDelegate.setApplicationLocales()` 实现无需重启的语言切换
 - **首次启动自动检测**: 自动检测系统语言并应用对应翻译
 - **例外**: 品牌名（ROKIDLAB、ROKIDLINK）、技术术语（ADB、TCP、HTTP）、作者信息等保持原文
-- **最低版本**: Android 9 (API 28)
+- **最低版本**: Android 10 (API 29)
 
 ## 代码质量与安全
 
@@ -197,7 +220,8 @@ RokidLab/
 │   │   │   │   ├── AdbFileManagerClient.kt  文件管理 ADB 客户端
 │   │   │   │   ├── AdbScreenMirrorClient.kt 屏幕镜像 ADB 客户端
 │   │   │   │   ├── AdbPasteCompat.kt        ADB 原始协议粘贴工具（TCP 连接眼镜 ADB 5555 端口执行粘贴）
-│   │   │   │   └── AdbKeyManager.kt         RSA 密钥持久化管理（所有 ADB Client 共享）
+│   │   │   │   ├── AdbKeyManager.kt         RSA 密钥持久化管理（所有 ADB Client 共享）
+│   │   │   │   └── TimerScheduler.kt        定时任务调度器（持久化 + 常驻触发 + TTS 播报）
 │   │   │   ├── design/      设计系统
 │   │   │   ├── StoreTheme.kt      配色/字体/主题（主入口，主题管理 + 全局颜色）
 │   │   │   ├── DesignComponents.kt 全局 UI 组件（错误/警告/加载/结果卡片）
@@ -207,17 +231,27 @@ RokidLab/
 │   │   │   │   ├── VelvetDarkColors.kt   默认主题（丝绒炭黑）
 │   │   │   │   └── CoolBlueColors.kt     第二主题（冰蓝冰川）
 │   │   │   └── RokidHostApp.kt    HostApp 枚举
+│   │   │   ├── ai/          AI 能力
+│   │   │   │   ├── OpenAiService.kt    OpenAI 兼容服务（可切换任意服务商）
+│   │   │   │   ├── ToolRegistry.kt     AI 工具注册表（语音控制：打开应用/定时任务/查询类）
+│   │   │   │   ├── LocalOcr.kt         本地 OCR（PP-OCRv4 + ONNX Runtime）
+│   │   │   │   └── KnowledgeBase.kt    本地知识库 RAG（txt/PDF 导入、分块、SQLite 检索）
+│   │   │   ├── connection/  连接路由
+│   │   │   │   └── ConnectionRouteManager.kt  WiFi 直连 / 蓝牙隧道双线路路由管理
 │   │   │   ├── filemanager/  文件管理
 │   │   │   │   └── FileManagerActivity.kt  文件管理器界面/组件
 │   │   │   ├── glasses/     眼镜通信/UI
-│   │   │   │   ├── CxrLHiRokidSession.kt        CXR-L 会话封装
+│   │   │   │   ├── CxrLHiRokidSession.kt        CXR-L 会话封装（AI 对话/拍照问 AI 公共流程）
 │   │   │   │   ├── ConnectionPanel.kt           连接状态面板
 │   │   │   │   ├── GuideScreen.kt               引导界面
 │   │   │   │   ├── FullCXRLinkCallback.kt       CXR-L 连接回调
 │   │   │   │   └── PhoneInstallResultReceiver.kt 安装结果接收器
 │   │   │   ├── hid/         蓝牙 HID
 │   │   │   │   ├── BluetoothHidManager.kt   HID 设备管理（注册/连接/报表发送）
-│   │   │   │   └── GamepadActivity.kt       手柄按键/鼠标模式 Activity
+│   │   │   │   ├── GamepadActivity.kt       手柄按键/鼠标模式 Activity
+│   │   │   │   └── HidGamepadScreen.kt      手柄按键自定义布局界面
+│   │   │   ├── keepalive/   后台保活
+│   │   │   │   └── LabKeepAliveService.kt   前台保活服务（通知栏常驻 + START_STICKY 自愈）
 │   │   │   ├── mirror/      投屏模块
 │   │   │   │   ├── PhoneMirrorActivity.kt     手机投屏页面
 │   │   │   │   ├── PhoneMirrorService.kt      投屏前台 Service（独立线程池异步重连、方向缓存、mirrorLock 同步锁、isReconnecting 防循环、帧健康看门狗30s）
@@ -232,9 +266,11 @@ RokidLab/
 │   │   │   │   └── MediaLoader.kt     媒体加载（基于 HttpClient）
 │   │   │   ├── settings/    设置页
 │   │   │   │   ├── SettingsScreen.kt   设置界面
+│   │   │   │   ├── DeveloperScreen.kt  开发者提交应用（Gitee API 直提注册表）
 │   │   │   │   └── SystemLogPanel.kt   日志面板
 │   │   │   ├── store/       商店 UI
 │   │   │   │   ├── StoreHomeScreen.kt    主界面入口（含 ADB工具/底栏等全部页面）
+│   │   │   │   ├── ChatScreen.kt         乐奇聊天界面（对话/拍照问 AI/知识库管理/AI 设置）
 │   │   │   │   ├── StoreComponents.kt    通用 UI 组件
 │   │   │   │   ├── StoreInstallState.kt  安装状态组件
 │   │   │   │   ├── StoreMedia.kt         媒体/图标组件
@@ -304,7 +340,7 @@ RokidLab/
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v2.0-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v2.3-beta-debug.apk
 ```
 
 ### 眼镜端服务
@@ -317,14 +353,15 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 
 1. 确保眼镜已连接到与手机相同的 WiFi 网络
 2. 在手机端打开 RokidLab，按照引导授权并连接眼镜
-3. 导航栏分为七个模块：
+3. 导航栏分为八个模块：
    - **应用商店**：浏览并安装应用到手机或眼镜
+   - **乐奇聊天**：与 AI 文字聊天（回复眼镜语音播报）、拍照问 AI、本地知识库
    - **屏幕镜像**：查看眼镜屏幕画面
    - **手机投屏**：将手机画面投射到眼镜
    - **文件管理**：浏览和管理眼镜文件
    - **ADB 工具**：应用管理、定时消息/启动、系统信息、Shell 命令（四子功能使用其他导航栏色区分）
    - **蓝牙手柄**：鼠标/游戏手柄模式控制眼镜
-   - **设置**：应用配置、服务管理、**语言切换**
+   - **设置**：应用配置、服务管理、**提交应用**、**语言切换**
 
 > **RokidLink 卡片色彩规则**：已安装/运行中 → 各自模块导航栏色；未安装/安装中/停止按钮 → 应用商店色（BrewCoral）；启动按钮 → 各自导航栏色。
 
@@ -338,10 +375,12 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 
 ## 依赖
 
-- **CXR-L SDK** (`client-l-1.0.3.aar`) — 手机端与眼镜通信
-- **CXR-S SDK** (`cxr-service-bridge-1.0.aar`) — 眼镜端桥接服务
+- **CXR-L SDK** (`com.rokid.cxr:client-l:1.1.0`，Maven) — 手机端与眼镜通信，内置 16KB 对齐 so，兼容 Android 16
+- **CXR-S SDK** (`cxr-service-bridge`) — 眼镜端桥接服务（client-l 1.1.0 内置）
 - Jetpack Compose (Material 3) — 现代 UI 框架
 - 蓝牙 HID Device Profile — 系统 API（Android 9+）
+- RapidOCR (`rapidocr4j-android` + OpenCV 4.12 + ONNX Runtime 1.22) — 本地离线 OCR
+- PDFBox (`pdfbox-android`) — 知识库 PDF 文档解析
 
 ## UI 设计
 

@@ -53,6 +53,7 @@ class BtTunnelServer {
                     try {
                         val socket = serverSocket?.accept() ?: break
                         Log.i(TAG, "Tunnel client connected")
+                        // 注意：RFCOMM 蓝牙连接仅支持单连接，必须串行处理（并发会互抢导致隧道反复断开）
                         handleConnection(socket)
                     } catch (e: IOException) {
                         if (isRunning) Log.e(TAG, "Accept error: ${e.message}")

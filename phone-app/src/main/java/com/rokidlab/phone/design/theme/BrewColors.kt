@@ -34,6 +34,7 @@ interface BrewColors {
     // 七模块七色（固定用途）
     // ═══════════════════════════════════════════════════
     val store: Color                 // 商店
+    val chat: Color                  // 乐奇聊天
     val mirror: Color                // 屏幕镜像
     val projection: Color            // 手机投屏
     val fileManager: Color           // 文件管理

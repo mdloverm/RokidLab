@@ -124,11 +124,10 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
     }
 
     override fun onDisconnected() {
-        runOnUiThread {
-            imageView.setImageBitmap(null)
-            // 断连后退到后台（不关闭），RokidLink 保持运行，投屏 Server 继续等待重连
-            moveTaskToBack(true)
-        }
+        // 断连时不退后台：手机端 PhoneMirrorService 会自动重连，
+        // 若退后台则重连成功后画面更新在后台不可见（"投屏中但眼镜无画面"）。
+        // 保持前台等待重连恢复；正常停止投屏由手机端 stopApp 关闭本页面。
+        Log.i(TAG, "Phone disconnected, staying foreground to await reconnect")
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {

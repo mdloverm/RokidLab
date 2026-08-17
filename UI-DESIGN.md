@@ -777,6 +777,11 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
     → BrutalButton "重装眼镜端" [BrewWarning #F0A050] 停止→等待800ms→推送安装
       安装中时: label 变为 "正在安装中..."，enabled=false 半透明不可点击
 
+  → ── 后台保活 ──
+    → SettingCard "后台保活" 已开启(BrewSuccess)/已关闭(BrewMuted) [可点击切换]
+      点击后立即持久化开关并启停前台保活服务（通知栏常驻）
+    → SettingCard "后台保活说明" "常驻通知栏，防止系统回收后台服务" [BrewMagenta]
+
   → ── 语言 ──
     → LanguageSwitcher:
       背景 BrewPanel, 圆角 12dp, 边框 1dp BrewBorder
@@ -893,6 +898,33 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 - 间隔/次数行同上
 - BrutalButton "▶ 启动" [BrewCyan] / "■ 停止" [BrewRed]
 - 已执行计数: "已执行: {n}/{total}" 12sp BrewMuted
+
+**模块3 — 定时任务动作（含 TTS 语音播报）：**
+- 定时任务支持多动作：发送通知 / 打开应用 / Shell 命令 / 点击 / 按键 / **TTS 语音播报**
+- TTS 播报：到点通过 CXR-L 下行 `tts_play` 通道让眼镜语音朗读提醒内容（App 退后台仍可触发）
+- 语音创建的定时任务（AI 说"5分钟后提醒我喝水"）自动附带 TTS 播报 + 本地通知
+- 定时任务持久化存储，保活服务重启后自动恢复运行中的任务
+
+---
+
+### 4.8 AI 工具管理子页面（ToolsManagePage）
+
+| 属性 | 值 |
+|------|-----|
+| 容器 | Dialog 全屏（usePlatformDefaultWidth=false），背景 BrewBg |
+| 入口 | 聊天设置 →「管理 AI 工具」行（右侧 › 箭头） |
+| 内边距 | 20dp |
+
+**布局：**
+- 顶栏: 标题 "AI 工具" 18sp Bold BrewTextBright + "完成" 按钮 BrewChat（点击保存全部开关并返回）
+- 副标题: 12sp BrewMuted（说明语）
+- 工具列表（可滚动）:
+  - 每个工具一张卡片: BrewPanel + 1dp BrewBorder + 12dp 圆角 + 10dp 内边距
+  - 左侧: 工具名 14sp Medium BrewTextBright + 描述 11sp BrewMuted（走多语言资源）
+  - 右侧: Switch（checkedTrackColor=BrewChat / unchecked=BrewPanelHi）
+  - 开关状态实时修改，点"完成"统一持久化
+
+**工具清单（8 个，默认全开）：** 知识库检索 / 当前时间 / 眼镜电量 / 眼镜系统信息 / 眼镜存储空间 / 已装应用列表 / 打开应用 / 定时任务
 
 ---
 
@@ -1232,6 +1264,18 @@ lifecycleScope.launch {
 ---
 
 ## 八、版本历史
+
+### v2.3-beta (2026-08-17)
+
+**后台保活 + 语音控制工具 + 语音定时**
+
+- **后台保活**：新增前台保活服务（通知栏常驻 + START_STICKY 自愈 + specialUse 类型），保证语音助手/蓝牙键盘/ADB 工具/定时任务在 App 退后台后持续运行；设置页新增保活开关（默认开启）
+- **长驻任务解耦**：ASR 轮询/推送等从 Activity lifecycleScope 迁出到 Application 级 appScope，Activity 销毁不断链
+- **AI 工具扩展**：新增「打开应用」（语音"打开小智"，自动名称匹配已装应用）与「定时任务」（语音"5分钟后提醒我喝水"）
+- **语音定时**：定时任务新增 TTS 语音播报动作，到点经 CXR-L `tts_play` 通道眼镜语音提醒，持久化 + 保活常驻触发
+- **AI 工具管理子页面**：聊天设置 →「管理 AI 工具」，8 个工具开关统一管理，名称/描述走多语言
+- **应用名统一**：小智应用商店注册名统一为「小智AI」（手机端/注册表/RokidBrew 三方同步）
+- **语音打断修复**：眼镜端下行过滤窗口仅由完整下行序列触发，打断指令不再吞掉用户提问
 
 ### v2.0 (2026-07-03)
 

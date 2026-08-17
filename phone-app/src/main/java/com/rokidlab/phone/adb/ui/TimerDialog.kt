@@ -3,7 +3,6 @@ package com.rokidlab.phone.adb.ui
 import com.rokidlab.phone.adb.AdbShellClient
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.R
-import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,10 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import java.util.*
 
 sealed class TimerAction {
@@ -36,6 +32,7 @@ sealed class TimerAction {
     data class ExecuteShell(val command: String) : TimerAction()
     data class Tap(val x: Int, val y: Int) : TimerAction()
     data class SendKeyEvent(val keyCode: Int) : TimerAction()
+    data class TtsSpeak(val text: String) : TimerAction()
 }
 
 sealed class TimerSchedule {
@@ -67,7 +64,8 @@ fun TimerDialog(
         icon = null,
         subtitle = context.getString(R.string.adb_tools_timer_subtitle),
     ) { c ->
-        var tasks by remember { mutableStateOf(emptyList<TimerTask>()) }
+        val scheduler = (context.applicationContext as com.rokidlab.phone.app.LabApplication).timerScheduler
+        var tasks by remember { mutableStateOf(scheduler.tasks) }
         var selectedTaskId by remember { mutableStateOf<String?>(null) }
         var showTaskEditor by remember { mutableStateOf(false) }
         var editingTask by remember { mutableStateOf<TimerTask?>(null) }
@@ -84,40 +82,14 @@ fun TimerDialog(
 
         var appPackages by remember { mutableStateOf(emptyList<String>()) }
         var appLoading by remember { mutableStateOf(true) }
-        val activeJobs by remember { mutableStateOf(mutableStateMapOf<String, Job>()) }
         var selectedActionType by remember { mutableStateOf("notify") }
 
         LaunchedEffect(Unit) {
             appLoading = true; val pkgs = withContext(Dispatchers.IO) { c.listPackages(false) }; appPackages = pkgs; appLoading = false
         }
 
-        fun postLocalNotification(text: String) {
-            try {
-                val nm = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    val channel = android.app.NotificationChannel("timer_notify", context.getString(R.string.timer_notification_channel), android.app.NotificationManager.IMPORTANCE_HIGH).apply { description = context.getString(R.string.timer_notification_channel_desc) }
-                    nm.createNotificationChannel(channel)
-                }
-                val notification = android.app.Notification.Builder(context, "timer_notify").setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("Rokid").setContentText(text).setAutoCancel(true).setPriority(android.app.Notification.PRIORITY_HIGH).apply { if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) setChannelId("timer_notify") }
-                @Suppress("DEPRECATION") if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) notification.setPriority(android.app.Notification.PRIORITY_HIGH)
-                nm.notify(System.currentTimeMillis().toInt(), notification.build())
-            } catch (e: Exception) { Log.w("Timer", "Local notification failed: ${e.message}") }
-        }
-
-        suspend fun executeAction(action: TimerAction) {
-            try { when (action) { is TimerAction.SendNotification -> { postLocalNotification(action.content); withContext(Dispatchers.IO) { c.sendNotification(action.title, action.content) } }; is TimerAction.LaunchApp -> withContext(Dispatchers.IO) { c.launchApp(action.packageName) }; is TimerAction.ExecuteShell -> withContext(Dispatchers.IO) { c.executeShellCommand(action.command) }; is TimerAction.Tap -> withContext(Dispatchers.IO) { c.tap(action.x, action.y) }; is TimerAction.SendKeyEvent -> withContext(Dispatchers.IO) { c.sendKeyEvent(action.keyCode) } } } catch (e: Exception) { Log.w("Timer", "executeAction ${action.javaClass.simpleName} failed: ${e.message}") }
-        }
-
-        fun runTask(task: TimerTask) {
-            val taskId = task.id; if (activeJobs.containsKey(taskId)) return; tasks = tasks.map { t -> if (t.id == taskId) t.copy(running = true) else t }
-            val job = scope.launch {
-                try { when (task.schedule) { is TimerSchedule.Interval -> { for (i in 0 until task.schedule.count) { if (!activeJobs.containsKey(taskId)) break; task.actions.forEach { executeAction(it) }; tasks = tasks.map { t -> if (t.id == taskId) t.copy(executedCount = t.executedCount + 1) else t }; if (i < task.schedule.count - 1) delay(task.schedule.seconds * 1000L) } }; is TimerSchedule.FixedTime -> { val now = Calendar.getInstance(); val target = Calendar.getInstance().apply { set(Calendar.HOUR_OF_DAY, task.schedule.hour); set(Calendar.MINUTE, task.schedule.minute); set(Calendar.SECOND, 0) }; var delayMs = target.timeInMillis - now.timeInMillis; if (delayMs < 0) delayMs += if (task.schedule.repeatDaily) 24 * 3600 * 1000L else 0L; if (delayMs > 0) delay(delayMs); if (activeJobs.containsKey(taskId)) { task.actions.forEach { executeAction(it) }; tasks = tasks.map { t -> if (t.id == taskId) t.copy(executedCount = t.executedCount + 1) else t }; if (task.schedule.repeatDaily) runTask(task) } }; is TimerSchedule.Countdown -> { delay(task.schedule.seconds * 1000L); if (activeJobs.containsKey(taskId)) { task.actions.forEach { executeAction(it) }; tasks = tasks.map { t -> if (t.id == taskId) t.copy(executedCount = t.executedCount + 1) else t } } } } } finally { activeJobs.remove(taskId); tasks = tasks.map { t -> if (t.id == taskId) t.copy(running = false) else t } }
-            }
-            activeJobs[taskId] = job
-        }
-
-        fun stopTask(taskId: String) { activeJobs[taskId]?.cancel(); activeJobs.remove(taskId); tasks = tasks.map { t -> if (t.id == taskId) t.copy(running = false) else t } }
-        fun deleteTask(taskId: String) { stopTask(taskId); tasks = tasks.filter { it.id != taskId }; if (selectedTaskId == taskId) selectedTaskId = null }
+        fun stopTask(taskId: String) { scheduler.stopTask(taskId); tasks = scheduler.tasks }
+        fun deleteTask(taskId: String) { scheduler.deleteTask(taskId); tasks = scheduler.tasks; if (selectedTaskId == taskId) selectedTaskId = null }
         fun resetEditor() { editingTask = null; newTaskName = ""; scheduleType = "interval"; intervalSeconds = "5"; intervalCount = "5"; fixedHour = "8"; fixedMinute = "0"; repeatDaily = false; countdownSeconds = "60"; editorActions = emptyList(); selectedActionType = "notify" }
 
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -139,7 +111,7 @@ fun TimerDialog(
                                 Row(verticalAlignment = Alignment.CenterVertically) { if (task.running) { Box(Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(BrewRed)); Spacer(Modifier.width(6.dp)) }; Text(task.name, color = if (isSelected) BrewWarning else BrewText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
                                 Spacer(Modifier.height(3.dp)); Text("$scheduleDesc · ${context.getString(R.string.timer_actions_count, task.actions.size)} · ${context.getString(R.string.timer_executed_count, task.executedCount)}", color = BrewMuted, fontSize = 12.sp)
                             }
-                            Row { if (!task.running) { Box(Modifier.height(36.dp).clip(BrewShapeSmall).background(BrewSuccess.copy(alpha = 0.15f)).border(1.dp, BrewSuccess, BrewShapeSmall).clickable { runTask(task) }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) { Text("▶", color = BrewSuccess, fontSize = 14.sp) }; Spacer(Modifier.width(6.dp)) }; Box(Modifier.height(36.dp).clip(BrewShapeSmall).background(BrewRed.copy(alpha = 0.15f)).border(1.dp, BrewRed, BrewShapeSmall).clickable { deleteTask(task.id) }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) { Text("✕", color = BrewRed, fontSize = 14.sp) } }
+                            Row { if (!task.running) { Box(Modifier.height(36.dp).clip(BrewShapeSmall).background(BrewSuccess.copy(alpha = 0.15f)).border(1.dp, BrewSuccess, BrewShapeSmall).clickable { scheduler.startTask(task); tasks = scheduler.tasks }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) { Text("▶", color = BrewSuccess, fontSize = 14.sp) }; Spacer(Modifier.width(6.dp)) }; Box(Modifier.height(36.dp).clip(BrewShapeSmall).background(BrewRed.copy(alpha = 0.15f)).border(1.dp, BrewRed, BrewShapeSmall).clickable { deleteTask(task.id) }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) { Text("✕", color = BrewRed, fontSize = 14.sp) } }
                         }
                         Spacer(Modifier.height(4.dp))
                     }
@@ -168,7 +140,7 @@ fun TimerDialog(
                     }
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) { Text(context.getString(R.string.timer_actions_label), color = BrewMuted, fontSize = 12.sp); Spacer(Modifier.weight(1f)); if (editorActions.isNotEmpty()) Text(context.getString(R.string.timer_click_to_delete), color = BrewRed, fontSize = 10.sp) }
-                        if (editorActions.isEmpty()) { Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) { Text(context.getString(R.string.timer_no_actions), color = BrewMuted, fontSize = 13.sp) } } else { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { editorActions.forEachIndexed { i, action -> val label = when (action) { is TimerAction.SendNotification -> "${context.getString(R.string.timer_action_notify)}: ${action.content.take(30)}"; is TimerAction.LaunchApp -> "${context.getString(R.string.timer_action_launch)}: ${action.packageName}"; is TimerAction.ExecuteShell -> "${context.getString(R.string.timer_action_shell)}: ${action.command.take(30)}"; is TimerAction.Tap -> "${context.getString(R.string.timer_action_tap)}: (${action.x}, ${action.y})"; is TimerAction.SendKeyEvent -> "${context.getString(R.string.timer_action_key)}: ${action.keyCode}" }; Row(Modifier.fillMaxWidth().clip(BrewShapeSmall).background(BrewWarning.copy(alpha = 0.05f)).border(1.dp, BrewWarning.copy(alpha = 0.15f), BrewShapeSmall).clickable { editorActions = editorActions.toMutableList().apply { removeAt(i) } }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) { Text("${i + 1}.", color = BrewWarning, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 6.dp)); Text(label, color = BrewText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)); Text("✕", color = BrewRed.copy(alpha = 0.6f), fontSize = 12.sp) } } } }
+                        if (editorActions.isEmpty()) { Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) { Text(context.getString(R.string.timer_no_actions), color = BrewMuted, fontSize = 13.sp) } } else { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { editorActions.forEachIndexed { i, action -> val label = when (action) { is TimerAction.SendNotification -> "${context.getString(R.string.timer_action_notify)}: ${action.content.take(30)}"; is TimerAction.LaunchApp -> "${context.getString(R.string.timer_action_launch)}: ${action.packageName}"; is TimerAction.ExecuteShell -> "${context.getString(R.string.timer_action_shell)}: ${action.command.take(30)}"; is TimerAction.Tap -> "${context.getString(R.string.timer_action_tap)}: (${action.x}, ${action.y})"; is TimerAction.SendKeyEvent -> "${context.getString(R.string.timer_action_key)}: ${action.keyCode}"; is TimerAction.TtsSpeak -> "TTS: ${action.text.take(30)}" }; Row(Modifier.fillMaxWidth().clip(BrewShapeSmall).background(BrewWarning.copy(alpha = 0.05f)).border(1.dp, BrewWarning.copy(alpha = 0.15f), BrewShapeSmall).clickable { editorActions = editorActions.toMutableList().apply { removeAt(i) } }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) { Text("${i + 1}.", color = BrewWarning, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 6.dp)); Text(label, color = BrewText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)); Text("✕", color = BrewRed.copy(alpha = 0.6f), fontSize = 12.sp) } } } }
                     }
                     Text(context.getString(R.string.timer_action_type), color = BrewMuted, fontSize = 12.sp)
                     Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("notify" to context.getString(R.string.timer_action_notify), "launch" to context.getString(R.string.timer_action_launch), "shell" to context.getString(R.string.timer_action_shell), "tap" to context.getString(R.string.timer_action_tap), "key" to context.getString(R.string.timer_action_key)).forEach { (type, label) -> Box(Modifier.height(36.dp).clip(BrewShapeSmall).background(if (selectedActionType == type) BrewWarning.copy(alpha = 0.2f) else Color.Transparent).border(1.dp, if (selectedActionType == type) BrewWarning else BrewBorder, BrewShapeSmall).clickable { selectedActionType = type }.padding(horizontal = 10.dp), contentAlignment = Alignment.Center) { Text(label, color = if (selectedActionType == type) BrewWarning else BrewText, fontSize = 12.sp) } } }
@@ -179,7 +151,7 @@ fun TimerDialog(
                         "tap" -> { var tapX by remember { mutableStateOf("") }; var tapY by remember { mutableStateOf("") }; Row(verticalAlignment = Alignment.CenterVertically) { Text(context.getString(R.string.timer_coord_x), color = BrewMuted, fontSize = 12.sp); Spacer(Modifier.width(4.dp)); BrutalTextField(value = tapX, onValueChange = { tapX = it }, placeholder = "0", color = BrewWarning, modifier = Modifier.width(60.dp), singleLine = true); Spacer(Modifier.width(8.dp)); Text(context.getString(R.string.timer_coord_y), color = BrewMuted, fontSize = 12.sp); Spacer(Modifier.width(4.dp)); BrutalTextField(value = tapY, onValueChange = { tapY = it }, placeholder = "0", color = BrewWarning, modifier = Modifier.width(60.dp), singleLine = true); Spacer(Modifier.width(6.dp)); Box(Modifier.height(36.dp).clip(BrewShapeSmall).background(BrewWarning.copy(alpha = 0.2f)).border(1.dp, BrewWarning, BrewShapeSmall).clickable(enabled = tapX.isNotBlank() && tapY.isNotBlank()) { editorActions = editorActions + TimerAction.Tap(tapX.toIntOrNull() ?: 0, tapY.toIntOrNull() ?: 0) }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) { Text("+", color = BrewWarning, fontSize = 18.sp, fontWeight = FontWeight.Bold) } } }
                         "key" -> { var keyCode by remember { mutableStateOf("") }; Row(verticalAlignment = Alignment.CenterVertically) { BrutalTextField(value = keyCode, onValueChange = { keyCode = it }, placeholder = context.getString(R.string.timer_keycode_hint), color = BrewWarning, modifier = Modifier.weight(1f), singleLine = true); Spacer(Modifier.width(6.dp)); Box(Modifier.height(36.dp).clip(BrewShapeSmall).background(BrewWarning.copy(alpha = 0.2f)).border(1.dp, BrewWarning, BrewShapeSmall).clickable(enabled = keyCode.isNotBlank()) { editorActions = editorActions + TimerAction.SendKeyEvent(keyCode.toIntOrNull() ?: 0) }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) { Text("+", color = BrewWarning, fontSize = 18.sp, fontWeight = FontWeight.Bold) } } }
                     }
-                    Box(Modifier.fillMaxWidth().height(44.dp).clip(BrewShapeSmall).background(BrewWarning).clickable(enabled = newTaskName.isNotBlank() && editorActions.isNotEmpty()) { val schedule = when (scheduleType) { "interval" -> TimerSchedule.Interval(intervalSeconds.toLongOrNull() ?: 5L, intervalCount.toIntOrNull() ?: 5); "fixed" -> TimerSchedule.FixedTime(fixedHour.toIntOrNull() ?: 8, fixedMinute.toIntOrNull() ?: 0, repeatDaily); "countdown" -> TimerSchedule.Countdown(countdownSeconds.toLongOrNull() ?: 60L); else -> TimerSchedule.Interval(5L, 5) }; if (editingTask != null) { tasks = tasks.map { t -> if (t.id == editingTask!!.id) t.copy(name = newTaskName, schedule = schedule, actions = editorActions) else t } } else { tasks = tasks + TimerTask(UUID.randomUUID().toString(), newTaskName, schedule, editorActions) }; showTaskEditor = false; resetEditor() }.padding(horizontal = 24.dp), contentAlignment = Alignment.Center) { Text(if (editingTask != null) context.getString(R.string.timer_update_task) else context.getString(R.string.timer_create_task), color = BrewBg, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+                    Box(Modifier.fillMaxWidth().height(44.dp).clip(BrewShapeSmall).background(BrewWarning).clickable(enabled = newTaskName.isNotBlank() && editorActions.isNotEmpty()) { val schedule = when (scheduleType) { "interval" -> TimerSchedule.Interval(intervalSeconds.toLongOrNull() ?: 5L, intervalCount.toIntOrNull() ?: 5); "fixed" -> TimerSchedule.FixedTime(fixedHour.toIntOrNull() ?: 8, fixedMinute.toIntOrNull() ?: 0, repeatDaily); "countdown" -> TimerSchedule.Countdown(countdownSeconds.toLongOrNull() ?: 60L); else -> TimerSchedule.Interval(5L, 5) }; if (editingTask != null) { scheduler.updateTask(TimerTask(editingTask!!.id, newTaskName, schedule, editorActions)); tasks = scheduler.tasks } else { scheduler.addTask(TimerTask(UUID.randomUUID().toString(), newTaskName, schedule, editorActions)); tasks = scheduler.tasks }; showTaskEditor = false; resetEditor() }.padding(horizontal = 24.dp), contentAlignment = Alignment.Center) { Text(if (editingTask != null) context.getString(R.string.timer_update_task) else context.getString(R.string.timer_create_task), color = BrewBg, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
                 }
             }
         }

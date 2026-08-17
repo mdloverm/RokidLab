@@ -45,6 +45,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -335,6 +336,9 @@ private fun ScreenMirrorUI(
     var localGlassesWidth by remember { mutableIntStateOf(480) }
     var localGlassesHeight by remember { mutableIntStateOf(640) }
 
+    // pointerInput 的闭包不会因 adbClient 变化而重建，用 rememberUpdatedState 保证触摸回调拿到最新引用
+    val currentAdbClient by rememberUpdatedState(adbClient)
+
     // 同步 glasses 尺寸到本地
     LaunchedEffect(glassesWidth, glassesHeight) {
         if (glassesWidth > 0 && glassesHeight > 0) {
@@ -363,6 +367,7 @@ private fun ScreenMirrorUI(
                             width: Int,
                             height: Int
                         ) {
+                            Log.i("ScreenMirror", "surface available: ${width}x${height}")
                             val surface = Surface(surfaceTexture)
                             surfaceReady = true
                             onSurfaceReady(surface)
@@ -409,13 +414,17 @@ private fun ScreenMirrorUI(
         }
 
         // 触摸事件
+        Log.i("ScreenMirror", "UI recompose: surfaceReady=$surfaceReady status=$status")
         if (surfaceReady) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(glassesWidth, glassesHeight, containerWidth, containerHeight, scale, offsetX, offsetY) {
+                        Log.i("ScreenMirror", "pointerInput started: g=${glassesWidth}x${glassesHeight} c=${containerWidth}x${containerHeight}")
                         awaitEachGesture {
+                            Log.i("ScreenMirror", "gesture started")
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            Log.i("ScreenMirror", "down at ${down.position}")
                             val startPos = down.position
                             val thresholdPx = 24f * density
                             val doubleTapMs = 350L
@@ -462,25 +471,25 @@ private fun ScreenMirrorUI(
                                         if (sinceLast < doubleTapMs) {
                                             lastTapTime = 0L
                                             Log.i("ScreenMirror", "double tap back")
-                                            adbClient?.sendKeyEvent("KEYCODE_BACK")
+                                            currentAdbClient?.sendKeyEvent("KEYCODE_BACK")
                                         } else {
                                             lastTapTime = now
                                             val gx = mapToGlassesX(upPos.x, containerWidth, containerHeight, glassesWidth, glassesHeight, scale, offsetX, offsetY)
                                             val gy = mapToGlassesY(upPos.y, containerWidth, containerHeight, glassesWidth, glassesHeight, scale, offsetX, offsetY)
                                             Log.i("ScreenMirror", "finger up: pos=${upPos.x.toInt()},${upPos.y.toInt()} -> glasses=$gx,$gy")
                                             if (gx in 0 until glassesWidth && gy in 0 until glassesHeight) {
-                                                adbClient?.sendTap(gx, gy)
+                                                currentAdbClient?.sendTap(gx, gy)
                                             }
                                         }
                                     } else {
                                         val phoneDx = upPos.x - startPos.x
                                         val phoneDy = upPos.y - startPos.y
                                         if (kotlin.math.abs(phoneDx) > kotlin.math.abs(phoneDy) * 1.5f) {
-                                            if (phoneDx > 0) adbClient?.sendKeyEvent("KEYCODE_DPAD_RIGHT")
-                                            else adbClient?.sendKeyEvent("KEYCODE_DPAD_LEFT")
+                                            if (phoneDx > 0) currentAdbClient?.sendKeyEvent("KEYCODE_DPAD_RIGHT")
+                                            else currentAdbClient?.sendKeyEvent("KEYCODE_DPAD_LEFT")
                                         } else if (kotlin.math.abs(phoneDy) > kotlin.math.abs(phoneDx) * 1.5f) {
-                                            if (phoneDy > 0) adbClient?.sendKeyEvent("KEYCODE_DPAD_DOWN")
-                                            else adbClient?.sendKeyEvent("KEYCODE_DPAD_UP")
+                                            if (phoneDy > 0) currentAdbClient?.sendKeyEvent("KEYCODE_DPAD_DOWN")
+                                            else currentAdbClient?.sendKeyEvent("KEYCODE_DPAD_UP")
                                         }
                                     }
                                     break

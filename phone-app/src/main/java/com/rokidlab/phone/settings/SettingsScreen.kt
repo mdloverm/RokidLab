@@ -1,6 +1,7 @@
 package com.rokidlab.phone.settings
 
 import com.rokidlab.phone.R
+import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.design.theme.BrewTheme
 import com.rokidlab.phone.design.theme.BrewThemeManager
@@ -130,6 +131,26 @@ internal fun SettingsScreen(
             content = ctx.getString(R.string.switch_source_desc),
             color = BrewCyan,
             onClick = actions.onSwitchMirror,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // 后台保活开关
+        val labApp = ctx.applicationContext as LabApplication
+        var keepAliveEnabled by remember { mutableStateOf(labApp.keepAliveEnabled) }
+        SettingsCard(
+            title = ctx.getString(R.string.keep_alive_enabled),
+            content = if (keepAliveEnabled) ctx.getString(R.string.keep_alive_on) else ctx.getString(R.string.keep_alive_off),
+            color = if (keepAliveEnabled) BrewSuccess else BrewMuted,
+            onClick = {
+                actions.onToggleKeepAlive()
+                keepAliveEnabled = labApp.keepAliveEnabled
+            },
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        SettingsCard(
+            title = ctx.getString(R.string.keep_alive_desc),
+            content = ctx.getString(R.string.keep_alive_notification_text),
+            color = BrewMagenta,
         )
         Spacer(modifier = Modifier.height(24.dp))
 

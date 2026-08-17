@@ -24,7 +24,8 @@ class FullCXRLinkCallback(
     private val onWearingStatus: (Boolean) -> Unit = {},
     private val onAiAssistStart: () -> Unit = {},
     private val onAiAssistStop: () -> Unit = {},
-    private val onAiInterrupt: (Boolean) -> Unit = {}
+    private val onAiInterrupt: (Boolean) -> Unit = {},
+    private val onLauncherResume: () -> Unit = {}
 ) : ICXRLinkCbk {
     
     override fun onCXRLConnected(connected: Boolean) {
@@ -53,5 +54,9 @@ class FullCXRLinkCallback(
 
     override fun onGlassAiInterrupt(interrupt: Boolean) {
         onAiInterrupt(interrupt)
+    }
+
+    override fun onGlassLauncherResume() {
+        onLauncherResume()
     }
 }

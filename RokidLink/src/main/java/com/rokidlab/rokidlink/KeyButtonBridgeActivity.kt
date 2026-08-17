@@ -45,16 +45,16 @@ class KeyButtonBridgeActivity : Activity() {
                     if (down <= 0) return
                     val elapsed = System.currentTimeMillis() - down
                     Log.i(TAG, "UP elapsed=${elapsed}ms")
-                    launchTargetByDuration(prefs, elapsed)
+                    launchTargetByDuration(context, prefs, elapsed)
                 }
                 "com.android.action.ACTION_SPRITE_BUTTON_CLICK" -> {
                     Log.i(TAG, "CLICK → SHORT")
-                    launchConfiguredTarget(prefs, isLong = false)
+                    launchConfiguredTarget(context, prefs, isLong = false)
                 }
                 "com.android.action.ACTION_SPRITE_BUTTON_LONG_PRESS" -> {
                     Log.i(TAG, "LONG_PRESS → LONG")
                     KeyButtonService.downTimeMs = 0L
-                    launchConfiguredTarget(prefs, isLong = true)
+                    launchConfiguredTarget(context, prefs, isLong = true)
                 }
             }
         }
@@ -66,7 +66,15 @@ class KeyButtonBridgeActivity : Activity() {
             return false
         }
 
-        private fun launchTargetByDuration(prefs: android.content.SharedPreferences, elapsedMs: Long) {
+        private fun launchTargetByDuration(context: Context, prefs: android.content.SharedPreferences, elapsedMs: Long) {
+            // 短按且「按键答题」开启 → 触发拍照问AI（覆盖原短按启动应用），并通知 Service 上行
+            if (elapsedMs < 500L && KeyButtonService.isKeyQuizEnabled(context)) {
+                Log.i(TAG, "Quiz mode: SHORT(DOWN/UP) → photo ask (via Service)")
+                KeyButtonService.downTimeMs = 0L
+                abortBroadcast()
+                notifyServiceQuizPhotoAsk(context)
+                return
+            }
             val pkg = prefs.getString(
                 if (elapsedMs >= 500L) KeyButtonService.KEY_LONG_PKG
                 else KeyButtonService.KEY_SHORT_PKG, ""
@@ -84,7 +92,15 @@ class KeyButtonBridgeActivity : Activity() {
             launchTargetAndLog(pkg, act, "duration=${if (elapsedMs >= 500L) "LONG" else "SHORT"}")
         }
 
-        private fun launchConfiguredTarget(prefs: android.content.SharedPreferences, isLong: Boolean) {
+        private fun launchConfiguredTarget(context: Context, prefs: android.content.SharedPreferences, isLong: Boolean) {
+            // 短按且「按键答题」开启 → 触发拍照问AI（覆盖原短按启动应用，长按不受影响）
+            if (!isLong && KeyButtonService.isKeyQuizEnabled(context)) {
+                Log.i(TAG, "Quiz mode: SHORT → photo ask (via Service)")
+                KeyButtonService.downTimeMs = 0L
+                abortBroadcast()
+                notifyServiceQuizPhotoAsk(context)
+                return
+            }
             val pkg = prefs.getString(
                 if (isLong) KeyButtonService.KEY_LONG_PKG
                 else KeyButtonService.KEY_SHORT_PKG, ""
@@ -102,6 +118,23 @@ class KeyButtonBridgeActivity : Activity() {
             if (isDuplicateLaunch()) return
             abortBroadcast()
             launchTargetAndLog(pkg, act, if (isLong) "LONG" else "SHORT")
+        }
+
+        /** quiz 短按：通过 startService 通知常驻 KeyButtonService 发送拍照答题上行（bridge 在 Service 内） */
+        private fun notifyServiceQuizPhotoAsk(context: Context) {
+            try {
+                val intent = Intent(context, KeyButtonService::class.java).apply {
+                    action = KeyButtonService.ACTION_QUIZ_PHOTO_ASK
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                Log.i(TAG, "Quiz photo ask notified to Service")
+            } catch (e: Exception) {
+                Log.e(TAG, "notifyServiceQuizPhotoAsk failed: ${e.message}")
+            }
         }
 
         private fun launchTargetAndLog(pkg: String, activity: String, mode: String) {
