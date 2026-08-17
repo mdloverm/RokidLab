@@ -340,7 +340,7 @@ RokidLab/
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v2.3-beta-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v3.0-debug.apk
 ```
 
 ### 眼镜端服务

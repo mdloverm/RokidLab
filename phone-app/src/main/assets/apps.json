@@ -1,21 +1,23 @@
 {
     "schemaVersion":  1,
     "generatedAt":  "2026-07-03T00:00:00.000Z",
-    "brewVersion":  "2.2",
-    "brewVersionCode":  13,
+    "brewVersion":  "3.0",
+    "brewVersionCode":  15,
     "brewIconUrl":  "",
-    "brewApkUrl":  "https://gitee.com/dlover1314/RokidLab/releases/download/v2.2/RokidLab-v2.2-release.apk",
-    "brewReleaseUrl":  "https://gitee.com/dlover1314/RokidLab/releases/tag/v2.2",
-    "brewNotes":  "双线路自动切换 + 蓝牙通道优化 + 移除WRITE_SETTINGS权限",
+    "brewApkUrl":  "https://gitee.com/dlover1314/RokidLab/releases/download/v3.0/RokidLab-v3.0-release.apk",
+    "brewReleaseUrl":  "https://gitee.com/dlover1314/RokidLab/releases/tag/v3.0",
+    "brewNotes":  "乐奇AI聊天 + 定时TTS播报 + 后台保活 + 开发者提交应用",
     "brewChanges":  [
-                        "双线路自动切换：优先 WiFi，不可达时自动走蓝牙隧道",
-                        "蓝牙隧道通过 RFCOMM Socket 透明转发 TCP 流量",
-                        "投屏/镜像双套参数：WiFi 高质量 + 蓝牙低画质高速度",
-                        "蓝牙投屏跳帧机制防止积压卡顿",
-                        "引导完成后自动启动眼镜端 RokidLink 服务",
-                        "眼镜端无 WiFi 时 RokidLink 后台运行不显示界面",
-                        "移除 WRITE_SETTINGS 权限请求（厂家ROM已锁定）",
-                        "修复 isWifiConnected 误判蓝牙网络共享为 WiFi"
+                        "乐奇 AI 聊天：OpenAI 兼容协议（默认 DeepSeek，可切换任意服务商），AI 回复眼镜语音播报",
+                        "拍照问 AI：镜腿按键/手机按钮双入口，本地 OCR + 知识库 RAG 生成答案并语音播报",
+                        "本地 OCR：PP-OCRv4 + ONNX Runtime 完全离线识别，16KB 页面设备兼容",
+                        "本地知识库：txt/PDF 导入，SQLite 分块检索（RAG）",
+                        "AI 工具语音控制：打开应用、定时任务、查询类 8 个工具",
+                        "定时 TTS 语音播报：到点通过 CXR-L 通道让眼镜语音播报提醒内容",
+                        "开发者提交应用：设置页表单一键通过 Gitee API 提交到商店注册表",
+                        "后台保活开关：前台服务保证语音助手/蓝牙键盘/ADB 工具/定时任务持续运行",
+                        "语音打断修复：打断指令不再吞掉用户的真实提问",
+                        "CXR-L SDK 升级 1.1.0：16KB 对齐 so，兼容 Android 16"
                     ],
     "apps":  [
                  {
