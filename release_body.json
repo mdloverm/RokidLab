@@ -1,7 +1,7 @@
 {
   "access_token": "f79578621ec9da315fa31a80b6c8da8c",
-  "tag_name": "v1.8",
-  "name": "v1.8 - 悬浮窗权限修复 & 投屏兼容性优化",
+  "tag_name": "v3.0",
+  "name": "v3.0 - 乐奇AI聊天 + 定时TTS播报",
   "target_commitish": "master",
-  "body": "## RokidLab v1.8 正式版\n\n### ✨ 新功能\n- 无\n\n### 🔧 修复\n- 修复 AndroidManifest.xml 缺少 SYSTEM_ALERT_WINDOW 权限声明，导致 OPPO/vivo 等手机系统设置中找不到 RokidLab 悬浮窗入口的问题\n- 修复 startPhoneMirror() 悬浮窗权限未授权时流程未阻断的问题\n- 优化 OPPO/vivo/小米等国产 ROM 悬浮窗权限跳转路径，直接进入各厂商安全中心\n\n### ⚙️ 优化\n- ManufacturerUtils 增加 OPPO/vivo/小米等厂商特定悬浮窗权限跳转路径\n- PhoneMirrorActivity 统一使用 ManufacturerUtils 的厂商特定跳转"
+  "body": "## RokidLab v3.0 正式版\n\n### ✨ 新功能\n- **乐奇 AI 聊天**：与 AI 文字聊天（OpenAI 兼容协议，默认 DeepSeek，可自由配置 baseUrl / apiKey / model 切换通义千问、Kimi、智谱、本地 Ollama 等任意服务商），AI 回复通过眼镜语音播报\n- **拍照问 AI**：镜腿按键 / 手机按钮双入口触发——眼镜拍照 → 本地 OCR 识别题目文字 → 知识库检索（RAG）→ AI 生成答案并语音播报\n- **本地 OCR**：完全离线识别（PP-OCRv4 模型 + ONNX Runtime 推理），无网络、无 GMS 依赖，16KB 页面设备兼容\n- **本地知识库**：支持导入 txt / PDF 文档，自动分块入库（SQLite）并关键词检索，为 AI 提供参考资料（RAG）\n- **AI 工具（语音控制）**：内置 8 个工具，一句话直达能力\n  - 打开应用：\"打开小智\"\"打开浏览器\"（自动名称匹配已装应用）\n  - 定时任务：\"5分钟后提醒我喝水\"\"明早8点叫我\"\"17点打开小智\"（到点眼镜语音播报，可同时打开应用）\n  - 查询类：眼镜电量、系统信息、存储空间、已装应用、当前时间、知识库检索\n- **定时 TTS 语音播报**：到点通过 CXR-L 通道让眼镜语音播报提醒内容（语音说\"5分钟后提醒我喝水\"自动创建，App 退后台也能到点触发）\n- **按键答题开关**：开启后短按镜腿按键直接触发拍照问 AI，覆盖原自定义按键短按，长按不受影响\n- **开发者提交应用**：设置页填写应用信息表单（图标/截图/版本/下载地址等），一键通过 Gitee API 提交到商店注册表\n- **后台保活开关**：前台服务（通知栏常驻）保证语音助手/蓝牙键盘/ADB 工具/定时任务在 App 退后台或 Activity 销毁后持续运行（START_STICKY 自愈）\n\n### 🔧 优化修复\n- 语音打断修复：眼镜端下行过滤窗口仅由 Lab 完整下行序列触发，打断指令不再吞掉用户的真实提问\n- 键盘输入三层方案：TCP 直连眼镜 TextInputService（主方案）→ ADB 原始协议粘贴（兜底）→ HID Ctrl+V（最终兜底），始终确保文字能送达\n- 按键设置：自定义眼镜功能键短按/长按启动第三方应用，下拉列表选择，60 秒缓存加速\n- CXR-L SDK 升级 1.1.0：内置 16KB 对齐 jni so，兼容 Android 16 / Honor 新机\n- 全品牌兼容：华为 EMUI 12+ / 小米 MIUI 14+ / OPPO ColorOS 13+ / vivo Funtouch OS 13+ 投屏黑屏自动修复"
 }
