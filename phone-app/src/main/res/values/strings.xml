@@ -281,6 +281,9 @@
     <string name="chat_settings_model">模型名</string>
     <string name="chat_settings_quiz">按键答题</string>
     <string name="chat_settings_quiz_hint">打开后短按镜腿按键 = 拍照问 AI，原短按功能失效，长按不受影响</string>
+    <string name="chat_settings_quiz_instruction">答题指令</string>
+    <string name="chat_settings_quiz_instruction_hint">拍照答题时注入 AI 的提示词，控制回答方式，如「只显示答案」「给出解题步骤」</string>
+    <string name="chat_settings_quiz_instruction_placeholder">例如：只显示答案</string>
     <string name="chat_settings_ai_mode">对话模型</string>
     <string name="chat_settings_ai_mode_hint">打开 = 自定义模型（Lab 拦截并回复）；关闭 = 官方乐奇</string>
     <string name="chat_settings_tools">AI 工具</string>
@@ -305,11 +308,11 @@
     <string name="chat_ocr_empty">未能识别到文字，请调整拍摄角度后重试</string>
     <string name="chat_photo_failed">拍照失败</string>
     <string name="chat_kb_title">知识库</string>
-    <string name="chat_kb_subtitle">导入 txt / pdf 文档，拍照问 AI 时自动检索相关资料</string>
+    <string name="chat_kb_subtitle">导入 txt 文档，拍照问 AI 时自动检索相关资料</string>
     <string name="chat_kb_import">导入文档</string>
     <string name="chat_kb_empty">知识库为空，请先导入文档</string>
     <string name="chat_kb_delete">删除</string>
-    <string name="chat_kb_import_failed">导入失败（仅支持 txt / pdf）</string>
+    <string name="chat_kb_import_failed">导入失败（仅支持 txt）</string>
     <string name="chat_kb_imported">已导入 %1$s</string>
     <string name="chat_kb_confirm_delete">删除「%1$s」？删除后不可恢复</string>
 

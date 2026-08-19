@@ -23,10 +23,6 @@
 -dontwarn ai.onnxruntime.**
 -dontwarn org.opencv.**
 
-# ── PDFBox（反射解析字体/CMap）──
--keep class com.tom_roush.** { *; }
--dontwarn com.tom_roush.**
-
 # ── BouncyCastle（算法注册使用反射）──
 -keep class org.bouncycastle.** { *; }
 -dontwarn org.bouncycastle.**

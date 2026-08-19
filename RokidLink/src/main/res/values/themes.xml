@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.RokidLink.Transparent" parent="@android:style/Theme.NoTitleBar.Fullscreen">
-        <item name="android:windowBackground">@android:color/black</item>
+        <!-- 窗口背景透明：MainActivity 仅作为隐形启动入口（服务启动后自动退后台），
+             自启/被 appStart 拉起时不显示黑底界面影响视线 -->
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowContentOverlay">@null</item>
     </style>
 </resources>

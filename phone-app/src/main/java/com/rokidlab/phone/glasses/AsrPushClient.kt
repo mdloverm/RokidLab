@@ -1,6 +1,7 @@
 package com.rokidlab.phone.glasses
 
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.util.Log
 import java.io.DataInputStream
@@ -31,6 +32,10 @@ class AsrPushClient(
     @Volatile
     private var running = false
 
+    /** 当前活动连接：stop() 需关闭它以解除 readFully/readInt 阻塞（仅 interrupt 无法中断 IO 读） */
+    @Volatile
+    private var socket: BluetoothSocket? = null
+
     private var thread: Thread? = null
     private var lastErrorLogAt = 0L
 
@@ -39,22 +44,25 @@ class AsrPushClient(
         running = true
         thread = Thread {
             while (running) {
-                var socket: android.bluetooth.BluetoothSocket? = null
                 try {
                     val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
                     val adapter = manager.adapter ?: throw Exception("bluetooth off")
                     val glasses = adapter.bondedDevices.firstOrNull { d ->
-                        d.name?.contains("RG") == true ||
-                            d.name?.contains("glasses") == true ||
-                            d.name?.contains("Glass") == true
+                        val n = d.name?.lowercase() ?: ""
+                        n.contains("rg") || n.contains("glass") || n.contains("rokid") ||
+                            d.name?.contains("乐奇") == true
                     } ?: throw Exception("no glasses device")
-                    socket = glasses.createRfcommSocketToServiceRecord(PUSH_UUID)
-                    socket.connect()
+                    val s = glasses.createRfcommSocketToServiceRecord(PUSH_UUID)
+                    socket = s
+                    s.connect()
                     Log.i(TAG, "ASR push connected")
-                    val input = DataInputStream(socket.inputStream)
+                    val input = DataInputStream(s.inputStream)
                     while (running) {
                         val len = input.readInt()
-                        if (len <= 0 || len > MAX_FRAME) continue
+                        if (len <= 0 || len > MAX_FRAME) {
+                            // 长度头非法 = 流已失步，无法恢复同步；断开走重连
+                            throw Exception("invalid frame length: $len")
+                        }
                         val buf = ByteArray(len)
                         input.readFully(buf)
                         val text = String(buf, Charsets.UTF_8)
@@ -69,6 +77,7 @@ class AsrPushClient(
                     if (running) logError(e)
                 } finally {
                     try { socket?.close() } catch (_: Exception) {}
+                    socket = null
                 }
                 if (!running) break
                 // 断线重连
@@ -83,7 +92,11 @@ class AsrPushClient(
 
     fun stop() {
         running = false
+        // 关闭 socket 解除读线程阻塞，避免占住眼镜端单客户端串行 accept
+        try { socket?.close() } catch (_: Exception) {}
+        socket = null
         thread?.interrupt()
+        thread?.join(2000)
         thread = null
     }
 

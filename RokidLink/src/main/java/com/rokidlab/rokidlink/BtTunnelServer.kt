@@ -31,6 +31,8 @@ class BtTunnelServer {
 
         private const val TARGET_HOST = "127.0.0.1"
         private const val IO_BUF = 8192
+        /** 隧道握手（读目标端口）超时：半开连接只 connect 不握手时会永久阻塞单客户端串行 accept */
+        private const val HANDSHAKE_TIMEOUT_MS = 10_000
     }
 
     @Volatile
@@ -39,6 +41,9 @@ class BtTunnelServer {
 
     private var serverSocket: BluetoothServerSocket? = null
     private var acceptThread: Thread? = null
+
+    /** 当前活动的透传连接：stop 时需全部关闭以解除读阻塞 */
+    private val activeSockets = java.util.concurrent.ConcurrentHashMap.newKeySet<BluetoothSocket>()
 
     /** 启动蓝牙隧道服务端 */
     fun start(adapter: BluetoothAdapter): Boolean {
@@ -75,11 +80,37 @@ class BtTunnelServer {
      * 3. 蓝牙 ↔ 本地 TCP 双向透传
      */
     private fun handleConnection(btSocket: BluetoothSocket) {
+        activeSockets.add(btSocket)
         var targetSocket: Socket? = null
         try {
-            // 隧道握手：读取目标端口号
+            // 隧道握手：读取目标端口号。BluetoothSocket 无超时 API，
+            // 用独立线程 + join 超时兜底，半开连接不再永久阻塞整个隧道（单客户端串行 accept）。
             val btIn = DataInputStream(btSocket.inputStream)
-            val targetPort = btIn.readInt()
+            val handshakeDone = AtomicBoolean(false)
+            var targetPort = 0
+            val handshakeThread = Thread {
+                try {
+                    targetPort = btIn.readInt()
+                } catch (_: Exception) {
+                    // socket 被关闭/中断读，保持 targetPort = 0
+                } finally {
+                    handshakeDone.set(true)
+                }
+            }
+            handshakeThread.start()
+            handshakeThread.join(HANDSHAKE_TIMEOUT_MS.toLong())
+            if (!handshakeDone.get()) {
+                Log.e(TAG, "Tunnel handshake timeout, closing connection")
+                // 关闭 socket 解除 readInt 阻塞后回收握手线程
+                runCatching { btSocket.close() }
+                handshakeThread.join(500)
+                return
+            }
+            // 端口校验：非法端口（含 0 / 负值 / 越界）直接拒绝，避免连到异常服务
+            if (targetPort <= 0 || targetPort > 65535) {
+                Log.e(TAG, "Invalid target port: $targetPort")
+                return
+            }
             Log.i(TAG, "Target port: $targetPort")
 
             targetSocket = Socket()
@@ -129,6 +160,7 @@ class BtTunnelServer {
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed: ${e.message}")
         } finally {
+            activeSockets.remove(btSocket)
             try { btSocket.close() } catch (_: Exception) {}
             try { targetSocket?.close() } catch (_: Exception) {}
             Log.i(TAG, "Tunnel connection closed")
@@ -139,6 +171,9 @@ class BtTunnelServer {
         isRunning = false
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
+        // 关闭全部活动连接：stop 后透传线程不再阻塞，立即可退出
+        activeSockets.forEach { runCatching { it.close() } }
+        activeSockets.clear()
         acceptThread?.interrupt()
         acceptThread = null
         Log.i(TAG, "BT tunnel server stopped")

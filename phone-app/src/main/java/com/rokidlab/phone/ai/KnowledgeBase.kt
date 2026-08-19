@@ -5,10 +5,8 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
-import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
-import com.tom_roush.pdfbox.pdmodel.PDDocument
-import com.tom_roush.pdfbox.text.PDFTextStripper
 
 /** 知识库文档信息 */
 data class KbDocInfo(
@@ -19,7 +17,7 @@ data class KbDocInfo(
 )
 
 /**
- * 本地知识库：文档导入（txt/pdf）→ 分块 → SQLite 存储 → 关键词检索。
+ * 本地知识库：文档导入（txt）→ 分块 → SQLite 存储 → 关键词检索。
  *
  * 用于「拍照问 AI」的 RAG 场景：
  *   眼镜拍照 → 本地 OCR 得到题目文本 → 知识库检索相关知识块 → 注入 DeepSeek 生成答案。
@@ -30,25 +28,34 @@ object KnowledgeBase {
     const val DB_VERSION = 1
     private const val CHUNK_SIZE = 500
 
+    /** 单文档导入大小上限：超过即拒绝，避免大文件全量读入导致 OOM */
+    private const val MAX_DOC_BYTES = 20L * 1024 * 1024
+
+    @Volatile
     private var helper: KbDbHelper? = null
 
+    /** 懒初始化加锁，避免多线程并发首次调用时创建多个 helper 实例 */
     private fun db(context: Context): SQLiteDatabase =
         helper?.writableDatabase
-            ?: KbDbHelper(context.applicationContext).also { helper = it }.writableDatabase
+            ?: synchronized(this) {
+                helper ?: KbDbHelper(context.applicationContext).also { helper = it }
+            }.writableDatabase
 
     // ═══════════════════════════════════════════════════
     // 导入
     // ═══════════════════════════════════════════════════
 
-    /** 从 Uri 导入文档（.txt 直接读文本，.pdf 用 pdfbox 解析），返回文档信息 */
+    /** 从 Uri 导入文档（.txt 读文本），返回文档信息 */
     fun importUri(context: Context, uri: Uri, displayName: String? = null): KbDocInfo? {
         return try {
             val name = displayName ?: uri.lastPathSegment ?: "doc_${System.currentTimeMillis()}"
-            val text = if (name.endsWith(".pdf", ignoreCase = true)) {
-                readPdf(context, uri)
-            } else {
-                readText(context, uri)
+            // 大文件全量读入会触发 OutOfMemoryError（OOM 无法被 catch(Exception) 捕获），先按元数据限制
+            val size = querySize(context, uri)
+            if (size > MAX_DOC_BYTES) {
+                Log.w(TAG, "importUri: file too large (${size / 1024 / 1024}MB > ${MAX_DOC_BYTES / 1024 / 1024}MB), skip $name")
+                return null
             }
+            val text = readText(context, uri)
             if (text.isBlank()) {
                 Log.w(TAG, "importUri: empty text for $name")
                 return null
@@ -57,6 +64,17 @@ object KnowledgeBase {
         } catch (e: Exception) {
             Log.e(TAG, "importUri failed: $displayName", e)
             null
+        }
+    }
+
+    /** 查询 Uri 对应文件大小（查不到返回 -1，由读取端做字节数兜底限制） */
+    private fun querySize(context: Context, uri: Uri): Long {
+        return try {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else -1L
+            } ?: -1L
+        } catch (e: Exception) {
+            -1L
         }
     }
 
@@ -127,8 +145,15 @@ object KnowledgeBase {
 
     fun deleteDoc(context: Context, docId: Long) {
         val database = db(context)
-        database.delete("chunks", "doc_id=?", arrayOf(docId.toString()))
-        database.delete("docs", "id=?", arrayOf(docId.toString()))
+        // chunks 与 docs 两删包进事务：避免删到一半崩溃残留孤儿 chunk
+        database.beginTransaction()
+        try {
+            database.delete("chunks", "doc_id=?", arrayOf(docId.toString()))
+            database.delete("docs", "id=?", arrayOf(docId.toString()))
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
     }
 
     fun docCount(context: Context): Int {
@@ -211,18 +236,23 @@ object KnowledgeBase {
 
     private fun readText(context: Context, uri: Uri): String {
         context.contentResolver.openInputStream(uri)?.use { input ->
-            return input.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(8192)
+            var total = 0
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                total += n
+                // 按字节计数，与 MAX_DOC_BYTES 单位一致；元数据查不到大小时兜底限制，防止超大文本 OOM
+                if (total > MAX_DOC_BYTES) {
+                    Log.w(TAG, "readText: exceeds size limit, aborted")
+                    return ""
+                }
+                out.write(buf, 0, n)
+            }
+            return String(out.toByteArray(), Charsets.UTF_8)
         }
         return ""
-    }
-
-    private fun readPdf(context: Context, uri: Uri): String {
-        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return ""
-        PDFBoxResourceLoader.init(context.applicationContext)
-        PDDocument.load(bytes).use { doc ->
-            val stripper = PDFTextStripper()
-            return stripper.getText(doc)
-        }
     }
 }
 

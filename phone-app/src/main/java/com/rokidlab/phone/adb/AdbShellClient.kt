@@ -331,14 +331,18 @@ class AdbShellClient(
     }
 
     fun getDeviceInfo(): String {
-        val cmds = listOf(
-            "getprop ro.product.model",
-            "getprop ro.product.manufacturer",
-            "getprop ro.build.version.release",
-            "getprop ro.build.version.sdk",
-            "getprop ro.serialno",
+        // 5 条 getprop 合并为单条 shell 命令：避免串行 5 次 RTT（默认 15s 超时，最坏 75s 阻塞 AI 对话）
+        val props = listOf(
+            "ro.product.model",
+            "ro.product.manufacturer",
+            "ro.build.version.release",
+            "ro.build.version.sdk",
+            "ro.serialno",
         )
-        return cmds.joinToString("\n") { "$it: ${executeShellCommand(it).trim()}" }
+        val raw = executeShellCommand(props.joinToString("; ") { "getprop $it" })
+        val values = raw.lines()
+        // 保持原输出格式（"getprop xxx: value"），便于 AI 识别字段
+        return props.mapIndexed { i, p -> "getprop $p: ${values.getOrNull(i)?.trim()}" }.joinToString("\n")
     }
 
     fun sendText(text: String): String {

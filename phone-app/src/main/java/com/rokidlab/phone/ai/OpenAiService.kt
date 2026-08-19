@@ -44,8 +44,8 @@ class OpenAiService(
         return chatTurn(userMessage, history, contextText).content.orEmpty()
     }
 
-    /** 构造 system 消息：定义 AI 角色，可选注入知识库检索资料（RAG） */
-    fun buildSystemMessage(contextText: String? = null): JSONObject {
+    /** 构造 system 消息：定义 AI 角色，可选注入知识库检索资料（RAG）与额外指令（如答题要求） */
+    fun buildSystemMessage(contextText: String? = null, instruction: String? = null): JSONObject {
         val systemMsg = JSONObject()
         systemMsg.put("role", "system")
         val systemContent = buildString {
@@ -53,6 +53,10 @@ class OpenAiService(
             if (!contextText.isNullOrBlank()) {
                 append("\n\n以下是知识库中检索到的参考资料，请优先基于这些资料回答用户问题；如果资料与问题无关，可忽略：\n")
                 append(contextText)
+            }
+            if (!instruction.isNullOrBlank()) {
+                append("\n\n请遵守以下答题要求：\n")
+                append(instruction)
             }
         }
         systemMsg.put("content", systemContent)
@@ -92,6 +96,20 @@ class OpenAiService(
      * 在 IO 线程调用（阻塞方法）。
      */
     fun chatTurn(messages: JSONArray, tools: List<JSONObject>? = null): ChatTurn {
+        // 网络瞬断/服务商抖动时重试一次：一次失败即整轮失败对用户太不友好（30s 超时后直接没回复）
+        var lastError: Exception? = null
+        repeat(2) { attempt ->
+            try {
+                return chatTurnOnce(messages, tools)
+            } catch (e: Exception) {
+                lastError = e
+                if (attempt == 0) Log.w(TAG, "chatTurn attempt 1 failed: ${e.message}, retrying")
+            }
+        }
+        throw lastError ?: Exception("chatTurn failed")
+    }
+
+    private fun chatTurnOnce(messages: JSONArray, tools: List<JSONObject>? = null): ChatTurn {
         // baseUrl 兼容：带 /v1 或已含完整 /chat/completions 的填法
         val base = baseUrl.trimEnd('/')
         val endpoint = when {

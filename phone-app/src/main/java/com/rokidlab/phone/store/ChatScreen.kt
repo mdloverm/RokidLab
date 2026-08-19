@@ -63,13 +63,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -175,18 +180,24 @@ internal fun ChatModule(app: LabApplication) {
             appendMsg(false, ctx.getString(R.string.chat_send_failed))
             return
         }
-        session.sendAiTextMessage(
-            text,
-            onResult = { success, err ->
-                sending = false
-                if (!success) {
-                    appendMsg(false, ctx.getString(R.string.chat_reply_failed) + if (err.isNullOrBlank()) "" else ": $err")
-                }
-            },
-            onReply = { reply ->
-                appendMsg(false, reply)
-            },
-        )
+        // sendAiTextMessage 内含多次 Thread.sleep + join（最长可阻塞 30s），
+        // 必须在后台线程执行，否则阻塞主线程导致 ANR/闪退
+        scope.launch(Dispatchers.IO) {
+            session.sendAiTextMessage(
+                text,
+                onResult = { success, err ->
+                    // onResult 由会话层 runOnUiThread 回调，已在主线程
+                    sending = false
+                    if (!success) {
+                        appendMsg(false, ctx.getString(R.string.chat_reply_failed) + if (err.isNullOrBlank()) "" else ": $err")
+                    }
+                },
+                onReply = { reply ->
+                    // onReply 在后台线程回调，需切回主线程更新 Compose 状态
+                    scope.launch { appendMsg(false, reply) }
+                },
+            )
+        }
     }
 
     /**
@@ -216,8 +227,11 @@ internal fun ChatModule(app: LabApplication) {
             },
             onText = { text -> appendMsg(true, text) },
             onReply = { reply ->
-                photoAsking = false
-                appendMsg(false, reply)
+                // startPhotoAsk 内部在后台线程回调，需切回主线程更新 Compose 状态
+                scope.launch {
+                    photoAsking = false
+                    appendMsg(false, reply)
+                }
             },
         )
     }
@@ -235,8 +249,10 @@ internal fun ChatModule(app: LabApplication) {
                 },
                 onText = { text -> appendMsg(true, text) },
                 onReply = { reply ->
-                    photoAsking = false
-                    appendMsg(false, reply)
+                    scope.launch {
+                        photoAsking = false
+                        appendMsg(false, reply)
+                    }
                 },
             )
         } catch (e: Exception) {
@@ -493,8 +509,12 @@ private fun ChatSettingsDialog(
     val initialCfg = session?.getAiConfig()
     var baseUrl by remember { mutableStateOf(initialCfg?.baseUrl.orEmpty()) }
     var apiKey by remember { mutableStateOf(initialCfg?.apiKey.orEmpty()) }
+    // API Key 焦点状态：未聚焦时掩码（sk- 后星号），点入输入框聚焦后显示明文
+    var apiKeyFocused by remember { mutableStateOf(false) }
     var model by remember { mutableStateOf(initialCfg?.model.orEmpty()) }
     var quizEnabled by remember { mutableStateOf(session?.isKeyQuizEnabled() ?: false) }
+    // 拍照答题指令：注入 AI 提示词控制回答方式（如「只显示答案」「给出解题步骤」）
+    var quizInstruction by remember { mutableStateOf(initialCfg?.quizInstruction.orEmpty()) }
     // 对话模型模式：custom（Lab 自定义模型，拦截官方回复）/ official（官方乐奇）
     var customAiMode by remember {
         mutableStateOf(initialCfg?.mode == CxrLHiRokidSession.AI_MODE_CUSTOM)
@@ -561,6 +581,7 @@ private fun ChatSettingsDialog(
                 apiKey = apiKey.trim(),
                 model = model.trim().ifBlank { "deepseek-chat" },
                 mode = if (customAiMode) CxrLHiRokidSession.AI_MODE_CUSTOM else CxrLHiRokidSession.AI_MODE_OFFICIAL,
+                quizInstruction = quizInstruction.trim(),
             )
         )
         // 下发「按键答题」开关到眼镜端（异步，失败不阻塞保存）
@@ -621,11 +642,15 @@ private fun ChatSettingsDialog(
             OutlinedTextField(
                 value = apiKey,
                 onValueChange = { apiKey = it },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { apiKeyFocused = it.isFocused },
                 label = { Text(stringResource(R.string.chat_settings_api_key), color = BrewMuted, fontSize = 13.sp) },
                 placeholder = { Text("sk-...", color = BrewMuted, fontSize = 14.sp) },
                 singleLine = true,
                 textStyle = TextStyle(color = BrewTextBright, fontSize = 14.sp),
+                // 未聚焦时 sk- 前缀保留、其余星号掩码；聚焦时显示明文
+                visualTransformation = SkKeyVisualTransformation(masked = !apiKeyFocused),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next, keyboardType = KeyboardType.Password),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = BrewChat,
@@ -769,6 +794,29 @@ private fun ChatSettingsDialog(
                 )
             }
 
+            // 拍照答题指令：注入 AI 提示词控制回答方式（如「只显示答案」「给出解题步骤」）
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = quizInstruction,
+                onValueChange = { quizInstruction = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.chat_settings_quiz_instruction), color = BrewMuted, fontSize = 13.sp) },
+                placeholder = { Text(stringResource(R.string.chat_settings_quiz_instruction_placeholder), color = BrewMuted, fontSize = 14.sp) },
+                supportingText = { Text(stringResource(R.string.chat_settings_quiz_instruction_hint), color = BrewMuted, fontSize = 11.sp) },
+                singleLine = false,
+                minLines = 1,
+                maxLines = 3,
+                textStyle = TextStyle(color = BrewTextBright, fontSize = 14.sp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = BrewChat,
+                    unfocusedBorderColor = BrewBorder,
+                    focusedTextColor = BrewTextBright,
+                    unfocusedTextColor = BrewTextBright,
+                    cursorColor = BrewChat,
+                ),
+            )
+
             Spacer(Modifier.height(16.dp))
             // AI 工具管理入口 → 子页面
             Row(
@@ -897,7 +945,7 @@ private fun KbManageDialog(
                 }
                 TextButton(
                     onClick = {
-                        importLauncher.launch(arrayOf("text/plain", "application/pdf"))
+                        importLauncher.launch(arrayOf("text/plain"))
                     },
                     enabled = !importing,
                 ) {
@@ -977,6 +1025,26 @@ private fun KbManageDialog(
                 }
             }
         }
+    }
+}
+
+/**
+ * API Key 掩码变换：未聚焦时保留 sk- 前缀，其余字符显示为星号；聚焦时显示明文。
+ * 实际编辑值不变，仅影响显示，光标位置一一对应。
+ */
+private class SkKeyVisualTransformation(private val masked: Boolean) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        if (!masked) return TransformedText(text, OffsetMapping.Identity)
+        val raw = text.text
+        if (raw.length <= 3) return TransformedText(text, OffsetMapping.Identity)
+        // 保留 sk- 前缀（若非 sk- 开头则整体掩码），其余替换为 *
+        val head = if (raw.startsWith("sk-", ignoreCase = true)) "sk-" else ""
+        val visible = head
+        val stars = "*".repeat(raw.length - visible.length)
+        return TransformedText(
+            AnnotatedString(visible + stars),
+            OffsetMapping.Identity,
+        )
     }
 }
 

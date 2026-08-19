@@ -25,8 +25,8 @@ android {
         applicationId = "com.rokidlab.phone"
         minSdk = 29
         targetSdk = 34
-        versionCode = 15
-        versionName = "3.0"
+        versionCode = 16
+        versionName = "3.1"
         manifestPlaceholders["cleartextTrafficPermitted"] = "false"
 
         // 本地 OCR（onnxruntime + opencv）体积较大，只保留主流真机 ABI
@@ -174,8 +174,4 @@ dependencies {
     }
     implementation("org.opencv:opencv:4.12.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
-    // 知识库 PDF 解析（排除旧版 BouncyCastle，与 rapidocr4j 的 bcprov-jdk18on 冲突）
-    implementation("com.tom-roush:pdfbox-android:2.0.27.0") {
-        exclude(group = "org.bouncycastle")
-    }
 }

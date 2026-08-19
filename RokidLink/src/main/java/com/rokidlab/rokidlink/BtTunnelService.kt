@@ -4,11 +4,16 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -30,6 +35,9 @@ class BtTunnelService : Service() {
         private const val CHANNEL_ID = "BtTunnel"
         private const val ADB_PORT = 5555
 
+        /** 蓝牙未开启时隧道重启的重试间隔 */
+        private const val BT_RETRY_INTERVAL_MS = 3_000L
+
         fun start(context: Context) {
             val intent = Intent(context, BtTunnelService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -45,6 +53,26 @@ class BtTunnelService : Service() {
     }
 
     private var tunnelServer: BtTunnelServer? = null
+
+    /** ADB 启用线程引用，onDestroy 时中断避免线程泄漏 */
+    private var enableAdbThread: Thread? = null
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** 蓝牙未开启时的延迟重试任务（防重复叠加） */
+    private val tunnelRetryRunnable = Runnable { startTunnel() }
+
+    /** 蓝牙状态广播：蓝牙关闭时服务不再自杀，开启后自动重启隧道 */
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == BluetoothAdapter.ACTION_STATE_CHANGED &&
+                intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR) == BluetoothAdapter.STATE_ON
+            ) {
+                Log.i(TAG, "Bluetooth turned on, restarting tunnel")
+                startTunnel()
+            }
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -63,6 +91,14 @@ class BtTunnelService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification())
+        // 监听蓝牙开启广播：蓝牙恢复后自动重启隧道，避免通道永久失效
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(bluetoothStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(bluetoothStateReceiver, filter)
+        }
         startTunnel()
         // 独立于 Activity 启用 ADB TCP，确保纯蓝牙模式下 adbd 监听 5555
         enableAdbTcp()
@@ -72,16 +108,19 @@ class BtTunnelService : Service() {
         try {
             val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
             if (adapter?.isEnabled != true) {
-                Log.w(TAG, "Bluetooth disabled, cannot start tunnel")
-                stopSelf()
+                // 蓝牙未开启时不自杀：延迟重试，蓝牙开启广播到达时也会立即重试
+                Log.w(TAG, "Bluetooth disabled, will retry tunnel")
+                mainHandler.removeCallbacks(tunnelRetryRunnable)
+                mainHandler.postDelayed(tunnelRetryRunnable, BT_RETRY_INTERVAL_MS)
                 return
             }
             tunnelServer = BtTunnelServer()
             val ok = tunnelServer?.start(adapter) == true
             Log.i(TAG, "BtTunnelServer started: $ok")
             if (!ok) {
-                Log.e(TAG, "Failed to start BtTunnelServer, stopping service")
-                stopSelf()
+                Log.e(TAG, "Failed to start BtTunnelServer, will retry")
+                mainHandler.removeCallbacks(tunnelRetryRunnable)
+                mainHandler.postDelayed(tunnelRetryRunnable, BT_RETRY_INTERVAL_MS)
                 return
             }
             // 第二 RFCOMM 通道：ASR 文字实时推送（长连接，独立于 ADB 隧道）。
@@ -89,8 +128,9 @@ class BtTunnelService : Service() {
             val pushOk = AsrPushServer.start(adapter)
             Log.i(TAG, "AsrPushServer started: $pushOk")
         } catch (e: Exception) {
-            Log.e(TAG, "startTunnel failed", e)
-            stopSelf()
+            Log.e(TAG, "startTunnel failed, will retry", e)
+            mainHandler.removeCallbacks(tunnelRetryRunnable)
+            mainHandler.postDelayed(tunnelRetryRunnable, BT_RETRY_INTERVAL_MS)
         }
     }
 
@@ -119,7 +159,7 @@ class BtTunnelService : Service() {
 
     /** 在后台线程启用 ADB TCP：setprop 端口 + 重启 adbd + 轮询检测 */
     private fun enableAdbTcp() {
-        Thread {
+        enableAdbThread = Thread {
             Log.i(TAG, getString(R.string.log_try_enable_adb_tcp))
             try {
                 Runtime.getRuntime().exec(arrayOf("setprop", "service.adb.tcp.port", ADB_PORT.toString()))
@@ -148,6 +188,10 @@ class BtTunnelService : Service() {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(tunnelRetryRunnable)
+        runCatching { unregisterReceiver(bluetoothStateReceiver) }
+        enableAdbThread?.interrupt()
+        enableAdbThread = null
         tunnelServer?.stop()
         tunnelServer = null
         AsrPushServer.stop()

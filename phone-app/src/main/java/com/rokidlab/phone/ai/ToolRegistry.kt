@@ -262,8 +262,13 @@ object ToolRegistry {
                     val installed = client.listPackages(false)
                     val pkg = matchPackage(appName, installed, context)
                         ?: return "没有找到“$appName”。眼镜上已安装的应用：${installed.joinToString("、")}"
-                    client.launchApp(pkg)
-                    "已为你打开 $appName（$pkg）"
+                    val result = client.launchApp(pkg)
+                    // launchApp 失败会返回 "Failed: ..." 前缀，不能照常回复「已打开」
+                    if (result.startsWith("Failed")) {
+                        "打开 $appName（$pkg）失败，请稍后重试"
+                    } else {
+                        "已为你打开 $appName（$pkg）"
+                    }
                 } finally {
                     runCatching { client.disconnect() }
                 }

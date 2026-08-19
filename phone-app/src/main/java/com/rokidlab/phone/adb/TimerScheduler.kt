@@ -4,6 +4,7 @@ import com.rokidlab.phone.adb.ui.TimerAction
 import com.rokidlab.phone.adb.ui.TimerSchedule
 import com.rokidlab.phone.adb.ui.TimerTask
 import com.rokidlab.phone.app.LabApplication
+import com.rokidlab.phone.connection.ConnectionRoute
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -15,10 +16,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 定时任务调度器（Application 级单例，由 LabApplication 持有）。
@@ -39,7 +42,10 @@ class TimerScheduler(private val appContext: Context) {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val jobs = mutableMapOf<String, Job>()
+    // 任务运行协程表：startTask/stopTask/协程 finally 在多个协程间并发读写，必须线程安全
+    private val jobs = ConcurrentHashMap<String, Job>()
+    /** tasks 读-改-写锁：UI 线程与 Default 调度协程并发修改任务列表，需串行化避免丢失更新 */
+    private val tasksLock = Any()
     private val tasksPrefs = appContext.getSharedPreferences(PREFS_TIMER, Context.MODE_PRIVATE)
 
     /** 当前任务列表（含运行时 running / executedCount 状态） */
@@ -51,23 +57,33 @@ class TimerScheduler(private val appContext: Context) {
 
     /** 新增任务（running=false，由 UI 显式启动） */
     fun addTask(task: TimerTask) {
-        tasks = tasks + task.copy(running = false)
-        saveTasks()
+        synchronized(tasksLock) {
+            tasks = tasks + task.copy(running = false)
+            saveTasks()
+        }
         Log.i(TAG, "addTask: ${task.name}")
     }
 
-    /** 更新任务：若在运行则先停止再以新配置重启 */
+    /** 更新任务：若在运行则先停止再以新配置重启，保持用户预期 */
     fun updateTask(task: TimerTask) {
+        val old = synchronized(tasksLock) { tasks.firstOrNull { it.id == task.id } }
         stopTask(task.id)
-        tasks = tasks.map { if (it.id == task.id) task.copy(running = false, executedCount = it.executedCount) else it }
-        saveTasks()
+        val updated = task.copy(running = false, executedCount = old?.executedCount ?: task.executedCount)
+        synchronized(tasksLock) {
+            tasks = tasks.map { if (it.id == task.id) updated else it }
+            saveTasks()
+        }
         Log.i(TAG, "updateTask: ${task.name}")
+        // 原任务运行中：编辑后以新配置继续运行
+        if (old?.running == true) startTask(updated)
     }
 
     fun deleteTask(id: String) {
         stopTask(id)
-        tasks = tasks.filter { it.id != id }
-        saveTasks()
+        synchronized(tasksLock) {
+            tasks = tasks.filter { it.id != id }
+            saveTasks()
+        }
         Log.i(TAG, "deleteTask: $id")
     }
 
@@ -75,15 +91,17 @@ class TimerScheduler(private val appContext: Context) {
     fun startTask(task: TimerTask) {
         val taskId = task.id
         if (jobs.containsKey(taskId)) return
-        tasks = tasks.map { if (it.id == taskId) it.copy(running = true) else it }
-        saveTasks()
+        synchronized(tasksLock) {
+            tasks = tasks.map { if (it.id == taskId) it.copy(running = true) else it }
+            saveTasks()
+        }
         val job = scope.launch {
             var repeatDaily = false
             try {
                 when (task.schedule) {
                     is TimerSchedule.Interval -> {
                         for (i in 0 until task.schedule.count) {
-                            if (!jobs.containsKey(taskId)) break
+                            if (!isActive) break
                             executeActions(task.actions)
                             updateExecutedCount(taskId)
                             if (i < task.schedule.count - 1) delay(task.schedule.seconds * 1000L)
@@ -97,9 +115,11 @@ class TimerScheduler(private val appContext: Context) {
                             set(Calendar.SECOND, 0)
                         }
                         var delayMs = target.timeInMillis - now.timeInMillis
-                        if (delayMs < 0) delayMs += if (task.schedule.repeatDaily) 24 * 3600 * 1000L else 0L
+                        // 时间已过时统一顺延 24h（下一次该时间点），与 AI 提示的「明天 HH:mm」语义一致；
+                        // 避免「已过时间的一次性任务」被立即触发，造成用户预期不符
+                        if (delayMs < 0) delayMs += 24 * 3600 * 1000L
                         if (delayMs > 0) delay(delayMs)
-                        if (jobs.containsKey(taskId)) {
+                        if (isActive) {
                             executeActions(task.actions)
                             updateExecutedCount(taskId)
                         }
@@ -107,44 +127,58 @@ class TimerScheduler(private val appContext: Context) {
                     }
                     is TimerSchedule.Countdown -> {
                         delay(task.schedule.seconds * 1000L)
-                        if (jobs.containsKey(taskId)) {
+                        if (isActive) {
                             executeActions(task.actions)
                             updateExecutedCount(taskId)
                         }
                     }
                 }
             } finally {
-                jobs.remove(taskId)
-                tasks = tasks.map { if (it.id == taskId) it.copy(running = false) else it }
-                saveTasks()
+                // 仅当自己仍是该任务的当前执行者时清理，避免误伤并发 startTask 的新协程
+                val removed = jobs.remove(taskId, coroutineContext[Job])
+                if (removed) {
+                    synchronized(tasksLock) {
+                        tasks = tasks.map { if (it.id == taskId) it.copy(running = false) else it }
+                        saveTasks()
+                    }
+                }
                 // 每日定时任务：本次执行完成后重新调度下一天
                 if (repeatDaily) {
-                    val latest = tasks.firstOrNull { it.id == taskId }
+                    val latest = synchronized(tasksLock) { tasks.firstOrNull { it.id == taskId } }
                     if (latest != null) startTask(latest)
                 }
             }
         }
-        jobs[taskId] = job
+        val prev = jobs.putIfAbsent(taskId, job)
+        if (prev != null) {
+            // 并发 startTask 已抢先登记：取消本协程，交由已有任务执行
+            job.cancel()
+        }
     }
 
     fun stopTask(id: String) {
         jobs[id]?.cancel()
         jobs.remove(id)
-        tasks = tasks.map { if (it.id == id) it.copy(running = false) else it }
-        saveTasks()
+        synchronized(tasksLock) {
+            tasks = tasks.map { if (it.id == id) it.copy(running = false) else it }
+            saveTasks()
+        }
     }
 
     fun stopAll() {
         jobs.values.forEach { it.cancel() }
         jobs.clear()
-        tasks = tasks.map { it.copy(running = false) }
-        saveTasks()
+        synchronized(tasksLock) {
+            tasks = tasks.map { it.copy(running = false) }
+            saveTasks()
+        }
     }
 
     /** 恢复运行中的任务（保活服务启动/自愈重建时调用） */
     fun resumeRunningTasks() {
-        tasks.filter { it.running }.forEach { startTask(it) }
-        Log.i(TAG, "resumeRunningTasks: ${tasks.count { it.running }} running")
+        val running = synchronized(tasksLock) { tasks.filter { it.running } }
+        running.forEach { startTask(it) }
+        Log.i(TAG, "resumeRunningTasks: ${running.size} running")
     }
 
     /** App 退出时停止全部任务 */
@@ -153,13 +187,15 @@ class TimerScheduler(private val appContext: Context) {
     }
 
     private fun updateExecutedCount(taskId: String) {
-        tasks = tasks.map { if (it.id == taskId) it.copy(executedCount = it.executedCount + 1) else it }
-        saveTasks()
+        synchronized(tasksLock) {
+            tasks = tasks.map { if (it.id == taskId) it.copy(executedCount = it.executedCount + 1) else it }
+            saveTasks()
+        }
     }
 
     // ── 动作执行 ──
 
-    private fun executeActions(actions: List<TimerAction>) {
+    private suspend fun executeActions(actions: List<TimerAction>) {
         for (action in actions) {
             try {
                 when (action) {
@@ -179,20 +215,35 @@ class TimerScheduler(private val appContext: Context) {
         }
     }
 
-    /** 按需建立短连接 ADB 会话执行操作，完成后立即断开 */
-    private fun withAdbClient(block: (AdbShellClient) -> Unit) {
+    /** 按需建立短连接 ADB 会话执行操作，完成后立即断开。
+     *  与 ToolRegistry 一致：通过 RouteManager 解析线路（WiFi 直连或蓝牙隧道），
+     *  蓝牙连接场景下不再直连 IP+5555（隧道关闭时直连必然失败）。 */
+    private suspend fun withAdbClient(block: (AdbShellClient) -> Unit) {
+        val app = appContext as? LabApplication ?: return
         val ip = appContext.getSharedPreferences(PREFS_ADB, Context.MODE_PRIVATE)
             .getString(KEY_ADB_IP, "") ?: ""
         if (ip.isBlank()) {
             Log.w(TAG, "withAdbClient: no ADB IP configured")
             return
         }
-        val client = AdbShellClient(appContext, ip, ADB_PORT)
+        val client = try {
+            val route = app.routeManager.resolve(ip, ADB_PORT)
+            val pair: Pair<String, Int>? = when (route) {
+                is ConnectionRoute.Wifi -> route.ip to route.port
+                is ConnectionRoute.Bluetooth -> route.ip to route.localPort
+                is ConnectionRoute.None -> null
+            }
+            pair ?: return
+            AdbShellClient(appContext, pair.first, pair.second)
+        } catch (e: Exception) {
+            Log.w(TAG, "withAdbClient: route resolve failed: ${e.message}")
+            return
+        }
         try {
             if (client.connect()) {
                 block(client)
             } else {
-                Log.w(TAG, "withAdbClient: connect failed to $ip")
+                Log.w(TAG, "withAdbClient: connect failed")
             }
         } catch (e: Exception) {
             Log.w(TAG, "withAdbClient failed: ${e.message}")

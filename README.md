@@ -67,7 +67,7 @@ Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、蓝牙�
 - **眼镜语音播报**：AI 回复经 CXR-L 通道发送到眼镜端语音朗读
 - **拍照问 AI**：镜腿按键 / 手机按钮双入口触发 —— 眼镜拍照 → 本地 OCR 识别题目文字 → 知识库检索（RAG）→ AI 生成答案并语音播报
 - **本地 OCR**：完全离线识别（PP-OCRv4 模型 + ONNX Runtime 推理），无网络、无 GMS 依赖，16KB 页面设备兼容
-- **本地知识库**：支持导入 txt / PDF 文档，自动分块入库（SQLite）并关键词检索，为 AI 提供参考资料（RAG）
+- **本地知识库**：支持导入 txt 文档，自动分块入库（SQLite）并关键词检索，为 AI 提供参考资料（RAG）
 - **按键答题开关**：开启后短按镜腿按键直接触发拍照问 AI，覆盖原自定义按键短按，长按不受影响
 - **AI 工具（语音控制）**：内置 8 个工具，一句话直达能力：
   - **打开应用**："打开小智""打开浏览器"（自动名称匹配已装应用）
@@ -145,7 +145,7 @@ Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、蓝牙�
 - **AI**:
   - OpenAI 兼容协议客户端（`OpenAiService`，可切换任意服务商）
   - 本地 OCR（RapidOCR / PP-OCRv4 + ONNX Runtime，完全离线）
-  - 本地知识库 RAG（txt / PDF 导入，SQLite 分块检索，PDFBox 解析）
+  - 本地知识库 RAG（txt 导入，SQLite 分块检索）
 - **投屏**: MediaProjection API + Socket 传输
 - **统一 HTTP 工具**: `HttpClient` 对象封装（替代裸 `HttpURLConnection`）
 - **统一交互组件**: `BrewButton`/`BrewOutlineButton`/`BrewCompactButton`/`BrewIconButton` 标准按钮系统、`BrewDialog` 标准对话框（RokidLink 卡片样式：彩色标题栏 + 装饰分隔线 + 彩色边框）、`BrewStatusDot`/`BrewStatusPill`/`BrewStateCard` 标准状态指示器（详见 [UI-DESIGN.md](./UI-DESIGN.md)）
@@ -235,7 +235,7 @@ RokidLab/
 │   │   │   │   ├── OpenAiService.kt    OpenAI 兼容服务（可切换任意服务商）
 │   │   │   │   ├── ToolRegistry.kt     AI 工具注册表（语音控制：打开应用/定时任务/查询类）
 │   │   │   │   ├── LocalOcr.kt         本地 OCR（PP-OCRv4 + ONNX Runtime）
-│   │   │   │   └── KnowledgeBase.kt    本地知识库 RAG（txt/PDF 导入、分块、SQLite 检索）
+│   │   │   │   └── KnowledgeBase.kt    本地知识库 RAG（txt 导入、分块、SQLite 检索）
 │   │   │   ├── connection/  连接路由
 │   │   │   │   └── ConnectionRouteManager.kt  WiFi 直连 / 蓝牙隧道双线路路由管理
 │   │   │   ├── filemanager/  文件管理
@@ -340,7 +340,7 @@ RokidLab/
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v3.0-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v3.1-debug.apk
 ```
 
 ### 眼镜端服务
@@ -380,7 +380,6 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 - Jetpack Compose (Material 3) — 现代 UI 框架
 - 蓝牙 HID Device Profile — 系统 API（Android 9+）
 - RapidOCR (`rapidocr4j-android` + OpenCV 4.12 + ONNX Runtime 1.22) — 本地离线 OCR
-- PDFBox (`pdfbox-android`) — 知识库 PDF 文档解析
 
 ## UI 设计
 

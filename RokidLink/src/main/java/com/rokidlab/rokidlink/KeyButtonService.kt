@@ -27,11 +27,7 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiNetworkSpecifier
 import com.rokid.cxr.CXRServiceBridge
 import com.rokid.cxr.Caps
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * 眼镜端按键映射常驻后台服务。
@@ -51,10 +47,15 @@ class KeyButtonService : Service() {
     private var bridge: CXRServiceBridge? = null
     private var bridgeActivityRunning = false
 
+    /** 显示状态页指令防抖：手机端指令可能广播式重复到达，500ms 内只响应一次 */
+    private var lastShowMainMs = 0L
+
     /** 唤醒词+语音的 ASR 流式文字（覆盖式累积，ASR_End 时取最后一条） */
     private var pendingAiText: String? = null
-    /** 待手机端拉取的 ASR 文字队列（请求-响应轮询） */
-    private val pendingAiAsrQueue = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    /** 本地接管执行器：ASR_End 后的 openAiSession/showAiUserText 含多次 sleep，
+     *  连续提问时若每次都 new Thread 会并发执行导致指令交错，必须串行化 */
+    private val takeoverExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     /**
      * 下行过滤：手机端 Lab 回复时下行序列为 Exit→KeyDown_Client→open→ASR_Result→ASR_End→TTS_Result。
@@ -62,13 +63,16 @@ class KeyButtonService : Service() {
      * 「写文件→手机读到→下行→误拦截→再写文件」的自反馈死循环。
      * 收到下行标志（KeyDown_Client/open）后，窗口内到达的 ASR 一律视为 Lab 重发，忽略。
      */
+    @Volatile
     private var downlinkUntilMs = 0L
 
     /**
      * 打断次数限制：滑动窗口内打断/写文件次数达到上限后暂停拦截，让官方自然完成回复
      * （打破任何异常循环），窗口滚动后自动恢复。比固定冷却时间更可控。
      */
+    @Volatile
     private var lastInterruptMs = 0L
+    @Volatile
     private var interruptCount = 0
 
     /** 用于定期校验按键 receiver 仍存活 */
@@ -274,6 +278,8 @@ class KeyButtonService : Service() {
         /** 打断次数限制滑动窗口与上限 */
         private const val INTERRUPT_WINDOW_MS = 20_000L
         private const val INTERRUPT_MAX = 3
+        /** WakeLock 持有超时：到期自动释放，由心跳续期（避免永久持有阻止 CPU 深度休眠） */
+        private const val WAKE_LOCK_TIMEOUT_MS = 10 * 60_000L
         /** ASR 文字 logcat 输出 tag：手机端经 ADB（蓝牙隧道）读取（CXR 上行被 AI App 过滤，改用 logcat） */
         internal const val AI_ASR_BRIDGE_TAG = "AiAsrBridge"
         internal const val PREFS_NAME = "key_button_config"
@@ -297,6 +303,8 @@ class KeyButtonService : Service() {
         internal const val AI_ASR_POLL_TOPIC = "rokidlab_ai_asr_poll"
         /** AI 频道（手机端 → 眼镜端，AssistServer 全局订阅） */
         internal const val AI_TOPIC = "Ai"
+        /** 显示状态页指令通道（手机端 → 眼镜端）：用户点「打开 RokidLink」后，MainActivity 带 EXTRA_SHOW_UI 显示 IP 状态页 */
+        internal const val SHOW_MAIN_TOPIC = "rokidlab_show_main"
         /** AI 配置下发通道（手机端 → 眼镜端）：baseUrl/apiKey/model，供眼镜端直接调用模型 */
         internal const val AI_CONFIG_TOPIC = "rokidlab_ai_config"
         /** AI 配置持久化 key */
@@ -360,6 +368,8 @@ class KeyButtonService : Service() {
     override fun onDestroy() {
         Log.i(TAG, "Service destroying")
         handler.removeCallbacksAndMessages(null)
+        // 停止本地接管执行器（openAiSession 等含 sleep 的任务不再继续）
+        takeoverExecutor.shutdownNow()
         runCatching { unregisterReceiver(keyReceiver) }
         receiverRegistered = false
         runCatching { unregisterReceiver(screenOnReceiver) }
@@ -508,21 +518,27 @@ class KeyButtonService : Service() {
                 "KeyButtonService::WakeLock"
             ).apply {
                 setReferenceCounted(false)
-                acquire()
+                // 带超时获取：避免永久持有阻止 CPU 深度休眠，由心跳每 30s 续期
+                acquire(WAKE_LOCK_TIMEOUT_MS)
             }
-            Log.i(TAG, "WakeLock acquired")
+            Log.i(TAG, "WakeLock acquired (${WAKE_LOCK_TIMEOUT_MS / 1000}s)")
         } catch (e: Exception) {
             Log.e(TAG, "acquireWakeLock failed", e)
         }
     }
 
-    /** 每 30 秒自检一次：key receiver 丢了就重新注册，TTS 绑定丢了就重绑 */
+    /** 每 30 秒自检一次：key receiver 丢了就重新注册，TTS 绑定丢了就重绑，WakeLock 超时了就续期 */
     private fun startHeartbeat() {
         handler.postDelayed(object : Runnable {
             override fun run() {
                 if (!receiverRegistered) {
                     Log.w(TAG, "Heartbeat: key receiver lost, re-registering")
                     registerKeyReceiver()
+                }
+                // WakeLock 超时自动释放后重新获取（仅当 Service 仍持有引用时）
+                if (wakeLock?.isHeld != true) {
+                    Log.w(TAG, "Heartbeat: WakeLock released, re-acquiring")
+                    acquireWakeLock()
                 }
                 // TTS 服务掉线自愈（ensureBound 内部判断已绑定则跳过）
                 TtsPlaybackHelper.ensureBound(this@KeyButtonService)
@@ -595,6 +611,11 @@ class KeyButtonService : Service() {
             Log.i(TAG, "subscribe($AI_TOPIC) -> $aiResult")
             // 订阅手机端轮询拉取通道（请求-响应，绕过 AI App 上行过滤）
             subscribeAiAsrPoll()
+            // 订阅显示状态页指令：手机端「打开 RokidLink」时带 EXTRA_SHOW_UI 显示 IP 状态页
+            val showMainResult = bridge?.subscribe(SHOW_MAIN_TOPIC, CXRServiceBridge.MsgCallback { _, _, _ ->
+                showMainActivity()
+            })
+            Log.i(TAG, "subscribe($SHOW_MAIN_TOPIC) -> $showMainResult")
         } catch (e: Exception) {
             Log.e(TAG, "initCxrBridge failed", e)
         }
@@ -636,15 +657,16 @@ class KeyButtonService : Service() {
                         Log.d(TAG, "AI ASR_End pass-through (official mode)")
                         return
                     }
+                    val finalText = pendingAiText?.trim().orEmpty()
+                    pendingAiText = null
+                    // 空文本不消耗打断次数（先把提取/判空前置）
+                    if (finalText.isBlank()) {
+                        Log.w(TAG, "AI ASR_End with empty text")
+                        return
+                    }
                     // 打断次数限制：窗口内达到上限则暂停拦截，让官方自然完成回复（打破循环）
                     if (!allowInterrupt()) {
                         Log.w(TAG, "AI ASR_End ignored (interrupt limit reached)")
-                        return
-                    }
-                    val finalText = pendingAiText?.trim().orEmpty()
-                    pendingAiText = null
-                    if (finalText.isBlank()) {
-                        Log.w(TAG, "AI ASR_End with empty text")
                         return
                     }
                     Log.i(TAG, "AI ASR complete: $finalText")
@@ -654,14 +676,15 @@ class KeyButtonService : Service() {
                     // 本地接管显示：官方会话被打断后界面会残留"思考中"等待（约 3s 直到手机端轮询+下行重开会话）。
                     // 这里立即本地重开会话并显示提问，官方界面立刻切到 Lab 会话等待（第二次思考中，可接受），
                     // 手机端读到文字后只需下行 DeepSeek 回复（TTS_Result），不再重发会话序列。
-                    Thread {
+                    // 串行执行器：连续提问时避免多个接管任务并发导致指令交错
+                    takeoverExecutor.execute {
                         try {
                             openAiSession()
                             showAiUserText(finalText)
                         } catch (e: Exception) {
                             Log.e(TAG, "local takeover error", e)
                         }
-                    }.start()
+                    }
                     // ASR 文字双通道暴露：
                     //   1) logcat（AiAsrBridge tag）——诊断用
                     //   2) RFCOMM 推送通道（AsrPushServer 长连接，毫秒级）——主通道
@@ -708,34 +731,24 @@ class KeyButtonService : Service() {
      * 将 ASR 文字追加写入 app 私有外部目录文件（ai_asr.log），
      * 供手机端经 ADB（蓝牙隧道）轮询读取。logcat 缓冲会被高频系统日志数秒内冲掉，
      * 必须落盘才能保证手机端可靠读到。每行格式：[epochMs] text
+     * 在后台线程执行：该函数由 CXR 订阅回调线程触发，全量读写文件会阻塞回调链路。
      */
     private fun appendAiAsrToFile(text: String) {
-        try {
-            val dir = getExternalFilesDir(null) ?: return
-            val f = File(dir, "ai_asr.log")
-            // 截断防膨胀：超过 64KB 时只保留最近 5 行（蓝牙传输带宽有限，避免每次 cat 过慢）
-            if (f.exists() && f.length() > 64 * 1024) {
-                val last = f.readLines().takeLast(5)
-                f.writeText("")
-                if (last.isNotEmpty()) f.appendText(last.joinToString("\n") + "\n")
+        Thread {
+            try {
+                val dir = getExternalFilesDir(null) ?: return@Thread
+                val f = File(dir, "ai_asr.log")
+                // 截断防膨胀：超过 64KB 时只保留最近 5 行（蓝牙传输带宽有限，避免每次 cat 过慢）
+                if (f.exists() && f.length() > 64 * 1024) {
+                    val last = f.readLines().takeLast(5)
+                    f.writeText("")
+                    if (last.isNotEmpty()) f.appendText(last.joinToString("\n") + "\n")
+                }
+                f.appendText("[${System.currentTimeMillis()}] $text\n")
+            } catch (e: Exception) {
+                Log.e(TAG, "appendAiAsrToFile error", e)
             }
-            f.appendText("[${System.currentTimeMillis()}] $text\n")
-        } catch (e: Exception) {
-            Log.e(TAG, "appendAiAsrToFile error", e)
-        }
-    }
-
-    /** 上行 Ai/Exit：结束官方 AI 会话（AssistServer 关闭界面、停止官方 TTS 播报） */
-    private fun exitAiSession() {
-        val b = bridge ?: return
-        try {
-            val caps = Caps()
-            caps.write("Exit")
-            val r = b.sendMessage(AI_TOPIC, caps)
-            Log.i(TAG, "sendMessage($AI_TOPIC/Exit) -> $r (close official AI)")
-        } catch (e: Exception) {
-            Log.e(TAG, "exitAiSession error", e)
-        }
+        }.apply { name = "ai-asr-file"; start() }
     }
 
     /**
@@ -756,40 +769,16 @@ class KeyButtonService : Service() {
         }
         // 2) 尝试系统双击广播（应用进程内执行，同 adb shell 权限受限）
         try {
+            // shell 内用 2>&1 合并 stderr 到 stdout，只读单流：先读 stdout 再读 stderr 可能因管道缓冲占满而死锁
             val p = Runtime.getRuntime().exec(arrayOf(
-                "am", "broadcast", "-a", "com.android.action.ACTION_SPRITE_BUTTON_DOUBLE_CLICK"
+                "sh", "-c",
+                "am broadcast -a com.android.action.ACTION_SPRITE_BUTTON_DOUBLE_CLICK 2>&1"
             ))
-            val out = p.inputStream.bufferedReader().readText() +
-                p.errorStream.bufferedReader().readText()
+            val out = p.inputStream.bufferedReader().use { it.readText() }
             Log.i(TAG, "interruptOfficialLocally: am broadcast -> ${out.trim().take(120)}")
         } catch (e: Exception) {
             Log.e(TAG, "interruptOfficialLocally am error", e)
         }
-    }
-
-    /**
-     * 眼镜端本地闭环：官方 ASR 识别出的文字不离开眼镜，
-     * 直接用 Lab 下发的 AI 配置（DeepSeek 等 OpenAI 兼容服务）生成回复，
-     * 并在官方聊天界面显示 + 本地 TTS 播报。
-     */
-    private fun handleAiQuestion(text: String) {
-        Thread {
-            try {
-                // 等官方会话关闭完成
-                Thread.sleep(800)
-                // 重新打开 AI 对话界面（复刻手机端 sendAiTextViaLink 已验证的指令序列）
-                openAiSession()
-                // 显示用户问题
-                showAiUserText(text)
-                // 调用 Lab 配置的模型获取回复
-                val reply = queryDeepSeek(text)
-                Log.i(TAG, "AI reply: ${reply.take(60)}")
-                // 显示 + 播报 Lab 回复
-                showAiReply(reply)
-            } catch (e: Exception) {
-                Log.e(TAG, "handleAiQuestion error", e)
-            }
-        }.start()
     }
 
     /** 发送 Ai 频道指令（caps[0] = 命令，后续为参数） */
@@ -821,79 +810,6 @@ class KeyButtonService : Service() {
         val r1 = sendAi("ASR_Result", text)
         val r2 = sendAi("ASR_End")
         Log.i(TAG, "showAiUserText: ASR_Result=$r1 ASR_End=$r2 text=$text")
-    }
-
-    /** 在官方聊天界面显示 Lab 回复 + 本地 TTS 播报 */
-    private fun showAiReply(reply: String) {
-        val r1 = sendAi("TTS_Result", reply)
-        Log.i(TAG, "showAiReply: TTS_Result=$r1")
-        Thread.sleep(300)
-        try {
-            TtsPlaybackHelper.play(this, reply)
-            Log.i(TAG, "showAiReply: tts played")
-        } catch (e: Exception) {
-            Log.e(TAG, "showAiReply tts error", e)
-        }
-    }
-
-    /** 调用 OpenAI 兼容 API（DeepSeek 等）获取回复 */
-    private fun queryDeepSeek(text: String): String {
-        val cfg = getAiConfig()
-        if (cfg.apiKey.isBlank()) {
-            Log.w(TAG, "queryDeepSeek: no apiKey configured")
-            return "Lab 尚未配置 AI 服务，请在 RokidLab 聊天设置中配置 API Key。"
-        }
-        var conn: HttpURLConnection? = null
-        return try {
-            val url = URL(cfg.baseUrl.trimEnd('/') + "/chat/completions")
-            conn = url.openConnection() as HttpURLConnection
-            conn!!.requestMethod = "POST"
-            conn!!.connectTimeout = 15_000
-            conn!!.readTimeout = 30_000
-            conn!!.doOutput = true
-            conn!!.setRequestProperty("Content-Type", "application/json")
-            conn!!.setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
-            val body = JSONObject().apply {
-                put("model", cfg.model)
-                put("messages", JSONArray().apply {
-                    put(JSONObject().put("role", "system")
-                        .put("content", "你是 RokidLab 的 AI 助手，请用简洁准确的中文回答问题。"))
-                    put(JSONObject().put("role", "user").put("content", text))
-                })
-                put("stream", false)
-            }
-            conn!!.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = conn!!.responseCode
-            val respText = (if (code in 200..299) conn!!.inputStream else conn!!.errorStream)
-                ?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (code !in 200..299) {
-                Log.e(TAG, "queryDeepSeek http $code: ${respText.take(200)}")
-                return "AI 请求失败($code)"
-            }
-            val reply = JSONObject(respText)
-                .getJSONArray("choices")
-                .getJSONObject(0)
-                .getJSONObject("message")
-                .getString("content")
-                .trim()
-            if (reply.isBlank()) "抱歉，我暂时无法回答这个问题。" else reply
-        } catch (e: Exception) {
-            Log.e(TAG, "queryDeepSeek error", e)
-            "AI 服务调用失败: ${e.message}"
-        } finally {
-            runCatching { conn?.disconnect() }
-        }
-    }
-
-    /** 读取 Lab 下发的 AI 配置 */
-    private fun getAiConfig(): AiConfig {
-        val p = getSharedPreferences(PREFS_NAME, 0)
-        return AiConfig(
-            baseUrl = p.getString(KEY_AI_BASE_URL, "").orEmpty().ifBlank { "https://api.deepseek.com" },
-            apiKey = p.getString(KEY_AI_API_KEY, "").orEmpty(),
-            model = p.getString(KEY_AI_MODEL, "").orEmpty().ifBlank { "deepseek-chat" },
-            mode = p.getString(KEY_AI_MODE, AI_MODE_CUSTOM).orEmpty().ifBlank { AI_MODE_CUSTOM },
-        )
     }
 
     /** 当前对话模型模式是否为自定义（Lab 拦截并回复）；official 模式放行官方乐奇 */
@@ -931,45 +847,14 @@ class KeyButtonService : Service() {
         }
     }
 
-    /** Lab 下发的 AI 服务配置 */
-    private data class AiConfig(
-        val baseUrl: String,
-        val apiKey: String,
-        val model: String,
-        val mode: String = AI_MODE_CUSTOM,
-    )
-
-    /** 上行推送 ASR 文字给手机 Lab（notify 通道，试探 AI App 是否转发） */
-    private fun pushAiAsrTextUp(text: String) {
-        val b = bridge ?: return
-        try {
-            // 实测 AI App 对自定义 cmd（rokidlab_ai_asr_poll）上行 notifyType=UNKNOWN 直接丢弃；
-            // Wifi_Connect_Status 是 AI App 已知的白名单 cmd（配 WiFi 回执），试探是否转发给手机。
-            val caps = Caps()
-            caps.write("ASR_TEXT")
-            caps.write(text)
-            val r = b.sendMessage("Wifi_Connect_Status", caps)
-            Log.i(TAG, "pushAiAsrText up(Wifi): $text (r=$r)")
-        } catch (e: Exception) {
-            Log.e(TAG, "pushAiAsrTextUp error", e)
-        }
-    }
-
-    /** 手机端轮询拉取 ASR 文字（可回复订阅，请求-响应机制） */
+    /** 手机端轮询拉取 ASR 文字（可回复订阅，请求-响应机制）。
+     *  文字主通道为 RFCOMM 长连接（AsrPushServer），本通道保留空响应占位。 */
     private fun subscribeAiAsrPoll() {
         val b = bridge ?: return
         try {
             val r = b.subscribe(AI_ASR_POLL_TOPIC, CXRServiceBridge.MsgReplyCallback { _, _, _, reply ->
-                val text = pendingAiAsrQueue.poll()
-                if (!text.isNullOrBlank()) {
-                    val caps = Caps()
-                    caps.write(text)
-                    reply.end(caps)
-                    Log.i(TAG, "AI poll reply: $text")
-                } else {
-                    reply.end(Caps())
-                    Log.d(TAG, "AI poll reply: empty")
-                }
+                reply.end(Caps())
+                Log.d(TAG, "AI poll reply: empty")
             })
             Log.i(TAG, "subscribe($AI_ASR_POLL_TOPIC) -> $r")
         } catch (e: Exception) {
@@ -977,11 +862,38 @@ class KeyButtonService : Service() {
         }
     }
 
+    /** 手机端「打开 RokidLink」触发：带 EXTRA_SHOW_UI 显示状态页（含 WiFi IP），供用户查看连接信息 */
+    private fun showMainActivity() {
+        // 防抖：手机端 appStart 后发的指令可能广播式重复到达，500ms 内只响应一次
+        val now = System.currentTimeMillis()
+        if (now - lastShowMainMs < 500L) {
+            Log.i(TAG, "showMainActivity: debounced (repeat)")
+            return
+        }
+        lastShowMainMs = now
+        try {
+            val intent = Intent(this, MainActivity::class.java).apply {
+                // 必须用 CLEAR_TOP 而非 SINGLE_TOP：appStart 刚启动的隐形实例（无 EXTRA_SHOW_UI）
+                // 在任务栈顶，SINGLE_TOP 会复用该实例，onCreate 不重跑 → showUi 仍为 false，
+                // 导致隐形实例获得焦点后 300ms 执行 finish() 把刚显示的 IP 状态页关掉。
+                // CLEAR_TOP 清掉旧实例并新建 showUi=true 实例，保证 onCreate 重新读取标志。
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra(MainActivity.EXTRA_SHOW_UI, true)
+            }
+            startActivity(intent)
+            Log.i(TAG, "showMainActivity: showing status page (WiFi IP)")
+        } catch (e: Exception) {
+            Log.e(TAG, "showMainActivity failed: ${e.message}")
+        }
+    }
+
     /** 收到手机端文字消息后，调用眼镜本地 TTS 播放语音 */
     private fun handleTtsPlay(args: Caps) {
         try {
-            if (args.size() < 2) {
-                Log.w(TAG, "Invalid tts_play size: ${args.size()}")
+            if (args.size() < 2 || args.at(1) == null ||
+                args.at(1).type() != Caps.Value.TYPE_STRING
+            ) {
+                Log.w(TAG, "Invalid tts_play payload: size=${args.size()}")
                 return
             }
             val text = args.at(1).getString()

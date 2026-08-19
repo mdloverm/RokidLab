@@ -276,6 +276,9 @@
     <string name="chat_settings_model">Model</string>
     <string name="chat_settings_quiz">Key Quiz Mode</string>
     <string name="chat_settings_quiz_hint">When ON, a short press on the temple button = Photo &amp; Ask AI; short-press shortcut is overridden, long press is unaffected.</string>
+    <string name="chat_settings_quiz_instruction">Quiz Instruction</string>
+    <string name="chat_settings_quiz_instruction_hint">Prompt injected to AI during photo quiz to control the answer style, e.g. \"answer only\" or \"show solution steps\".</string>
+    <string name="chat_settings_quiz_instruction_placeholder">e.g. answer only</string>
     <string name="chat_settings_ai_mode">Chat Model</string>
     <string name="chat_settings_ai_mode_hint">ON = Custom model (Lab intercepts and replies); OFF = Official Leki</string>
     <string name="chat_settings_tools">AI Tools</string>
@@ -298,11 +301,11 @@
     <string name="chat_ocr_empty">No text recognized. Please adjust the camera angle and retry.</string>
     <string name="chat_photo_failed">Failed to take photo</string>
     <string name="chat_kb_title">Knowledge Base</string>
-    <string name="chat_kb_subtitle">Import txt / pdf documents. They will be searched automatically when using Photo &amp; Ask AI.</string>
+    <string name="chat_kb_subtitle">Import txt documents. They will be searched automatically when using Photo &amp; Ask AI.</string>
     <string name="chat_kb_import">Import Document</string>
     <string name="chat_kb_empty">Knowledge base is empty. Please import documents first.</string>
     <string name="chat_kb_delete">Delete</string>
-    <string name="chat_kb_import_failed">Import failed (only txt / pdf supported)</string>
+    <string name="chat_kb_import_failed">Import failed (only txt supported)</string>
     <string name="chat_kb_imported">Imported %1$s</string>
     <string name="chat_kb_confirm_delete">Delete "%1$s"? This cannot be undone.</string>
 

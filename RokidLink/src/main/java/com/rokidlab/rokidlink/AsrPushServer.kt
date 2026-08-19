@@ -22,6 +22,9 @@ object AsrPushServer {
     /** 第二 RFCOMM 通道 UUID（与手机端 AsrPushClient 一致） */
     val PUSH_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34F9")
 
+    /** 协议帧上限（与手机端 AsrPushClient.MAX_FRAME 一致） */
+    private const val MAX_FRAME = 65536
+
     @Volatile
     private var running = false
 
@@ -30,6 +33,9 @@ object AsrPushServer {
 
     private var serverSocket: BluetoothServerSocket? = null
     private var acceptThread: Thread? = null
+
+    /** 写锁：push 可能被多个 CXR 订阅回调线程并发调用，帧拼接+写入必须串行化 */
+    private val pushLock = Any()
 
     /** 启动推送服务端（长连接 accept 循环） */
     fun start(adapter: BluetoothAdapter): Boolean {
@@ -77,15 +83,25 @@ object AsrPushServer {
      */
     fun push(text: String): Boolean {
         val s = clientSocket ?: return false
+        if (text.isEmpty()) return false
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        // 超长拒绝：超过协议帧上限会破坏对端解析（截断还会破坏 UTF-8 边界），交由调用方走文件兜底
+        if (bytes.size > MAX_FRAME) {
+            Log.w(TAG, "ASR push text too long (${bytes.size} > $MAX_FRAME), dropped")
+            return false
+        }
         return try {
-            val bytes = text.toByteArray(Charsets.UTF_8)
-            val out = s.outputStream
-            out.write(bytes.size shr 24)
-            out.write(bytes.size shr 16 and 0xFF)
-            out.write(bytes.size shr 8 and 0xFF)
-            out.write(bytes.size and 0xFF)
-            out.write(bytes)
-            out.flush()
+            synchronized(pushLock) {
+                // 长度头 + payload 拼装为单帧一次写入：分段 write 在并发下帧会交错破坏协议
+                val frame = ByteArray(4 + bytes.size)
+                frame[0] = (bytes.size shr 24).toByte()
+                frame[1] = (bytes.size shr 16 and 0xFF).toByte()
+                frame[2] = (bytes.size shr 8 and 0xFF).toByte()
+                frame[3] = (bytes.size and 0xFF).toByte()
+                System.arraycopy(bytes, 0, frame, 4, bytes.size)
+                s.outputStream.write(frame)
+                s.outputStream.flush()
+            }
             true
         } catch (e: Exception) {
             Log.e(TAG, "ASR push write failed: ${e.message}")

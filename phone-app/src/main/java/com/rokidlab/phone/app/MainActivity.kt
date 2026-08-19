@@ -1429,10 +1429,13 @@ class MainActivity : AppCompatActivity() {
         phoneMirrorState = phoneMirrorState.copy(rokidLinkRunning = true)
         fileManagerState = fileManagerState.copy(rokidLinkRunning = true)
         log(getString(R.string.log_opening_rokidlink))
-        // 仍然尝试启动眼镜端应用，但无论成功失败都不影响 running 状态
+        // 仍然尝试启动眼镜端应用，但无论成功失败都不影响 running 状态。
+        // sendCmdAfterLaunch="rokidlab_show_main"：appStart 隐形启动（退后台）后，
+        // 通过自定义指令让眼镜端带 EXTRA_SHOW_UI 显示状态页（含 WiFi IP），供用户查看。
         cxrL.launchApp(
             packageName = "com.rokidlab.rokidlink",
             activityClass = ".MainActivity",
+            sendCmdAfterLaunch = "rokidlab_show_main",
             onLaunchResult = { success ->
                 isOpeningRokidLink = false
                 if (success) {

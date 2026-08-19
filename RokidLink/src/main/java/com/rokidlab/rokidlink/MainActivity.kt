@@ -37,6 +37,13 @@ class MainActivity : Activity() {
     /** 是否已获得过窗口焦点（首次聚焦后启动后台服务，避免 FGS 被 ROM 拒绝） */
     private var hadWindowFocus = false
 
+    /**
+     * 显示模式：手机端「打开 RokidLink」时经 CXR 指令带 EXTRA_SHOW_UI 拉起本页，
+     * 显示状态界面（WiFi IP/ADB 状态）供用户查看。平时被动自启（appStart/SDK 拉起）
+     * 不带该标志 → 服务启动后自动退后台，不影响视线。
+     */
+    private var showUi = false
+
     // 网络状态实时监听（WiFi/以太网）
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -92,6 +99,12 @@ class MainActivity : Activity() {
         /** PhoneMirrorActivity 启动时发出的广播 Action，用于关闭本页面 */
         const val ACTION_FINISH_MAIN = "com.rokidlab.rokidlink.FINISH_MAIN"
 
+        /**
+         * 显示模式标志：手机端「打开 RokidLink」经 CXR 指令（rokidlab_show_main）
+         * 拉起本页时置 true，显示状态界面（WiFi IP/ADB 状态）；平时自启不携带 → 隐形退后台。
+         */
+        const val EXTRA_SHOW_UI = "rokidlab_show_ui"
+
         // 状态灯颜色（Mondrian Noir）
         private const val DOT_IDLE    = 0xFF666666.toInt()  // 灰 — 初始
         private const val DOT_CHECKING= 0xFFFFD200.toInt()  // 黄 — 检查中
@@ -108,6 +121,20 @@ class MainActivity : Activity() {
         // 注意：后台服务不在 onCreate 启动，等 onWindowFocusChanged 获得窗口焦点后再启动，
         // 否则眼镜 ROM 的 FGS 启动限制会拒绝 startForegroundService（Background start not allowed）。
         setContentView(R.layout.activity_main)
+
+        // 显示模式：手机端「打开 RokidLink」拉起时展示状态页（含 WiFi IP），
+        // 平时被动自启保持隐形（布局 invisible + 透明窗口）
+        showUi = intent?.getBooleanExtra(EXTRA_SHOW_UI, false) == true
+        if (showUi) {
+            findViewById<View>(R.id.root)?.apply {
+                visibility = View.VISIBLE
+                setBackgroundColor(0xFF000000.toInt())
+            }
+            // 显示后 60 秒无操作自动退后台，避免状态页常驻挡视线
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (showUi) runCatching { moveTaskToBack(true) }
+            }, 60_000L)
+        }
 
         // 申请电池优化豁免：RokidLink 是常驻服务（按键映射 + 蓝牙隧道 + AI ASR 拦截），
         // 若被系统 app idle 停服务，唤醒词链路会失效（实测 3 分钟无操作被 am_stop_idle_service 停掉）。
@@ -138,11 +165,19 @@ class MainActivity : Activity() {
             if (!hadWindowFocus && !isServiceRunning(BtTunnelService::class.java)) {
                 Log.i(TAG, "startup fallback: starting background services")
                 startBackgroundServices()
+                // 兜底路径同样只结束隐形实例（显示模式除外），原因见 onWindowFocusChanged
+                if (!showUi) runCatching { finish() }
             }
         }, 3000)
 
-        // 注册关闭广播接收器，当 PhoneMirrorActivity 启动时自动结束本页面
-        registerReceiver(finishMainReceiver, IntentFilter(ACTION_FINISH_MAIN))
+        // 注册关闭广播接收器，当 PhoneMirrorActivity 启动时自动结束本页面。
+        // Android 14+（targetSdk 34）动态注册必须指定 flags，否则抛 SecurityException
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(finishMainReceiver, IntentFilter(ACTION_FINISH_MAIN), Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(finishMainReceiver, IntentFilter(ACTION_FINISH_MAIN))
+        }
     }
 
     /** 启动后台服务：先 BtTunnelService（前台服务需 5 秒内 startForeground，先启避免被 KeyButtonService 的主线程初始化拖慢崩溃），再 KeyButtonService */
@@ -190,6 +225,11 @@ class MainActivity : Activity() {
                     Log.i(TAG, "startBackgroundServices: KeyButtonService")
                     KeyButtonService.start(this)
                 }
+                // 服务启动完成：隐形实例直接结束本页，避免状态页影响视线。
+                // 注意：不能用 moveTaskToBack —— 手机端「打开」时同一任务栈里已有显示模式实例，
+                // moveTaskToBack 会把整个任务（含正在显示的 IP 状态页）一起退到后台。
+                // finish() 只移除本（隐形）实例，显示实例不受影响。
+                if (!showUi) runCatching { finish() }
             }, 300)
         }
     }
@@ -339,6 +379,11 @@ class MainActivity : Activity() {
     }
 
     private fun enableAdbTcp() {
+        // ADB 启用已由 BtTunnelService 统一负责（Service 保留），运行中不再重复启动，
+        // 避免并发线程反复 ctl.restart adbd。
+        if (isServiceRunning(BtTunnelService::class.java)) return
+        // 防重入：网络回调/onResume 可能多次触发 startSetup，线程尚存活时不再新建
+        if (enableAdbThread?.isAlive == true) return
         val thread = Thread {
             Log.i(TAG, getString(R.string.log_try_enable_adb_tcp))
 

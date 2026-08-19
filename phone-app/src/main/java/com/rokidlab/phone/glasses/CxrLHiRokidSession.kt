@@ -96,6 +96,8 @@ class CxrLHiRokidSession(
         private const val KEY_AI_MODE = "ai_mode"
         const val AI_MODE_OFFICIAL = "official"
         const val AI_MODE_CUSTOM = "custom"
+        /** 拍照答题指令：答题时注入 AI 提示词控制回答方式 */
+        private const val KEY_QUIZ_INSTRUCTION = "quiz_instruction"
         private const val KEY_KEY_QUIZ_ENABLED = "key_quiz_enabled"
 
         private fun tokenPrefKey(hostApp: RokidHostApp) = KEY_TOKEN_PREFIX + hostApp.packageName
@@ -119,8 +121,24 @@ class CxrLHiRokidSession(
     /** ASR 文字推送客户端（第二 RFCOMM 通道长连接，实时接收眼镜端推送） */
     private var aiAsrPushClient: AsrPushClient? = null
     private var aiConfigPushJob: Job? = null
+    /** 「拍照问 AI」图片回调超时兜底（takePhoto 成功但图片回调永不到达时复位状态） */
+    private var photoRequestTimeoutJob: Job? = null
     /** 使用同步锁保护操作状态 */
     private val operationLock = Any()
+
+    /**
+     * AI 下行发送互斥锁：WiFi 稳定连接时聊天发送 / ASR push / 轮询 / SDK 上行
+     * 多个并发入口同时命中 sendAiTextMessage 快速路径，无锁并发 sendCustomCmd
+     * 同一 CXRLink 会与 cleanup() 的 disconnect 产生竞态（SDK native 崩溃），
+     * 因此 sendAiTextViaLink 全流程加锁串行执行。
+     */
+    private val aiSendLock = Any()
+
+    /** 最近一次眼镜 ASR 文字及时间（双通道去重：push 与轮询/WiFi 上行可能同时收到同一段文字） */
+    @Volatile
+    private var lastAsrText = ""
+    @Volatile
+    private var lastAsrTextAt = 0L
 
     /** 「拍照问 AI」流程进行中标志（防止按键/按钮重复触发） */
     @Volatile
@@ -173,8 +191,8 @@ class CxrLHiRokidSession(
     @Volatile
     private var wifiStatusCallback: ((String) -> Unit)? = null
 
-    /** DeepSeek API Key（用于 AI 文字对话功能，作为 AI 配置的兜底 key） */
-    private var deepSeekApiKey: String = "sk-4fa8678eb36f40abaa9447f119066a28"
+    /** DeepSeek API Key（用户显式配置后保存；禁止内置 key 防止反编译盗用） */
+    private var deepSeekApiKey: String = ""
 
     /** 更新 DeepSeek API Key */
     fun setDeepSeekApiKey(key: String) {
@@ -188,6 +206,8 @@ class CxrLHiRokidSession(
         val model: String = "deepseek-chat",
         /** 对话模型模式：AI_MODE_OFFICIAL（官方乐奇）/ AI_MODE_CUSTOM（Lab 自定义模型） */
         val mode: String = AI_MODE_CUSTOM,
+        /** 拍照答题指令：设置页填写，答题时注入 AI 提示词控制回答方式（如「只显示答案」「给出解题步骤」） */
+        val quizInstruction: String = "",
     )
 
     /** 保存 AI 配置（持久化到 SharedPreferences） */
@@ -198,6 +218,7 @@ class CxrLHiRokidSession(
                 .putString(KEY_AI_API_KEY, config.apiKey)
                 .putString(KEY_AI_MODEL, config.model)
                 .putString(KEY_AI_MODE, config.mode)
+                .putString(KEY_QUIZ_INSTRUCTION, config.quizInstruction)
                 .apply()
         }
         if (config.apiKey.isNotBlank()) deepSeekApiKey = config.apiKey
@@ -211,7 +232,12 @@ class CxrLHiRokidSession(
         aiConfigPushJob?.cancel()
         aiConfigPushJob = appScope.launch {
             repeat(30) { attempt ->
-                val link = cxrLink ?: return@launch
+                val link = cxrLink
+                if (link == null) {
+                    // 链路尚未就绪：继续重试等待（首次判空不再退出整个协程）
+                    delay(1000)
+                    return@repeat
+                }
                 try {
                     val caps = Caps()
                     caps.write("ai_config")
@@ -231,14 +257,15 @@ class CxrLHiRokidSession(
         }
     }
 
-    /** 读取 AI 配置（prefs 优先，缺省回退默认值 / 内置 key） */
+    /** 读取 AI 配置（prefs 优先，缺省回退默认值；key 未配置时留空，由用户在设置页显式填写） */
     fun getAiConfig(): AiConfig {
         val prefs = activity.getSharedPreferences(AI_PREFS, 0)
         val baseUrl = prefs.getString(KEY_AI_BASE_URL, "").orEmpty().ifBlank { "https://api.deepseek.com" }
-        val apiKey = prefs.getString(KEY_AI_API_KEY, "").orEmpty().ifBlank { deepSeekApiKey }
+        val apiKey = prefs.getString(KEY_AI_API_KEY, "").orEmpty()
         val model = prefs.getString(KEY_AI_MODEL, "").orEmpty().ifBlank { "deepseek-chat" }
         val mode = prefs.getString(KEY_AI_MODE, AI_MODE_CUSTOM).orEmpty().ifBlank { AI_MODE_CUSTOM }
-        return AiConfig(baseUrl, apiKey, model, mode)
+        val quizInstruction = prefs.getString(KEY_QUIZ_INSTRUCTION, "").orEmpty()
+        return AiConfig(baseUrl, apiKey, model, mode, quizInstruction)
     }
 
     // ═══════════════════════════════════════════════════
@@ -319,6 +346,13 @@ class CxrLHiRokidSession(
      * 开关打开后：短按镜腿按键 = 拍照问AI（覆盖原自定义按键短按），长按不受影响。
      */
     fun sendKeyQuizConfig(enabled: Boolean, onResult: ((Boolean) -> Unit)? = null) {
+        // onResult 防重：超时 onFailure 与迟到的 appStart 回调都可能触发，保证只通知一次
+        var resultDelivered = false
+        fun deliver(success: Boolean) {
+            if (resultDelivered) return
+            resultDelivered = true
+            onResult?.invoke(success)
+        }
         runCatching {
             activity.getSharedPreferences(AI_PREFS, 0).edit()
                 .putBoolean(KEY_KEY_QUIZ_ENABLED, enabled)
@@ -326,7 +360,7 @@ class CxrLHiRokidSession(
         }
         val targetHostApp = hostApp
         if (!hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
-            onResult?.invoke(false)
+            deliver(false)
             return
         }
         val authToken = token.orEmpty()
@@ -361,10 +395,10 @@ class CxrLHiRokidSession(
                                 caps.write(enabled.toString())
                                 val result = link.sendCustomCmd(QUIZ_CONFIG_CMD, caps)
                                 Log.i(TAG, "sendCustomCmd($QUIZ_CONFIG_CMD, enabled=$enabled) -> $result")
-                                onResult?.invoke(result == 0)
+                                deliver(result == 0)
                             } else {
                                 Log.w(TAG, "appStart failed, cannot send quiz config")
-                                onResult?.invoke(false)
+                                deliver(false)
                             }
                             completeActiveOperation()
                             onBusyChanged(false)
@@ -374,7 +408,7 @@ class CxrLHiRokidSession(
                 onFailure = {
                     cleanup()
                     onBusyChanged(false)
-                    onResult?.invoke(false)
+                    deliver(false)
                 },
             ),
         )
@@ -763,6 +797,8 @@ class CxrLHiRokidSession(
         /** 眼镜端是否已本地接管显示（KeyButtonService 在 ASR_End 后已本地打开会话并显示提问）：
          *  为 true 时下行只发 DeepSeek 回复（TTS_Result + tts_play），跳过 KeyDown/open/ASR_Result/ASR_End */
         localTakeover: Boolean = false,
+        /** 附加指令：注入 system 提示词控制回答方式（如「只显示答案」「给出解题步骤」） */
+        instruction: String? = null,
     ) {
         Log.i(TAG, "sendAiTextMessage(\"$text\") called. cxrlConnected=$cxrlConnected, glassBtConnected=$glassBtConnected, cxrLink=${cxrLink != null}, token=${token?.take(8) ?: "null"}")
 
@@ -770,7 +806,7 @@ class CxrLHiRokidSession(
         val link = cxrLink
         if (cxrlConnected && glassBtConnected && link != null) {
             Log.i(TAG, "sendAiTextMessage: using existing CXRLink (fast path)")
-            sendAiTextViaLink(link, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover)
+            sendAiTextViaLink(link, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction)
             return
         }
 
@@ -779,7 +815,7 @@ class CxrLHiRokidSession(
         val targetHostApp = hostApp
         if (!hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
             Log.w(TAG, "sendAiTextMessage: missing prerequisites")
-            onResult?.invoke(false, "missing prerequisites")
+            activity.runOnUiThread { onResult?.invoke(false, "missing prerequisites") }
             return
         }
         val authToken = token.orEmpty()
@@ -797,12 +833,18 @@ class CxrLHiRokidSession(
                 bindFailureMessage = "Bind host service failed",
                 showConnectionStatus = false,
                 onReady = { l ->
-                    sendAiTextViaLink(l, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover)
+                    // onReady 由连接回调（maybeRunPendingOperation）在主线程触发；
+                    // sendAiTextViaLink 内含多次 Thread.sleep + deepSeekThread.join（最长可阻塞 30s），
+                    // 必须切后台线程执行，否则慢速路径阻塞主线程导致 ANR/闪退。
+                    // onStatus/onBusyChanged 已线程安全，onReply 由调用方切主线程，onResult 内部 runOnUiThread。
+                    appScope.launch(Dispatchers.IO) {
+                        sendAiTextViaLink(l, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction)
+                    }
                 },
                 onFailure = {
                     cleanup()
                     onBusyChanged(false)
-                    onResult?.invoke(false, "connection failed")
+                    activity.runOnUiThread { onResult?.invoke(false, "connection failed") }
                 },
             ),
         )
@@ -921,7 +963,18 @@ class CxrLHiRokidSession(
                         sendAiTextMessage(
                             text,
                             contextText = kbText.ifBlank { null },
-                            onResult = { _, _ -> photoAskInProgress = false },
+                            // 答题完成后保留眼镜端回复显示：skipTtsAudioFinished=true 不发送
+                            // TTS_AudioFinished（该消息会触发官方会话 startNewTalk 重置，清掉刚显示的答案）
+                            skipTtsAudioFinished = true,
+                            // 注入设置页填写的答题指令（如「只显示答案」「给出解题步骤」）
+                            instruction = getAiConfig().quizInstruction.ifBlank { null },
+                            onResult = { success, _ ->
+                                photoAskInProgress = false
+                                if (!success) {
+                                    // 失败且无 onReply：通知 UI 复位 photoAsking（否则拍照问 AI 入口永久失效）
+                                    activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_photo_failed) }
+                                }
+                            },
                             onReply = onReply,
                         )
                     } catch (e: Exception) {
@@ -986,6 +1039,17 @@ class CxrLHiRokidSession(
      */
     private fun handleGlassesAiAsrText(text: String) {
         try {
+            // 双通道去重：push 推送 / 文件轮询 / Wifi_Connect_Status 上行可能同时收到
+            // 同一段 ASR 文字（重复处理会并发触发 sendAiTextMessage，加剧 link 竞态）。
+            // 3s 内相同文字只处理一次。
+            val now = System.currentTimeMillis()
+            if (text == lastAsrText && now - lastAsrTextAt < 3000) {
+                Log.i(TAG, "handleGlassesAiAsrText: duplicate ASR text within 3s, skip")
+                return
+            }
+            lastAsrText = text
+            lastAsrTextAt = now
+
             Log.i(TAG, "handleGlassesAiAsrText: $text")
             // 用户提问同步到聊天窗口（轮询在 IO 线程，需切回主线程更新 Compose 状态）
             safeRunOnUiThread { glassesAiTextCb(text) }
@@ -1131,12 +1195,27 @@ class CxrLHiRokidSession(
         fun finish(onResult: () -> Unit) {
             if (done) return
             done = true
+            photoRequestTimeoutJob?.cancel()
+            photoRequestTimeoutJob = null
             completeActiveOperation()
             if (cleanupOnDone) {
                 cleanup()
                 onBusyChanged(false)
             }
             onResult()
+        }
+
+        // 超时兜底：takePhoto 返回成功但 onImageReceived/onImageError 永不到达
+        // （SDK 静默失败/眼镜端场景被关闭）时，复位标志并回调错误，避免后续拍照被永久跳过
+        photoRequestTimeoutJob?.cancel()
+        photoRequestTimeoutJob = appScope.launch {
+            delay(15_000)
+            activity.runOnUiThread {
+                if (!done) {
+                    Log.w(TAG, "requestPhotoFromLink: no image callback within 15s, forcing error")
+                    finish { onError("photo timeout") }
+                }
+            }
         }
 
         link.setCXRImageCbk(object : IImageStreamCbk {
@@ -1156,6 +1235,22 @@ class CxrLHiRokidSession(
         if (!ok) {
             activity.runOnUiThread { finish { onError("takePhoto failed") } }
         }
+    }
+
+    /**
+     * 发送过程中校验 CXRLink 是否仍然有效（未被 cleanup 断开/替换）。
+     * 无效时复位状态并回调失败，返回 false 供调用方中止发送，
+     * 避免用已断开的 link 调 sendCustomCmd 导致 SDK native 崩溃。
+     */
+    private fun abortAiSendIfLinkInvalid(link: CXRLink, onResult: ((Boolean, String?) -> Unit)?): Boolean {
+        if (cxrLink === link && cxrlConnected) return true
+        Log.w(TAG, "sendAiTextViaLink: link stale/closed, abort send")
+        activity.runOnUiThread {
+            completeActiveOperation()
+            onBusyChanged(false)
+            onResult?.invoke(false, "link disconnected")
+        }
+        return false
     }
 
     /**
@@ -1182,7 +1277,16 @@ class CxrLHiRokidSession(
         /** 眼镜端是否已本地接管显示（KeyButtonService 在 ASR_End 后已本地打开会话并显示提问）：
          *  为 true 时下行只发 DeepSeek 回复（TTS_Result + tts_play），跳过 KeyDown/open/ASR_Result/ASR_End */
         localTakeover: Boolean = false,
+        /** 附加指令：注入 system 提示词控制回答方式（如「只显示答案」「给出解题步骤」） */
+        instruction: String? = null,
     ) {
+        // 串行化所有 AI 下行发送：聊天发送 / ASR push / 文件轮询 / SDK 上行多个并发入口
+        // 在 WiFi 稳定连接时全部命中快速路径，同一 CXRLink 并发 sendCustomCmd 会与
+        // cleanup() 的 disconnect 产生竞态（SDK native 崩溃）。加锁保证同一时刻只有
+        // 一条 AI 下行链路执行，并在发送过程中持续校验 link 有效性。
+        synchronized(aiSendLock) {
+        // 入口校验：link 必须仍是最新且未断开（防止慢速路径 cleanup 后使用旧 link）
+        if (!abortAiSendIfLinkInvalid(link, onResult)) return
         // 反射绕过 CXR-L SDK 的 cmd 黑名单
         try {
             val field = link.javaClass.superclass.getDeclaredField("d")
@@ -1195,6 +1299,12 @@ class CxrLHiRokidSession(
 
         onBusyChanged(true)
 
+        // 下行显示段与发送段（两个 try 块）共享的变量，提升到 try 外避免作用域不可见
+        var reply = ""
+        var asrResult: Int? = 0
+        var endResult: Int? = 0
+
+        try {
         // ===== 步骤-1: （可选）先打断官方乐奇会话 =====
         // 语音唤醒链路中眼镜端已本地打断（interruptOfficialLocally），此处作为双保险，
         // 等待时间从 1000ms 压缩到 300ms 提速。localTakeover 时眼镜端已打断，跳过。
@@ -1215,7 +1325,7 @@ class CxrLHiRokidSession(
                 val cfg = getAiConfig()
                 val service = com.rokidlab.phone.ai.OpenAiService(cfg.apiKey, cfg.model, cfg.baseUrl)
                 val messages = JSONArray()
-                messages.put(service.buildSystemMessage(contextText))
+                messages.put(service.buildSystemMessage(contextText, instruction))
                 val userMsg = JSONObject()
                 userMsg.put("role", "user")
                 userMsg.put("content", text)
@@ -1278,8 +1388,6 @@ class CxrLHiRokidSession(
         // 下行无需重发，避免官方界面残留"思考中"等待手机端轮询（约 3s 空白）。
         var keyDownResult: Int? = 0
         var openResult: Int? = 0
-        var asrResult: Int? = 0
-        var endResult: Int? = 0
         if (!localTakeover) {
             // 0a. 发送 KeyDown_Client（privacy_level=2）：眼镜端 AIPhoneOpenHandler 在 AI 未运行时
             //     调用 openAiAssistant() -> openSceneWithIgnoreTips("ai_assist")，真正设置 aiIsRunning=true，
@@ -1287,6 +1395,7 @@ class CxrLHiRokidSession(
             val keyDownCaps = Caps()
             keyDownCaps.write("KeyDown_Client")
             keyDownCaps.write("{\"privacy_level\":2}")
+            if (!abortAiSendIfLinkInvalid(link, onResult)) return
             keyDownResult = link.sendCustomCmd("Ai", keyDownCaps)
             Log.i(TAG, "sendCustomCmd(Ai, KeyDown_Client, privacy_level=2) -> $keyDownResult")
             Thread.sleep(600)
@@ -1294,6 +1403,7 @@ class CxrLHiRokidSession(
             // 0b. 发送 Ai + open：眼镜端 AIOpenHandler 调用 startNewTalk()，开启 AI 对话
             val openCaps = Caps()
             openCaps.write("open")
+            if (!abortAiSendIfLinkInvalid(link, onResult)) return
             openResult = link.sendCustomCmd("Ai", openCaps)
             Log.i(TAG, "sendCustomCmd(Ai, open) -> $openResult")
             Thread.sleep(400)
@@ -1304,6 +1414,7 @@ class CxrLHiRokidSession(
                 val asrCaps = Caps()
                 asrCaps.write("ASR_Result")
                 asrCaps.write(text)
+                if (!abortAiSendIfLinkInvalid(link, onResult)) return
                 asrResult = link.sendCustomCmd("Ai", asrCaps)
                 Log.i(TAG, "sendCustomCmd(Ai, ASR_Result, \"$text\") -> $asrResult")
             } else {
@@ -1313,6 +1424,7 @@ class CxrLHiRokidSession(
             // ===== 步骤2: 发送 ASR_End（标记 ASR 结束）=====
             val endCaps = Caps()
             endCaps.write("ASR_End")
+            if (!abortAiSendIfLinkInvalid(link, onResult)) return
             endResult = link.sendCustomCmd("Ai", endCaps)
             Log.i(TAG, "sendCustomCmd(Ai, ASR_End) -> $endResult")
             onStatus("已发送到眼镜，正在获取 AI 回复...")
@@ -1323,12 +1435,24 @@ class CxrLHiRokidSession(
 
         // ===== 等待 DeepSeek 完成（下行显示期间已并行执行）=====
         deepSeekThread.join()
-        val reply = replyRef.get()
+        reply = replyRef.get()
         Log.i(TAG, "AI reply ready: ${reply.take(40)}")
         onReply?.invoke(reply)
+        } catch (e: Exception) {
+            // 下行指令段（sendCustomCmd/sleep/join）异常：统一复位状态，避免 sending/busy 永久卡死
+            Log.e(TAG, "AI send downlink failed", e)
+            activity.runOnUiThread {
+                completeActiveOperation()
+                onBusyChanged(false)
+                onResult?.invoke(false, "AI send error: ${e.message}")
+            }
+            return
+        }
 
         // ===== 步骤4: 发送 TTS_Result（AI 回复）到眼镜 =====
         try {
+            // join 等待 DeepSeek 期间可能发生 cleanup 断开/替换 link，发送前重新校验
+            if (!abortAiSendIfLinkInvalid(link, onResult)) return
             // 官方协议: caps[0] = "TTS_Result", caps[1] = 回复文字
             val ttsCaps = Caps()
             ttsCaps.write("TTS_Result")
@@ -1343,6 +1467,7 @@ class CxrLHiRokidSession(
             // RokidLink 通过 CXRServiceBridge.subscribe("tts_play") 收到后，
             // 调用系统 TtsService 本地合成并播放语音
             fun sendTtsPlay(): Int? {
+                if (!abortAiSendIfLinkInvalid(link, onResult)) return -99
                 val ttsPlayCaps = Caps()
                 ttsPlayCaps.write("tts_play")
                 ttsPlayCaps.write(reply)
@@ -1386,6 +1511,7 @@ class CxrLHiRokidSession(
                 onBusyChanged(false)
                 onResult?.invoke(false, "AI send error: ${e.message}")
             }
+        }
         }
     }
 
@@ -1848,7 +1974,9 @@ class CxrLHiRokidSession(
                         val asrText = parseAiAsrPollText(data)
                         if (!asrText.isNullOrBlank()) {
                             Log.i(TAG, "Wifi_Connect_Status carrying ASR text: $asrText")
-                            handleGlassesAiAsrText(asrText)
+                            // SDK 回调在 binder 线程：handleGlassesAiAsrText 内含 sleep+join（最长 30s+），
+                            // 必须切后台线程，否则独占 binder 线程池导致其他 SDK 回调延迟/超时
+                            appScope.launch(Dispatchers.IO) { handleGlassesAiAsrText(asrText) }
                         } else {
                             val json = String(data ?: ByteArray(0))
                             Log.i(TAG, "Received Wifi_Connect_Status: $json")
@@ -1857,13 +1985,14 @@ class CxrLHiRokidSession(
                     }
                     PHOTO_ASK_CMD -> {
                         Log.i(TAG, "Photo-ask triggered from glasses button")
-                        startPhotoAsk()
+                        // 拍照+OCR+AI 全流程耗时数秒，同样切后台线程执行
+                        appScope.launch(Dispatchers.IO) { startPhotoAsk() }
                     }
                     AI_ASR_POLL_CMD -> {
                         val text = parseAiAsrPollText(data)
                         if (!text.isNullOrBlank()) {
                             Log.i(TAG, "AI ASR poll got text: $text")
-                            handleGlassesAiAsrText(text)
+                            appScope.launch(Dispatchers.IO) { handleGlassesAiAsrText(text) }
                         }
                     }
                     else -> {
