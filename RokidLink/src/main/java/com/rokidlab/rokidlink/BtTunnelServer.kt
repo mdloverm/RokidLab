@@ -45,6 +45,9 @@ class BtTunnelServer {
     /** 当前活动的透传连接：stop 时需全部关闭以解除读阻塞 */
     private val activeSockets = java.util.concurrent.ConcurrentHashMap.newKeySet<BluetoothSocket>()
 
+    /** 并发透传连接上限：RFCOMM 多通道可共存，限制避免异常客户端无限占满 */
+    private val maxActive = 3
+
     /** 启动蓝牙隧道服务端 */
     fun start(adapter: BluetoothAdapter): Boolean {
         if (isRunning) return true
@@ -58,8 +61,10 @@ class BtTunnelServer {
                     try {
                         val socket = serverSocket?.accept() ?: break
                         Log.i(TAG, "Tunnel client connected")
-                        // 注意：RFCOMM 蓝牙连接仅支持单连接，必须串行处理（并发会互抢导致隧道反复断开）
-                        handleConnection(socket)
+                        // 每连接独立线程处理：手机端进程被杀后残留连接不再阻塞 accept，
+                        // 避免新连接在蓝牙协议栈排队超时（手机端 connect 8s / 读 3s 超时）。
+                        // 手机端 BtTunnelClient 为串行短连接，实际并发度低，RFCOMM 多通道可安全共存。
+                        Thread { handleConnection(socket) }.apply { name = "bt-tunnel-handler"; isDaemon = true; start() }
                     } catch (e: IOException) {
                         if (isRunning) Log.e(TAG, "Accept error: ${e.message}")
                     }
@@ -80,6 +85,11 @@ class BtTunnelServer {
      * 3. 蓝牙 ↔ 本地 TCP 双向透传
      */
     private fun handleConnection(btSocket: BluetoothSocket) {
+        if (activeSockets.size >= maxActive) {
+            Log.w(TAG, "Too many active connections (max $maxActive), rejecting")
+            try { btSocket.close() } catch (_: Exception) {}
+            return
+        }
         activeSockets.add(btSocket)
         var targetSocket: Socket? = null
         try {

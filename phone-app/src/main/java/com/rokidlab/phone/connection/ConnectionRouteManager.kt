@@ -1,8 +1,8 @@
 package com.rokidlab.phone.connection
 
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.util.Log
@@ -145,25 +145,66 @@ class ConnectionRouteManager(private val context: Context) {
         false
     }
 
-    /** 是否有已配对的眼镜设备 */
-    fun findBondedGlasses(): BluetoothDevice? {
-        val adapter = btAdapter() ?: return null
-        if (!adapter.isEnabled) return null
-        return adapter.bondedDevices.firstOrNull { d ->
-            d.name?.let {
-                it.contains("Glasses", true) || it.startsWith("RG", true)
-            } == true
-        }
-    }
-
-    private fun btAdapter(): BluetoothAdapter? =
-        (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+    /** 是否有已配对的眼镜设备（优先当前 A2DP 活跃连接的眼镜） */
+    fun findBondedGlasses(): BluetoothDevice? = selectActiveGlasses(context)
 
     /** 停止蓝牙隧道 */
     fun stopTunnel() = tunnel.stop()
 
     /** 隧道是否运行中 */
     val isTunnelRunning: Boolean get() = tunnel.isRunning
+}
+
+/**
+ * 从已配对设备中挑选当前实际使用的眼镜。
+ *
+ * 手机可能残留绑定多台眼镜（如旧眼镜 Glasses_5091），按名字 firstOrNull
+ * 会选错目标导致 RFCOMM 永远连不上。优先选 A2DP 当前已连接的眼镜
+ * （即正在与手机关联的活跃眼镜，实测 mActiveDevice 即当前眼镜 07:2F），
+ * 兜底才按绑定顺序取第一台。
+ */
+internal fun selectActiveGlasses(context: Context): BluetoothDevice? {
+    val bm = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager ?: return null
+    val adapter = bm.adapter ?: return null
+    if (!adapter.isEnabled) return null
+
+    val candidates = adapter.bondedDevices.filter { d ->
+        d.name?.let { it.contains("Glasses", true) || it.startsWith("RG", true) } == true
+    }
+    if (candidates.isEmpty()) return null
+
+    // 1. 优先：A2DP 当前已连接的眼镜。
+    //    小米 ROM 的 getConnectedDevices(A2DP) 实测抛 "Profile not supported: 2"，
+    //    必须捕获回退，否则隧道/ASR 重连全部失败。
+    try {
+        bm.getConnectedDevices(BluetoothProfile.A2DP)
+            .firstOrNull { connected -> candidates.any { it.address == connected.address } }
+            ?.let { connected ->
+                val match = candidates.first { it.address == connected.address }
+                Log.i("ConnRoute", "Selecting active glasses: ${match.name} (${match.address})")
+                return match
+            }
+    } catch (e: Exception) {
+        Log.w("ConnRoute", "getConnectedDevices(A2DP) failed: ${e.message}")
+    }
+
+    // 2. 回退：逐设备查询 A2DP 连接状态
+    candidates.firstOrNull { d ->
+        try {
+            bm.getConnectionState(d, BluetoothProfile.A2DP) == BluetoothProfile.STATE_CONNECTED
+        } catch (e: Exception) {
+            Log.w("ConnRoute", "getConnectionState(${d.address}) failed: ${e.message}")
+            false
+        }
+    }?.let { d ->
+        Log.i("ConnRoute", "Selecting A2DP-state-connected glasses: ${d.name} (${d.address})")
+        return d
+    }
+
+    // 3. 兜底：按绑定顺序取第一台
+    val fallback = candidates.first()
+    Log.w("ConnRoute", "No A2DP-connected glasses, fallback to ${fallback.name} (${fallback.address})")
+    return fallback
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -185,6 +226,21 @@ class BtTunnelClient(private val context: Context) {
         private const val TAG = "BtTunnel"
         private const val LOCAL_HOST = "127.0.0.1"
         private const val IO_BUF = 8192
+
+        /**
+         * RFCOMM connect 超时兜底：BluetoothSocket.connect() 无超时 API，
+         * 眼镜端隧道忙（串行 accept 被占用）时 connect 会卡 10-30s，
+         * 导致本隧道 accept 线程被永久阻塞、后续 ADB 连接全部读超时。
+         * 用独立线程 + join 超时，超时即关闭 socket 释放隧道。
+         */
+        private const val BT_CONNECT_TIMEOUT_MS = 8_000L
+
+        /**
+         * 隧道转发空闲超时：客户端 TCP 半开/被杀（进程无 finally 清理）时，
+         * t1 读 tcpIn 永久阻塞会把串行隧道占用到底。
+         * 大于客户端最慢操作（pullFile 30s / 心跳 8s），正常会话不会触发。
+         */
+        private const val TUNNEL_IDLE_TIMEOUT_MS = 60_000
     }
 
     @Volatile
@@ -248,7 +304,7 @@ class BtTunnelClient(private val context: Context) {
         var btSocket: BluetoothSocket? = null
         try {
             btSocket = glasses.createRfcommSocketToServiceRecord(ConnectionRouteManager.TUNNEL_UUID)
-            btSocket.connect()
+            connectWithTimeout(btSocket, BT_CONNECT_TIMEOUT_MS)
             Log.i(TAG, "BT RFCOMM connected to ${glasses.name}")
 
             // 隧道握手：发送 4 字节目标端口号
@@ -256,6 +312,8 @@ class BtTunnelClient(private val context: Context) {
             btOut.writeInt(targetPort)
             btOut.flush()
 
+            // 转发阶段 TCP 读加空闲超时：客户端半开/进程被杀时 t1 不再永久阻塞串行隧道
+            tcpSocket.soTimeout = TUNNEL_IDLE_TIMEOUT_MS
             val btIn = btSocket.inputStream
             val tcpIn = tcpSocket.getInputStream()
             val tcpOut = tcpSocket.getOutputStream()
@@ -294,7 +352,8 @@ class BtTunnelClient(private val context: Context) {
 
             t1.start()
             t2.start()
-            t1.join()
+            // t1 受 soTimeout 兜底，最多 TUNNEL_IDLE_TIMEOUT_MS 必然退出
+            t1.join(TUNNEL_IDLE_TIMEOUT_MS + 5000L)
             t2.join(2000)
         } catch (e: Exception) {
             Log.e(TAG, "Tunnel connection failed: ${e.message}")
@@ -305,15 +364,30 @@ class BtTunnelClient(private val context: Context) {
         }
     }
 
-    private fun findGlasses(): BluetoothDevice? {
-        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-        if (adapter?.isEnabled != true) return null
-        return adapter.bondedDevices.firstOrNull { d ->
-            d.name?.let {
-                it.contains("Glasses", true) || it.startsWith("RG", true)
-            } == true
+    /**
+     * 带超时的 RFCOMM connect：BluetoothSocket.connect() 无超时 API，
+     * 用独立线程 + join 超时兜底，超时后关闭 socket 解除阻塞并抛出，
+     * 避免一次卡住的 connect 永久占用串行隧道（后续 ADB 连接全部超时）。
+     */
+    private fun connectWithTimeout(btSocket: BluetoothSocket, timeoutMs: Long) {
+        val done = AtomicBoolean(false)
+        val connectThread = Thread {
+            try { btSocket.connect() } catch (_: Exception) {} finally { done.set(true) }
+        }.apply { name = "bt-tunnel-connect"; isDaemon = true; start() }
+        if (!done.get()) {
+            connectThread.join(timeoutMs)
+            if (!done.get()) {
+                Log.w(TAG, "BT RFCOMM connect timeout after ${timeoutMs}ms, closing socket")
+                // 关闭以解除阻塞中的 connect（Android 蓝牙栈 close 可中断 connect）
+                runCatching { btSocket.close() }
+                connectThread.join(1000)
+                throw IOException("BT RFCOMM connect timeout")
+            }
         }
+        if (!btSocket.isConnected) throw IOException("BT RFCOMM connect failed")
     }
+
+    private fun findGlasses(): BluetoothDevice? = selectActiveGlasses(context)
 
     fun stop() {
         isRunning = false

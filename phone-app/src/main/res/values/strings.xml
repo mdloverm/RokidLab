@@ -417,6 +417,12 @@
     <string name="ai_tool_launch_glasses_app_desc">打开眼镜上安装的应用，回答"打开小智""打开浏览器""打开游戏"等</string>
     <string name="ai_tool_set_timer_name">定时任务</string>
     <string name="ai_tool_set_timer_desc">创建定时提醒/定时任务，回答"5分钟后提醒我喝水""明早8点叫我""17点打开小智"等</string>
+    <string name="ai_tool_play_song_name">播放歌曲</string>
+    <string name="ai_tool_play_song_desc">播放用户点名的歌曲，回答"播放某某歌""来一首某某的歌"等</string>
+    <string name="ai_tool_stop_music_name">停止播放</string>
+    <string name="ai_tool_stop_music_desc">停止当前正在播放的音乐，回答"停止播放""别放了""不听了"等</string>
+    <string name="ai_tool_show_lyrics_name">显示歌词</string>
+    <string name="ai_tool_show_lyrics_desc">在 Rokid 眼镜上逐行显示当前播放歌曲的歌词，回答"显示歌词""打开歌词""看歌词"等</string>
     <string name="phone_mirror_channel">手机投屏</string>
     <string name="phone_mirror_channel_desc">手机屏幕投射到眼镜</string>
     <string name="phone_mirror_projecting">正在投射屏幕到眼镜</string>

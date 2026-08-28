@@ -5,6 +5,9 @@ package com.rokidlab.phone.util
  * 集中管理硬编码的配置项，便于维护和修改
  */
 object AppConfig {
+    /** 酷我音乐 API（云萌 API 市场）访问 Token，用于 AI「播放歌曲」工具搜索音源 */
+    const val KUWO_API_TOKEN = "api-c3e79d8a039f13569921ae4a5b5eb57d5c645d89"
+
     /** ADB 默认端口 */
     const val DEFAULT_ADB_PORT = 5555
 

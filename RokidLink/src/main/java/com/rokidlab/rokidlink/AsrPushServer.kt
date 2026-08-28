@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.util.Log
 import java.util.UUID
+import java.util.concurrent.Executors
 
 /**
  * ASR 文字推送服务端（眼镜端，单例）
@@ -25,6 +26,9 @@ object AsrPushServer {
     /** 协议帧上限（与手机端 AsrPushClient.MAX_FRAME 一致） */
     private const val MAX_FRAME = 65536
 
+    /** 拍照答题控制指令：经本 RFCOMM 通道上行到手机端（独立于 AI App 网关，可区分按键意图） */
+    const val CTRL_PHOTO_ASK = "__LAB_PHOTO_ASK__"
+
     @Volatile
     private var running = false
 
@@ -36,6 +40,20 @@ object AsrPushServer {
 
     /** 写锁：push 可能被多个 CXR 订阅回调线程并发调用，帧拼接+写入必须串行化 */
     private val pushLock = Any()
+
+    /**
+     * 写线程（单线程）：socket 半开时 outputStream.write 无超时，若在调用线程（CXR 订阅回调）
+     * 同步执行会永久卡死回调线程，导致后续 ASR 事件全部丢失（实测"停止播放"即因此被官方接管）。
+     * 独立线程即使被卡住，也只影响本写线程，回调线程可继续处理。
+     */
+    private val writerExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "asr-push-writer").apply { isDaemon = true }
+    }
+
+    /** 排队中未写完的帧数：写线程被卡死时防止无限堆积 */
+    @Volatile
+    private var pendingFrames = 0
+    private const val MAX_PENDING_FRAMES = 4
 
     /** 启动推送服务端（长连接 accept 循环） */
     fun start(adapter: BluetoothAdapter): Boolean {
@@ -50,18 +68,30 @@ object AsrPushServer {
                     try {
                         val s = serverSocket?.accept() ?: break
                         Log.i(TAG, "ASR push client connected")
-                        clientSocket = s
-                        // 阻塞读直到连接断开（手机端断线/蓝牙断开时 read 抛异常返回）
-                        try {
-                            val buf = ByteArray(256)
-                            while (running && s.inputStream.read(buf) != -1) {
-                                // 手机端不应向此通道写数据，读到即丢弃
+                        // 替换式单客户端：新连接到来时立即关闭旧连接并替换，
+                        // 避免手机端进程被杀后残留连接阻塞 accept 读循环，
+                        // 导致新连接在蓝牙协议栈排队超时（手机端 3s 读超时）。
+                        synchronized(pushLock) {
+                            clientSocket?.takeIf { it !== s }?.let { old ->
+                                try { old.close() } catch (_: Exception) {}
                             }
-                        } catch (_: Exception) {
+                            clientSocket = s
                         }
-                        if (clientSocket === s) clientSocket = null
-                        try { s.close() } catch (_: Exception) {}
-                        Log.i(TAG, "ASR push client disconnected, awaiting reconnect")
+                        // 连接读循环放独立线程，accept 循环立即回到 accept，不被死连接阻塞
+                        Thread {
+                            try {
+                                val buf = ByteArray(256)
+                                while (running && s.inputStream.read(buf) != -1) {
+                                    // 手机端不应向此通道写数据，读到即丢弃
+                                }
+                            } catch (_: Exception) {
+                            }
+                            synchronized(pushLock) {
+                                if (clientSocket === s) clientSocket = null
+                            }
+                            try { s.close() } catch (_: Exception) {}
+                            Log.i(TAG, "ASR push client disconnected, awaiting reconnect")
+                        }.apply { name = "asr-push-client-handler"; isDaemon = true; start() }
                     } catch (e: Exception) {
                         if (running) {
                             Log.e(TAG, "ASR push accept error: ${e.message}")
@@ -78,6 +108,16 @@ object AsrPushServer {
     }
 
     /**
+     * 推送一条控制指令（如拍照答题意图），与 ASR 文字共用同一 RFCOMM 帧协议。
+     * 返回 true 表示已发送（客户端连接存在）；未连接时返回 false，调用方自行处理兜底。
+     */
+    fun pushControl(cmd: String): Boolean {
+        val sent = push(cmd)
+        Log.i(TAG, "pushControl($cmd) -> $sent")
+        return sent
+    }
+
+    /**
      * 推送一条 ASR 文字。返回 true 表示已发送（客户端连接存在）。
      * 连接未建立/已断开时返回 false，调用方应兜底走文件通道。
      */
@@ -90,23 +130,37 @@ object AsrPushServer {
             Log.w(TAG, "ASR push text too long (${bytes.size} > $MAX_FRAME), dropped")
             return false
         }
-        return try {
-            synchronized(pushLock) {
-                // 长度头 + payload 拼装为单帧一次写入：分段 write 在并发下帧会交错破坏协议
-                val frame = ByteArray(4 + bytes.size)
-                frame[0] = (bytes.size shr 24).toByte()
-                frame[1] = (bytes.size shr 16 and 0xFF).toByte()
-                frame[2] = (bytes.size shr 8 and 0xFF).toByte()
-                frame[3] = (bytes.size and 0xFF).toByte()
-                System.arraycopy(bytes, 0, frame, 4, bytes.size)
-                s.outputStream.write(frame)
-                s.outputStream.flush()
-            }
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "ASR push write failed: ${e.message}")
-            false
+        // 防堆积：写线程被卡死（socket 半开）时拒绝继续排队，调用方走文件兜底
+        if (pendingFrames >= MAX_PENDING_FRAMES) {
+            Log.w(TAG, "ASR push writer busy ($pendingFrames queued), fallback requested")
+            return false
         }
+        synchronized(pushLock) {
+            if (clientSocket !== s) return false
+            pendingFrames++
+        }
+        // 提交到独立写线程：绝不在 CXR 回调线程同步 write（半开 socket 无超时会永久卡死回调线程）
+        writerExecutor.execute {
+            try {
+                synchronized(pushLock) {
+                    if (clientSocket !== s) return@execute
+                    // 长度头 + payload 拼装为单帧一次写入：分段 write 在并发下帧会交错破坏协议
+                    val frame = ByteArray(4 + bytes.size)
+                    frame[0] = (bytes.size shr 24).toByte()
+                    frame[1] = (bytes.size shr 16 and 0xFF).toByte()
+                    frame[2] = (bytes.size shr 8 and 0xFF).toByte()
+                    frame[3] = (bytes.size and 0xFF).toByte()
+                    System.arraycopy(bytes, 0, frame, 4, bytes.size)
+                    s.outputStream.write(frame)
+                    s.outputStream.flush()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "ASR push write failed: ${e.message}")
+            } finally {
+                pendingFrames--
+            }
+        }
+        return true
     }
 
     fun stop() {

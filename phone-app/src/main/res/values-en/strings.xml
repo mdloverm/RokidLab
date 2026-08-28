@@ -410,6 +410,12 @@
     <string name="ai_tool_launch_glasses_app_desc">Open an app installed on glasses, answer \"open Xiaozhi\", \"open browser\", \"open game\"</string>
     <string name="ai_tool_set_timer_name">Timer</string>
     <string name="ai_tool_set_timer_desc">Create timed reminders/tasks, answer \"remind me in 5 minutes\", \"wake me at 8am\", \"open Xiaozhi at 5pm\"</string>
+    <string name="ai_tool_play_song_name">Play Song</string>
+    <string name="ai_tool_play_song_desc">Play a requested song, answer \"play some song\", \"play something by an artist\"</string>
+    <string name="ai_tool_stop_music_name">Stop Music</string>
+    <string name="ai_tool_stop_music_desc">Stop currently playing music, answer \"stop playing\", \"turn it off\", \"enough music\"</string>
+    <string name="ai_tool_show_lyrics_name">Show Lyrics</string>
+    <string name="ai_tool_show_lyrics_desc">Display the lyrics of the current song line by line on the Rokid glasses, answer \"show lyrics\", \"open lyrics\"</string>
     <string name="phone_mirror_channel">Phone Mirror</string>
     <string name="phone_mirror_channel_desc">Project phone screen to glasses</string>
     <string name="phone_mirror_projecting">Projecting screen to glasses</string>

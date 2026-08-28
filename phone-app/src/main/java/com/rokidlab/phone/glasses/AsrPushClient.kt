@@ -1,9 +1,9 @@
 package com.rokidlab.phone.glasses
 
-import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.util.Log
+import com.rokidlab.phone.connection.selectActiveGlasses
 import java.io.DataInputStream
 import java.util.UUID
 
@@ -36,6 +36,9 @@ class AsrPushClient(
     @Volatile
     private var socket: BluetoothSocket? = null
 
+    /** 推送通道是否已连接（用于决定是否跳过 ADB 文件轮询兜底，减少蓝牙隧道占用） */
+    val isConnected: Boolean get() = socket != null
+
     private var thread: Thread? = null
     private var lastErrorLogAt = 0L
 
@@ -45,13 +48,9 @@ class AsrPushClient(
         thread = Thread {
             while (running) {
                 try {
-                    val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-                    val adapter = manager.adapter ?: throw Exception("bluetooth off")
-                    val glasses = adapter.bondedDevices.firstOrNull { d ->
-                        val n = d.name?.lowercase() ?: ""
-                        n.contains("rg") || n.contains("glass") || n.contains("rokid") ||
-                            d.name?.contains("乐奇") == true
-                    } ?: throw Exception("no glasses device")
+                    // 优先 A2DP 当前活跃连接的眼镜，避免多台绑定（含残留旧眼镜）时选错设备
+                    val glasses = selectActiveGlasses(context)
+                        ?: throw Exception("no glasses device")
                     val s = glasses.createRfcommSocketToServiceRecord(PUSH_UUID)
                     socket = s
                     s.connect()

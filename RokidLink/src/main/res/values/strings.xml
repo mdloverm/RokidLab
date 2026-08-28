@@ -21,6 +21,7 @@
     <string name="log_try_enable_adb_tcp">Trying to enable ADB TCP mode...</string>
     <string name="log_try_attempt">Attempt #%d: ctl.restart adbd</string>
     <string name="log_adb_tcp_enabled">ADB TCP enabled (after %d attempts, %ds)</string>
+    <string name="log_interrupted">ADB enable thread interrupted, exiting gracefully</string>
     <string name="log_retry_failed">Retried 3 times but still cannot enable ADB TCP</string>
     <string name="log_command_failed">Command failed: %s</string>
     <string name="log_setprop_failed">setprop failed: %s</string>

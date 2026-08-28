@@ -165,8 +165,12 @@ class MainActivity : Activity() {
             if (!hadWindowFocus && !isServiceRunning(BtTunnelService::class.java)) {
                 Log.i(TAG, "startup fallback: starting background services")
                 startBackgroundServices()
-                // 兜底路径同样只结束隐形实例（显示模式除外），原因见 onWindowFocusChanged
-                if (!showUi) runCatching { finish() }
+                // 延迟 finish：给服务 onCreate/startForeground 留出时间，
+                // 避免 app 立即退后台导致 startForeground 被系统拒绝
+                // （实测日志：Service.startForeground() not allowed due to bg restriction）
+                if (!showUi) Handler(Looper.getMainLooper()).postDelayed({
+                    runCatching { finish() }
+                }, 2000)
             }
         }, 3000)
 
@@ -225,11 +229,15 @@ class MainActivity : Activity() {
                     Log.i(TAG, "startBackgroundServices: KeyButtonService")
                     KeyButtonService.start(this)
                 }
-                // 服务启动完成：隐形实例直接结束本页，避免状态页影响视线。
+                // 服务启动完成：隐形实例延迟结束本页，避免状态页影响视线。
                 // 注意：不能用 moveTaskToBack —— 手机端「打开」时同一任务栈里已有显示模式实例，
                 // moveTaskToBack 会把整个任务（含正在显示的 IP 状态页）一起退到后台。
                 // finish() 只移除本（隐形）实例，显示实例不受影响。
-                if (!showUi) runCatching { finish() }
+                // 延迟 2s 再 finish：给服务 onCreate/startForeground 留出时间，
+                // 否则 app 立即退后台导致 startForeground 被 bg restriction 拒绝。
+                if (!showUi) Handler(Looper.getMainLooper()).postDelayed({
+                    runCatching { finish() }
+                }, 2000)
             }, 300)
         }
     }
@@ -396,7 +404,16 @@ class MainActivity : Activity() {
 
                 for (wait in 1..4) {
                     if (Thread.currentThread().isInterrupted) return@Thread
-                    Thread.sleep(1000)
+                    try {
+                        Thread.sleep(1000)
+                    } catch (e: InterruptedException) {
+                        // onDestroy 中断本线程时优雅退出：未捕获的 InterruptedException
+                        // 会把整个进程打崩（FATAL EXCEPTION: enable-adb-tcp），
+                        // 导致 BtTunnelService/KeyButtonService/AsrPushServer 全部随进程死亡。
+                        Thread.currentThread().interrupt()
+                        Log.i(TAG, getString(R.string.log_interrupted))
+                        return@Thread
+                    }
                     if (isAdbTcpListening()) {
                         Handler(Looper.getMainLooper()).post {
                             setDotColor(DOT_READY)

@@ -81,6 +81,21 @@ object ToolRegistry {
             displayNameRes = R.string.ai_tool_set_timer_name,
             descriptionRes = R.string.ai_tool_set_timer_desc,
         ),
+        ToolMeta(
+            name = "play_song",
+            displayNameRes = R.string.ai_tool_play_song_name,
+            descriptionRes = R.string.ai_tool_play_song_desc,
+        ),
+        ToolMeta(
+            name = "stop_music",
+            displayNameRes = R.string.ai_tool_stop_music_name,
+            descriptionRes = R.string.ai_tool_stop_music_desc,
+        ),
+        ToolMeta(
+            name = "show_lyrics",
+            displayNameRes = R.string.ai_tool_show_lyrics_name,
+            descriptionRes = R.string.ai_tool_show_lyrics_desc,
+        ),
     )
 
     /** 工具开关状态（默认开启） */
@@ -154,6 +169,37 @@ object ToolRegistry {
                         "repeatDaily" to mapOf("type" to "boolean", "description" to "是否每天重复，默认 false"),
                     ),
                     "required" to listOf("time", "content"),
+                ),
+            )
+
+            "play_song" -> toolSchema(
+                name = meta.name,
+                description = "播放用户点名的歌曲。当用户说“播放某某歌”“来一首某歌”“放首某某的歌”时调用，联网搜索并直接播放该歌曲。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "songName" to mapOf("type" to "string", "description" to "歌曲名称，如“晴天”“海阔天空”"),
+                        "artist" to mapOf("type" to "string", "description" to "歌手名（可选），用于更精确地找到歌曲，如“周杰伦”"),
+                    ),
+                    "required" to listOf("songName"),
+                ),
+            )
+
+            "stop_music" -> toolSchema(
+                name = meta.name,
+                description = "停止当前正在播放的音乐。当用户说“停止播放”“别放了”“停一下”“不听了”时调用。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            )
+
+            "show_lyrics" -> toolSchema(
+                name = meta.name,
+                description = "在 Rokid 眼镜上显示当前播放歌曲的歌词（逐行实时显示）。当用户说“显示歌词”“打开歌词”“看歌词”时调用，仅在音乐正在播放时有效。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
                 ),
             )
 
@@ -325,6 +371,40 @@ object ToolRegistry {
                 val timeLabel = String.format(Locale.CHINA, "%02d:%02d", hour, minute)
                 val actionLabel = if (action == "launch") "并打开 $appName" else ""
                 "已设置定时任务：$dayLabel $timeLabel $actionLabel，提醒：$content"
+            }
+
+            "play_song" -> {
+                val songName = args.optString("songName").trim()
+                if (songName.isEmpty()) return "请告诉我要播放哪首歌"
+                val artist = args.optString("artist").trim()
+                val song = KuwoMusicApi.search(songName, artist.ifBlank { null })
+                    ?: return "没有找到歌曲《$songName》${
+                        if (artist.isNotBlank()) "（歌手：$artist）" else ""
+                    }，请换个歌名试试"
+                MusicPlayerController.play(context, song.playUrl, song.name, song.artist, song.lyrics)
+                val artistPart = if (song.artist.isNotBlank()) " - ${song.artist}" else ""
+                "已开始播放《${song.name}》$artistPart"
+            }
+
+            "stop_music" -> {
+                MusicPlayerController.stop()
+                "已停止播放音乐"
+            }
+
+            "show_lyrics" -> {
+                if (!MusicPlayerController.isPlaying()) {
+                    return "当前没有正在播放的音乐，请先说“播放某某歌”，再让我显示歌词"
+                }
+                val title = MusicPlayerController.currentTitle
+                val lyrics = MusicPlayerController.currentLyrics
+                if (lyrics.isEmpty()) {
+                    return "没有获取到《$title》的歌词，请换个歌曲试试"
+                }
+                if (MusicPlayerController.startLyrics(context, lyrics)) {
+                    "正在为你显示《$title》的歌词"
+                } else {
+                    "歌词显示开启失败，请稍后重试"
+                }
             }
 
             else -> throw IllegalArgumentException("未知工具: $name")

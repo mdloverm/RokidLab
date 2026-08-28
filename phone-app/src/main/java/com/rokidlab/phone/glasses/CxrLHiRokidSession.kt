@@ -76,16 +76,28 @@ class CxrLHiRokidSession(
          * 眼镜端可回复订阅返回 ASR 文字。请求-响应机制可绕过 AI App 对未知上行指令的过滤。
          */
         private const val AI_ASR_POLL_CMD = "rokidlab_ai_asr_poll"
-        /** AI 文字轮询间隔：官方打断已由眼镜端本地完成（sendAi Exit），轮询只负责读文字触发 Lab 回复。
-         *  短连接用后即断，避免长连接独占蓝牙隧道（RFCOMM 单连接限制）导致用户 ADB 功能连不上。
-         *  线路选择已缓存（RouteManager 60s），每轮只剩 RFCOMM+ADB 握手开销，500ms 间隔可接受。 */
-        private const val AI_ASR_POLL_INTERVAL_MS = 500L
+        /** AI 文字轮询间隔：主通道为 RFCOMM 推送（毫秒级），文件轮询仅作推送断开时的兜底。
+         *  蓝牙隧道（RFCOMM）仅支持单串行连接，高频打隧道会令 5556 等本地端口接收积压溢出被拒，
+         *  因此推送通道健康时跳过轮询（见 startAiAsrBridgePolling），断开时才以兜底间隔读取。 */
+        private const val AI_ASR_POLL_INTERVAL_MS = 5000L
+        /** 隧道异常退避上限：轮询连接失败时指数退避，避免推送断开期间持续打隧道导致 5556 报错 */
+        private const val AI_ASR_BACKOFF_MAX_MS = 30_000L
         /** ASR 文字文件通道：眼镜端把 ASR_TEXT 追加写入该文件，手机端轮询 tail 读取。
          *  logcat 缓冲会被眼镜高频系统日志数秒内冲掉，文件通道保证可靠读到 */
         private const val GLASSES_ASR_FILE = "/sdcard/Android/data/com.rokidlab.rokidlink/files/ai_asr.log"
         private const val KEY_LAST_ASR_TS = "ai_asr_last_ts"
         /** 按键答题开关下发通道（手机端 → 眼镜端） */
         private const val QUIZ_CONFIG_CMD = "rokidlab_key_quiz"
+
+        /** 眼镜端「双击退出对话窗口」时经 RFCOMM 推送通道上行到手机的音乐停止标记 */
+        private const val MUSIC_STOP_MARKER = "__LAB_MUSIC_STOP__"
+
+        /**
+         * 眼镜端「按键拍照答题」控制指令：经 RFCOMM 推送通道（AsrPushServer）上行，
+         * 独立于 AI App 网关（custom cmd 的 rokidlab_photo_ask 可能被网关过滤收不到），
+         * 且与 Sys_App_Resume_Change 不同——仅按键才发送，可严格区分「拍照意图」。
+         */
+        private const val PHOTO_ASK_MARKER = "__LAB_PHOTO_ASK__"
 
         /** OpenAI 兼容 AI 配置存储 */
         private const val AI_PREFS = "chat_prefs"
@@ -183,9 +195,13 @@ class CxrLHiRokidSession(
         glassesAiReplyCb = onReply
     }
 
-    /** 最近一次 appStart 时间（毫秒），用于过滤 appStart 触发的真实 resume 误报为按键触发 */
+    /**
+     * appStart 后的一次性冷却标志：真实 resume（appStart 触发的 Sys_App_Resume_Change）只会到达一次，
+     * 用一次性标志消费而非 3s 时间窗口——时间窗口会把「开启后 3s 内的第一次按键」也误过滤，
+     * 导致按键答题开启后第一次按键没反应。标志设置后 3s 未收到真实 resume 会自动清除（防残留）。
+     */
     @Volatile
-    private var lastAppStartMs = 0L
+    private var quizResumeCooling = false
 
     /** WiFi 连接状态回调（由 sendWifiConfig 设置，统一在全局指令监听中转发） */
     @Volatile
@@ -329,6 +345,8 @@ class CxrLHiRokidSession(
                 client
             } else {
                 runCatching { client.disconnect() }
+                // 连接失败（含蓝牙隧道 RFCOMM 卡顿/半开）时清理线路缓存，下次强制重新探测
+                runCatching { app.routeManager.clearRouteCache() }
                 null
             }
         }.getOrNull()
@@ -384,9 +402,14 @@ class CxrLHiRokidSession(
                     link.appStart(entryUri, glassAppCallback(
                         onStart = { success ->
                             if (success) {
-                                // 记录 appStart 时间：appStart 后眼镜端 RokidLink 会真实 resume，
-                                // 触发 Sys_App_Resume_Change 上行，需冷却窗口过滤避免误触发拍照答题
-                                lastAppStartMs = System.currentTimeMillis()
+                                // 置一次性冷却标志：appStart 后眼镜端 RokidLink 会真实 resume，
+                                // 触发 Sys_App_Resume_Change 上行，需消费该 resume 避免误触发拍照答题。
+                                // 用一次性标志而非 3s 时间窗口，避免「开启后 3s 内的第一次按键」被误过滤。
+                                quizResumeCooling = true
+                                appScope.launch {
+                                    delay(3000)
+                                    quizResumeCooling = false
+                                }
                                 // SDK 的 appStart 内部会用传入 cbk 覆盖 setCXRGlassAppCbk，
                                 // 这里重新注册「按键答题」的 resume 监听，恢复短按触发拍照答题
                                 registerKeyQuizResumeListener(link)
@@ -870,6 +893,7 @@ class CxrLHiRokidSession(
         // 快速路径: 已有连接直接拍照，拍完保持连接（乐奇聊天可继续使用）
         val link = cxrLink
         if (cxrlConnected && glassBtConnected && link != null) {
+            Log.i(TAG, "takeGlassesPhoto: fast path, using existing CXRLink")
             requestPhotoFromLink(link, width, height, quality, onPhoto, onError, cleanupOnDone = false)
             return
         }
@@ -897,7 +921,10 @@ class CxrLHiRokidSession(
                 bindFailureMessage = "Bind host service failed",
                 showConnectionStatus = false,
                 onReady = { l ->
-                    requestPhotoFromLink(l, width, height, quality, onPhoto, onError, cleanupOnDone = true)
+                    // cleanupOnDone=false + resetBusyOnDone=true：拍照完成后保持 CXR 链路复用
+                    // （避免每次按键重建连接 5-10s，导致「按键后出答案慢」），同时复位 busy 状态；
+                    // 后续按键/聊天直接走 fast path
+                    requestPhotoFromLink(l, width, height, quality, onPhoto, onError, cleanupOnDone = false, resetBusyOnDone = true)
                 },
                 onFailure = {
                     cleanup()
@@ -926,6 +953,9 @@ class CxrLHiRokidSession(
             return
         }
         photoAskInProgress = true
+        // 全链路起点：记录开始时间，各阶段打印相对耗时（拍照/OCR/KB/AI），定位「出答案慢」
+        val askStartMs = System.currentTimeMillis()
+        Log.i(TAG, "startPhotoAsk: BEGIN, trigger=photo ask")
         onStage(com.rokidlab.phone.R.string.chat_photo_status)
 
         takeGlassesPhoto(
@@ -935,8 +965,10 @@ class CxrLHiRokidSession(
             onPhoto = { jpeg ->
                 Thread {
                     try {
+                        Log.i(TAG, "photoAsk: photo received (${jpeg.size}B) after ${System.currentTimeMillis() - askStartMs}ms, starting OCR")
                         activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_ocr_status) }
                         // 2) 本地 OCR 识别题目文字
+                        val tOcr = System.currentTimeMillis()
                         val text = runCatching {
                             val bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
                                 ?: return@runCatching ""
@@ -946,7 +978,9 @@ class CxrLHiRokidSession(
                                 bmp.recycle()
                             }
                         }.getOrDefault("").trim()
+                        Log.i(TAG, "photoAsk: OCR done in ${System.currentTimeMillis() - tOcr}ms -> ${text.take(50)}")
                         if (text.isEmpty()) {
+                            Log.w(TAG, "photoAsk: OCR result empty, abort")
                             photoAskInProgress = false
                             activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_ocr_empty) }
                             return@Thread
@@ -955,11 +989,14 @@ class CxrLHiRokidSession(
                         activity.runOnUiThread { onText(text) }
                         // 4) 知识库检索相关资料（RAG）
                         activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_kb_status) }
+                        val tKb = System.currentTimeMillis()
                         val kbText = com.rokidlab.phone.ai.KnowledgeBase
                             .search(activity, text, topK = 3)
                             .joinToString("\n\n")
+                        Log.i(TAG, "photoAsk: KB search done in ${System.currentTimeMillis() - tKb}ms, hits=${kbText.length} chars")
                         // 4) 生成答案并发送到眼镜（显示 + 播报）
                         activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_ai_status) }
+                        val tAi = System.currentTimeMillis()
                         sendAiTextMessage(
                             text,
                             contextText = kbText.ifBlank { null },
@@ -968,14 +1005,18 @@ class CxrLHiRokidSession(
                             skipTtsAudioFinished = true,
                             // 注入设置页填写的答题指令（如「只显示答案」「给出解题步骤」）
                             instruction = getAiConfig().quizInstruction.ifBlank { null },
-                            onResult = { success, _ ->
+                            onResult = { success, err ->
                                 photoAskInProgress = false
+                                Log.i(TAG, "photoAsk: AI send onResult success=$success err=$err after ${System.currentTimeMillis() - tAi}ms (total ${System.currentTimeMillis() - askStartMs}ms)")
                                 if (!success) {
                                     // 失败且无 onReply：通知 UI 复位 photoAsking（否则拍照问 AI 入口永久失效）
                                     activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_photo_failed) }
                                 }
                             },
-                            onReply = onReply,
+                            onReply = { reply ->
+                                Log.i(TAG, "photoAsk: AI reply received (${reply.length} chars) after ${System.currentTimeMillis() - askStartMs}ms total")
+                                onReply(reply)
+                            },
                         )
                     } catch (e: Exception) {
                         Log.e(TAG, "startPhotoAsk failed", e)
@@ -1088,22 +1129,42 @@ class CxrLHiRokidSession(
         aiAsrPollJob = appScope.launch(Dispatchers.IO) {
             val prefs = activity.getSharedPreferences("adb_prefs", 0)
             var lastTs = prefs.getLong(KEY_LAST_ASR_TS, 0L)
+            // 隧道异常退避：连接失败时逐步拉大间隔（5s→10s→…→30s），
+            // 推送断开期间不再固定 5s 打一次隧道，避免 5556 本地端口积压溢出
+            var backoffMs = AI_ASR_POLL_INTERVAL_MS
             while (isActive) {
                 try {
-                    val hit = readAiAsrBridgeTextOnce(lastTs)
-                    if (hit != null) {
-                        val (ts, text) = hit
-                        lastTs = ts
-                        prefs.edit().putLong(KEY_LAST_ASR_TS, ts).apply()
-                        Log.i(TAG, "ASR via ADB bridge (fallback): $text")
-                        // 打断已由眼镜端本地完成（KeyButtonService interruptOfficialLocally 发 Ai/Exit），
-                        // 处理链路放后台线程执行（下行 sleep + DeepSeek join 耗时数秒），避免阻塞主线程。
-                        Thread { handleGlassesAiAsrText(text) }.start()
+                    // 主通道推送健康时跳过文件轮询：蓝牙隧道（RFCOMM）单串行连接，
+                    // 每轮 ADB 连接都会占用隧道，推送正常时打隧道会造成
+                    // 5556 本地端口接收积压溢出 → "connection refused"。
+                    // 推送通道断开时才启用文件兜底轮询。
+                    if (aiAsrPushClient?.isConnected != true) {
+                        val r = readAiAsrBridgeTextOnce(lastTs)
+                        if (r != null) {
+                            if (r.tunnelOk) {
+                                backoffMs = AI_ASR_POLL_INTERVAL_MS
+                            } else {
+                                backoffMs = (backoffMs * 2).coerceAtMost(AI_ASR_BACKOFF_MAX_MS)
+                                Log.w(TAG, "ASR tunnel unavailable, backoff to ${backoffMs}ms")
+                            }
+                            r.text?.let { (ts, text) ->
+                                lastTs = ts
+                                prefs.edit().putLong(KEY_LAST_ASR_TS, ts).apply()
+                                Log.i(TAG, "ASR via ADB bridge (fallback): $text")
+                                // 打断已由眼镜端本地完成（KeyButtonService interruptOfficialLocally 发 Ai/Exit），
+                                // 处理链路放后台线程执行（下行 sleep + DeepSeek join 耗时数秒），避免阻塞主线程。
+                                Thread { handleGlassesAiAsrText(text) }.start()
+                            }
+                        }
+                    } else {
+                        // 推送恢复：复位退避
+                        backoffMs = AI_ASR_POLL_INTERVAL_MS
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "aiAsrBridge poll error", e)
+                    backoffMs = (backoffMs * 2).coerceAtMost(AI_ASR_BACKOFF_MAX_MS)
                 }
-                delay(AI_ASR_POLL_INTERVAL_MS)
+                delay(backoffMs)
             }
         }
         // 推送通道：第二 RFCOMM 长连接，毫秒级实时接收眼镜端推送（正常主通道）。
@@ -1111,6 +1172,20 @@ class CxrLHiRokidSession(
         aiAsrPushClient?.stop()
         aiAsrPushClient = AsrPushClient(activity.applicationContext) { text ->
             try {
+                // 音乐停止标记：眼镜端双击退出对话窗口时推送，收到后停止手机端音乐播放
+                if (text == MUSIC_STOP_MARKER) {
+                    Log.i(TAG, "Music stop marker received from glasses (conversation exited)")
+                    com.rokidlab.phone.ai.MusicPlayerController.stop()
+                    return@AsrPushClient
+                }
+                // 拍照答题标记：眼镜端镜腿按键时经 RFCOMM 通道推送（可靠区分按键意图，
+                // 不依赖 AI App 网关，也不会被真实 resume 事件误触发）
+                if (text == PHOTO_ASK_MARKER) {
+                    Log.i(TAG, "Photo-ask marker received via RFCOMM push channel")
+                    // 拍照+OCR+AI 全流程耗时数秒，切后台线程执行，避免阻塞 RFCOMM 读线程
+                    Thread { startPhotoAsk() }.start()
+                    return@AsrPushClient
+                }
                 // 更新去重游标：推送文字无真实时间戳，用接收时刻作为游标，
                 // 防止轮询兜底读到同一条文字重复处理（眼镜端推送失败写文件的场景）。
                 val prefs = activity.getSharedPreferences("adb_prefs", 0)
@@ -1157,16 +1232,21 @@ class CxrLHiRokidSession(
         }.getOrNull()
     }
 
+    /** 文件通道轮询单次结果：text=读到的新文本（可能 null）；tunnelOk=隧道连接是否成功 */
+    private data class AsrBridgeRead(val text: Pair<Long, String>?, val tunnelOk: Boolean)
+
     /**
      * 通过 ADB 读取眼镜端 ai_asr.log 中时间戳大于 lastTs 的最新 ASR_TEXT（短连接，用后即断）。
-     * 返回 (ts, text) 或 null（无新文本）。
+     * 返回 AsrBridgeRead：tunnelOk=false 表示隧道不可用（调用方应退避，避免持续打隧道），
+     * text 为 null 表示隧道正常但无新文本。
      */
-    private fun readAiAsrBridgeTextOnce(lastTs: Long): Pair<Long, String>? {
-        val client = createShortAdbClient() ?: return null
+    private fun readAiAsrBridgeTextOnce(lastTs: Long): AsrBridgeRead? {
+        val client = createShortAdbClient() ?: return AsrBridgeRead(null, false)
         return try {
             val out = runCatching {
                 client.executeShellCommand("tail -n 20 $GLASSES_ASR_FILE 2>/dev/null", 10_000)
-            }.getOrNull() ?: return null
+            }.getOrNull()
+            if (out == null) return AsrBridgeRead(null, false)
             val latest = out.lineSequence()
                 .mapNotNull { line ->
                     // 每行格式：[epochMs] text；解析失败（半行/脏数据）则忽略
@@ -1175,8 +1255,9 @@ class CxrLHiRokidSession(
                     val text = m.groupValues[2].trim()
                     if (text.isEmpty()) null else ts to text
                 }
-                .lastOrNull() ?: return null
-            if (latest.first <= lastTs) null else latest
+                .lastOrNull()
+            // 隧道连接成功；latest 可能为 null（无新数据），也可能时间戳不新
+            AsrBridgeRead(if (latest != null && latest.first > lastTs) latest else null, true)
         } finally {
             runCatching { client.disconnect() }
         }
@@ -1190,6 +1271,11 @@ class CxrLHiRokidSession(
         onPhoto: (ByteArray) -> Unit,
         onError: (String) -> Unit,
         cleanupOnDone: Boolean,
+        /**
+         * 完成后是否复位 busy（fast path 未设 busy 时为 false，避免多余 UI 刷新；
+         * slow path 保持连接时需显式复位 busy）
+         */
+        resetBusyOnDone: Boolean = cleanupOnDone,
     ) {
         var done = false
         fun finish(onResult: () -> Unit) {
@@ -1200,6 +1286,9 @@ class CxrLHiRokidSession(
             completeActiveOperation()
             if (cleanupOnDone) {
                 cleanup()
+                onBusyChanged(false)
+            } else if (resetBusyOnDone) {
+                // 保持连接复用（避免每次按键重建 CXR 链路）：复位 busy 但不断开 cxrLink
                 onBusyChanged(false)
             }
             onResult()
@@ -1321,6 +1410,7 @@ class CxrLHiRokidSession(
         // 执行结果回填后再生成最终回复；最终回复照常走下方 TTS 链路到眼镜显示并语音播报。
         val replyRef = java.util.concurrent.atomic.AtomicReference<String>("")
         val deepSeekThread = Thread {
+            val tGenStart = System.currentTimeMillis()
             try {
                 val cfg = getAiConfig()
                 val service = com.rokidlab.phone.ai.OpenAiService(cfg.apiKey, cfg.model, cfg.baseUrl)
@@ -1376,7 +1466,7 @@ class CxrLHiRokidSession(
                 }
                 if (reply.isBlank()) reply = "抱歉，我暂时无法处理这个问题，请换个说法再试一次。"
                 replyRef.set(reply)
-                Log.i(TAG, "AI reply: ${reply.take(80)}...")
+                Log.i(TAG, "AI reply generated in ${System.currentTimeMillis() - tGenStart}ms: ${reply.take(80)}...")
             } catch (e: Exception) {
                 Log.e(TAG, "DeepSeek API failed", e)
                 replyRef.set("抱歉，AI 服务暂时不可用。")
@@ -1729,9 +1819,13 @@ class CxrLHiRokidSession(
                         override fun onUnInstallAppResult(success: Boolean) = Unit
                         override fun onOpenAppResult(success: Boolean) {
                             if (success) {
-                                // 记录 appStart 时间：appStart 后眼镜端 RokidLink 会真实 resume，
-                                // 触发 Sys_App_Resume_Change 上行，用冷却窗口过滤避免误触发
-                                lastAppStartMs = System.currentTimeMillis()
+                                // 置一次性冷却标志：appStart 后眼镜端 RokidLink 会真实 resume，
+                                // 触发 Sys_App_Resume_Change 上行，消费该 resume 避免误触发拍照答题
+                                quizResumeCooling = true
+                                appScope.launch {
+                                    delay(3000)
+                                    quizResumeCooling = false
+                                }
                                 // SDK 的 appStart 内部会用传入 cbk 覆盖 setCXRGlassAppCbk，
                                 // 重新注册以恢复 onGlassAppResume 回调（按键答题 + ASR 打断信号都依赖它）
                                 registerKeyQuizResumeListener(link)
@@ -1910,25 +2004,31 @@ class CxrLHiRokidSession(
         // 眼镜端 RokidLink app 的 resume 变化（Sys_App_Resume_Change 经 AI App 无条件转发）：
         // 按键答题开启时，短按镜腿按键 → 眼镜端模拟 Sys_App_Resume_Change 上行，
         // SDK 匹配 customAppPackage 后回调 onGlassAppResume(true)，据此触发拍照答题。
-        // appStart 后的真实 resume 通过 lastAppStartMs 冷却窗口过滤。
+        // appStart 后的真实 resume 通过一次性冷却标志（quizResumeCooling）过滤。
         link.setCXRGlassAppCbk(object : IGlassAppCbk {
             override fun onGlassAppResume(resumed: Boolean) {
                 val quiz = activity.getSharedPreferences(AI_PREFS, 0)
                     .getBoolean(KEY_KEY_QUIZ_ENABLED, false)
-                val cooling = System.currentTimeMillis() - lastAppStartMs < 3000
-                Log.i(TAG, "onGlassAppResume: resumed=$resumed quiz=$quiz cooling=$cooling")
-                if (resumed && !cooling) {
+                // 一次性冷却：消费 appStart 触发的真实 resume（不会再来第二次），
+                // 之后任意时刻按键触发的 resume 不再被时间窗口误过滤（修复「开启后第一次按键没反应」）
+                if (resumed && quizResumeCooling) {
+                    quizResumeCooling = false
+                    Log.i(TAG, "onGlassAppResume: consumed real resume after appStart")
+                    return
+                }
+                Log.i(TAG, "onGlassAppResume: resumed=$resumed quiz=$quiz cooling=$quizResumeCooling")
+                if (resumed) {
                     // 分步验证-第1步：收到眼镜端上行信号（ASR 期间真实界面 resume）后打断官方回复。
                     // 延迟 800ms 等 ASR 结束再发 Ai/open（startNewTalk 重开对话）终止官方回复
                     appScope.launch {
                         delay(800)
                         interruptOfficialAi(link)
                     }
-                    // 按键答题：短按镜腿按键触发拍照答题
-                    if (quiz) {
-                        Log.i(TAG, "Quiz short-press detected via Sys_App_Resume_Change, start photo ask")
-                        startPhotoAsk()
-                    }
+                    // 注意：不再用 onGlassAppResume 触发拍照答题！
+                    // SDK 的 onGlassAppResumeChange 按包名匹配回调，任何 RokidLink 的真实 resume
+                    //（AI 会话切换、进程重启等）都会到达这里，无法与眼镜端按键模拟的
+                    // Sys_App_Resume_Change 区分，曾导致「未按键却自动拍照」。
+                    // 拍照意图已改走 RFCOMM 推送通道（PHOTO_ASK_MARKER）+ custom cmd（PHOTO_ASK_CMD）。
                 }
             }
 

@@ -38,6 +38,17 @@ class BtTunnelService : Service() {
         /** 蓝牙未开启时隧道重启的重试间隔 */
         private const val BT_RETRY_INTERVAL_MS = 3_000L
 
+        /** startForeground 被拒后的重试间隔 / 上限 */
+        private const val FOREGROUND_RETRY_INTERVAL_MS = 5_000L
+        private const val MAX_FOREGROUND_RETRIES = 10
+
+        /** 健康看门狗巡检间隔 */
+        private const val WATCHDOG_INTERVAL_MS = 30_000L
+
+        /** 服务销毁后自愈重启的重试间隔 / 上限 */
+        private const val RESTART_RETRY_INTERVAL_MS = 5_000L
+        private const val MAX_RESTART_ATTEMPTS = 10
+
         fun start(context: Context) {
             val intent = Intent(context, BtTunnelService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -79,18 +90,14 @@ class BtTunnelService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // 兜底：startForegroundService 后系统要求 5 秒内建立前台状态，
         // 若 onCreate 因主线程繁忙延迟，这里再补一次，避免 ForegroundServiceDidNotStartInTimeException 崩溃
-        try {
-            startForeground(NOTIFICATION_ID, createNotification())
-        } catch (e: Exception) {
-            Log.e(TAG, "startForeground (onStartCommand) failed", e)
-        }
+        startForegroundSafe("onStartCommand")
         return START_STICKY
     }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, createNotification())
+        startForegroundSafe("onCreate")
         // 监听蓝牙开启广播：蓝牙恢复后自动重启隧道，避免通道永久失效
         val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -102,6 +109,117 @@ class BtTunnelService : Service() {
         startTunnel()
         // 独立于 Activity 启用 ADB TCP，确保纯蓝牙模式下 adbd 监听 5555
         enableAdbTcp()
+        // 健康看门狗：隧道异常 / ADB 失效 / BridgeActivity 销毁时自动恢复，防止链路永久失效
+        startWatchdog()
+    }
+
+    /**
+     * 安全进入前台状态：后台 FGS 启动受限（bg restriction）时**不崩溃**，
+     * 降级为普通服务继续运行，并延迟重试转前台（进程获得前台窗口/系统放行后可能成功）。
+     * 若不捕获该异常，服务 onCreate 会崩溃导致系统反复 restart 而隧道始终不可用。
+     */
+    private fun startForegroundSafe(tag: String) {
+        try {
+            startForeground(NOTIFICATION_ID, createNotification())
+            foregroundRetryCount = 0
+            Log.i(TAG, "startForeground ok ($tag)")
+        } catch (e: Exception) {
+            Log.e(TAG, "startForeground failed ($tag): ${e.message}")
+            retryStartForeground()
+        }
+    }
+
+    /** startForeground 被拒后的延迟重试（每 5s，最多 10 次） */
+    private var foregroundRetryCount = 0
+    private fun retryStartForeground() {
+        if (foregroundRetryCount >= MAX_FOREGROUND_RETRIES) {
+            Log.w(TAG, "Give up startForeground retry after $MAX_FOREGROUND_RETRIES attempts")
+            return
+        }
+        foregroundRetryCount++
+        mainHandler.postDelayed({
+            try {
+                startForeground(NOTIFICATION_ID, createNotification())
+                foregroundRetryCount = 0
+                Log.i(TAG, "startForeground ok on retry #$foregroundRetryCount")
+            } catch (e: Exception) {
+                Log.w(TAG, "startForeground retry #$foregroundRetryCount failed: ${e.message}")
+                retryStartForeground()
+            }
+        }, FOREGROUND_RETRY_INTERVAL_MS)
+    }
+
+    // ---------------- 健康看门狗 ----------------
+
+    private val watchdogRunnable = Runnable { checkHealth() }
+
+    /** 每 30s 巡检：隧道服务 / ADB TCP / 常驻 BridgeActivity，任一失效自动恢复 */
+    private fun startWatchdog() {
+        mainHandler.removeCallbacks(watchdogRunnable)
+        mainHandler.postDelayed(watchdogRunnable, WATCHDOG_INTERVAL_MS)
+    }
+
+    private fun checkHealth() {
+        try {
+            // 1) 隧道健康：BtTunnelServer 停止则重建（被系统停服务后 START_STICKY 重启场景）
+            if (tunnelServer?.isRunning != true) {
+                Log.w(TAG, "Tunnel server not running, restarting tunnel")
+                startTunnel()
+            }
+            // 2) BridgeActivity 保活：透明 Activity 维持进程 VISIBLE，避免被系统标记为后台。
+            //    注意：官方 AI 会话活跃期间（KeyButtonService.officialAiSessionActive）不拉起——
+            //    此时 BridgeActivity 在前台会让 AssistServer 判定为 third_app 场景，官方会话
+            //    结束时 force stop RokidLink。退让期间靠 FGS+WakeLock 保活，会话结束后由
+            //    KeyButtonService 的 restoreBridgeRunnable（10s 无 AI 活动）自动恢复。
+            if (!KeyButtonBridgeActivity.isAlive && !KeyButtonService.officialAiSessionActive) {
+                Log.i(TAG, "KeyButtonBridgeActivity not alive, relaunching")
+                runCatching {
+                    startActivity(
+                        Intent(this, KeyButtonBridgeActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }.onFailure { Log.w(TAG, "relaunch BridgeActivity failed: ${it.message}") }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "checkHealth error: ${e.message}")
+        }
+        startWatchdog()
+    }
+
+    // ---------------- 自愈重启 ----------------
+
+    /** onDestroy 后延迟检查，若服务未恢复（app idle 停服务）则主动拉起 */
+    private fun retryRestartSelf(attempt: Int) {
+        if (attempt >= MAX_RESTART_ATTEMPTS) {
+            Log.e(TAG, "Give up restarting after $MAX_RESTART_ATTEMPTS attempts")
+            return
+        }
+        mainHandler.postDelayed({
+            if (isServiceRunning(BtTunnelService::class.java)) {
+                Log.i(TAG, "BtTunnelService running again, no restart needed")
+                return@postDelayed
+            }
+            Log.w(TAG, "BtTunnelService not running after destroy, restarting (attempt ${attempt + 1})")
+            try {
+                // 用普通 startService 而非 startForegroundService，规避 FGS 后台启动限制；
+                // onStartCommand 中 startForegroundSafe 会尝试转前台
+                startService(Intent(this, BtTunnelService::class.java))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to restart BtTunnelService", e)
+            }
+            retryRestartSelf(attempt + 1)
+        }, RESTART_RETRY_INTERVAL_MS)
+    }
+
+    private fun isServiceRunning(clazz: Class<*>): Boolean {
+        return try {
+            val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+            am.getRunningServices(100).any {
+                it.service.packageName == packageName && it.service.className == clazz.name
+            }
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun startTunnel() {
@@ -189,6 +307,7 @@ class BtTunnelService : Service() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(tunnelRetryRunnable)
+        mainHandler.removeCallbacks(watchdogRunnable)
         runCatching { unregisterReceiver(bluetoothStateReceiver) }
         enableAdbThread?.interrupt()
         enableAdbThread = null
@@ -196,6 +315,9 @@ class BtTunnelService : Service() {
         tunnelServer = null
         AsrPushServer.stop()
         Log.i(TAG, "BtTunnelService destroyed")
+        // 自愈：app idle 可能停掉本服务（实测日志：Stopping service due to app idle），
+        // 主动延迟检查并拉起，配合 START_STICKY 系统重启双重保障隧道尽快恢复
+        retryRestartSelf(0)
         super.onDestroy()
     }
 

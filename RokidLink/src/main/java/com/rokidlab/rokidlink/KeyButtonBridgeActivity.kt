@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.WindowManager
 
 /**
  * 常驻透明 Activity — 保持进程始终拥有可见窗口。
@@ -25,6 +26,29 @@ import android.util.Log
 class KeyButtonBridgeActivity : Activity() {
     companion object {
         private const val TAG = "KeyButtonBridge"
+
+        /** 是否存活（onCreate=true / onDestroy=false），供 BtTunnelService 看门狗检查并保活 */
+        @Volatile
+        var isAlive = false
+
+        /** KeyButtonService 在按键答题且屏幕已熄时传入：加 FLAG_TURN_SCREEN_ON 点亮屏幕 */
+        const val EXTRA_WAKE_SCREEN = "wake_screen"
+
+        /**
+         * KeyButtonService 广播：官方 AI 会话活跃期间要求本 Activity 退让（finish）。
+         * 常驻透明 Activity 会让 AssistServer 把本进程判定为 third_app 场景，官方 AI 会话
+         * 退出时（ai_assist=false → 清理 third_app）会 force stop RokidLink（实测 15:47/16:01/16:10/16:19
+         * 反复强杀）。官方 AI 会话期间退让到后台（FGS+WakeLock 保活），会话结束再恢复。
+         */
+        const val ACTION_YIELD = "rokidlab.action.BRIDGE_YIELD"
+    }
+
+    /** 退让广播接收器：收到 ACTION_YIELD 立即 finish，让本进程退出 third_app 场景 */
+    private val yieldReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.i(TAG, "yield requested by service, finishing")
+            finish()
+        }
     }
 
     /** 按键接收器 */
@@ -210,7 +234,15 @@ class KeyButtonBridgeActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        isAlive = true
         Log.i(TAG, "onCreate — alive")
+
+        // 按键答题时屏幕已熄的场景：KeyButtonService 以 wake_screen=true 拉起本 Activity，
+        // 窗口显示时点亮屏幕（否则 AI 会话处于退出态、相机不可用，拍照会超时）。
+        if (intent?.getBooleanExtra(EXTRA_WAKE_SCREEN, false) == true) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+            Log.i(TAG, "FLAG_TURN_SCREEN_ON applied (wake_screen=true)")
+        }
 
         val filter = IntentFilter().apply {
             addAction("com.android.action.ACTION_SPRITE_BUTTON_DOWN")
@@ -225,11 +257,20 @@ class KeyButtonBridgeActivity : Activity() {
             registerReceiver(keyReceiver, filter)
         }
         Log.i(TAG, "Key receiver registered")
+
+        // 退让广播（官方 AI 会话期间被 KeyButtonService 要求退出前台）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(yieldReceiver, IntentFilter(ACTION_YIELD), Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(yieldReceiver, IntentFilter(ACTION_YIELD))
+        }
     }
 
     override fun onDestroy() {
+        isAlive = false
         Log.i(TAG, "onDestroy")
         runCatching { unregisterReceiver(keyReceiver) }
+        runCatching { unregisterReceiver(yieldReceiver) }
         super.onDestroy()
     }
 }

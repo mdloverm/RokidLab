@@ -10,6 +10,8 @@ import android.os.Looper
 import android.os.Parcel
 import android.util.Log
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * 眼镜端本地 TTS 播放器。
@@ -25,7 +27,10 @@ import java.util.UUID
  *  - bindService 返回 false → 延迟重试（最多 [MAX_BIND_RETRIES] 次）
  *  - onServiceDisconnected → 自动延迟重绑，服务掉线后恢复自愈
  *  - playTtsMsg 调用异常 → 自动重试 1 次
- *  - 多文本用队列缓存，onServiceConnected 后逐条播放（替代原单槽 pendingText）
+ *  - 分块串行播放：单线程 playExecutor 逐块 invoke，每块携带 ITtsListener 并
+ *    阻塞等待 onTtsStop（音频播放结束）回调后再发下一块——无需估算延时、块间
+ *    由真实播放进度自然衔接，同时规避 TtsService 对"正在准备/刚播完"状态下
+ *    的新消息 stop 当前流导致的丢块
  *  - 对外暴露 ensureBound()，供 KeyButtonService 启动时预热绑定
  */
 object TtsPlaybackHelper {
@@ -44,11 +49,46 @@ object TtsPlaybackHelper {
     /** ITtsServer AIDL 接口描述符 */
     private const val TTS_INTERFACE_DESCRIPTOR = "com.rokid.os.sprite.tts.ITtsServer"
 
+    /** ITtsListener AIDL 接口描述符（播放完成回调） */
+    private const val TTS_LISTENER_DESCRIPTOR = "com.rokid.os.sprite.tts.ITtsListener"
+
     /** bind 失败最大重试次数 */
     private const val MAX_BIND_RETRIES = 3
 
     /** 绑定/重绑失败的重试间隔（ms） */
     private const val BIND_RETRY_DELAY_MS = 2_000L
+
+    /**
+     * 绑定超时看护（ms）：bindService 返回 true 后若 TtsService 长期不回调
+     * onServiceConnected（服务崩溃/被系统限时），bindPending 会卡死导致后续
+     * 播放全部入队不执行。超时后重置 bindPending 并重新发起绑定。
+     */
+    private const val BIND_TIMEOUT_MS = 5_000L
+
+    /**
+     * 单次合成文本上限（字符数）。眼镜本地 ONNX TTS 引擎对超长/含多段换行的文本会报
+     * "ONNX Expand node p2o.Expand.2 invalid expand shape" → acoustic_output 为空 → 静音
+     * （实测 230 字多段答案失败、70 字单段正常），播放前按标点/换行拆块规避。
+     */
+    private const val TTS_CHUNK_MAX_CHARS = 80
+
+    /**
+     * 单块播放超时（ms）：invoke playTtsMsg 后若长时间收不到 onTtsStop 完成回调
+     * （listener 回调丢失/TtsService 异常），超时后继续播下一块，防止串行播放卡死。
+     * 正常 80 字块约 16s 播完，30s 余量充足。
+     */
+    private const val TTS_PLAY_TIMEOUT_MS = 30_000L
+
+    /**
+     * 块间状态同步缓冲（ms）：onTtsStop 回调时音频虽已播完，但 TtsService 的
+     * playTask 线程仍在收尾（playFinish=true/playFuture=null 尚未完成）。若此时
+     * 立即 invoke 下一块会落入"正在播放"分支触发 stop。等待固定 300ms（句间自然
+     * 停顿量级）确保状态就绪后再发下一块，避免额外丢块。
+     */
+    private const val STABLE_DELAY_MS = 300L
+
+    /** 串行播放执行器：保证 TTS 块逐个播放，杜绝连续 invoke 导致 TtsService 丢块 */
+    private val playExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -61,26 +101,18 @@ object TtsPlaybackHelper {
     @Volatile
     private var bindPending = false
 
-    /** 待播文本队列（服务未就绪时缓存，连接后逐条消费） */
-    private val pendingQueue = ArrayDeque<String>()
+    /** 最近一次用于 bind 的 Context（进程级），重绑时复用 */
+    @Volatile
+    private var bindAppContext: Context? = null
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             Log.i(TAG, "TtsService connected")
-            var snapshot: List<String>? = null
             synchronized(this@TtsPlaybackHelper) {
                 bound = true
                 ttsServer = service
                 bindRetryCount = 0
                 bindPending = false
-                // 快照出队当前全部待播文本，避免在主线程 while(true) 消费 + transact/sleep 造成 ANR
-                snapshot = ArrayList(pendingQueue)
-                pendingQueue.clear()
-            }
-            if (snapshot != null && snapshot!!.isNotEmpty()) {
-                val consumer = Thread { snapshot!!.forEach { invokePlayTtsMsg(service, it) } }
-                consumer.name = "tts-pending-consumer"
-                consumer.start()
             }
         }
 
@@ -96,27 +128,84 @@ object TtsPlaybackHelper {
         }
     }
 
-    /** 最近一次用于 bind 的 Context（进程级），重绑时复用 */
-    @Volatile
-    private var bindAppContext: Context? = null
-
     /**
      * 播放指定文字的本地 TTS 语音。
-     * 若服务尚未绑定，先入队并绑定（连接后自动逐条播放）。
+     *
+     * 串行播放 + 完成回调：所有分块提交到单线程 playExecutor 逐个播放。
+     * 每块 invoke 时携带 ITtsListener，**等待 onTtsStop（音频播放结束）回调后再发下一块**，
+     * 块间由真实播放进度自然衔接，无需估算延时，也不会因提前下发触发 TtsService 的
+     * stop 丢块。本方法自身不 sleep（可能在桥接回调线程被调用），实际播放逻辑全部
+     * 在 playExecutor 线程。
      */
     fun play(context: Context, text: String) {
         if (text.isBlank()) {
             Log.w(TAG, "play: text is blank, ignored")
             return
         }
-        val server = ttsServer
-        if (bound && server != null) {
-            invokePlayTtsMsg(server, text)
-        } else {
-            Log.i(TAG, "TtsService not bound yet, queueing text")
-            synchronized(this) { pendingQueue.addLast(text) }
-            bind(context)
+        // 分块播放：规避 ONNX 引擎对超长文本的 Expand 形状错误（见 TTS_CHUNK_MAX_CHARS 注释）
+        val chunks = splitForTts(text)
+        if (chunks.size > 1) Log.i(TAG, "play: split ${text.length} chars into ${chunks.size} chunks")
+        playExecutor.execute {
+            for ((i, chunk) in chunks.withIndex()) {
+                waitUntilBound(context)
+                val server = ttsServer
+                if (server == null) {
+                    Log.w(TAG, "TtsService not bound within ${BIND_TIMEOUT_MS}ms, dropping: \"${chunk.take(20)}...\"")
+                    break
+                }
+                Log.i(TAG, "chunk ${i + 1}/${chunks.size} playing (${chunk.length}字)")
+                invokePlayTtsMsg(server, chunk)
+            }
         }
+    }
+
+    /**
+     * 阻塞等待 TtsService 绑定就绪（最多 [BIND_TIMEOUT_MS]）。
+     * 仅在 playExecutor 线程调用（此时 sleep 无 ANR 风险）。
+     */
+    private fun waitUntilBound(context: Context) {
+        var waited = 0L
+        while (!bound || ttsServer == null) {
+            if (waited == 0L) {
+                bindAppContext?.let { bind(it) } ?: bind(context)
+            }
+            if (waited >= BIND_TIMEOUT_MS) return
+            try {
+                Thread.sleep(200)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
+            waited += 200
+        }
+    }
+
+    /**
+     * 将待播文本拆分为 TTS 引擎安全的分块（每块 ≤ [TTS_CHUNK_MAX_CHARS]）。
+     * 先按句末标点（。！？；）与换行切分，超长句再按逗号/顿号切分，保证语义尽量完整。
+     */
+    private fun splitForTts(text: String): List<String> {
+        val out = mutableListOf<String>()
+        val sentences = text.split(Regex("(?<=[。！？；\\n])"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        for (s in sentences) {
+            if (s.length <= TTS_CHUNK_MAX_CHARS) {
+                out.add(s)
+            } else {
+                val cur = StringBuilder()
+                for (ch in s) {
+                    cur.append(ch)
+                    if (cur.length >= TTS_CHUNK_MAX_CHARS || ch == '，' || ch == '、') {
+                        val piece = cur.toString().trim()
+                        if (piece.isNotEmpty()) out.add(piece)
+                        cur.setLength(0)
+                    }
+                }
+                if (cur.isNotEmpty()) out.add(cur.toString().trim())
+            }
+        }
+        return out.ifEmpty { listOf(text) }
     }
 
     /**
@@ -150,6 +239,16 @@ object TtsPlaybackHelper {
                     Log.e(TAG, "bindService failed after $MAX_BIND_RETRIES attempts")
                     synchronized(this) { bindRetryCount = 0 }
                 }
+            } else {
+                // 绑定超时看护：bindService 成功但 onServiceConnected 长时间未回调
+                //（TtsService 崩溃/被系统限时）时解除 bindPending 卡死，重新发起绑定
+                mainHandler.postDelayed({
+                    if (bindPending && !bound) {
+                        Log.w(TAG, "bind timeout (${BIND_TIMEOUT_MS}ms), rebinding")
+                        bindPending = false
+                        bind(context)
+                    }
+                }, BIND_TIMEOUT_MS)
             }
         } catch (e: Exception) {
             Log.e(TAG, "bindService failed", e)
@@ -168,36 +267,90 @@ object TtsPlaybackHelper {
                 bound = false
                 ttsServer = null
                 bindPending = false
-                pendingQueue.clear()
             }
             bindAppContext = null
         }
     }
 
     /**
-     * 调用 ITtsServer.playTtsMsg(String msg, String uuid, ITtsListener listener)。
-     * transaction = 1，listener 传 null 即可（无需回调）。
-     * 调用异常时自动重试 1 次（不 sleep：该函数可能被主线程调用，sleep 会导致 ANR）。
+     * ITtsListener 回调实现（Binder 直通，不依赖系统私有接口类）：
+     * 手动解析 TtsService 对 listener 的跨进程回调。接口定义（逆向自 assistserver）：
+     *  - transaction 1 = onTtsStart(String uuid) — 音频开始播放
+     *  - transaction 2 = onTtsStop(String uuid)  — 音频播放结束
+     */
+    private class TtsListenerBinder : android.os.Binder() {
+        /** onTtsStop 回调（音频播放结束，携带 uuid） */
+        @Volatile
+        var onStop: ((String?) -> Unit)? = null
+
+        @Volatile
+        var onStart: ((String?) -> Unit)? = null
+
+        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+            try {
+                data.enforceInterface(TTS_LISTENER_DESCRIPTOR)
+                when (code) {
+                    1 -> { // onTtsStart(String uuid)
+                        val uuid = data.readString()
+                        onStart?.invoke(uuid)
+                        reply?.writeNoException()
+                        return true
+                    }
+                    2 -> { // onTtsStop(String uuid)
+                        val uuid = data.readString()
+                        onStop?.invoke(uuid)
+                        reply?.writeNoException()
+                        return true
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "ITtsListener transact error: code=$code", e)
+            }
+            return super.onTransact(code, data, reply, flags)
+        }
+    }
+
+    /**
+     * 调用 ITtsServer.playTtsMsg(String msg, String uuid, ITtsListener listener)，
+     * 携带 listener 后**阻塞等待 onTtsStop 完成回调**（真实播放结束），再返回让
+     * playExecutor 继续播下一块——块间零估算延时、自然连贯。
+     * 仅在 playExecutor 线程调用（阻塞等待无 ANR 风险）；超时 [TTS_PLAY_TIMEOUT_MS]
+     * 兜底，防止 listener 回调丢失时卡死。调用异常时自动重试 1 次。
      */
     private fun invokePlayTtsMsg(binder: IBinder?, text: String) {
         if (binder == null) {
             Log.w(TAG, "invokePlayTtsMsg: binder is null")
             return
         }
+        val uuid = UUID.randomUUID().toString()
+        val latch = CountDownLatch(1)
+        val listener = TtsListenerBinder().apply {
+            onStart = { cbUuid ->
+                Log.d(TAG, "onTtsStart: $cbUuid")
+            }
+            onStop = { cbUuid ->
+                if (cbUuid == uuid) {
+                    Log.d(TAG, "onTtsStop: $cbUuid")
+                    latch.countDown()
+                }
+            }
+        }
         var success = false
         repeat(2) { attempt ->
-            if (success) return
+            // 注意：必须用 return@repeat（局部返回 lambda），不能写 return——
+            // 否则第二次循环会非局部返回整个函数，跳过下方 latch.await（块间串行等待失效）
+            if (success) return@repeat
             val data = Parcel.obtain()
             val reply = Parcel.obtain()
             try {
                 data.writeInterfaceToken(TTS_INTERFACE_DESCRIPTOR)
                 data.writeString(text)
-                data.writeString(UUID.randomUUID().toString())
-                data.writeStrongBinder(null)
+                data.writeString(uuid)
+                data.writeStrongBinder(listener)
                 binder.transact(1, data, reply, 0)
                 reply.readException()
                 success = true
-                Log.i(TAG, "playTtsMsg invoked: \"${text.take(40)}...\"")
+                Log.i(TAG, "playTtsMsg invoked (uuid=$uuid): \"${text.take(30)}...\" waiting onTtsStop")
             } catch (e: Exception) {
                 Log.e(TAG, "playTtsMsg failed (attempt=${attempt + 1})", e)
             } finally {
@@ -208,6 +361,19 @@ object TtsPlaybackHelper {
         if (!success) {
             // 失败不回插队首：否则连接后主循环会反复消费同一文本，形成死循环占用线程
             Log.e(TAG, "playTtsMsg failed after retry, dropping: \"${text.take(40)}...\"")
+            return
+        }
+        // 等待真实播放结束（onTtsStop）；超时兜底继续下一块
+        val finished = latch.await(TTS_PLAY_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        if (!finished) {
+            Log.w(TAG, "onTtsStop timeout after ${TTS_PLAY_TIMEOUT_MS}ms: \"${text.take(30)}...\"")
+        }
+        // 状态同步：等 TtsService 的 playTask 收尾完成（playFinish/playFuture 归位），
+        // 避免下一块 invoke 落入"正在播放"分支触发 stop 丢块
+        try {
+            Thread.sleep(STABLE_DELAY_MS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
 }
