@@ -98,6 +98,13 @@ class CxrLHiRokidSession(
          * 且与 Sys_App_Resume_Change 不同——仅按键才发送，可严格区分「拍照意图」。
          */
         private const val PHOTO_ASK_MARKER = "__LAB_PHOTO_ASK__"
+        /** ASR 识别完成信号（眼镜端 AsrPushServer.CTRL_ASR_READY，经 RFCOMM 通道推送） */
+        private const val ASR_READY_MARKER = "__LAB_ASR_READY__"
+
+        /** 工具输出回填上限：超过即截断（防超长 dumpsys 等撑爆模型上下文 / 浪费 token） */
+        private const val MAX_TOOL_OUTPUT_CHARS = 4000
+        /** 截断后保留的开头预览字符数 */
+        private const val TOOL_OUTPUT_PREVIEW_CHARS = 1500
 
         /** OpenAI 兼容 AI 配置存储 */
         private const val AI_PREFS = "chat_prefs"
@@ -145,6 +152,18 @@ class CxrLHiRokidSession(
      * 因此 sendAiTextViaLink 全流程加锁串行执行。
      */
     private val aiSendLock = Any()
+
+    /**
+     * AI 单条指令发送互斥锁：sendAiTextViaLink 全流程锁（aiSendLock）持有期间，
+     * 工具进度线程（deepSeekThread）会并发向眼镜发送进度提示（TTS_Result），
+     * 与下行主链路的 KeyDown/open/ASR_Result/ASR_End 存在并发 sendCustomCmd 竞态。
+     * 下行主链路各条指令与进度发送均按条加锁串行。
+     *
+     * 锁顺序约定：aiSendLock（外层）→ aiCmdLock（内层），全程单向获取，
+     * 禁止反向（持有 aiCmdLock 时再去获取 aiSendLock）以防死锁。
+     * 当前所有 aiCmdLock 临界区均在 aiSendLock 持有期间调用，顺序一致，无死锁风险。
+     */
+    private val aiCmdLock = Any()
 
     /** 最近一次眼镜 ASR 文字及时间（双通道去重：push 与轮询/WiFi 上行可能同时收到同一段文字） */
     @Volatile
@@ -357,6 +376,11 @@ class CxrLHiRokidSession(
         return runCatching {
             activity.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_KEY_QUIZ_ENABLED, false)
         }.getOrDefault(false)
+    }
+
+    /** 清空 Agent 会话记忆（用户点击清空对话按钮时调用） */
+    fun clearAgentHistory() {
+        com.rokidlab.phone.ai.AgentSessionManager.clear()
     }
 
     /**
@@ -822,6 +846,10 @@ class CxrLHiRokidSession(
         localTakeover: Boolean = false,
         /** 附加指令：注入 system 提示词控制回答方式（如「只显示答案」「给出解题步骤」） */
         instruction: String? = null,
+        /** 是否记录到 Agent 会话记忆（多轮上下文）。拍照答题等一次性场景传 false */
+        recordHistory: Boolean = true,
+        /** AI 回复流式增量回调（每个 content delta），用于 UI 边生成边显示；眼镜 TTS 仍整段发送 */
+        onDelta: ((String) -> Unit)? = null,
     ) {
         Log.i(TAG, "sendAiTextMessage(\"$text\") called. cxrlConnected=$cxrlConnected, glassBtConnected=$glassBtConnected, cxrLink=${cxrLink != null}, token=${token?.take(8) ?: "null"}")
 
@@ -829,7 +857,7 @@ class CxrLHiRokidSession(
         val link = cxrLink
         if (cxrlConnected && glassBtConnected && link != null) {
             Log.i(TAG, "sendAiTextMessage: using existing CXRLink (fast path)")
-            sendAiTextViaLink(link, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction)
+            sendAiTextViaLink(link, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta)
             return
         }
 
@@ -861,7 +889,7 @@ class CxrLHiRokidSession(
                     // 必须切后台线程执行，否则慢速路径阻塞主线程导致 ANR/闪退。
                     // onStatus/onBusyChanged 已线程安全，onReply 由调用方切主线程，onResult 内部 runOnUiThread。
                     appScope.launch(Dispatchers.IO) {
-                        sendAiTextViaLink(l, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction)
+                        sendAiTextViaLink(l, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta)
                     }
                 },
                 onFailure = {
@@ -1005,6 +1033,8 @@ class CxrLHiRokidSession(
                             skipTtsAudioFinished = true,
                             // 注入设置页填写的答题指令（如「只显示答案」「给出解题步骤」）
                             instruction = getAiConfig().quizInstruction.ifBlank { null },
+                            // 一次性问答且带答题指令，不记录到 Agent 会话记忆（避免污染闲聊上下文）
+                            recordHistory = false,
                             onResult = { success, err ->
                                 photoAskInProgress = false
                                 Log.i(TAG, "photoAsk: AI send onResult success=$success err=$err after ${System.currentTimeMillis() - tAi}ms (total ${System.currentTimeMillis() - askStartMs}ms)")
@@ -1186,6 +1216,15 @@ class CxrLHiRokidSession(
                     Thread { startPhotoAsk() }.start()
                     return@AsrPushClient
                 }
+                // ASR 识别完成信号：眼镜端收到官方 ASR_End 后推送，此刻官方识别已完成。
+                // 眼镜端 KeyButtonService 已同步本地接管（interruptOfficialLocally + openAiSession +
+                // showAiUserText 显示提问），此处只记录不再重复打断——若再发 Ai/open（startNewTalk）
+                // 会与眼镜端本地 open 竞态，重置官方会话导致后续 TTS_Result 回复文字不显示
+                // （语音正常但文字丢失，实测 12:03 双 open 竞态）。
+                if (text == ASR_READY_MARKER) {
+                    Log.i(TAG, "ASR_READY received via RFCOMM push (glasses already took over, skip interrupt)")
+                    return@AsrPushClient
+                }
                 // 更新去重游标：推送文字无真实时间戳，用接收时刻作为游标，
                 // 防止轮询兜底读到同一条文字重复处理（眼镜端推送失败写文件的场景）。
                 val prefs = activity.getSharedPreferences("adb_prefs", 0)
@@ -1343,6 +1382,24 @@ class CxrLHiRokidSession(
     }
 
     /**
+     * 工具执行期间向眼镜推送进度提示（如「正在查询眼镜电量…」）。
+     * 仅更新 AI 会话显示文字，不触发语音播报；最终回复的 TTS_Result 会覆盖该文字。
+     * 按条加锁（aiCmdLock）与下行主链路串行；失败静默——进度提示是增强体验，不能影响主流程。
+     */
+    private fun sendGlassesProgress(link: CXRLink, text: String) {
+        if (cxrLink !== link || !cxrlConnected) return
+        runCatching {
+            synchronized(aiCmdLock) {
+                val caps = Caps()
+                caps.write("TTS_Result")
+                caps.write(text)
+                link.sendCustomCmd("Ai", caps)
+            }
+        }
+        onStatus(text)
+    }
+
+    /**
      * 用已连接的 CXRLink 直接发送 AI 文字指令。
      *
      * 完整流程（复刻官方 App 行为，12:18:45 日志验证）：
@@ -1368,6 +1425,10 @@ class CxrLHiRokidSession(
         localTakeover: Boolean = false,
         /** 附加指令：注入 system 提示词控制回答方式（如「只显示答案」「给出解题步骤」） */
         instruction: String? = null,
+        /** 是否记录到 Agent 会话记忆（多轮上下文）。拍照答题等一次性场景传 false */
+        recordHistory: Boolean = true,
+        /** AI 回复流式增量回调（每个 content delta），用于 UI 边生成边显示；眼镜 TTS 仍整段发送 */
+        onDelta: ((String) -> Unit)? = null,
     ) {
         // 串行化所有 AI 下行发送：聊天发送 / ASR push / 文件轮询 / SDK 上行多个并发入口
         // 在 WiFi 稳定连接时全部命中快速路径，同一 CXRLink 并发 sendCustomCmd 会与
@@ -1414,17 +1475,41 @@ class CxrLHiRokidSession(
             try {
                 val cfg = getAiConfig()
                 val service = com.rokidlab.phone.ai.OpenAiService(cfg.apiKey, cfg.model, cfg.baseUrl)
+                // Agent 会话记忆：超时清理 + 注入历史消息（多轮上下文），使 AI 能理解「再来一首」等指代
+                val agentSession = com.rokidlab.phone.ai.AgentSessionManager
+                agentSession.maybeExpire()
+                // 同时校验 AgentSessionManager 开关，关闭时本次不注入历史也不记录本轮
+                val memoryEnabled = agentSession.isEnabled(activity)
+                val effectiveRecord = recordHistory && memoryEnabled
+                // 长期记忆：跨会话记住用户事实/偏好（注入 <memories> + 注册 manage_memory 工具）
+                val longTermMemory = com.rokidlab.phone.ai.LongTermMemoryManager
+                val longTermOn = longTermMemory.isEnabled(activity)
+                val longTermContext = if (longTermOn) longTermMemory.memoriesContext(activity) else null
                 val messages = JSONArray()
-                messages.put(service.buildSystemMessage(contextText, instruction))
+                messages.put(service.buildSystemMessage(contextText, instruction, longTermContext))
+                if (effectiveRecord) {
+                    agentSession.getHistory().forEach { msg ->
+                        messages.put(JSONObject().apply {
+                            put("role", msg.role)
+                            put("content", msg.content)
+                        })
+                    }
+                }
                 val userMsg = JSONObject()
                 userMsg.put("role", "user")
                 userMsg.put("content", text)
                 messages.put(userMsg)
 
+                // 可用工具：常规工具 + 长期记忆工具（开关开启时注册给 AI 自主调用）
+                val availableTools = ToolRegistry.schemas(activity).toMutableList()
+                if (longTermOn) availableTools.add(longTermMemory.schema())
+
                 var reply = ""
-                // 最多 3 轮工具循环，防止模型反复请求工具导致死循环
-                for (round in 0 until 3) {
-                    val turn = service.chatTurn(messages, tools = ToolRegistry.schemas(activity))
+                val toolTrace = mutableListOf<String>()
+                // 最多 6 轮工具循环：支持多步任务（先查时间再设定时等），同时防止模型反复请求工具导致死循环
+                for (round in 0 until 6) {
+                    // 流式：实时推送 content 增量给 UI（工具调用轮 content 通常为空，最终回复轮逐字推送）
+                    val turn = service.chatTurnStream(messages, tools = availableTools, onDelta = onDelta)
                     if (turn.toolCalls.isEmpty()) {
                         reply = turn.content.orEmpty()
                         break
@@ -1443,19 +1528,48 @@ class CxrLHiRokidSession(
                                 put("arguments", tc.arguments)
                             })
                         })
+                        toolTrace.add("${tc.name}(${tc.arguments})")
                     }
                     assistantMsg.put("tool_calls", calls)
                     messages.put(assistantMsg)
 
-                    // 依次执行工具，结果以 tool 消息回填
-                    for (tc in turn.toolCalls) {
-                        val result = try {
-                            ToolRegistry.execute(activity, tc.name, tc.arguments)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "tool execute failed: ${tc.name}", e)
-                            "工具执行失败: ${e.message}"
+                    // 并发执行工具：ADB 类工具在 ToolRegistry 内通过 adbLock 串行（蓝牙单连接安全），
+                    // 非 ADB 工具真并发，降低多工具延迟叠加；结果按原顺序回填保证 messages 顺序稳定
+                    val results = arrayOfNulls<String>(turn.toolCalls.size)
+                    val latch = java.util.concurrent.CountDownLatch(turn.toolCalls.size)
+                    turn.toolCalls.forEachIndexed { idx, tc ->
+                        Thread {
+                            // 长期记忆工具是静默上下文维护，无用户可见进度，跳过进度推送
+                            if (tc.name != com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME) {
+                                sendGlassesProgress(link, ToolRegistry.statusText(tc.name))
+                            }
+                            results[idx] = try {
+                                if (tc.name == com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME) {
+                                    longTermMemory.execute(activity, tc.arguments)
+                                } else {
+                                    ToolRegistry.execute(activity, tc.name, tc.arguments)
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "tool execute failed: ${tc.name}", e)
+                                "工具执行失败: ${e.message}"
+                            }
+                            latch.countDown()
+                        }.start()
+                    }
+                    latch.await()
+                    // 按原顺序回填 tool 消息
+                    turn.toolCalls.forEachIndexed { idx, tc ->
+                        val raw = results[idx] ?: "工具执行失败"
+                        // 工具输出截断：dumpsys/df 等可能返回超长文本，全量回填浪费 token 且易超模型上下文。
+                        // 参考 RikkaHub maybeTruncateToolOutput：超过上限截断为开头预览 + 明确提示
+                        // （模型通常只用开头几行结论；若确实需要更多可说明已截断让模型如实回复）。
+                        val result = if (raw.length > MAX_TOOL_OUTPUT_CHARS) {
+                            Log.w(TAG, "tool ${tc.name} output truncated: ${raw.length} chars -> ${MAX_TOOL_OUTPUT_CHARS}")
+                            raw.take(TOOL_OUTPUT_PREVIEW_CHARS) +
+                                "\n…（工具输出过长已截断，仅保留开头 ${TOOL_OUTPUT_PREVIEW_CHARS} 字符，原始 ${raw.length} 字符）"
+                        } else {
+                            raw
                         }
-                        onStatus("已调用工具: ${tc.name}")
                         Log.i(TAG, "tool ${tc.name}(${tc.arguments}) -> ${result.take(100)}")
                         messages.put(JSONObject().apply {
                             put("role", "tool")
@@ -1464,8 +1578,20 @@ class CxrLHiRokidSession(
                         })
                     }
                 }
-                if (reply.isBlank()) reply = "抱歉，我暂时无法处理这个问题，请换个说法再试一次。"
+                // 6 轮工具用尽仍无最终回复：基于已收集的工具结果，不带 tools 再请求一次强制生成总结，
+                // 避免多步任务最后一步被吞掉（原实现直接给固定兜底文案，丢失工具结果）
+                if (reply.isBlank()) {
+                    val finalTurn = try {
+                        service.chatTurn(messages, tools = null)
+                    } catch (_: Exception) { null }
+                    reply = finalTurn?.content?.takeIf { it.isNotBlank() }
+                        ?: "抱歉，我暂时无法处理这个问题，请换个说法再试一次。"
+                }
                 replyRef.set(reply)
+                // 记录本轮到会话记忆（含工具轨迹，catch 分支的失败兜底回复不记录，避免污染上下文）
+                if (effectiveRecord) {
+                    agentSession.recordTurn(text, reply, toolTrace)
+                }
                 Log.i(TAG, "AI reply generated in ${System.currentTimeMillis() - tGenStart}ms: ${reply.take(80)}...")
             } catch (e: Exception) {
                 Log.e(TAG, "DeepSeek API failed", e)
@@ -1485,16 +1611,20 @@ class CxrLHiRokidSession(
             val keyDownCaps = Caps()
             keyDownCaps.write("KeyDown_Client")
             keyDownCaps.write("{\"privacy_level\":2}")
-            if (!abortAiSendIfLinkInvalid(link, onResult)) return
-            keyDownResult = link.sendCustomCmd("Ai", keyDownCaps)
+            synchronized(aiCmdLock) {
+                if (!abortAiSendIfLinkInvalid(link, onResult)) return
+                keyDownResult = link.sendCustomCmd("Ai", keyDownCaps)
+            }
             Log.i(TAG, "sendCustomCmd(Ai, KeyDown_Client, privacy_level=2) -> $keyDownResult")
             Thread.sleep(600)
 
             // 0b. 发送 Ai + open：眼镜端 AIOpenHandler 调用 startNewTalk()，开启 AI 对话
             val openCaps = Caps()
             openCaps.write("open")
-            if (!abortAiSendIfLinkInvalid(link, onResult)) return
-            openResult = link.sendCustomCmd("Ai", openCaps)
+            synchronized(aiCmdLock) {
+                if (!abortAiSendIfLinkInvalid(link, onResult)) return
+                openResult = link.sendCustomCmd("Ai", openCaps)
+            }
             Log.i(TAG, "sendCustomCmd(Ai, open) -> $openResult")
             Thread.sleep(400)
 
@@ -1504,8 +1634,10 @@ class CxrLHiRokidSession(
                 val asrCaps = Caps()
                 asrCaps.write("ASR_Result")
                 asrCaps.write(text)
-                if (!abortAiSendIfLinkInvalid(link, onResult)) return
-                asrResult = link.sendCustomCmd("Ai", asrCaps)
+                synchronized(aiCmdLock) {
+                    if (!abortAiSendIfLinkInvalid(link, onResult)) return
+                    asrResult = link.sendCustomCmd("Ai", asrCaps)
+                }
                 Log.i(TAG, "sendCustomCmd(Ai, ASR_Result, \"$text\") -> $asrResult")
             } else {
                 Log.i(TAG, "skip ASR_Result resend (voice wakeup chain, question already shown)")
@@ -1514,8 +1646,10 @@ class CxrLHiRokidSession(
             // ===== 步骤2: 发送 ASR_End（标记 ASR 结束）=====
             val endCaps = Caps()
             endCaps.write("ASR_End")
-            if (!abortAiSendIfLinkInvalid(link, onResult)) return
-            endResult = link.sendCustomCmd("Ai", endCaps)
+            synchronized(aiCmdLock) {
+                if (!abortAiSendIfLinkInvalid(link, onResult)) return
+                endResult = link.sendCustomCmd("Ai", endCaps)
+            }
             Log.i(TAG, "sendCustomCmd(Ai, ASR_End) -> $endResult")
             onStatus("已发送到眼镜，正在获取 AI 回复...")
         } else {
@@ -2018,12 +2152,10 @@ class CxrLHiRokidSession(
                 }
                 Log.i(TAG, "onGlassAppResume: resumed=$resumed quiz=$quiz cooling=$quizResumeCooling")
                 if (resumed) {
-                    // 分步验证-第1步：收到眼镜端上行信号（ASR 期间真实界面 resume）后打断官方回复。
-                    // 延迟 800ms 等 ASR 结束再发 Ai/open（startNewTalk 重开对话）终止官方回复
-                    appScope.launch {
-                        delay(800)
-                        interruptOfficialAi(link)
-                    }
+                    // 打断官方 AI 已改由「ASR_READY 信号」驱动（眼镜端收到官方 ASR_End 后经 RFCOMM
+                    // 推送，见 startAiAsrBridgePolling 的 ASR_READY_MARKER 分支）：官方识别完成后
+                    // 才打断，避免固定 800ms 提前打断导致官方识别被掐断、ASR_End 永不产生的竞态。
+                    // 此回调不再承担打断职责。
                     // 注意：不再用 onGlassAppResume 触发拍照答题！
                     // SDK 的 onGlassAppResumeChange 按包名匹配回调，任何 RokidLink 的真实 resume
                     //（AI 会话切换、进程重启等）都会到达这里，无法与眼镜端按键模拟的
@@ -2038,27 +2170,6 @@ class CxrLHiRokidSession(
             override fun onStopAppResult(success: Boolean) {}
             override fun onQueryAppResult(installed: Boolean) {}
         })
-    }
-
-    /** 打断官方乐奇会话。
-     *  "Ai/Exit" 会被 AI App 拦截（眼镜端 subscribe(Ai) 收不到），改用白名单指令
-     *  "Ai/open"（startNewTalk 重开对话）来终止官方正在进行的回复。 */
-    private fun interruptOfficialAi(link: CXRLink) {
-        try {
-            val field = link.javaClass.superclass.getDeclaredField("d")
-            field.isAccessible = true
-            field.set(link, arrayOf<String>())
-        } catch (e: Exception) {
-            Log.w(TAG, "clear cmd blacklist failed: ${e.message}")
-        }
-        try {
-            val caps = Caps()
-            caps.write("open")
-            val r = link.sendCustomCmd("Ai", caps)
-            Log.i(TAG, "interrupt official AI (Ai/open) -> $r")
-        } catch (e: Exception) {
-            Log.e(TAG, "interrupt official AI error", e)
-        }
     }
 
     private fun registerGlobalCmdListener(link: CXRLink) {

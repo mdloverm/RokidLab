@@ -29,6 +29,11 @@ object AsrPushServer {
     /** 拍照答题控制指令：经本 RFCOMM 通道上行到手机端（独立于 AI App 网关，可区分按键意图） */
     const val CTRL_PHOTO_ASK = "__LAB_PHOTO_ASK__"
 
+    /** ASR 识别完成指令：官方 AI 识别完成下发 ASR_End 时，先于文字推送此信号，
+     *  手机端收到后才打断官方 AI 会话（保证官方先完成识别、ASR_End 必然产生，
+     *  消除「识别前打断导致无文字」竞态） */
+    const val CTRL_ASR_READY = "__LAB_ASR_READY__"
+
     @Volatile
     private var running = false
 

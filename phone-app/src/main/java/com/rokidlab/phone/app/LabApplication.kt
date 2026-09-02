@@ -78,6 +78,9 @@ class LabApplication : Application() {
         LocalizationManager.init(this)
         LocalizationManager.applyLocale(LocalizationManager.getCurrentLocaleCode())
 
+        // 加载聊天历史落盘记录（App 重启后恢复对话）
+        com.rokidlab.phone.store.ChatStateHolder.init(this)
+
         hidManager = BluetoothHidManager(this)
 
         routeManager = ConnectionRouteManager(this)

@@ -36,10 +36,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -50,12 +52,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -80,6 +84,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.text.selection.SelectionContainer
 import com.rokidlab.phone.R
 import com.rokidlab.phone.ai.KbDocInfo
 import com.rokidlab.phone.ai.KnowledgeBase
@@ -125,8 +130,8 @@ internal fun ChatModule(app: LabApplication) {
     val prefs = remember { ctx.getSharedPreferences(CHAT_PREFS, Context.MODE_PRIVATE) }
     val savedKey = remember { prefs.getString(KEY_DEEPSEEK, "").orEmpty() }
 
-    var messages by remember { mutableStateOf(listOf<ChatMsg>()) }
-    var msgId by remember { mutableStateOf(0L) }
+    // 聊天消息状态由全局 ChatStateHolder 持有，切到其他页面再切回不会清空
+    val messages = ChatStateHolder.messages
     var input by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     // 「拍照问 AI」流程进行中
@@ -135,6 +140,8 @@ internal fun ChatModule(app: LabApplication) {
     var showKbDialog by remember { mutableStateOf(false) }
     // AI 设置弹窗（AI 服务地址/密钥/模型 + 按键答题开关）
     var showSettings by remember { mutableStateOf(false) }
+    // 清空对话确认弹窗
+    var showClearConfirm by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
@@ -152,12 +159,10 @@ internal fun ChatModule(app: LabApplication) {
     }
 
     fun appendMsg(isUser: Boolean, content: String, isStatus: Boolean = false) {
-        msgId += 1
-        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-        messages = messages + ChatMsg(msgId, isUser, content, time, isStatus)
+        ChatStateHolder.add(isUser, content, isStatus)
         scope.launch {
             try {
-                listState.animateScrollToItem((messages.size - 1).coerceAtLeast(0))
+                listState.animateScrollToItem((ChatStateHolder.messages.size - 1).coerceAtLeast(0))
             } catch (_: Exception) {
             }
         }
@@ -193,8 +198,13 @@ internal fun ChatModule(app: LabApplication) {
                     }
                 },
                 onReply = { reply ->
-                    // onReply 在后台线程回调，需切回主线程更新 Compose 状态
-                    scope.launch { appendMsg(false, reply) }
+                    // 流式 onDelta 已边生成边显示，此处用完整回复修正最后一条 AI 消息并落盘；
+                    // 若流式未触发（如兜底路径）则 finalizeLastAi 内部会新增一条
+                    scope.launch { ChatStateHolder.finalizeLastAi(reply) }
+                },
+                onDelta = { delta ->
+                    // 流式增量：边生成边显示（切主线程，SnapshotStateList 写入需 Compose 快照线程）
+                    scope.launch { ChatStateHolder.appendAiDelta(delta) }
                 },
             )
         }
@@ -283,6 +293,11 @@ internal fun ChatModule(app: LabApplication) {
             onPhotoAsk = { askPhotoAi() },
             onOpenKb = { showKbDialog = true },
             onOpenSettings = { showSettings = true },
+            onClearChat = {
+                if (ChatStateHolder.messages.isNotEmpty()) {
+                    showClearConfirm = true
+                }
+            },
         )
 
         if (messages.isEmpty()) {
@@ -384,6 +399,20 @@ internal fun ChatModule(app: LabApplication) {
         )
     }
 
+    if (showClearConfirm) {
+        ConfirmClearChatDialog(
+            onConfirm = {
+                ChatStateHolder.clear()
+                try {
+                    app.cxrL.clearAgentHistory()
+                } catch (_: Exception) {
+                }
+                showClearConfirm = false
+            },
+            onDismiss = { showClearConfirm = false },
+        )
+    }
+
     if (showKbDialog) {
         KbManageDialog(onDismiss = { showKbDialog = false })
     }
@@ -395,6 +424,7 @@ private fun ChatHeader(
     onPhotoAsk: () -> Unit,
     onOpenKb: () -> Unit,
     onOpenSettings: () -> Unit,
+    onClearChat: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -427,6 +457,13 @@ private fun ChatHeader(
             Icon(
                 imageVector = Icons.Filled.Folder,
                 contentDescription = stringResource(R.string.chat_kb),
+                tint = BrewChat,
+            )
+        }
+        IconButton(onClick = onClearChat) {
+            Icon(
+                imageVector = Icons.Filled.DeleteSweep,
+                contentDescription = stringResource(R.string.chat_clear),
                 tint = BrewChat,
             )
         }
@@ -475,12 +512,25 @@ private fun ChatBubble(msg: ChatMsg) {
                 .background(if (isUser) BrewChat else BrewPanelAlt)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            Text(
-                text = msg.content,
-                color = if (isUser) BrewBg else BrewTextBright,
-                fontSize = 15.sp,
-                lineHeight = 22.sp,
-            )
+            // AI 消息用 SelectionContainer 包裹，支持长按选字 / 复制
+            // 用户消息不需要选中
+            if (isUser) {
+                Text(
+                    text = msg.content,
+                    color = BrewBg,
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp,
+                )
+            } else {
+                SelectionContainer {
+                    Text(
+                        text = msg.content,
+                        color = BrewTextBright,
+                        fontSize = 15.sp,
+                        lineHeight = 22.sp,
+                    )
+                }
+            }
             Text(
                 text = msg.time,
                 color = if (isUser) BrewBg.copy(alpha = 0.7f) else BrewMuted,
@@ -491,6 +541,30 @@ private fun ChatBubble(msg: ChatMsg) {
             )
         }
     }
+}
+
+// ===== 清空对话确认弹窗 =====
+@Composable
+private fun ConfirmClearChatDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.chat_clear), color = BrewTextBright, fontWeight = FontWeight.Bold) },
+        text = { Text(stringResource(R.string.chat_clear_confirm), color = BrewMuted, fontSize = 14.sp) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.chat_clear), color = BrewChat, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.chat_key_dialog_cancel), color = BrewMuted)
+            }
+        },
+        containerColor = BrewPanel,
+    )
 }
 
 // ===== AI 服务设置对话框（地址 + 密钥 + 模型 + 按键答题开关）=====
@@ -522,6 +596,8 @@ private fun ChatSettingsDialog(
     var saving by remember { mutableStateOf(false) }
     // AI 工具管理子页面
     var showToolsManage by remember { mutableStateOf(false) }
+    // Agent 会话记忆子页面
+    var showAgentSection by remember { mutableStateOf(false) }
     // 模型下拉列表：从 OpenAI 兼容接口 GET /models 拉取
     var models by remember { mutableStateOf(listOf<String>()) }
     var loadingModels by remember { mutableStateOf(false) }
@@ -818,6 +894,34 @@ private fun ChatSettingsDialog(
             )
 
             Spacer(Modifier.height(16.dp))
+            // Agent 会话记忆入口 → 子页面
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BrewPanelHi.copy(alpha = 0.5f))
+                    .border(1.dp, BrewBorder, RoundedCornerShape(12.dp))
+                    .clickable { showAgentSection = true }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.agent_section_title),
+                        color = BrewTextBright,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = stringResource(R.string.agent_section_subtitle),
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                    )
+                }
+                Text(text = "›", color = BrewMuted, fontSize = 20.sp)
+            }
+
+            Spacer(Modifier.height(16.dp))
             // AI 工具管理入口 → 子页面
             Row(
                 modifier = Modifier
@@ -867,6 +971,10 @@ private fun ChatSettingsDialog(
                 }
             }
         }
+    }
+
+    if (showAgentSection) {
+        AgentSectionPage(app = app, onBack = { showAgentSection = false })
     }
 
     if (showToolsManage) {
@@ -1044,6 +1152,241 @@ private class SkKeyVisualTransformation(private val masked: Boolean) : VisualTra
         return TransformedText(
             AnnotatedString(visible + stars),
             OffsetMapping.Identity,
+        )
+    }
+}
+
+// ===== Agent 会话记忆子页面 =====
+@Composable
+private fun AgentSectionPage(
+    app: LabApplication,
+    onBack: () -> Unit,
+) {
+    val ctx = LocalContext.current
+    var memoryEnabled by remember {
+        mutableStateOf(com.rokidlab.phone.ai.AgentSessionManager.isEnabled(ctx))
+    }
+    var longTermEnabled by remember {
+        mutableStateOf(com.rokidlab.phone.ai.LongTermMemoryManager.isEnabled(ctx))
+    }
+    var longTermCount by remember {
+        mutableIntStateOf(com.rokidlab.phone.ai.LongTermMemoryManager.count(ctx))
+    }
+    var showClearConfirm by remember { mutableStateOf(false) }
+    var showLongClearConfirm by remember { mutableStateOf(false) }
+    Dialog(
+        onDismissRequest = onBack,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(BrewBg)
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.agent_section_title),
+                    color = BrewTextBright,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onBack) {
+                    Text(stringResource(R.string.back_btn), color = BrewChat, fontWeight = FontWeight.Bold)
+                }
+            }
+            Text(
+                text = stringResource(R.string.agent_section_subtitle),
+                color = BrewMuted,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(16.dp))
+
+            // 会话记忆开关
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BrewPanel)
+                    .border(1.dp, BrewBorder, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.agent_memory_switch),
+                        color = BrewTextBright,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = stringResource(R.string.agent_memory_switch_hint),
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                    )
+                }
+                Switch(
+                    checked = memoryEnabled,
+                    onCheckedChange = {
+                        memoryEnabled = it
+                        com.rokidlab.phone.ai.AgentSessionManager.setEnabled(ctx, it)
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = BrewChat,
+                        uncheckedTrackColor = BrewPanelHi,
+                        checkedThumbColor = BrewBg,
+                        uncheckedThumbColor = BrewMuted,
+                    ),
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+            // 会话信息
+            Text(
+                text = stringResource(R.string.agent_memory_info),
+                color = BrewMuted,
+                fontSize = 12.sp,
+            )
+
+            Spacer(Modifier.height(20.dp))
+            // 清空会话记忆按钮
+            Button(
+                onClick = { showClearConfirm = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = BrewPanel,
+                    contentColor = BrewChat,
+                ),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.DeleteSweep,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.agent_memory_clear), fontWeight = FontWeight.Medium)
+            }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider(color = BrewBorder)
+            Spacer(Modifier.height(16.dp))
+
+            // 长期记忆开关（跨会话记住用户偏好）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BrewPanel)
+                    .border(1.dp, BrewBorder, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.agent_longterm_switch),
+                        color = BrewTextBright,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = stringResource(R.string.agent_longterm_switch_hint),
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                    )
+                }
+                Switch(
+                    checked = longTermEnabled,
+                    onCheckedChange = {
+                        longTermEnabled = it
+                        com.rokidlab.phone.ai.LongTermMemoryManager.setEnabled(ctx, it)
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = BrewChat,
+                        uncheckedTrackColor = BrewPanelHi,
+                        checkedThumbColor = BrewBg,
+                        uncheckedThumbColor = BrewMuted,
+                    ),
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = stringResource(R.string.agent_longterm_info, longTermCount),
+                color = BrewMuted,
+                fontSize = 12.sp,
+            )
+
+            Spacer(Modifier.height(20.dp))
+            // 清空长期记忆按钮
+            Button(
+                onClick = { showLongClearConfirm = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = BrewPanel,
+                    contentColor = BrewChat,
+                ),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.DeleteSweep,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.agent_longterm_clear), fontWeight = FontWeight.Medium)
+            }
+        }
+    }
+
+    if (showClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            title = { Text(stringResource(R.string.agent_memory_clear), color = BrewTextBright, fontWeight = FontWeight.Bold) },
+            text = { Text(stringResource(R.string.agent_memory_clear_confirm), color = BrewMuted, fontSize = 14.sp) },
+            confirmButton = {
+                TextButton(onClick = {
+                    com.rokidlab.phone.ai.AgentSessionManager.clear()
+                    showClearConfirm = false
+                    Toast.makeText(ctx, ctx.getString(R.string.agent_memory_cleared), Toast.LENGTH_SHORT).show()
+                }) {
+                    Text(stringResource(R.string.confirm), color = BrewChat, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) {
+                    Text(stringResource(R.string.chat_key_dialog_cancel), color = BrewMuted)
+                }
+            },
+            containerColor = BrewPanel,
+        )
+    }
+
+    if (showLongClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLongClearConfirm = false },
+            title = { Text(stringResource(R.string.agent_longterm_clear), color = BrewTextBright, fontWeight = FontWeight.Bold) },
+            text = { Text(stringResource(R.string.agent_longterm_clear_confirm), color = BrewMuted, fontSize = 14.sp) },
+            confirmButton = {
+                TextButton(onClick = {
+                    com.rokidlab.phone.ai.LongTermMemoryManager.clear(ctx)
+                    longTermCount = 0
+                    showLongClearConfirm = false
+                    Toast.makeText(ctx, ctx.getString(R.string.agent_longterm_cleared), Toast.LENGTH_SHORT).show()
+                }) {
+                    Text(stringResource(R.string.confirm), color = BrewChat, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLongClearConfirm = false }) {
+                    Text(stringResource(R.string.chat_key_dialog_cancel), color = BrewMuted)
+                }
+            },
+            containerColor = BrewPanel,
         )
     }
 }

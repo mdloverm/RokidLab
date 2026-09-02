@@ -63,7 +63,10 @@ Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、蓝牙�
 
 ### 乐奇 AI 聊天
 - **文字对话**：与 AI 文字聊天，回复通过眼镜语音播报（OpenAI 兼容协议，默认 DeepSeek，可自由配置 baseUrl / apiKey / model 切换通义千问、Kimi、智谱、本地 Ollama 等任意服务商）
-- **多轮对话**：自动携带历史上下文，持续多轮交流
+- **AI Agent 模式**：乐奇以 Agent 形态工作，按人设（Rokid 眼镜 AI 助理）与工具准则播报（≤3 句、纯文本、实时信息必须查证后回答）
+- **多轮会话记忆**：跨请求多轮历史，自动携带上下文（理解「再来一首」「它是什么」等指代）；10 分钟无活动自动清空，最长 12 条 / 6000 字符，从最旧丢弃；可在聊天设置 → Agent 设置页查看/清空
+- **长期记忆**：跨会话记住用户称呼与偏好（说「以后叫我周哥」「我喜欢周杰伦」自动记忆），每次对话注入 system prompt，重启 App 不丢失；支持在 Agent 设置页开关、查看条数、一键清空（禁止存储密码/账号等敏感信息）
+- **多步任务与中间状态播报**：工具循环最多 6 轮，支持「查电量 → 打开应用」等多步任务；执行工具时眼镜实时播报中间状态（如「正在查询眼镜电量…」）
 - **眼镜语音播报**：AI 回复经 CXR-L 通道发送到眼镜端语音朗读
 - **拍照问 AI**：镜腿按键 / 手机按钮双入口触发 —— 眼镜拍照 → 本地 OCR 识别题目文字 → 知识库检索（RAG）→ AI 生成答案并语音播报
 - **本地 OCR**：完全离线识别（PP-OCRv4 模型 + ONNX Runtime 推理），无网络、无 GMS 依赖，16KB 页面设备兼容
@@ -74,7 +77,8 @@ Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、蓝牙�
   - **定时任务**："5分钟后提醒我喝水""明早8点叫我""17点打开小智"（到点眼镜语音播报，可同时打开应用）
   - **查询类**：眼镜电量、系统信息、存储空间、已装应用、当前时间、知识库检索
   - 工具开关在聊天设置 →「管理 AI 工具」子页面统一管理，支持中英文
-- **语音打断修复**：眼镜端下行过滤窗口仅由 Lab 完整下行序列触发，打断指令不再吞掉用户的真实提问
+- **聊天界面**：AI 消息支持长按选择复制；顶部可一键清空对话（同时重置 Agent 上下文）；消息跨页面切换不丢失
+- **会话稳定性**：ASR_READY 控制信号避免眼镜语音会话在识别完成前被过早打断；眼镜端本地接管负责打断/打开/文字显示，杜绝双 open 竞态；长工具输出自动截断防上下文膨胀
 
 ### 屏幕镜像
 - 将眼镜屏幕实时显示在手机上（ADB over TCP 自定义实现）
@@ -234,6 +238,8 @@ RokidLab/
 │   │   │   ├── ai/          AI 能力
 │   │   │   │   ├── OpenAiService.kt    OpenAI 兼容服务（可切换任意服务商）
 │   │   │   │   ├── ToolRegistry.kt     AI 工具注册表（语音控制：打开应用/定时任务/查询类）
+│   │   │   │   ├── AgentSessionManager.kt   Agent 会话记忆（多轮历史，10 分钟自动清空）
+│   │   │   │   ├── LongTermMemoryManager.kt 长期记忆（manage_memory 工具 + 跨会话持久化）
 │   │   │   │   ├── LocalOcr.kt         本地 OCR（PP-OCRv4 + ONNX Runtime）
 │   │   │   │   └── KnowledgeBase.kt    本地知识库 RAG（txt 导入、分块、SQLite 检索）
 │   │   │   ├── connection/  连接路由
@@ -271,6 +277,7 @@ RokidLab/
 │   │   │   ├── store/       商店 UI
 │   │   │   │   ├── StoreHomeScreen.kt    主界面入口（含 ADB工具/底栏等全部页面）
 │   │   │   │   ├── ChatScreen.kt         乐奇聊天界面（对话/拍照问 AI/知识库管理/AI 设置）
+│   │   │   │   ├── ChatStateHolder.kt    聊天消息单例状态（跨页面切换不丢失）
 │   │   │   │   ├── StoreComponents.kt    通用 UI 组件
 │   │   │   │   ├── StoreInstallState.kt  安装状态组件
 │   │   │   │   ├── StoreMedia.kt         媒体/图标组件
@@ -340,7 +347,7 @@ RokidLab/
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v3.1-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v3.3-debug.apk
 ```
 
 ### 眼镜端服务

@@ -309,6 +309,26 @@
     <string name="chat_kb_imported">Imported %1$s</string>
     <string name="chat_kb_confirm_delete">Delete "%1$s"? This cannot be undone.</string>
 
+    <!-- LeQi Chat - Clear Chat -->
+    <string name="chat_clear">Clear Chat</string>
+    <string name="chat_clear_confirm">Clear all chat messages? This cannot be undone, and AI multi-turn context will be reset.</string>
+
+    <!-- LeQi Chat - Agent Memory -->
+    <string name="agent_section_title">Agent Memory</string>
+    <string name="agent_section_subtitle">Multi-turn context memory</string>
+    <string name="agent_memory_switch">Enable Session Memory</string>
+    <string name="agent_memory_switch_hint">When ON, AI understands context references (e.g. \"play another\", \"what is it\"). When OFF, each turn is independent.</string>
+    <string name="agent_memory_info">Last 6 turns (max 12 messages / 6000 chars), auto-cleared after 10 min idle</string>
+    <string name="agent_memory_clear">Clear Memory</string>
+    <string name="agent_memory_clear_confirm">Clear all Agent multi-turn context memory? Current chat messages are kept.</string>
+    <string name="agent_memory_cleared">Session memory cleared</string>
+    <string name="agent_longterm_switch">Enable Long-term Memory</string>
+    <string name="agent_longterm_switch_hint">When ON, AI remembers your preferences and personal info (e.g. nickname, favorite singers, common apps) across sessions.</string>
+    <string name="agent_longterm_info">%1$d long-term memories saved</string>
+    <string name="agent_longterm_clear">Clear Long-term Memory</string>
+    <string name="agent_longterm_clear_confirm">Clear all long-term memories? AI will forget your saved preferences and personal info.</string>
+    <string name="agent_longterm_cleared">Long-term memory cleared</string>
+
     <!-- Store main interface -->
     <string name="featured_apps">Featured Apps</string>
     <string name="search_apps_placeholder">Search apps…</string>

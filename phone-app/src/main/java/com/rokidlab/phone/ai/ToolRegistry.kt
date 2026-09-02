@@ -32,6 +32,13 @@ object ToolRegistry {
     private const val TOOL_PREFS = "ai_tool_prefs"
     private const val KEY_PREFIX = "tool_enabled_"
 
+    /**
+     * ADB 工具串行锁：眼镜蓝牙隧道（RFCOMM）仅支持单连接，ADB 工具共享同一 client
+     * （app.cxrL.getAdbShellClient()），并发执行会互相 disconnect 冲突。
+     * Agent 工具循环并发执行 toolCalls 时，ADB 类工具通过此锁串行，非 ADB 工具仍真并发。
+     */
+    private val adbLock = Any()
+
     /** 工具元数据（设置页展示用，名称/描述走多语言资源） */
     data class ToolMeta(
         val name: String,
@@ -116,6 +123,22 @@ object ToolRegistry {
         return toolList
             .filter { isEnabled(context, it.name) }
             .map { buildSchema(it) }
+    }
+
+    /** 工具执行中的人性化进度文案（眼镜端显示 + 手机端状态栏共用） */
+    fun statusText(name: String): String = when (name) {
+        "search_knowledge_base" -> "正在检索知识库…"
+        "get_current_time" -> "正在查看时间…"
+        "get_glasses_battery" -> "正在查询眼镜电量…"
+        "get_glasses_device_info" -> "正在查询设备信息…"
+        "get_glasses_storage" -> "正在查询存储空间…"
+        "list_glasses_apps" -> "正在查询应用列表…"
+        "launch_glasses_app" -> "正在打开应用…"
+        "set_timer" -> "正在设置定时任务…"
+        "play_song" -> "正在搜索歌曲…"
+        "stop_music" -> "正在停止播放…"
+        "show_lyrics" -> "正在打开歌词…"
+        else -> "正在执行 $name…"
     }
 
     private fun buildSchema(meta: ToolMeta): JSONObject {
@@ -246,7 +269,7 @@ object ToolRegistry {
                 "当前时间：" + fmt.format(Date())
             }
 
-            "get_glasses_battery" -> {
+            "get_glasses_battery" -> synchronized(adbLock) {
                 val client = adbClient(context) ?: return "眼镜 ADB 连接失败，无法查询电量"
                 try {
                     val raw = client.getBatteryInfo()
@@ -267,16 +290,18 @@ object ToolRegistry {
                 }
             }
 
-            "get_glasses_device_info" -> {
+            "get_glasses_device_info" -> synchronized(adbLock) {
                 val client = adbClient(context) ?: return "眼镜 ADB 连接失败，无法查询设备信息"
                 try {
-                    client.getDeviceInfo()
+                    val raw = client.getDeviceInfo()
+                    // 脱敏：ro.serialno 值替换为 [已隐藏]，避免设备序列号泄露给 AI/日志
+                    raw.replace(Regex("(ro\\.serialno): .*")) { "${it.groupValues[1]}: [已隐藏]" }
                 } finally {
                     runCatching { client.disconnect() }
                 }
             }
 
-            "get_glasses_storage" -> {
+            "get_glasses_storage" -> synchronized(adbLock) {
                 val client = adbClient(context) ?: return "眼镜 ADB 连接失败，无法查询存储"
                 try {
                     client.executeShellCommand("df -h /sdcard /data 2>/dev/null")
@@ -285,7 +310,7 @@ object ToolRegistry {
                 }
             }
 
-            "list_glasses_apps" -> {
+            "list_glasses_apps" -> synchronized(adbLock) {
                 val client = adbClient(context) ?: return "眼镜 ADB 连接失败，无法列出应用"
                 try {
                     val includeSystem = args.optBoolean("includeSystem", false)
@@ -300,7 +325,7 @@ object ToolRegistry {
                 }
             }
 
-            "launch_glasses_app" -> {
+            "launch_glasses_app" -> synchronized(adbLock) {
                 val appName = args.optString("appName").trim()
                 if (appName.isEmpty()) return "请提供要打开的应用名称"
                 val client = adbClient(context) ?: return "眼镜 ADB 连接失败，无法打开应用"
@@ -334,7 +359,7 @@ object ToolRegistry {
                 val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
 
                 val actions = mutableListOf<TimerAction>()
-                if (action == "launch") {
+                if (action == "launch") synchronized(adbLock) {
                     val client = adbClient(context)
                         ?: return "眼镜 ADB 连接失败，无法创建打开应用的定时任务"
                     try {

@@ -316,6 +316,26 @@
     <string name="chat_kb_imported">已导入 %1$s</string>
     <string name="chat_kb_confirm_delete">删除「%1$s」？删除后不可恢复</string>
 
+    <!-- 乐奇聊天 - 清空对话 -->
+    <string name="chat_clear">清空对话</string>
+    <string name="chat_clear_confirm">清空全部聊天记录？清空后不可恢复，同时会重置 AI 多轮上下文。</string>
+
+    <!-- 乐奇聊天 - Agent 会话记忆 -->
+    <string name="agent_section_title">Agent 会话记忆</string>
+    <string name="agent_section_subtitle">多轮上下文记忆管理</string>
+    <string name="agent_memory_switch">启用会话记忆</string>
+    <string name="agent_memory_switch_hint">开启后 AI 可理解上下文指代（如「再来一首」「它是什么」），关闭后每次对话独立</string>
+    <string name="agent_memory_info">最近 6 轮（最多 12 条 / 6000 字符），10 分钟无活动自动清空</string>
+    <string name="agent_memory_clear">清空会话记忆</string>
+    <string name="agent_memory_clear_confirm">清空全部 Agent 多轮上下文记忆？不影响当前聊天记录。</string>
+    <string name="agent_memory_cleared">会话记忆已清空</string>
+    <string name="agent_longterm_switch">启用长期记忆</string>
+    <string name="agent_longterm_switch_hint">开启后 AI 会记住你的偏好与个人信息（如称呼、喜欢的歌手、常用应用），跨会话持续生效</string>
+    <string name="agent_longterm_info">已记住 %1$d 条长期记忆</string>
+    <string name="agent_longterm_clear">清空长期记忆</string>
+    <string name="agent_longterm_clear_confirm">清空全部长期记忆？AI 将忘记已记住的用户偏好与个人信息。</string>
+    <string name="agent_longterm_cleared">长期记忆已清空</string>
+
     <!-- Store main interface -->
     <string name="featured_apps">精选应用</string>
     <string name="search_apps_placeholder">搜索应用…</string>

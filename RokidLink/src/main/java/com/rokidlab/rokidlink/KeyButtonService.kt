@@ -846,6 +846,11 @@ class KeyButtonService : Service() {
                     //   2) RFCOMM 推送通道（AsrPushServer 长连接，毫秒级）——主通道
                     //   3) 文件（app 私有外部目录）——推送失败时的兜底（手机端轮询读取）
                     Log.i(AI_ASR_BRIDGE_TAG, "ASR_TEXT:$finalText")
+                    // 先推送「ASR 识别完成」信号：官方已识别完并下发 ASR_End（此刻打断官方安全），
+                    // 手机端收到该信号才打断官方 AI（替代 onGlassAppResume 固定 800ms 的提前打断，
+                    // 消除官方识别未完成就被掐断导致 ASR_End 永不产生的竞态）。
+                    // 再推文字（主通道）+ 文件兜底。两帧顺序：信号在前、文字在后，手机端按序消费。
+                    AsrPushServer.pushControl(AsrPushServer.CTRL_ASR_READY)
                     if (!AsrPushServer.push(finalText)) {
                         Log.w(TAG, "ASR push channel unavailable, fallback to file")
                         appendAiAsrToFile(finalText)
