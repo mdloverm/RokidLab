@@ -44,11 +44,12 @@ object ToolRegistry {
     const val DOMAIN_WEB = "web"            // 联网搜索/读网页
     const val DOMAIN_FILES = "files"        // 文件产出（总结 txt / 代码落盘）
     const val DOMAIN_AIUI = "aiui"          // AIUI 智能体应用（生成/安装/打开/管理）
+    const val DOMAIN_PHONE = "phone"        // 手机端（通讯录/拨号/闹钟/应用/状态/音量/日历）
 
     /** 全部工具域（主 Agent 默认全量装配，未来可拆出子集） */
     val DOMAIN_ALL: Set<String> = setOf(
         DOMAIN_INFO, DOMAIN_KNOWLEDGE, DOMAIN_GLASSES, DOMAIN_TIMER,
-        DOMAIN_MEDIA, DOMAIN_WEB, DOMAIN_FILES, DOMAIN_AIUI,
+        DOMAIN_MEDIA, DOMAIN_WEB, DOMAIN_FILES, DOMAIN_AIUI, DOMAIN_PHONE,
     )
 
     /** 主 Agent 会话（眼镜语音/手机聊天，在线模型）装配的工具域 */
@@ -139,6 +140,18 @@ object ToolRegistry {
             descriptionRes = R.string.ai_tool_set_timer_desc,
         ),
         ToolMeta(
+            name = "list_timers",
+            group = DOMAIN_TIMER,
+            displayNameRes = R.string.ai_tool_list_timers_name,
+            descriptionRes = R.string.ai_tool_list_timers_desc,
+        ),
+        ToolMeta(
+            name = "cancel_timer",
+            group = DOMAIN_TIMER,
+            displayNameRes = R.string.ai_tool_cancel_timer_name,
+            descriptionRes = R.string.ai_tool_cancel_timer_desc,
+        ),
+        ToolMeta(
             name = "play_song",
             group = DOMAIN_MEDIA,
             displayNameRes = R.string.ai_tool_play_song_name,
@@ -210,6 +223,66 @@ object ToolRegistry {
             displayNameRes = R.string.ai_tool_list_my_aiui_apps_name,
             descriptionRes = R.string.ai_tool_list_my_aiui_apps_desc,
         ),
+        ToolMeta(
+            name = "get_weather",
+            group = DOMAIN_WEB,
+            displayNameRes = R.string.ai_tool_get_weather_name,
+            descriptionRes = R.string.ai_tool_get_weather_desc,
+        ),
+        ToolMeta(
+            name = "calculate",
+            group = DOMAIN_INFO,
+            displayNameRes = R.string.ai_tool_calculate_name,
+            descriptionRes = R.string.ai_tool_calculate_desc,
+        ),
+        ToolMeta(
+            name = "search_contacts",
+            group = DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_search_contacts_name,
+            descriptionRes = R.string.ai_tool_search_contacts_desc,
+        ),
+        ToolMeta(
+            name = "call_phone",
+            group = DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_call_phone_name,
+            descriptionRes = R.string.ai_tool_call_phone_desc,
+        ),
+        ToolMeta(
+            name = "set_phone_alarm",
+            group = DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_set_phone_alarm_name,
+            descriptionRes = R.string.ai_tool_set_phone_alarm_desc,
+        ),
+        ToolMeta(
+            name = "open_phone_app",
+            group = DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_open_phone_app_name,
+            descriptionRes = R.string.ai_tool_open_phone_app_desc,
+        ),
+        ToolMeta(
+            name = "get_phone_status",
+            group = DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_get_phone_status_name,
+            descriptionRes = R.string.ai_tool_get_phone_status_desc,
+        ),
+        ToolMeta(
+            name = "set_phone_volume",
+            group = DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_set_phone_volume_name,
+            descriptionRes = R.string.ai_tool_set_phone_volume_desc,
+        ),
+        ToolMeta(
+            name = "query_calendar",
+            group = DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_query_calendar_name,
+            descriptionRes = R.string.ai_tool_query_calendar_desc,
+        ),
+        ToolMeta(
+            name = "add_calendar_event",
+            group = DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_add_calendar_event_name,
+            descriptionRes = R.string.ai_tool_add_calendar_event_desc,
+        ),
     )
 
     /** 已知 AIUI agent（眼镜端 PACKAGE_INDEX 已安装的 .aix 智能体应用），供 open_aiui_app 匹配 */
@@ -270,6 +343,8 @@ object ToolRegistry {
             .edit()
             .putBoolean(KEY_PREFIX + name, enabled)
             .apply()
+        // 开关变更后旧 Schema 缓存失效（Domains 键 + 全量开关快照双重校验，见 schemasFor）
+        schemaCache.clear()
     }
 
     /** 工具声明列表（仅已开启的工具），直接传给 OpenAI 兼容协议的 tools 参数（默认全量域） */
@@ -280,10 +355,26 @@ object ToolRegistry {
      * 主 Agent 用 [SESSION_AGENT_DOMAINS]（全量），本地轻量用 [SESSION_LOCAL_DOMAINS]（空集）。
      * 后续新增会话/场景（如商店助手、答题、生图）时在此声明自己的域子集，无需改执行逻辑。
      */
+    /**
+     * schemasFor 结果缓存：key = domains 集合，value = (全量工具开关快照, Schema 列表)。
+     * 每次调用读一遍开关快照（SharedPreferences 首载后为内存读，开销极小）做双重校验，
+     * 命中即跳过 ~30 个工具的 JSONObject 重建；[setEnabled] 写入后清空。
+     * 调用方仅对返回的 List 做 add/remove，不修改 JSONObject 本身，共享实例安全。
+     */
+    private val schemaCache = java.util.concurrent.ConcurrentHashMap<Set<String>, Pair<Map<String, Boolean>, List<JSONObject>>>()
+
     fun schemasFor(context: Context, domains: Set<String>): List<JSONObject> {
-        return toolList
-            .filter { it.group in domains && isEnabled(context, it.name) }
+        val prefs = context.getSharedPreferences(TOOL_PREFS, Context.MODE_PRIVATE)
+        val snapshot = HashMap<String, Boolean>(toolList.size)
+        toolList.forEach { snapshot[it.name] = prefs.getBoolean(KEY_PREFIX + it.name, true) }
+        schemaCache[domains]?.let { (cachedSnapshot, cachedSchemas) ->
+            if (cachedSnapshot == snapshot) return cachedSchemas
+        }
+        val result = toolList
+            .filter { it.group in domains && snapshot[it.name] == true }
             .map { buildSchema(it) }
+        schemaCache[domains] = snapshot to result
+        return result
     }
 
     /** 工具执行中的人性化进度文案（眼镜端显示 + 手机端状态栏共用） */
@@ -296,6 +387,18 @@ object ToolRegistry {
         "list_glasses_apps" -> "正在查询应用列表…"
         "launch_glasses_app" -> "正在打开应用…"
         "set_timer" -> "正在设置定时任务…"
+        "list_timers" -> "正在查看定时任务…"
+        "cancel_timer" -> "正在取消定时任务…"
+        "get_weather" -> "正在查询天气…"
+        "calculate" -> "正在精确计算…"
+        "search_contacts" -> "正在查找联系人…"
+        "call_phone" -> "正在拨号…"
+        "set_phone_alarm" -> "正在设置手机闹钟…"
+        "open_phone_app" -> "正在打开手机应用…"
+        "get_phone_status" -> "正在查询手机状态…"
+        "set_phone_volume" -> "正在调节手机音量…"
+        "query_calendar" -> "正在查询日程…"
+        "add_calendar_event" -> "正在创建日程…"
         "play_song" -> "正在搜索歌曲…"
         "stop_music" -> "正在停止播放…"
         "show_lyrics" -> "正在打开歌词…"
@@ -311,7 +414,8 @@ object ToolRegistry {
         else -> "正在执行 $name…"
     }
 
-    private fun buildSchema(meta: ToolMeta): JSONObject {
+    /** 组装单个工具的 JSON Schema（internal：金标评测单测直接校验声明内容） */
+    internal fun buildSchema(meta: ToolMeta): JSONObject {
         return when (meta.name) {
             "search_knowledge_base" -> toolSchema(
                 name = meta.name,
@@ -323,6 +427,33 @@ object ToolRegistry {
                         "topK" to mapOf("type" to "integer", "description" to "返回的资料块数量，默认 3", "minimum" to 1, "maximum" to 5),
                     ),
                     "required" to listOf("query"),
+                ),
+            )
+
+            "get_current_time" -> toolSchema(
+                name = meta.name,
+                description = "获取当前的准确时间（日期、星期与 24 小时制时刻）。凡用户问「现在几点」「今天几号」「星期几」等时间问题时必须调用本工具，严禁自行推算或编造时间。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            )
+
+            "get_glasses_battery" -> toolSchema(
+                name = meta.name,
+                description = "查询 Rokid 眼镜的当前电量百分比与充电状态（是否在充电/已接电源）。当用户问「眼镜还有多少电」「眼镜要充电吗」等电量问题时调用。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            )
+
+            "get_glasses_storage" -> toolSchema(
+                name = meta.name,
+                description = "查询 Rokid 眼镜的存储空间占用情况（已用/剩余容量）。当用户问「眼镜存储还剩多少」「内存够不够」等存储问题时调用。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
                 ),
             )
 
@@ -516,6 +647,151 @@ object ToolRegistry {
                 ),
             )
 
+            "list_timers" -> toolSchema(
+                name = meta.name,
+                description = "列出当前已设置的全部定时任务（名称、触发时间、是否每天重复、运行状态）。当用户问「我有哪些提醒」「都有什么定时任务」「几点有提醒」时调用；用户想取消某个提醒前也先调用本工具拿到任务名称或编号。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            )
+
+            "cancel_timer" -> toolSchema(
+                name = meta.name,
+                description = "取消/删除一个已存在的定时任务。当用户说「取消刚才的提醒」「删掉明天的闹钟」「不要那个定时了」时调用；不知道要取消哪个时先用 list_timers 查看再取消。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "timerName" to mapOf("type" to "string", "description" to "要取消的定时任务名称或提醒内容（用户提到的那个，如「喝水提醒」）"),
+                        "all" to mapOf("type" to "boolean", "description" to "用户要求全部取消时传 true，默认 false"),
+                    ),
+                    "required" to listOf("timerName"),
+                ),
+            )
+
+            "get_weather" -> toolSchema(
+                name = meta.name,
+                description = "查询指定城市的天气（实况温度/体感/湿度/风力 + 未来两天预报）。凡用户问「今天天气怎么样」「明天会下雨吗」「杭州冷不冷」等天气问题时必须调用本工具，严禁自行编造天气。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "city" to mapOf("type" to "string", "description" to "城市名称，如「杭州」「上海」；用户没说城市时问一句或按记忆中的常居城市"),
+                        "date" to mapOf("type" to "string", "enum" to listOf("today", "tomorrow", "all"), "description" to "today=只报今天（默认），tomorrow=只报明天，all=实况+未来两天"),
+                    ),
+                    "required" to listOf("city"),
+                ),
+            )
+
+            "calculate" -> toolSchema(
+                name = meta.name,
+                description = "精确计算算术表达式（大数乘除、百分比、幂、括号均可）。凡涉及精确数值计算（「378×56 等于多少」「(128+64)×12」「2 的 20 次方」「打 85 折多少钱」）时必须调用本工具，不要心算。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "expression" to mapOf("type" to "string", "description" to "标准算术表达式，支持 + - * / % ^ 与括号，如 \"378*56\"、\"(128+64)*12\"、\"599*0.85\""),
+                    ),
+                    "required" to listOf("expression"),
+                ),
+            )
+
+            "search_contacts" -> toolSchema(
+                name = meta.name,
+                description = "在手机通讯录中按姓名查找联系人及其电话号码。当用户问「XX 的电话是多少」「XX 手机号」「我存的 XX 的号码」时调用。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "name" to mapOf("type" to "string", "description" to "联系人姓名，如「张三」"),
+                    ),
+                    "required" to listOf("name"),
+                ),
+            )
+
+            "call_phone" -> toolSchema(
+                name = meta.name,
+                description = "用手机拨打电话（打开拨号盘，用户确认后拨出）。参数可以是联系人姓名（自动查通讯录）或手机号。当用户说「给张三打电话」「拨打 138xxxx」「打电话给妈妈」时调用。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "contact" to mapOf("type" to "string", "description" to "联系人姓名（如「张三」）或完整手机号（如「13800138000」）"),
+                    ),
+                    "required" to listOf("contact"),
+                ),
+            )
+
+            "set_phone_alarm" -> toolSchema(
+                name = meta.name,
+                description = "在手机上设置闹钟或倒计时（区别于眼镜端的定时提醒，本工具响铃在手机上）。当用户说「明早 7 点叫我起床」「30 分钟后手机闹我」「设个手机闹钟」时调用。「X分钟后提醒」若未强调手机，优先用眼镜定时任务（set_timer）。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "message" to mapOf("type" to "string", "description" to "闹钟标签/提醒内容，如「起床」「该出发了」"),
+                        "hour" to mapOf("type" to "integer", "description" to "24 小时制小时（绝对时间闹钟必填，0-23），如 7"),
+                        "minute" to mapOf("type" to "integer", "description" to "分钟（绝对时间闹钟必填，0-59），如 30"),
+                        "minutesFromNow" to mapOf("type" to "integer", "description" to "相对分钟数（倒计时用，如「30分钟后」传 30；与 hour/minute 二选一）"),
+                    ),
+                ),
+            )
+
+            "open_phone_app" -> toolSchema(
+                name = meta.name,
+                description = "打开手机上安装的应用（微信/支付宝/相机等）。当用户说「打开手机上的微信」「帮我打开支付宝」且对象是手机应用时调用；打开眼镜上的应用请用 launch_glasses_app。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "appName" to mapOf("type" to "string", "description" to "要打开的手机应用名称，原样转述，如「微信」「支付宝」「设置」"),
+                    ),
+                    "required" to listOf("appName"),
+                ),
+            )
+
+            "get_phone_status" -> toolSchema(
+                name = meta.name,
+                description = "查询手机当前状态：电量百分比、是否在充电、媒体音量、屏幕亮度。当用户问「手机还有多少电」「在充电吗」「音量多大」「手机什么状态」时调用。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            )
+
+            "set_phone_volume" -> toolSchema(
+                name = meta.name,
+                description = "调节手机媒体音量（百分比）。当用户说「手机音量调到 50」「音量小一点/大一点」（对象是手机时）调用；「大一点/小一点」换算为比当前值高/低 20% 左右的具体数字。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "volume" to mapOf("type" to "integer", "description" to "目标音量百分比 0~100，如 50 表示一半"),
+                    ),
+                    "required" to listOf("volume"),
+                ),
+            )
+
+            "query_calendar" -> toolSchema(
+                name = meta.name,
+                description = "查询手机日历中某天的日程安排。当用户问「我明天有什么安排」「今天有什么日程」「9月10号我要干什么」时调用。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "date" to mapOf("type" to "string", "description" to "要查询的日期：today/tomorrow/今天/明天，或 YYYY-MM-DD；不传默认今天"),
+                    ),
+                ),
+            )
+
+            "add_calendar_event" -> toolSchema(
+                name = meta.name,
+                description = "在手机日历上创建一个日程。当用户说「帮我记一下明天下午 3 点开会」「加个日程：周五 19 点健身」时调用。开始时间必须是具体的 HH:mm（用户只说「下午」按 15:00 左右估算并告知用户）。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "title" to mapOf("type" to "string", "description" to "日程标题，如「团队会议」"),
+                        "date" to mapOf("type" to "string", "description" to "日期：today/tomorrow/今天/明天，或 YYYY-MM-DD；不传默认今天（已过时刻自动顺延到明天）"),
+                        "startTime" to mapOf("type" to "string", "description" to "开始时间，24 小时制 HH:mm，如 14:30"),
+                        "durationMinutes" to mapOf("type" to "integer", "description" to "时长（分钟），默认 60"),
+                        "note" to mapOf("type" to "string", "description" to "备注（可选），如地点、参会人"),
+                    ),
+                    "required" to listOf("title", "startTime"),
+                ),
+            )
+
             else -> toolSchema(
                 name = meta.name,
                 description = "执行 ${meta.name} 工具。",
@@ -537,11 +813,14 @@ object ToolRegistry {
             "search_knowledge_base" -> {
                 val query = args.optString("query")
                 val topK = args.optInt("topK", 3).coerceIn(1, 5)
-                val results = KnowledgeBase.search(context, query, topK)
+                val results = KnowledgeBase.searchHits(context, query, topK)
                 if (results.isEmpty()) {
                     "知识库中没有找到与“$query”相关的内容"
                 } else {
-                    results.mapIndexed { i, s -> "[${i + 1}] $s" }.joinToString("\n")
+                    // 来源标注：让模型（与用户）知道结论出自哪份文档的哪一块，可溯源
+                    results.mapIndexed { i, hit ->
+                        "[${i + 1}]（来源：《${hit.docName}》第${hit.chunkIdx + 1}块）${hit.text}"
+                    }.joinToString("\n")
                 }
             }
 
@@ -863,6 +1142,113 @@ object ToolRegistry {
                         "\n如需修改某个“对话生成”的应用，告诉我应用名或项目名，我会先读取它现有的代码，改好后再重新安装到眼镜；也可以让我直接打开或关闭某个应用。"
                 }
             }
+
+            "list_timers" -> {
+                val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
+                val tasks = app.timerScheduler.tasks
+                if (tasks.isEmpty()) {
+                    "当前没有任何定时任务。需要设置时说「X分钟后提醒我…」即可"
+                } else {
+                    "你共有 ${tasks.size} 个定时任务：\n" + tasks.mapIndexed { i, t ->
+                        val sched = when (val s = t.schedule) {
+                            is TimerSchedule.FixedTime -> {
+                                String.format(Locale.CHINA, "%02d:%02d", s.hour, s.minute) +
+                                    if (s.repeatDaily) "（每天）" else ""
+                            }
+                            is TimerSchedule.Interval -> "每 ${s.seconds / 60} 分钟"
+                            is TimerSchedule.Countdown -> "倒计时 ${s.seconds / 60} 分钟"
+                        }
+                        "[${i + 1}] ${t.name}｜$sched｜${if (t.running) "运行中" else "已暂停"}"
+                    }.joinToString("\n") + "\n如需取消，告诉我任务名称即可"
+                }
+            }
+
+            "cancel_timer" -> {
+                val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
+                if (args.optBoolean("all", false)) {
+                    val count = app.timerScheduler.tasks.size
+                    app.timerScheduler.stopAll()
+                    app.timerScheduler.tasks.toList().forEach { app.timerScheduler.deleteTask(it.id) }
+                    return if (count > 0) "已取消全部 $count 个定时任务" else "当前没有可取消的定时任务"
+                }
+                val name = args.optString("timerName").trim()
+                if (name.isEmpty()) return "请提供要取消的任务名称（可先用 list_timers 查看）"
+                val tasks = app.timerScheduler.tasks
+                // 名称精确 → 包含（双向）匹配
+                val target = tasks.firstOrNull { it.name == name }
+                    ?: tasks.firstOrNull { it.name.contains(name) || name.contains(it.name) }
+                    ?: return "没有找到名为「$name」的定时任务。当前任务：${
+                        if (tasks.isEmpty()) "（无）" else tasks.joinToString("、") { it.name }
+                    }"
+                app.timerScheduler.stopTask(target.id)
+                app.timerScheduler.deleteTask(target.id)
+                "已取消定时任务「${target.name}」"
+            }
+
+            "get_weather" -> {
+                val city = args.optString("city").trim()
+                val date = args.optString("date", "today").trim()
+                WeatherTools.getWeather(city, date)
+            }
+
+            "calculate" -> {
+                val expr = args.optString("expression").trim()
+                if (expr.isEmpty()) return "请提供要计算的表达式"
+                try {
+                    val value = Calculator.evaluate(expr)
+                    // 整数结果去掉小数尾巴（378*56=21216.0 → 21216）
+                    val pretty = if (value == Math.floor(value) && !value.isInfinite() &&
+                        Math.abs(value) < 1e15
+                    ) value.toLong().toString() else value.toString()
+                    "$expr = $pretty"
+                } catch (e: IllegalArgumentException) {
+                    "无法计算「$expr」：${e.message}"
+                }
+            }
+
+            "search_contacts" -> {
+                val name = args.optString("name").trim()
+                if (name.isEmpty()) return "请提供要查找的联系人姓名"
+                if (androidx.core.content.ContextCompat.checkSelfPermission(
+                        context, android.Manifest.permission.READ_CONTACTS
+                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    return "需要通讯录权限：请打开手机「设置 → 应用 → RokidLab → 权限」，开启「通讯录」后重试"
+                }
+                val hits = PhoneTools.searchContacts(context, name)
+                if (hits.isEmpty()) {
+                    "通讯录中没有找到「$name」"
+                } else {
+                    hits.mapIndexed { i, c -> "[${i + 1}] ${c.name}：${c.number}" }.joinToString("\n")
+                }
+            }
+
+            "call_phone" -> PhoneTools.dialPhone(context, args.optString("contact"))
+
+            "set_phone_alarm" -> PhoneTools.setPhoneAlarm(
+                context,
+                message = args.optString("message", "闹钟"),
+                hour = if (args.has("hour") && !args.isNull("hour")) args.optInt("hour") else null,
+                minute = if (args.has("minute") && !args.isNull("minute")) args.optInt("minute") else null,
+                minutesFromNow = if (args.has("minutesFromNow") && !args.isNull("minutesFromNow")) args.optLong("minutesFromNow") else null,
+            )
+
+            "open_phone_app" -> PhoneTools.openPhoneApp(context, args.optString("appName"))
+
+            "get_phone_status" -> PhoneTools.getPhoneStatus(context)
+
+            "set_phone_volume" -> PhoneTools.setPhoneVolume(context, args.optInt("volume", 50))
+
+            "query_calendar" -> PhoneTools.queryCalendar(context, args.optString("date"))
+
+            "add_calendar_event" -> PhoneTools.addCalendarEvent(
+                context,
+                title = args.optString("title"),
+                date = args.optString("date"),
+                startTime = args.optString("startTime"),
+                durationMinutes = args.optInt("durationMinutes", 60),
+                note = args.optString("note").trim().ifBlank { null },
+            )
 
             else -> throw IllegalArgumentException("未知工具: $name")
         }

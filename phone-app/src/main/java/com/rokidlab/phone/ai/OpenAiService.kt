@@ -4,8 +4,6 @@ import android.util.Log
 import com.rokidlab.phone.util.HttpClient
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * OpenAI 兼容的 AI 服务封装。
@@ -202,11 +200,19 @@ class OpenAiService(
      * （只有 tool_calls），最终回复轮 content 流式增量推送。
      * 在 IO 线程调用（阻塞方法，直至流关闭）。
      *
+     * 断线重连（指数退避）：请求失败时按 [retryBaseDelayMs]×2^attempt 退避后整轮重放，
+     * 重放安全边界 = 「尚未向 UI 推送过任何 content 增量」——
+     *   - 首字前失败：完全安全（用户未看到任何输出）；
+     *   - 工具调用增量下发中途断线（content 仍为空）：工具尚未执行、无副作用，重放安全；
+     *   - content 已部分推送后断线：重放会导致重复输出，不重试、直接抛出（OpenAI 协议无断点续传，
+     *     真正的中途续传需要服务端支持 last-event-id，当前端点不支持）。
+     *
      * @param isCancelled 流式读取期间周期性检查的取消回调（供上层"用户打断"使用）；
      *                    返回 true 时停止读取并断开连接。若服务端暂无数据推送而阻塞在
      *                    readLine，最迟在 [readTimeoutMs] 后超时返回（本地模型首字/模型加载
      *                    可能远慢于远程，调用方对本地端点已调大超时；远程保持 30s 使打断
      *                    让出时间有界）。返回半截数据由调用方依据自己的取消标志丢弃。
+     * @param retryBaseDelayMs 首次重试的退避基数（毫秒），逐次翻倍，上限 4s。
      */
     fun chatTurnStream(
         messages: JSONArray,
@@ -214,15 +220,13 @@ class OpenAiService(
         onDelta: ((String) -> Unit)? = null,
         isCancelled: (() -> Boolean)? = null,
         /**
-         * 首字前失败/超时的重试次数（含首次外的追加次数，默认额外 1 次）。
-         * 远程服务商偶发抖动时可重放一次；本地 Ollama 首字慢（思考模型/首次加载）时
-         * 重试只会让模型重复加载、等待翻倍，调用方应传 1（不重试）并让用户等待首字。
+         * 失败重试总次数（含首次，默认 2）。
+         * 远程服务商偶发抖动时建议 3（配合指数退避）；本地 Ollama 首字慢（思考模型/
+         * 首次加载）时重试只会让模型重复加载、等待翻倍，应传 1（不重试）。
          */
         retryAttempts: Int = 2,
+        retryBaseDelayMs: Long = 500,
     ): ChatTurn {
-        // 首字前（尚无任何内容/tool_calls 增量下发）的网络抖动/本地模型加载超时重试：
-        // 此时用户未看到任何输出，重放安全；一旦已有增量下发则不再重试，避免重复播报。
-        // 注意 retryAttempts=1 时完全不重试（本地端点）。
         var lastError: Exception? = null
         repeat(retryAttempts) { attempt ->
             val accumulator = SseStreamAccumulator(onDelta)
@@ -231,9 +235,27 @@ class OpenAiService(
             } catch (e: Exception) {
                 lastError = e
                 val retryable = attempt < retryAttempts - 1
-                if (retryable && !accumulator.hasStarted()) {
-                    Log.w(TAG, "chatTurnStream attempt ${attempt + 1}/$retryAttempts failed before any output: ${e.message}, retrying")
+                // 重放安全判定：只要还没有任何 content 增量推给 UI，整轮重放无副作用
+                if (retryable && !accumulator.hasEmittedContent()) {
+                    val delay = (retryBaseDelayMs shl attempt).coerceAtMost(4000L)
+                    Log.w(
+                        TAG,
+                        "chatTurnStream attempt ${attempt + 1}/$retryAttempts failed " +
+                            "(no content emitted yet, toolCalls partial=${accumulator.hasStarted()}): " +
+                            "${e.message}, reconnecting in ${delay}ms",
+                    )
+                    if (delay > 0) {
+                        try {
+                            Thread.sleep(delay)
+                        } catch (_: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            throw e
+                        }
+                    }
                 } else {
+                    if (retryable) {
+                        Log.w(TAG, "chatTurnStream failed after partial content emitted, cannot safely replay: ${e.message}")
+                    }
                     throw e
                 }
             }
@@ -281,44 +303,31 @@ class OpenAiService(
             "Content-Type" to "application/json; charset=utf-8",
             "Accept" to "text/event-stream",
         )
-        // 流式需直接持有 HttpURLConnection 以逐行读取 SSE，不复用 HttpClient.postString（一次性 readText）
-        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            doOutput = true
-            connectTimeout = 15000
+        // 流式走 HttpClient.postSse（OkHttp 连接池）：逐行回调读取 SSE，
+        // 回调返回 false 即停止（用户打断 / 累积器完成），连接归还连接池复用
+        HttpClient.postSse(
+            url = endpoint,
+            body = requestBody.toString(),
+            headers = headers,
+            connectTimeout = 15000,
             // 由 readTimeoutMs 控制：本地 Ollama 加载/思考首字慢，已按需调大
-            readTimeout = readTimeoutMs
-            useCaches = false
-            instanceFollowRedirects = true
-            headers.forEach { (k, v) -> setRequestProperty(k, v) }
-        }
-        try {
-            conn.outputStream.use { it.write(requestBody.toString().toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                ?: throw java.io.IOException("HTTP $code: ${conn.responseMessage}")
-            // SSE 行累积与 tool_calls 增量拼接收敛在 SseStreamAccumulator（独立可单测）
-            stream.bufferedReader().use { reader ->
-                while (true) {
-                    // 用户打断：尽快停止读取（readLine 未阻塞时立即生效）
-                    if (isCancelled?.invoke() == true) {
-                        Log.w(TAG, "chatTurnStream: cancelled by user interrupt, stop reading")
-                        break
-                    }
-                    val data = reader.readLine() ?: break
-                    if (!accumulator.onSseLine(data)) break
-                }
+            readTimeout = readTimeoutMs,
+        ) { data ->
+            // 用户打断：尽快停止读取（readLine 未阻塞时立即生效）
+            if (isCancelled?.invoke() == true) {
+                Log.w(TAG, "chatTurnStream: cancelled by user interrupt, stop reading")
+                false
+            } else {
+                accumulator.onSseLine(data)
             }
-            val turn = accumulator.build()
-            Log.i(
-                TAG,
-                "chatTurnStream: toolCalls=${turn.toolCalls.size} content=${turn.content?.take(60)} " +
-                    "finish=${accumulator.finishReason ?: "none"} reasoning=${accumulator.reasoningChars}",
-            )
-            return turn
-        } finally {
-            conn.disconnect()
         }
+        val turn = accumulator.build()
+        Log.i(
+            TAG,
+            "chatTurnStream: toolCalls=${turn.toolCalls.size} content=${turn.content?.take(60)} " +
+                "finish=${accumulator.finishReason ?: "none"} reasoning=${accumulator.reasoningChars}",
+        )
+        return turn
     }
 
     private fun chatTurnOnce(
@@ -479,6 +488,12 @@ internal class SseStreamAccumulator(
     /** 是否已产生任何 content / tool_calls 增量（首字前判定，供上层决定重试是否安全） */
     fun hasStarted(): Boolean =
         content.isNotEmpty() || toolNameParts.isNotEmpty() || toolArgParts.isNotEmpty()
+
+    /**
+     * 是否已向 UI 推送过 content 增量（SSE 断线重连的「重放安全」判定）：
+     * content 为空 = 用户未看到任何输出，整轮重放无副作用（工具调用增量只被累积、尚未执行）。
+     */
+    fun hasEmittedContent(): Boolean = content.isNotEmpty()
 
     /**
      * 处理一行 SSE（如 `data: {...}` 或 `data: [DONE]`）。

@@ -55,6 +55,7 @@ import androidx.lifecycle.lifecycleScope
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -74,8 +75,6 @@ class MainActivity : AppCompatActivity() {
     private enum class InstallStateSource { CACHED, VERIFIED }
 
     private lateinit var cxrL: CxrLHiRokidSession
-    /** 【临时测试】用于 adb broadcast 触发 AI 文字指令测试 */
-    private var aiTextTestReceiver: android.content.BroadcastReceiver? = null
     private lateinit var downloader: ApkDownloader
     private lateinit var iconLoader: IconLoader
     private lateinit var mediaLoader: MediaLoader
@@ -334,25 +333,9 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
-        // 【临时测试】注册广播接收器，用 adb broadcast 触发 AI 文字指令测试
-        // 用法: adb -s <phone> shell am broadcast -a com.rokidlab.phone.TEST_AI_TEXT --es text "你好"
-        aiTextTestReceiver = object : android.content.BroadcastReceiver() {
-            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
-                val text = intent?.getStringExtra("text") ?: return
-                Log.i(TAG, "TEST_AI_TEXT received: \"$text\"")
-                log("TEST_AI_TEXT: \"$text\"")
-                cxrL.sendAiTextMessage(text, onResult = { ok, msg ->
-                    Log.i(TAG, "TEST_AI_TEXT result: ok=$ok, msg=$msg")
-                    runOnUiThread { log("TEST_AI_TEXT result: ok=$ok, msg=$msg") }
-                })
-            }
-        }
-        val aiFilter = android.content.IntentFilter("com.rokidlab.phone.TEST_AI_TEXT")
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(aiTextTestReceiver, aiFilter, android.content.Context.RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(aiTextTestReceiver, aiFilter)
-        }
+        // 【安全修复】已移除 TEST_AI_TEXT 广播接收器：
+        // 原实现用 RECEIVER_EXPORTED 注册，任意 App 可远程触发 AI 发消息（安全漏洞），
+        // 且属于"临时测试"调试残留。AI 链路测试请走应用内对话或 adb 调试通道。
 
         setContent {
             RokidLabTheme {
@@ -590,6 +573,9 @@ class MainActivity : AppCompatActivity() {
         // Android 13+ 请求通知权限（用于定时消息推送到眼镜）
         requestNotificationPermission()
 
+        // AI 工具权限（通讯录/日历，缺失时对应工具会返回引导文本，不阻塞启动）
+        requestAiToolPermissions()
+
         // 检查国产手机兼容性设置（电池优化白名单、自启动权限等）
         checkCompatibilitySettings()
     }
@@ -597,6 +583,29 @@ class MainActivity : AppCompatActivity() {
     // ════════════════════════════════════════════════════════════════
     //  通知权限请求与系统设置
     // ════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════
+    //  AI 工具运行时权限（通讯录/日历，用于 Agent 的联系人查找与日程工具）
+    // ════════════════════════════════════════════════════════════════
+    /** 独立于蓝牙权限 launcher：拒绝只记日志不弹提示（缺失时对应 AI 工具会返回引导文本） */
+    private val aiToolPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+
+    private fun requestAiToolPermissions() {
+        val needed = listOf(
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.READ_CALENDAR,
+            Manifest.permission.WRITE_CALENDAR,
+        ).filter { !hasPermission(it) }
+        if (needed.isEmpty()) return
+        lifecycleScope.launch {
+            // 延后 4s：先让蓝牙/通知等核心权限弹窗走完，避免一次性轰炸用户
+            delay(4000)
+            if (needed.any { !hasPermission(it) }) {
+                aiToolPermissionLauncher.launch(needed.toTypedArray())
+            }
+        }
+    }
+
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (hasPermission(Manifest.permission.POST_NOTIFICATIONS)) return
@@ -843,15 +852,16 @@ class MainActivity : AppCompatActivity() {
         selfUpdateState = selfUpdateState.copy(downloading = true, downloadPercent = 0)
         downloadProgress["brew-self-update"] = 0
         val version = selfUpdateState.latestVersion.ifBlank { "latest" }
-        val job = lifecycleScope.launch {
+        var job: Job? = null
+        job = lifecycleScope.launch {
             runCatching {
                 log(getString(R.string.log_downloading_rokidlab, version))
-                val file = downloader.download(url, "RokidLab-update.apk") { percent ->
+                val file = downloader.download(url, "RokidLab-update.apk", isCancelled = { job?.isActive == false }, onProgress = { percent ->
                     runOnUiThread {
                         downloadProgress["brew-self-update"] = percent
                         selfUpdateState = selfUpdateState.copy(downloadPercent = percent)
                     }
-                }
+                })
                 downloadProgress["brew-self-update"] = 100
                 selfUpdateState = selfUpdateState.copy(downloading = false, downloadPercent = 100)
                 log(getString(R.string.log_downloaded_bytes, file.length()))
@@ -864,10 +874,17 @@ class MainActivity : AppCompatActivity() {
                 downloadProgress.remove("brew-self-update")
                 downloadCancelJobs.remove("brew-self-update")
             }.onFailure { error ->
-                log(getString(R.string.log_update_failed, error.message ?: error.javaClass.simpleName))
-                downloadProgress.remove("brew-self-update")
-                downloadCancelJobs.remove("brew-self-update")
-                selfUpdateState = selfUpdateState.copy(downloading = false)
+                if (error is CancellationException) {
+                    // 用户主动取消：静默清理，不弹错误
+                    downloadProgress.remove("brew-self-update")
+                    downloadCancelJobs.remove("brew-self-update")
+                    selfUpdateState = selfUpdateState.copy(downloading = false)
+                } else {
+                    log(getString(R.string.log_update_failed, error.message ?: error.javaClass.simpleName))
+                    downloadProgress.remove("brew-self-update")
+                    downloadCancelJobs.remove("brew-self-update")
+                    selfUpdateState = selfUpdateState.copy(downloading = false)
+                }
             }
         }
         downloadCancelJobs["brew-self-update"] = job
@@ -876,11 +893,12 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         // 退出时清理日志，避免下次打开看到旧日志
         LogCollector.clear()
-        aiTextTestReceiver?.let { runCatching { unregisterReceiver(it) } }
-        aiTextTestReceiver = null
         if ((application as LabApplication).keepAliveEnabled) {
             // 保活开启：保留 CxrL 蓝牙链路 + 蓝牙 HID 注册，后台能力持续运行。
             // 重开 App 时 onCreate 会对残留旧会话先 cleanup 再建新会话，此处无需断开。
+            // 解除会话对本 Activity 的回调引用（防 Activity 被 Application 单例钉住泄漏），
+            // 后台链路不受影响，UI 回调降级为纯日志。
+            cxrL.detachUiCallbacks()
             Log.i(TAG, "keep-alive enabled: preserving background links on destroy")
         } else {
             // 保活关闭：彻底清理（现状行为）
@@ -1066,7 +1084,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun installArtifact(app: BrewApp, target: String) {
-        if (busy) return
+        val progressKey = "${app.id}:$target"
+        // 同一应用重复点击：给反馈而非静默
+        downloadCancelJobs[progressKey]?.let { existing ->
+            if (existing.isActive) {
+                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.download_already_running, app.name), Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
+        if (busy) {
+            // 全局有其他任务（如自检/推送）：提示等待，不再静默吞掉点击
+            Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.task_in_progress), Toast.LENGTH_SHORT).show()
+            return
+        }
         val artifact = app.artifactFor(target)
         if (artifact == null) {
             Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.no_build_for_target, app.name, target), Toast.LENGTH_SHORT).show()
@@ -1074,17 +1104,21 @@ class MainActivity : AppCompatActivity() {
         }
         if (target == "glasses" && !cxrL.ensureGlassesOperationReady()) return
 
-        val progressKey = "${app.id}:$target"
-        val job = lifecycleScope.launch {
+        var job: Job? = null
+        job = lifecycleScope.launch {
             updateBusy(true)
             downloadProgress[progressKey] = 0
             runCatching {
                 val fileName = "${app.id}-${target}-${app.version}.apk"
                 log(getString(R.string.log_downloading_apk, target, app.name))
-                val file = downloader.download(artifact.url, fileName, artifact.sha256) { progress ->
-                    downloadProgress[progressKey] = progress
-                    if (progress % 25 == 0) log(getString(R.string.log_download_progress, target, progress))
-                }
+                val file = downloader.download(
+                    artifact.url, fileName, artifact.sha256,
+                    isCancelled = { job?.isActive == false },
+                    onProgress = { progress ->
+                        downloadProgress[progressKey] = progress
+                        if (progress % 25 == 0) log(getString(R.string.log_download_progress, target, progress))
+                    },
+                )
                 downloadProgress[progressKey] = 100
                 log(getString(R.string.log_downloaded_kb, file.name, file.length() / 1024))
                 if (target == "glasses") {
@@ -1127,12 +1161,16 @@ class MainActivity : AppCompatActivity() {
                     PhonePackageInstallHelper.requestInstall(this@MainActivity, file, ::log)
                 }
             }.onFailure { error ->
-                log(getString(R.string.log_install_failed, error.message ?: error.javaClass.simpleName))
-                LogCollector.e("Install", getString(R.string.log_install_failed, error.message ?: error.javaClass.simpleName), error)
-                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.install_failed, app.name, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
                 downloadProgress.remove(progressKey)
                 downloadCancelJobs.remove(progressKey)
                 updateBusy(false)
+                if (error is CancellationException) {
+                    // 用户主动取消：静默清理，不弹错误不触发日志导出
+                    return@onFailure
+                }
+                log(getString(R.string.log_install_failed, error.message ?: error.javaClass.simpleName))
+                LogCollector.e("Install", getString(R.string.log_install_failed, error.message ?: error.javaClass.simpleName), error)
+                Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.install_failed, app.name, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
                 // 安装异常时自动弹出错误报告
                 showExportLogDialog()
             }
@@ -1141,7 +1179,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun uninstallArtifact(app: BrewApp, target: String) {
-        if (busy) return
+        if (busy) {
+            Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.task_in_progress), Toast.LENGTH_SHORT).show()
+            return
+        }
         val artifact = app.artifactFor(target)
         val packageName = artifact?.packageName?.takeIf { it.isNotBlank() }
         if (artifact == null || packageName == null) {

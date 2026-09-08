@@ -76,7 +76,9 @@ object AgentSessionManager {
  * 语义（与生产约束一致）：
  *   - 每轮记录 user + assistant 两条消息，assistant 可带工具轨迹 [ChatMessage.toolTrace]
  *   - 10 分钟无活动自动清空（[maybeExpire]）
- *   - 条数上限 12 / 字符上限 6000，超限时把最旧一轮压缩成 system 摘要，收敛性：每轮净减至少 1 条
+ *   - 条数上限 12 / 字符上限 6000，超限时把最旧一轮压缩进**滚动摘要**（单条 system 消息
+ *     累积多轮要点，各轮提取首句关键片段，摘要自身有字符上限、超出丢最旧行），
+ *     收敛性：每轮净减至少 1 条；相较旧版「压缩完即丢弃」保留更多早期上下文。
  */
 internal class AgentSessionHistory(
     private val clock: () -> Long = System::currentTimeMillis,
@@ -90,6 +92,9 @@ internal class AgentSessionHistory(
 
     /** 历史总字符数上限 */
     private val maxChars = 6000
+
+    /** 滚动摘要条数上限 1 条（固定置顶 system 消息）；字符上限独立控制防摘要本身膨胀 */
+    private val digestMaxChars = 800
 
     private val history = mutableListOf<ChatMessage>()
     private var lastActivityMs = 0L
@@ -144,33 +149,63 @@ internal class AgentSessionHistory(
     }
 
     /**
-     * 双重预算裁剪：条数超上限或总字符超上限时丢弃最旧消息。
-     * 丢弃前把最旧一轮（user+assistant）压缩成一条 system 摘要保留要点（各取前 40 字），
-     * 避免纯 FIFO 丢失关键早期信息；摘要本身也是一条消息，后续若仍超预算会继续压缩更早轮。
-     * 已是摘要的最旧消息直接丢弃，防止摘要无限堆积。收敛性：每轮净减至少 1 条。
+     * 双重预算裁剪：条数超上限或总字符超上限时，把最旧一轮压缩进置顶滚动摘要。
+     * 摘要是**单条** system 消息（置顶），累积多轮要点（每轮提取首句关键片段）；
+     * 摘要超出 [digestMaxChars] 时丢最旧行。收敛性：每轮压缩净减 2 条（新增摘要仅首次），
+     * 不会死循环。
      */
     private fun trimLocked() {
         while (history.size > maxMessages || totalCharsLocked() > maxChars) {
             if (history.size <= 2) break
-            when (history[0].role) {
-                "user" -> {
-                    val u = history.removeAt(0)
-                    val a = if (history.isNotEmpty() && history[0].role == "assistant") history.removeAt(0) else null
-                    val summary = ChatMessage(
-                        role = "system",
-                        content = "[更早对话] 用户问\"${u.content.take(40)}\"" +
-                            (a?.let { "，AI答\"${it.content.take(40)}\"" } ?: ""),
-                    )
-                    history.add(0, summary)
-                    onTrim("trim: compressed oldest turn into summary")
-                }
-                // 已是摘要或孤立的 assistant：直接丢弃，避免摘要堆叠/无限循环
+            when {
+                history[0].role == "user" -> compressTurnIntoDigest(startIndex = 0)
+                history[0].role == "system" && history.size > 1 && history[1].role == "user" ->
+                    compressTurnIntoDigest(startIndex = 1)
                 else -> {
+                    // 摘要后紧跟孤立 assistant（异常形态）：直接丢弃防死循环
                     val dropped = history.removeAt(0)
                     onTrim("trim: dropped oldest ${dropped.role} (${dropped.content.length} chars)")
                 }
             }
         }
+    }
+
+    /** 把 [startIndex] 处的 user+assistant 一轮压缩成摘要行，并入置顶滚动摘要 */
+    private fun compressTurnIntoDigest(startIndex: Int) {
+        val u = history.removeAt(startIndex)
+        val a = if (history.size > startIndex && history[startIndex].role == "assistant") {
+            history.removeAt(startIndex)
+        } else null
+        val line = "· 用户问\"${keySnippet(u.content)}\"" +
+            (a?.let { "，AI答\"${keySnippet(it.content)}\"" } ?: "")
+
+        val digestIdx = if (startIndex == 1) {
+            0 // 摘要已在置顶
+        } else {
+            history.add(0, ChatMessage(role = "system", content = "[更早对话摘要]"))
+            0
+        }
+        val digest = history[digestIdx]
+        var lines = digest.content.split('\n').toMutableList()
+        if (lines.size == 1 && lines[0] == "[更早对话摘要]") {
+            lines.add(line)
+        } else {
+            lines.add(line)
+            // 摘要超字符上限：丢最旧的行（保头标题与最新要点）
+            while (lines.joinToString("\n").length > digestMaxChars && lines.size > 2) {
+                lines.removeAt(1)
+            }
+        }
+        history[digestIdx] = digest.copy(content = lines.joinToString("\n"))
+        onTrim("trim: compressed oldest turn into rolling digest")
+    }
+
+    /** 提取关键片段：首个完整句（到首个句读符），截断到 60 字 */
+    private fun keySnippet(text: String): String {
+        val t = text.trim()
+        val cut = t.indexOfFirst { it in "。！？!?；;\n" }
+        val s = if (cut > 0) t.substring(0, cut + 1) else t
+        return if (s.length > 60) s.take(57) + "…" else s
     }
 
     private fun totalCharsLocked() = history.sumOf { it.content.length }

@@ -248,8 +248,15 @@ object LocalOllamaManager {
      * 拉取模型（POST /api/pull，stream=true）。
      * 通过 [onProgress] 回调下载进度：percent < 0 表示仅状态文案（如 pulling manifest）。
      * 成功时回调 status="success"、percent=100 后返回；失败抛异常。
+     * [isCancelled] 返回 true 时立即中止（真实取消：断开连接停止下载，不等整个流跑完）。
+     * [onTotal] 在得知下载总字节数时回调一次（供调用方做磁盘空间预检）。
      */
-    fun pullModel(name: String, onProgress: (status: String, percent: Int) -> Unit) {
+    fun pullModel(
+        name: String,
+        onProgress: (status: String, percent: Int) -> Unit,
+        isCancelled: () -> Boolean = { false },
+        onTotal: (Long) -> Unit = {},
+    ) {
         val conn = (URL("$OLLAMA_BASE/api/pull").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             doOutput = true
@@ -268,13 +275,22 @@ object LocalOllamaManager {
                 throw IOException("HTTP $code: ${err.take(200)}")
             }
             val reader = conn.inputStream.bufferedReader()
+            var totalReported = false
             while (true) {
+                if (isCancelled()) {
+                    // 主动断开连接：Ollama 服务端会中止拉取，部分分片由服务端处理
+                    throw kotlinx.coroutines.CancellationException("pull cancelled")
+                }
                 val line = reader.readLine() ?: break
                 val json = runCatching { JSONObject(line) }.getOrNull() ?: continue
                 val status = json.optString("status")
                 val completed = json.optLong("completed")
                 val total = json.optLong("total")
                 val percent = if (total > 0) ((completed * 100) / total).toInt() else -1
+                if (total > 0 && !totalReported) {
+                    totalReported = true
+                    onTotal(total)
+                }
                 if (status == "success") {
                     onProgress(status, 100)
                     return

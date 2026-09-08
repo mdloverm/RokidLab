@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import kotlin.math.ln
 
 /** 知识库文档信息 */
 data class KbDocInfo(
@@ -14,6 +15,14 @@ data class KbDocInfo(
     val name: String,
     val size: Int,
     val importedAt: Long,
+)
+
+/** 一次检索命中：块文本 + 来源标注（文档名 + 块序号）+ 相关度得分 */
+data class KbHit(
+    val text: String,
+    val docName: String,
+    val chunkIdx: Int,
+    val score: Double,
 )
 
 /**
@@ -27,6 +36,9 @@ object KnowledgeBase {
     const val DB_NAME = "knowledge_base.db"
     const val DB_VERSION = 1
     private const val CHUNK_SIZE = 500
+
+    /** BM25 tf 饱和系数（k1） */
+    private const val BM25_K1 = 1.2
 
     /** 单文档导入大小上限：超过即拒绝，避免大文件全量读入导致 OOM */
     private const val MAX_DOC_BYTES = 20L * 1024 * 1024
@@ -110,21 +122,54 @@ object KnowledgeBase {
     // 检索
     // ═══════════════════════════════════════════════════
 
-    /** 用查询文本检索最相关的知识块（topK 个），按相关度降序 */
-    fun search(context: Context, query: String, topK: Int = 3): List<String> {
+    /**
+     * 用查询文本检索最相关的知识块（topK 个），按相关度降序（兼容旧接口，无来源标注）。
+     * 新代码请用 [searchHits]（带文档名/块序号来源标注 + IDF 混合评分）。
+     */
+    fun search(context: Context, query: String, topK: Int = 3): List<String> =
+        searchHits(context, query, topK).map { it.text }
+
+    /**
+     * 混合检索（词法 + 统计）：一次全表扫描同时计算 BM25 式 IDF 加权得分。
+     *
+     * 相比旧的「命中即 +1、重复再加」平铺计分，IDF 让「只在少数块出现的关键词」权重远高于
+     * 「到处都出现的常见词」，显著提升长文档/多文档下的区分度；tf 项带饱和（k1），
+     * 防止单块反复堆同一个词刷分。返回命中带来源（文档名 + 块序号），供 RAG 注入时标注引用。
+     *
+     * 说明：纯本地、无 embedding 的混合（词法 + 统计）方案；向量召回（bge-small-zh + ONNX）
+     * 作为后续升级路径，与该接口兼容（新增 embed 列后评分项再加余弦相似度即可）。
+     */
+    fun searchHits(context: Context, query: String, topK: Int = 3): List<KbHit> {
         val tokens = tokenize(query)
         if (tokens.isEmpty()) return emptyList()
         val database = db(context)
-        val scored = mutableListOf<Pair<Double, String>>()
-        database.rawQuery("SELECT text FROM chunks", null).use { c ->
+
+        // 单次 JOIN 扫描：块文本 + 文档名 + 块序号，同时统计各查询 token 的文档频率 df
+        data class Row(val text: String, val docName: String, val chunkIdx: Int)
+        val rows = mutableListOf<Row>()
+        val df = HashMap<String, Int>()
+        database.rawQuery(
+            "SELECT c.text, d.name, c.idx FROM chunks c JOIN docs d ON d.id = c.doc_id",
+            null,
+        ).use { c ->
             while (c.moveToNext()) {
-                val text = c.getString(0)
-                val score = scoreText(text, tokens)
-                if (score > 0) scored.add(score to text)
+                val row = Row(c.getString(0), c.getString(1), c.getInt(2))
+                rows.add(row)
+                // 只统计查询 token 的 df（而非全量建立倒排），避免无关分词开销
+                val rowTokens = tokenize(row.text)
+                for (t in tokens) {
+                    if (t in rowTokens) df[t] = (df[t] ?: 0) + 1
+                }
             }
         }
-        scored.sortByDescending { it.first }
-        return scored.take(topK).map { it.second }
+        if (rows.isEmpty()) return emptyList()
+
+        val total = rows.size
+        val scored = rows.mapNotNull { row ->
+            val score = scoreTextHybrid(row.text, tokens, df, total)
+            if (score > 0) KbHit(row.text, row.docName, row.chunkIdx, score) else null
+        }
+        return scored.sortedByDescending { it.score }.take(topK)
     }
 
     // ═══════════════════════════════════════════════════
@@ -215,7 +260,7 @@ object KnowledgeBase {
 
     private fun Char.isChineseChar(): Boolean = this in '\u4e00'..'\u9fff'
 
-    /** 块得分：每个命中的关键词贡献 1 + 出现次数 */
+    /** 块得分（旧平铺计分，保留给潜在调用方）：每个命中的关键词贡献 1 + 出现次数 */
     private fun scoreText(text: String, tokens: Set<String>): Double {
         var score = 0.0
         for (token in tokens) {
@@ -226,6 +271,28 @@ object KnowledgeBase {
                 idx = text.indexOf(token, idx + token.length)
             }
             if (count > 0) score += 1.0 + count
+        }
+        return score
+    }
+
+    /**
+     * BM25 式混合评分：Σ idf(t) × tf·(k1+1)/(tf+k1)。
+     * idf = ln(1 + (N-df+0.5)/(df+0.5))，稀有词（df 小）得分高、常见词得分低；
+     * tf 项 k1 饱和（k1=1.2），重复出现增益递减，防止单块堆词刷分。
+     */
+    private fun scoreTextHybrid(text: String, tokens: Set<String>, df: Map<String, Int>, totalDocs: Int): Double {
+        var score = 0.0
+        for (token in tokens) {
+            val dfv = df[token] ?: continue
+            if (dfv <= 0) continue
+            val idf = ln(1.0 + (totalDocs - dfv + 0.5) / (dfv + 0.5))
+            var tf = 0
+            var idx = text.indexOf(token)
+            while (idx >= 0) {
+                tf++
+                idx = text.indexOf(token, idx + token.length)
+            }
+            if (tf > 0) score += idf * (tf * (BM25_K1 + 1)) / (tf + BM25_K1)
         }
         return score
     }
