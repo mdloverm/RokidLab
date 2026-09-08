@@ -10,9 +10,13 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "ChatStateHolder"
 private const val HISTORY_FILE = "chat_history.json"
+
+/** 聊天历史上限：超过则裁掉最旧的消息，防止长会话把内存/落盘 JSON 撑爆 */
+private const val MAX_HISTORY = 500
 
 /**
  * 聊天消息状态全局持有器。
@@ -32,9 +36,8 @@ internal object ChatStateHolder {
     /** 当前聊天消息列表（Compose 可观察） */
     val messages: SnapshotStateList<ChatMsg> = mutableStateListOf()
 
-    /** 自增消息 id，避免 LazyColumn key 冲突 */
-    @Volatile
-    private var msgIdCounter: Long = 0L
+    /** 自增消息 id，避免 LazyColumn key 冲突（原子操作，防并发重复 key） */
+    private val msgIdCounter = AtomicLong(0L)
 
     @Volatile
     private var appContext: Context? = null
@@ -80,7 +83,7 @@ internal object ChatStateHolder {
                     isStatus = o.optBoolean("isStatus", false),
                 )
                 messages.add(msg)
-                if (msg.id > msgIdCounter) msgIdCounter = msg.id
+                if (msg.id > msgIdCounter.get()) msgIdCounter.set(msg.id)
             }
             Log.i(TAG, "loaded ${messages.size} messages from disk")
         }.onFailure { Log.w(TAG, "load failed: ${it.message}") }
@@ -88,18 +91,26 @@ internal object ChatStateHolder {
 
     /** 添加一条消息并返回它 */
     fun add(isUser: Boolean, content: String, isStatus: Boolean = false): ChatMsg {
-        msgIdCounter += 1
+        val id = msgIdCounter.incrementAndGet()
         val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-        val msg = ChatMsg(msgIdCounter, isUser, content, time, isStatus)
+        val msg = ChatMsg(id, isUser, content, time, isStatus)
         messages.add(msg)
+        trimIfNeeded()
         persist()
         return msg
+    }
+
+    /** 超出历史上限时裁掉最旧的消息 */
+    private fun trimIfNeeded() {
+        while (messages.size > MAX_HISTORY) {
+            messages.removeAt(0)
+        }
     }
 
     /** 清空全部聊天消息 */
     fun clear() {
         messages.clear()
-        msgIdCounter = 0L
+        msgIdCounter.set(0L)
         persist()
     }
 
@@ -111,12 +122,13 @@ internal object ChatStateHolder {
     fun appendAiDelta(delta: String) {
         if (delta.isEmpty()) return
         val last = messages.lastOrNull()
-        if (last != null && !last.isUser) {
+        // 仅追加到"正文" AI 消息：状态气泡（如"正在识别…"）不参与流式合并
+        if (last != null && !last.isUser && !last.isStatus) {
             messages[messages.size - 1] = last.copy(content = last.content + delta)
         } else {
-            msgIdCounter += 1
+            val id = msgIdCounter.incrementAndGet()
             val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-            messages.add(ChatMsg(msgIdCounter, false, delta, time, false))
+            messages.add(ChatMsg(id, false, delta, time, false))
         }
     }
 
@@ -127,8 +139,10 @@ internal object ChatStateHolder {
      */
     fun finalizeLastAi(fullContent: String) {
         for (i in messages.size - 1 downTo 0) {
-            if (!messages[i].isUser) {
-                messages[i] = messages[i].copy(content = fullContent)
+            // 跳过状态气泡，只修正最后一条"正文" AI 消息，防止覆盖拍照流程的进度提示
+            val m = messages[i]
+            if (!m.isUser && !m.isStatus) {
+                messages[i] = m.copy(content = fullContent)
                 persist()
                 return
             }

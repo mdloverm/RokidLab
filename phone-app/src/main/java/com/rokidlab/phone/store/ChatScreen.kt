@@ -161,29 +161,38 @@ internal fun ChatModule(app: LabApplication) {
         // sendAiTextMessage 内含多次 Thread.sleep + join（最长可阻塞 30s），
         // 必须在后台线程执行，否则阻塞主线程导致 ANR/闪退
         scope.launch(Dispatchers.IO) {
-            session.sendAiTextMessage(
-                text,
-                // 保留回复文字在眼镜上的显示：不发 TTS_AudioFinished（避免官方会话
-                // 在长语音播完前被 AudioFinishedHandler→startNewTalk 重置清屏）
-                skipTtsAudioFinished = true,
-                onResult = { success, err ->
-                    // onResult 由会话层 runOnUiThread 回调，已在主线程
+            try {
+                session.sendAiTextMessage(
+                    text,
+                    // 保留回复文字在眼镜上的显示：不发 TTS_AudioFinished（避免官方会话
+                    // 在长语音播完前被 AudioFinishedHandler→startNewTalk 重置清屏）
+                    skipTtsAudioFinished = true,
+                    onResult = { success, err ->
+                        // onResult 由会话层 runOnUiThread 回调，已在主线程
+                        sending = false
+                        // 用户停止/被新请求抢占时 success=false 且 err=null：静默，不显示失败气泡
+                        if (!success && !err.isNullOrBlank()) {
+                            appendMsg(false, ctx.getString(R.string.chat_reply_failed) + ": $err")
+                        }
+                    },
+                    onReply = { reply ->
+                        // 流式 onDelta 已边生成边显示，此处用完整回复修正最后一条 AI 消息并落盘；
+                        // 若流式未触发（如兜底路径）则 finalizeLastAi 内部会新增一条
+                        scope.launch { ChatStateHolder.finalizeLastAi(reply) }
+                    },
+                    onDelta = { delta ->
+                        // 流式增量：边生成边显示（切主线程，SnapshotStateList 写入需 Compose 快照线程）
+                        scope.launch { ChatStateHolder.appendAiDelta(delta) }
+                    },
+                )
+            } catch (e: Exception) {
+                // 异常路径必须复位 sending，否则发送按钮永久卡死
+                Log.e(TAG, "sendAiTextMessage crashed", e)
+                scope.launch {
                     sending = false
-                    // 用户停止/被新请求抢占时 success=false 且 err=null：静默，不显示失败气泡
-                    if (!success && !err.isNullOrBlank()) {
-                        appendMsg(false, ctx.getString(R.string.chat_reply_failed) + ": $err")
-                    }
-                },
-                onReply = { reply ->
-                    // 流式 onDelta 已边生成边显示，此处用完整回复修正最后一条 AI 消息并落盘；
-                    // 若流式未触发（如兜底路径）则 finalizeLastAi 内部会新增一条
-                    scope.launch { ChatStateHolder.finalizeLastAi(reply) }
-                },
-                onDelta = { delta ->
-                    // 流式增量：边生成边显示（切主线程，SnapshotStateList 写入需 Compose 快照线程）
-                    scope.launch { ChatStateHolder.appendAiDelta(delta) }
-                },
-            )
+                    appendMsg(false, ctx.getString(R.string.chat_reply_failed) + ": ${e.message}")
+                }
+            }
         }
     }
 

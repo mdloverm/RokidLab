@@ -323,6 +323,13 @@ class KeyButtonService : Service() {
     companion object {
         private const val TAG = "KeyButtonService"
 
+        /** 短命销毁计数持久化键：服务启动后短时间内反复被销毁时累加 */
+        private const val KEY_SHORT_LIVED_DESTROY_COUNT = "short_lived_destroy_count"
+        /** 判定「短命」的存活时长阈值：低于该值被销毁视为启动即失败 */
+        private const val SHORT_LIVED_THRESHOLD_MS = 60_000L
+        /** 连续短命销毁达此次数后放弃自愈，避免无限重启循环耗尽系统资源 */
+        private const val MAX_SHORT_LIVED_DESTROY = 5
+
         /**
          * 官方 AI 会话是否活跃（true = BridgeActivity 已退让，BtTunnelService 看门狗不得拉起）。
          * 常驻透明 BridgeActivity 会让 AssistServer 把本进程判定为 third_app 场景，官方 AI 会话
@@ -453,8 +460,12 @@ class KeyButtonService : Service() {
     //  Service 生命周期与自愈
     // ──────────────────────────────────────────────
 
+    /** 本实例启动时刻，用于判定「启动后短命被销毁」（自愈重启循环防护） */
+    private var serviceStartMs = 0L
+
     override fun onCreate() {
         super.onCreate()
+        serviceStartMs = System.currentTimeMillis()
         Log.i(TAG, "Service creating")
         startForegroundService()
         // 同时启动常驻透明 Activity 和 Service 接收器（双重保障）
@@ -507,7 +518,31 @@ class KeyButtonService : Service() {
         // 崩溃/异常销毁自愈：延迟检查，若服务未恢复则重新拉起。
         // START_STICKY 在 startRequested=false（服务被 stop）时不生效，需要主动重启。
         // 眼镜 ROM 在 app idle 时可能停服务，且后台 FGS 启动受限，因此多次重试直到成功。
-        retryRestartSelf(0)
+        //
+        // ⚠️ 短命销毁防护：若服务启动后 <60s 就被销毁，说明是「启动即失败」（典型如 bridge
+        // JNI 初始化崩溃），此时反复重启只会形成无限循环、持续空转耗尽电量与系统资源。
+        // 计数必须用 SharedPreferences 持久化——重试计数是方法局部的，每轮 onDestroy 都会
+        // 从 0 重新开始，永远触发不到上限。连续 5 次短命销毁后放弃自愈，等待用户手动拉起。
+        val aliveMs = System.currentTimeMillis() - serviceStartMs
+        val prefs = getSharedPreferences(PREFS_NAME, 0)
+        val shortLivedCount = if (aliveMs < SHORT_LIVED_THRESHOLD_MS) {
+            val next = prefs.getInt(KEY_SHORT_LIVED_DESTROY_COUNT, 0) + 1
+            prefs.edit().putInt(KEY_SHORT_LIVED_DESTROY_COUNT, next).apply()
+            next
+        } else {
+            // 存活超过阈值视为一次正常运行，重新开始计数
+            prefs.edit().putInt(KEY_SHORT_LIVED_DESTROY_COUNT, 0).apply()
+            0
+        }
+        if (shortLivedCount >= MAX_SHORT_LIVED_DESTROY) {
+            Log.e(
+                TAG,
+                "Give up self-healing: destroyed $shortLivedCount times with each alive " +
+                    "<${SHORT_LIVED_THRESHOLD_MS}ms (last ${aliveMs}ms)"
+            )
+        } else {
+            retryRestartSelf(0)
+        }
         super.onDestroy()
     }
 
@@ -659,7 +694,13 @@ class KeyButtonService : Service() {
             val filter = IntentFilter().apply {
                 addAction(Intent.ACTION_SCREEN_ON)
             }
-            registerReceiver(screenOnReceiver, filter)
+            // Android 13+ 动态注册必须显式指定接收标志。此处只监听系统广播
+            // ACTION_SCREEN_ON，无需接收其他应用发来的 Intent，故声明 NOT_EXPORTED。
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(screenOnReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(screenOnReceiver, filter)
+            }
             Log.i(TAG, "Screen-on receiver registered")
         } catch (e: Exception) {
             Log.e(TAG, "registerScreenOnReceiver failed", e)

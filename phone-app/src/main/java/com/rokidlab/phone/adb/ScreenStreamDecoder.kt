@@ -156,8 +156,19 @@ class ScreenStreamDecoder(
         }
     }
 
-    private fun tryInitCodec(data: ByteArray) {
-        try {
+    /** 释放并复位解码器，等待下一帧/配置包重建（错误自愈入口） */
+    private fun recoverCodec() {
+        Log.w(TAG, "recovering decoder codec")
+        try { mediaCodec?.stop() } catch (_: Exception) {}
+        try { mediaCodec?.release() } catch (_: Exception) {}
+        mediaCodec = null
+        codecReady = false
+    }
+
+    private fun tryInitCodec(data: ByteArray): Boolean {
+        // 已有实例先释放，避免半初始化状态残留
+        recoverCodec()
+        return try {
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, videoWidth, videoHeight)
             format.setByteBuffer("csd-0", ByteBuffer.wrap(data))
             Log.i(TAG, "init codec with full data, size=${data.size}")
@@ -167,8 +178,11 @@ class ScreenStreamDecoder(
             mediaCodec = codec
             codecReady = true
             Log.i(TAG, "MediaCodec started: ${videoWidth}x${videoHeight}")
+            true
         } catch (e: Exception) {
             Log.e(TAG, "tryInitCodec: ${e.message}")
+            codecReady = false
+            false
         }
     }
 
@@ -189,7 +203,9 @@ class ScreenStreamDecoder(
                 outIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "feedConfigToCodec: ${e.message}")
+            // 配置包喂失败：标记待重建，下一个包（配置/帧）触发 tryInitCodec 自愈
+            Log.e(TAG, "feedConfigToCodec: ${e.message}, will re-init on next packet")
+            recoverCodec()
         }
     }
 
@@ -210,7 +226,13 @@ class ScreenStreamDecoder(
                 outIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "feedToCodec: ${e.message}")
+            // 解码器进入错误态（configure 变更/码流异常）：用缓存的 SPS/PPS 重建后重喂本帧
+            Log.e(TAG, "feedToCodec: ${e.message}, recovering codec")
+            recoverCodec()
+            val csd = lastConfigData
+            if (csd != null && tryInitCodec(csd)) {
+                runCatching { feedToCodec(data, pts) }
+            }
         }
     }
 

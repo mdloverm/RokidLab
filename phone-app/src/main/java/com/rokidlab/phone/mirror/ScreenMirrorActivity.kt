@@ -83,6 +83,9 @@ class ScreenMirrorActivity : ComponentActivity() {
     private var adbClient by mutableStateOf<AdbScreenMirrorClient?>(null)
     private var streamDecoder: ScreenStreamDecoder? = null
     private var surface: Surface? = null
+    // screencap 降级模式的显示兜底：最新一帧 + 可用 Surface（surface 晚于连接就绪时也能出画面）
+    @Volatile private var fallbackFrame: android.graphics.Bitmap? = null
+    @Volatile private var fallbackSurface: Surface? = null
     private var glassesWidth by mutableIntStateOf(480)
     private var glassesHeight by mutableIntStateOf(640)
     /** 当前连接是否蓝牙隧道线路 */
@@ -132,6 +135,9 @@ class ScreenMirrorActivity : ComponentActivity() {
                             },
                             onSurfaceReady = { s ->
                                 surface = s
+                                // screencap 降级模式：surface 就绪后立即补画最新帧
+                                fallbackSurface = s
+                                drawFallbackFrame()
                                 connectToGlasses(s)
                             }
                         )
@@ -142,6 +148,20 @@ class ScreenMirrorActivity : ComponentActivity() {
     }
 
     private var isConnecting = false
+
+    /** 把 screencap 降级模式的最新一帧绘制到可用 Surface（无解码器路径的显示兜底） */
+    private fun drawFallbackFrame() {
+        val bmp = fallbackFrame ?: return
+        val s = fallbackSurface ?: return
+        runCatching {
+            val canvas = s.lockCanvas(null)
+            try {
+                canvas.drawBitmap(bmp, null, android.graphics.RectF(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat()), null)
+            } finally {
+                s.unlockCanvasAndPost(canvas)
+            }
+        }
+    }
 
     private fun connectToGlasses(surfaceOverride: Surface? = null) {
         if (isConnecting) return
@@ -175,6 +195,17 @@ class ScreenMirrorActivity : ComponentActivity() {
                 }
             }
             val client = AdbScreenMirrorClient(this, targetIp, targetPort)
+            // H264 解码器不可用时的降级帧也走统一的 screencap 显示兜底
+            client.onFallbackFrame = { bitmap ->
+                fallbackFrame = bitmap
+                runOnUiThread {
+                    if (glassesWidth != bitmap.width || glassesHeight != bitmap.height) {
+                        glassesWidth = bitmap.width
+                        glassesHeight = bitmap.height
+                    }
+                }
+                drawFallbackFrame()
+            }
             adbClient = client
             if (isDestroyed) { isConnecting = false; return@Thread }
 
@@ -226,7 +257,16 @@ class ScreenMirrorActivity : ComponentActivity() {
                 // 降级：screencap 原始像素模式
                 client.startStreaming(
                     onFrame = { bitmap ->
-                        runOnUiThread { /* bitmap 被忽略 - TextureView 直接显示 */ }
+                        // screencap 帧直接绘制到 TextureView 的 Surface（连接早于 surface 就绪时，
+                        // 待 surface 到位后由 onSurfaceReady 补画最新帧）
+                        fallbackFrame = bitmap
+                        runOnUiThread {
+                            if (glassesWidth != bitmap.width || glassesHeight != bitmap.height) {
+                                glassesWidth = bitmap.width
+                                glassesHeight = bitmap.height
+                            }
+                        }
+                        drawFallbackFrame()
                     },
                     onStatus = { status ->
                         runOnUiThread {

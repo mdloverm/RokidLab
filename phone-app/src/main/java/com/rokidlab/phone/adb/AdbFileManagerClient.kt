@@ -573,11 +573,14 @@ class AdbFileManagerClient(
     fun copyFile(sourcePath: String, destPath: String): Boolean {
         lock.lock()
         return try {
+            drainStalePackets()
             val sid = localId.getAndIncrement()
-            val cmd = "shell:cp -rf \"$sourcePath\" \"$destPath\"\u0000"
+            // 路径经 shellEscape 防注入；echo $? 回读退出码，杜绝 copy 失败仍报成功（CUT 分支依赖此结果决定是否删源）
+            val cmd = "shell:cp -rf ${shellEscape(sourcePath)} ${shellEscape(destPath)} 2>/dev/null; echo \$?\u0000"
             sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
             var remoteId = 0
+            val allOutput = StringBuilder()
             while (true) {
                 val msg = readPacket()
                 when (msg.command) {
@@ -588,6 +591,7 @@ class AdbFileManagerClient(
                     }
                     CMD_WRTE -> {
                         if (msg.arg1 == sid) {
+                            allOutput.append(String(msg.payload, Charsets.UTF_8))
                             sendPacket(CMD_OKAY, sid, msg.arg0, null)
                         } else {
                             sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
@@ -604,7 +608,15 @@ class AdbFileManagerClient(
                     }
                 }
             }
-            true
+
+            val exitCode = allOutput.toString()
+                .split('\n')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .lastOrNull()
+                ?.toIntOrNull() ?: -1
+            Log.d(TAG, "Copy command exit code: $exitCode, $sourcePath -> $destPath")
+            exitCode == 0
         } catch (e: Exception) {
             Log.e(TAG, "Copy failed: ${e.message}", e)
             false
@@ -616,11 +628,13 @@ class AdbFileManagerClient(
     fun renameFile(oldPath: String, newPath: String): Boolean {
         lock.lock()
         return try {
+            drainStalePackets()
             val sid = localId.getAndIncrement()
-            val cmd = "shell:mv ${shellEscape(oldPath)} ${shellEscape(newPath)}\u0000"
+            val cmd = "shell:mv ${shellEscape(oldPath)} ${shellEscape(newPath)} 2>/dev/null; echo \$?\u0000"
             sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
             var remoteId = 0
+            val allOutput = StringBuilder()
             while (true) {
                 val msg = readPacket()
                 when (msg.command) {
@@ -631,6 +645,7 @@ class AdbFileManagerClient(
                     }
                     CMD_WRTE -> {
                         if (msg.arg1 == sid) {
+                            allOutput.append(String(msg.payload, Charsets.UTF_8))
                             sendPacket(CMD_OKAY, sid, msg.arg0, null)
                         } else {
                             sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
@@ -647,7 +662,15 @@ class AdbFileManagerClient(
                     }
                 }
             }
-            true
+
+            val exitCode = allOutput.toString()
+                .split('\n')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .lastOrNull()
+                ?.toIntOrNull() ?: -1
+            Log.d(TAG, "Rename command exit code: $exitCode, $oldPath -> $newPath")
+            exitCode == 0
         } catch (e: Exception) {
             Log.e(TAG, "Rename failed: ${e.message}", e)
             false
@@ -659,11 +682,13 @@ class AdbFileManagerClient(
     fun createFolder(path: String): Boolean {
         lock.lock()
         return try {
+            drainStalePackets()
             val sid = localId.getAndIncrement()
-            val cmd = "shell:mkdir -p \"$path\"\u0000"
+            val cmd = "shell:mkdir -p ${shellEscape(path)} 2>/dev/null; echo \$?\u0000"
             sendPacket(CMD_OPEN, sid, 0, cmd.toByteArray(Charsets.UTF_8))
 
             var remoteId = 0
+            val allOutput = StringBuilder()
             while (true) {
                 val msg = readPacket()
                 when (msg.command) {
@@ -674,6 +699,7 @@ class AdbFileManagerClient(
                     }
                     CMD_WRTE -> {
                         if (msg.arg1 == sid) {
+                            allOutput.append(String(msg.payload, Charsets.UTF_8))
                             sendPacket(CMD_OKAY, sid, msg.arg0, null)
                         } else {
                             sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
@@ -690,7 +716,15 @@ class AdbFileManagerClient(
                     }
                 }
             }
-            true
+
+            val exitCode = allOutput.toString()
+                .split('\n')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .lastOrNull()
+                ?.toIntOrNull() ?: -1
+            Log.d(TAG, "Create folder exit code: $exitCode, path: $path")
+            exitCode == 0
         } catch (e: Exception) {
             Log.e(TAG, "Create folder failed: ${e.message}", e)
             false

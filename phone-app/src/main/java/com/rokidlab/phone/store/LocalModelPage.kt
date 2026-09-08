@@ -125,6 +125,7 @@ internal fun LocalModelPage(
     var pulling by remember { mutableStateOf(false) }
     var pullStatus by remember { mutableStateOf("") }
     var pullPercent by remember { mutableStateOf(-1) }
+    var pullJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
 
@@ -277,21 +278,36 @@ internal fun LocalModelPage(
         }
     }
 
-    // 拉取模型（流式进度实时回填）
+    // 拉取模型（流式进度实时回填；可取消——取消会真实断开下载连接；得知总大小时预检磁盘）
     fun pull() {
         val name = pullName.trim()
         if (name.isEmpty()) return
         if (pulling) return
-        scope.launch {
+        pullJob = scope.launch {
             pulling = true
             pullStatus = ""
             pullPercent = -1
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    LocalOllamaManager.pullModel(name) { status, percent ->
-                        pullStatus = status
-                        if (percent >= 0) pullPercent = percent
-                    }
+                    LocalOllamaManager.pullModel(
+                        name,
+                        isCancelled = { pullJob?.isActive == false },
+                        onTotal = { total ->
+                            // 磁盘空间预检：模型落在 /data 分区，按应用私有目录所在分区估算
+                            runCatching {
+                                val stat = android.os.StatFs(ctx.filesDir.path)
+                                val free = stat.availableBytes
+                                if (free < total) {
+                                    pullJob?.cancel()
+                                    toast(ctx.getString(R.string.local_model_pull_no_space, total / (1024L * 1024L * 1024L), free / (1024L * 1024L * 1024L)))
+                                }
+                            }
+                        },
+                        onProgress = { status, percent ->
+                            pullStatus = status
+                            if (percent >= 0) pullPercent = percent
+                        },
+                    )
                 }
             }
             pulling = false
@@ -301,10 +317,20 @@ internal fun LocalModelPage(
                 pullPercent = -1
                 checkServer()
             }.onFailure { e ->
-                toast(ctx.getString(R.string.local_model_pull_fail, e.message ?: "error"))
-                pullPercent = -1
+                if (e is kotlinx.coroutines.CancellationException) {
+                    // 用户取消 / 空间不足取消：不弹通用失败提示（取消场景已有专属提示）
+                    pullPercent = -1
+                } else {
+                    toast(ctx.getString(R.string.local_model_pull_fail, e.message ?: "error"))
+                    pullPercent = -1
+                }
             }
         }
+    }
+
+    // 取消拉取：cancel() 会让 pullModel 的 isCancelled 检查立即断开下载
+    fun cancelPull() {
+        pullJob?.cancel()
     }
 
     Dialog(
@@ -666,6 +692,7 @@ internal fun LocalModelPage(
                         percent = pullPercent,
                         status = pullStatus,
                         onPull = { pull() },
+                        onCancel = { cancelPull() },
                         enabled = !pulling,
                     )
                     Spacer(Modifier.height(4.dp))
@@ -896,7 +923,7 @@ private fun <T> ParamChipRow(
     }
 }
 
-/** 拉取模型输入区 + 进度条 */
+/** 拉取模型输入区 + 进度条（拉取中按钮切换为"取消拉取"，真实中止下载） */
 @Composable
 private fun PullSection(
     value: String,
@@ -905,6 +932,7 @@ private fun PullSection(
     percent: Int,
     status: String,
     onPull: () -> Unit,
+    onCancel: () -> Unit,
     enabled: Boolean,
 ) {
     Column(
@@ -934,13 +962,24 @@ private fun PullSection(
                 ),
             )
             Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = onPull,
-                enabled = enabled && value.isNotBlank(),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = BrewChat, contentColor = BrewBg),
-            ) {
-                Text(stringResource(R.string.local_model_pull_start), fontWeight = FontWeight.Bold)
+            if (pulling) {
+                // 拉取中：按钮切换为取消（真实断开下载连接）
+                Button(
+                    onClick = onCancel,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrewBorder, contentColor = BrewTextBright),
+                ) {
+                    Text(stringResource(R.string.local_model_pull_cancel), fontWeight = FontWeight.Bold)
+                }
+            } else {
+                Button(
+                    onClick = onPull,
+                    enabled = enabled && value.isNotBlank(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrewChat, contentColor = BrewBg),
+                ) {
+                    Text(stringResource(R.string.local_model_pull_start), fontWeight = FontWeight.Bold)
+                }
             }
         }
         if (pulling) {

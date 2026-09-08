@@ -229,8 +229,11 @@ object BrewIndex {
     }
 
     fun loadBundled(context: Context): List<BrewApp> {
-        val raw = context.assets.open("apps.json").bufferedReader().use { it.readText() }
-        return parse(raw).apps
+        // 内置注册表损坏（字段缺失等）不再打挂启动：容错解析，坏条目跳过
+        return runCatching {
+            val raw = context.assets.open("apps.json").bufferedReader().use { it.readText() }
+            parse(raw).apps
+        }.getOrDefault(emptyList())
     }
 
     fun loadCached(context: Context): List<BrewApp> {
@@ -312,53 +315,14 @@ object BrewIndex {
         val appsArray = root.getJSONArray("apps")
         val apps = buildList {
             for (i in 0 until appsArray.length()) {
-                val app = appsArray.getJSONObject(i)
-                val artifactsJson = app.getJSONArray("artifacts")
-                val artifacts = buildList {
-                    for (j in 0 until artifactsJson.length()) {
-                        val artifact = artifactsJson.getJSONObject(j)
-                        add(
-                            BrewArtifact(
-                                target = artifact.getString("target"),
-                                url = artifact.getString("url"),
-                                sha256 = artifact.optString("sha256").takeIf { it.isNotBlank() },
-                                sizeBytes = artifact.optLong("sizeBytes").takeIf { it > 0L },
-                                packageName = artifact.optString("packageName").takeIf { it.isNotBlank() },
-                                versionCode = artifact.optLong("versionCode").takeIf { it > 0L },
-                            ),
-                        )
-                    }
+                // 单个投稿条目缺字段/类型错：跳过该条而不是打挂整份列表
+                val app = runCatching { appsArray.getJSONObject(i) }.getOrNull() ?: continue
+                val parsed = runCatching { parseApp(app) }.getOrNull()
+                if (parsed == null) {
+                    android.util.Log.w("BrewIndex", "apps[$i] malformed, skipped")
+                } else {
+                    add(parsed)
                 }
-                val sourceUrl = app.optString("sourceUrl").takeIf { it.isNotBlank() } ?: artifacts.inferredSourceUrl()
-                val publishedAt = app.optString("publishedAt").takeIf { it.isNotBlank() }
-                val newUntil = app.optString("newUntil").takeIf { it.isNotBlank() }
-                val listing = app.listing()
-                add(
-                    BrewApp(
-                        id = app.getString("id"),
-                        name = app.getString("name"),
-                        category = app.getString("category"),
-                        type = app.getString("type"),
-                        version = app.getString("version"),
-                        summary = app.getString("summary"),
-                        description = app.optString("description", app.getString("summary")),
-                        author = app.optString("author").takeIf { it.isNotBlank() } ?: sourceUrl.inferredAuthor(),
-                        sourceUrl = sourceUrl,
-                        iconAsset = app.optString("iconAsset").takeIf { it.isNotBlank() },
-                        iconUrl = app.optString("iconUrl").takeIf { it.isNotBlank() },
-                        screenshotAssets = app.screenshotAssets(),
-                        screenshotUrls = app.screenshotUrls(),
-                        featured = app.optBoolean("featured", false),
-                        featuredRank = app.optionalInt("featuredRank"),
-                        publishedAt = publishedAt,
-                        newUntil = newUntil,
-                        isNew = isNewApp(publishedAt, newUntil),
-                        phoneRequired = app.optBoolean("phoneRequired", false),
-                        artifacts = artifacts,
-                        listing = listing,
-                        releases = app.releases(),
-                    ),
-                )
             }
         }
         return BrewIndexRaw(
@@ -370,6 +334,53 @@ object BrewIndex {
             brewReleaseUrl = root.optString("brewReleaseUrl").takeIf { it.isNotBlank() },
             brewNotes = root.optString("brewNotes").takeIf { it.isNotBlank() },
             brewChanges = root.stringList("brewChanges"),
+        )
+    }
+
+    private fun parseApp(app: JSONObject): BrewApp {
+        val artifactsJson = app.getJSONArray("artifacts")
+        val artifacts = buildList {
+            for (j in 0 until artifactsJson.length()) {
+                val artifact = artifactsJson.getJSONObject(j)
+                add(
+                    BrewArtifact(
+                        target = artifact.getString("target"),
+                        url = artifact.getString("url"),
+                        sha256 = artifact.optString("sha256").takeIf { it.isNotBlank() },
+                        sizeBytes = artifact.optLong("sizeBytes").takeIf { it > 0L },
+                        packageName = artifact.optString("packageName").takeIf { it.isNotBlank() },
+                        versionCode = artifact.optLong("versionCode").takeIf { it > 0L },
+                    ),
+                )
+            }
+        }
+        val sourceUrl = app.optString("sourceUrl").takeIf { it.isNotBlank() } ?: artifacts.inferredSourceUrl()
+        val publishedAt = app.optString("publishedAt").takeIf { it.isNotBlank() }
+        val newUntil = app.optString("newUntil").takeIf { it.isNotBlank() }
+        val listing = app.listing()
+        return BrewApp(
+            id = app.getString("id"),
+            name = app.getString("name"),
+            category = app.getString("category"),
+            type = app.getString("type"),
+            version = app.getString("version"),
+            summary = app.getString("summary"),
+            description = app.optString("description", app.getString("summary")),
+            author = app.optString("author").takeIf { it.isNotBlank() } ?: sourceUrl.inferredAuthor(),
+            sourceUrl = sourceUrl,
+            iconAsset = app.optString("iconAsset").takeIf { it.isNotBlank() },
+            iconUrl = app.optString("iconUrl").takeIf { it.isNotBlank() },
+            screenshotAssets = app.screenshotAssets(),
+            screenshotUrls = app.screenshotUrls(),
+            featured = app.optBoolean("featured", false),
+            featuredRank = app.optionalInt("featuredRank"),
+            publishedAt = publishedAt,
+            newUntil = newUntil,
+            isNew = isNewApp(publishedAt, newUntil),
+            phoneRequired = app.optBoolean("phoneRequired", false),
+            artifacts = artifacts,
+            listing = listing,
+            releases = app.releases(),
         )
     }
 

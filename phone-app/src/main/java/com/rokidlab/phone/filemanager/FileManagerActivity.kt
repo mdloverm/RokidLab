@@ -1197,10 +1197,15 @@ class FileManagerActivity : ComponentActivity() {
                         if (client.copyFile(path, newPath)) successCount++
                         else failedPaths.add(path)
                     } else {
-                        // Move = copy + delete
+                        // Move = copy + delete（仅 copy 确认成功后才删源，防数据丢失）
                         if (client.copyFile(path, newPath)) {
-                            client.deleteFile(path)
-                            successCount++
+                            if (client.deleteFile(path)) {
+                                successCount++
+                            } else {
+                                // copy 成功但删源失败：目标已就位，只提示源未清理
+                                successCount++
+                                LogCollector.w(TAG, "Move: copied but failed to remove source: $path")
+                            }
                         } else {
                             failedPaths.add(path)
                         }

@@ -99,12 +99,17 @@ class ConnectionRouteManager(private val context: Context) {
             val key = "$wifiIp:$wifiPort"
             val now = System.currentTimeMillis()
 
-            // 1. 缓存命中：直接复用上次线路（隧道持续运行，start 幂等）
+            // 1. 缓存命中：直接复用上次线路（隧道持续运行，start 幂等）。
+            //    BT 线路额外校验：缓存生效期间隧道发生过 RFCOMM 建连失败（蓝牙断开），
+            //    缓存立即失效强制重新探测，避免向死隧道继续引流最长 60s。
             routeCache[key]?.let { cached ->
-                if (now - cached.time < ROUTE_CACHE_TTL_MS) {
+                val btDiedAfterCache = cached.route is ConnectionRoute.Bluetooth &&
+                        tunnel.lastConnectFailureAt > cached.time
+                if (now - cached.time < ROUTE_CACHE_TTL_MS && !btDiedAfterCache) {
                     Log.i(TAG, "Route cache hit: ${cached.route}")
                     return@withContext cached.route
                 }
+                Log.i(TAG, "Route cache invalidated (expired=${now - cached.time >= ROUTE_CACHE_TTL_MS}, btFailed=$btDiedAfterCache)")
                 routeCache.remove(key)
             }
 
@@ -263,6 +268,15 @@ class BtTunnelClient(private val context: Context) {
     var isRunning = false
         private set
 
+    /**
+     * 最近一次 RFCOMM 建连失败的时间戳（蓝牙链路断开的信号）。
+     * ConnectionRouteManager 据此让缓存中的 BT 线路立即失效，
+     * 避免蓝牙断线后 60s 内继续向死隧道发请求。
+     */
+    @Volatile
+    var lastConnectFailureAt = 0L
+        private set
+
     /** 每个本地端口一个 ServerSocket */
     private val servers = ConcurrentHashMap<Int, ServerSocket>()
     private val acceptThreads = ConcurrentHashMap<Int, Thread>()
@@ -376,6 +390,8 @@ class BtTunnelClient(private val context: Context) {
             t1.join(TUNNEL_IDLE_TIMEOUT_MS + 5000L)
             t2.join(2000)
         } catch (e: Exception) {
+            // 记录失败时间：路由缓存据此失效（BT 断线后不再向死隧道引流 60s）
+            lastConnectFailureAt = System.currentTimeMillis()
             Log.e(TAG, "Tunnel connection failed: ${e.message}")
         } finally {
             try { tcpSocket.close() } catch (_: Exception) {}

@@ -56,6 +56,13 @@ class AdbScreenMirrorClient(
     @Volatile
     private var videoStreamRemoteId = -1
 
+    /**
+     * H.264 解码器不可用、降级 screencap 模式时的帧回调（UI 侧把它绘制到 TextureView，
+     * 避免降级路径静默黑屏）。使用方在 startH264Streaming 前设置。
+     */
+    @Volatile
+    var onFallbackFrame: ((android.graphics.Bitmap) -> Unit)? = null
+
     companion object {
         private const val TAG = "AdbScreenMirror"
 
@@ -74,6 +81,47 @@ class AdbScreenMirrorClient(
         private const val HEADER_LENGTH = 24
         private const val MAX_STREAM_BUFFER_SIZE = 10 * 1024 * 1024 // 10MB 上限
         private const val MAX_ADB_PAYLOAD = 1024 * 1024 // 1MB：ADB 单个包最大负载，超过视为损坏
+    }
+
+    /**
+     * 空闲超时后的通道活性探测：scrcpy 在画面静止时不发包（正常行为），
+     * 通过开一个新的 shell 流验证 ADB 通道是否仍可用。
+     * 返回 true 表示通道存活（调用方重置空闲计时），false 表示已断、需重连。
+     * 探测期间到达的视频数据照常喂给解码器。
+     */
+    private fun probeStreamAlive(videoSid: Int, decoder: ScreenStreamDecoder?): Boolean {
+        val probeSid = localId.getAndIncrement()
+        return try {
+            sendPacket(CMD_OPEN, probeSid, 0, "shell:echo probe\u0000".toByteArray(Charsets.UTF_8))
+            val deadline = System.currentTimeMillis() + 5_000L
+            while (System.currentTimeMillis() < deadline) {
+                val msg = try {
+                    readPacket()
+                } catch (e: java.net.SocketTimeoutException) {
+                    continue
+                }
+                when (msg.command) {
+                    CMD_OKAY, CMD_WRTE, CMD_CLSE -> {
+                        if (msg.arg1 == probeSid) {
+                            if (msg.command == CMD_WRTE) sendPacket(CMD_OKAY, probeSid, msg.arg0, null)
+                            sendPacket(CMD_CLSE, probeSid, msg.arg0, null)
+                            return true
+                        }
+                        if (msg.command == CMD_WRTE) {
+                            sendPacket(CMD_OKAY, msg.arg1, msg.arg0, null)
+                            if (msg.arg1 == videoSid) {
+                                decoder?.feedData(msg.payload)
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            false
+        } catch (e: Exception) {
+            Log.w(TAG, "probeStreamAlive failed: ${e.message}")
+            false
+        }
     }
 
     fun connect(onStatus: (String) -> Unit): Boolean {
@@ -187,7 +235,7 @@ class AdbScreenMirrorClient(
     ) {
         if (decoder == null) {
             Log.w(TAG, "Decoder not ready, falling back to screencap")
-            startStreaming(onFrame = {}, onStatus = onStatus)
+            startStreaming(onFrame = { onFallbackFrame?.invoke(it) }, onStatus = onStatus)
             return
         }
 
@@ -468,7 +516,12 @@ class AdbScreenMirrorClient(
 
                         // 检查空闲超时
                         if (System.currentTimeMillis() - lastDataTime > idleTimeout) {
-                            Log.w(TAG, "stream idle timeout")
+                            // scrcpy 静止画面不发帧属正常：先探测 ADB 通道是否存活，活着就不重连
+                            if (probeStreamAlive(streamId, decoder)) {
+                                lastDataTime = System.currentTimeMillis()
+                                continue
+                            }
+                            Log.w(TAG, "stream idle timeout (probe failed)")
                             break
                         }
                     }
