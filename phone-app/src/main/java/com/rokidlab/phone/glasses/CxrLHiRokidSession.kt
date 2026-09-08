@@ -47,10 +47,10 @@ import org.json.JSONObject
 import kotlinx.coroutines.runBlocking
 
 class CxrLHiRokidSession(
-    private val activity: AppCompatActivity,
-    private val onStatus: (String) -> Unit,
-    private val onBusyChanged: (Boolean) -> Unit,
-    private val onConnectionChanged: (CxrConnectionState) -> Unit,
+    activity: AppCompatActivity,
+    private var onStatus: (String) -> Unit,
+    private var onBusyChanged: (Boolean) -> Unit,
+    private var onConnectionChanged: (CxrConnectionState) -> Unit,
     initialHostApp: RokidHostApp = RokidHostApp.DEFAULT,
     /** 用于启动授权 Activity 的现代 ActivityResultLauncher，替代已废弃的 startActivityForResult */
     private val authLauncher: ((Intent) -> Unit)? = null,
@@ -58,6 +58,27 @@ class CxrLHiRokidSession(
      *  配合保活前台服务，Activity 退后台/销毁后语音链路仍持续运行。 */
     private val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
+    // ── Activity 泄漏防护 ──
+    // 本会话由 LabApplication（应用级单例）持有，若强引用 Activity，
+    // 保活模式下 Activity 销毁后仍被单例钉住无法回收（泄漏整棵 View 树）。
+    // 因此：仅持 application 级 Context + Activity 弱引用；
+    // 确需 Activity 的场景（授权页跳转/销毁检查）走 activityRef。
+    private val appContext: android.content.Context = activity.applicationContext
+    private val activityRef = java.lang.ref.WeakReference(activity)
+    /** 主线程调度：替代 activity.runOnUiThread（Activity 回收后仍可用） */
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * 保活模式下 Activity 销毁时调用：解除回调对 Activity 方法引用的强引用。
+     * 后台链路（AI/ASR/轮询/投屏）不受影响继续运行，
+     * UI 回调降级为纯日志，下次打开 App 会重建会话恢复 UI。
+     */
+    fun detachUiCallbacks() {
+        onStatus = { msg -> LogCollector.i(TAG, msg) }
+        onBusyChanged = { }
+        onConnectionChanged = { }
+        Log.i(TAG, "UI callbacks detached (keep-alive background mode)")
+    }
     companion object {
         private const val TAG = "CxrLHiRokidSession"
         private const val PREFS_NAME = "cxr_l_auth"
@@ -76,41 +97,9 @@ class CxrLHiRokidSession(
          * 眼镜端可回复订阅返回 ASR 文字。请求-响应机制可绕过 AI App 对未知上行指令的过滤。
          */
         private const val AI_ASR_POLL_CMD = "rokidlab_ai_asr_poll"
-        /** AI 文字轮询间隔：主通道为 RFCOMM 推送（毫秒级），文件轮询仅作推送断开时的兜底。
-         *  蓝牙隧道（RFCOMM）仅支持单串行连接，高频打隧道会令 5556 等本地端口接收积压溢出被拒，
-         *  因此推送通道健康时跳过轮询（见 startAiAsrBridgePolling），断开时才以兜底间隔读取。 */
-        private const val AI_ASR_POLL_INTERVAL_MS = 5000L
-        /** 隧道异常退避上限：轮询连接失败时指数退避，避免推送断开期间持续打隧道导致 5556 报错 */
-        private const val AI_ASR_BACKOFF_MAX_MS = 30_000L
-        /** 下行存活探测周期：连接存活期间每 60s 下发一条 ping（AiChannel.TOPIC_PING）。
-         *  眼镜端 RokidLink 断线重连后 cxr-service 分发路由可能 stale（订阅返回 0 但实际不投递，
-         *  ai_config/tts/show_main 全部静默丢失，仅进程重启可恢复）——RokidLink 以「重连后
-         *  150s 内是否收到过任意下行（含本 ping）」判定路由失效并自杀重启。 */
-        private const val DOWNLINK_PING_INTERVAL_MS = 60_000L
-        /** ASR 文字文件通道：眼镜端把 ASR_TEXT 追加写入该文件，手机端轮询 tail 读取。
-         *  logcat 缓冲会被眼镜高频系统日志数秒内冲掉，文件通道保证可靠读到 */
-        private const val GLASSES_ASR_FILE = "/sdcard/Android/data/com.rokidlab.rokidlink/files/ai_asr.log"
-        private const val KEY_LAST_ASR_TS = "ai_asr_last_ts"
 
-        /** 眼镜端「双击退出对话窗口」时经 RFCOMM 推送通道上行到手机的音乐停止标记 */
-        private const val MUSIC_STOP_MARKER = "__LAB_MUSIC_STOP__"
 
-        /**
-         * 眼镜端「用户关闭助手/退出对话」时经 RFCOMM 推送通道上行到手机的中止标记：
-         * 手机收到后停止音乐、下发 tts_stop 停眼镜端播报，并取消正在运行的 Lab 模型请求
-         * （bump aiGenSeq 让 deepSeekThread 在检查点自弃），避免退出后模型继续生成、
-         * 跑完又下行 tts_play 造成"关了助手语音还复活"。
-         */
-        private const val ABORT_AI_MARKER = "__LAB_ABORT_AI__"
 
-        /**
-         * 眼镜端「按键拍照答题」控制指令：经 RFCOMM 推送通道（AsrPushServer）上行，
-         * 独立于 AI App 网关（custom cmd 的 rokidlab_photo_ask 可能被网关过滤收不到），
-         * 且与 Sys_App_Resume_Change 不同——仅按键才发送，可严格区分「拍照意图」。
-         */
-        private const val PHOTO_ASK_MARKER = "__LAB_PHOTO_ASK__"
-        /** ASR 识别完成信号（眼镜端 AsrPushServer.CTRL_ASR_READY，经 RFCOMM 通道推送） */
-        private const val ASR_READY_MARKER = "__LAB_ASR_READY__"
 
         /** OpenAI 兼容 AI 配置存储 */
         private const val AI_PREFS = "chat_prefs"
@@ -156,13 +145,6 @@ class CxrLHiRokidSession(
     /** 防止超时与 operation.onReady 回调竞态 */
     private var operationCompleted = false
     private var timeoutJob: Job? = null
-    /** AI 文字轮询任务（连接后定期拉取眼镜端 ASR 文字，推送通道不可用时的兜底） */
-    private var aiAsrPollJob: Job? = null
-    /** 下行存活探测任务：连接存活期间每 60s 下发 ping（AiChannel.TOPIC_PING），
-     *  供眼镜端 RokidLink 判定 cxr-service 分发路由健康（驱动断线重连后的自愈重启） */
-    private var downlinkPingJob: Job? = null
-    /** ASR 文字推送客户端（第二 RFCOMM 通道长连接，实时接收眼镜端推送） */
-    private var aiAsrPushClient: AsrPushClient? = null
     private var aiConfigPushJob: Job? = null
     /** 「拍照问 AI」图片回调超时兜底（takePhoto 成功但图片回调永不到达时复位状态） */
     private var photoRequestTimeoutJob: Job? = null
@@ -189,6 +171,21 @@ class CxrLHiRokidSession(
      */
     private val aiCmdLock = Any()
 
+    /** ASR 桥接协调器（双通道接收/去重/控制标记/下行 ping，从本类拆出，职责见其文档） */
+    private val asrBridge = AsrBridgeCoordinator(
+        appContext = appContext,
+        appScope = appScope,
+        linkProvider = { cxrLink },
+        linkAlive = { cxrlConnected },
+        cmdLock = aiCmdLock,
+        onAsrText = { text -> dispatchGlassesAsrText(text) },
+        onAbortAi = {
+            stopTtsOnGlass()
+            abortCurrentAi()
+        },
+        onPhotoAsk = { startPhotoAsk() },
+    )
+
     /**
      * 手机端 NetProxy 应答器：眼镜端 Jsai 下载 .aix（installAiuiAgent）时，
      * 眼镜经 BLE 代理把 HTTP 流量发到手机，本中继在手机侧执行真实 socket 收发后
@@ -205,38 +202,36 @@ class CxrLHiRokidSession(
     @Volatile
     private var aiGenSeq = 0L
 
-    /** 最近一次眼镜 ASR 文字及时间（双通道去重：push 与轮询/WiFi 上行可能同时收到同一段文字） */
-    @Volatile
-    private var lastAsrText = ""
-    @Volatile
-    private var lastAsrTextAt = 0L
-
-    /** 「拍照问 AI」流程进行中标志（防止按键/按钮重复触发） */
-    @Volatile
-    private var photoAskInProgress = false
-
-    /**
-     * 「拍照问 AI」默认 UI 回调（乐奇聊天界面注册）。
-     * 镜腿按键 / 自定义指令触发的 startPhotoAsk() 不带显式回调，使用此处注册的回调
-     * 在聊天界面展示流程气泡、识别文字与最终答案。
-     */
-    @Volatile
-    private var photoAskStageCb: (Int) -> Unit = {}
-    @Volatile
-    private var photoAskTextCb: (String) -> Unit = {}
-    @Volatile
-    private var photoAskReplyCb: (String) -> Unit = {}
+    /** 「拍照问 AI」流程编排器（拍照→OCR→RAG→AI 答题，从本类拆出） */
+    private val photoQuiz = PhotoQuizFlow(
+        appContext = appContext,
+        appScope = appScope,
+        mainHandler = mainHandler,
+        takePhoto = { w, h, q, onPhoto, onError -> takeGlassesPhoto(w, h, q, onPhoto, onError) },
+        sendAiQuestion = { question, contextText, instruction, onResult, onReply ->
+            sendAiTextMessage(
+                question,
+                contextText = contextText,
+                // 答题完成后保留眼镜端回复显示：skipTtsAudioFinished=true 不发送
+                // TTS_AudioFinished（该消息会触发官方会话 startNewTalk 重置，清掉刚显示的答案）
+                skipTtsAudioFinished = true,
+                // 注入设置页填写的答题指令（如「只显示答案」「给出解题步骤」）
+                instruction = instruction,
+                // 一次性问答且带答题指令，不记录到 Agent 会话记忆（避免污染闲聊上下文）
+                recordHistory = false,
+                onResult = onResult,
+                onReply = onReply,
+            )
+        },
+        quizInstructionProvider = { getAiConfig().quizInstruction },
+    )
 
     /** 注册「拍照问 AI」流程的 UI 回调（乐奇聊天界面进入时调用，按键触发时复用展示） */
     fun setPhotoAskUiCallbacks(
         onStage: (Int) -> Unit,
         onText: (String) -> Unit,
         onReply: (String) -> Unit,
-    ) {
-        photoAskStageCb = onStage
-        photoAskTextCb = onText
-        photoAskReplyCb = onReply
-    }
+    ) = photoQuiz.setUiCallbacks(onStage, onText, onReply)
 
     /** 眼镜端唤醒词对话（语音 ASR）的 UI 回调：同步显示到乐奇聊天窗口 */
     @Volatile
@@ -291,7 +286,7 @@ class CxrLHiRokidSession(
      */
     fun setAiConfig(config: AiConfig) {
         runCatching {
-            activity.getSharedPreferences(AI_PREFS, 0).edit()
+            appContext.getSharedPreferences(AI_PREFS, 0).edit()
                 .putString(KEY_AI_BASE_URL, config.baseUrl)
                 .putString(KEY_AI_API_KEY, config.apiKey)
                 .putString(KEY_AI_MODEL, config.model)
@@ -307,16 +302,16 @@ class CxrLHiRokidSession(
 
     /** 是否已启用本地 Ollama 作为眼镜对话模型 */
     fun isLocalChatActive(): Boolean =
-        activity.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_AI_USE_LOCAL, false)
+        appContext.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_AI_USE_LOCAL, false)
 
     /** 当前选择的本地对话模型名（未启用/未选择返回空串） */
     fun localChatModel(): String =
-        activity.getSharedPreferences(AI_PREFS, 0).getString(KEY_AI_LOCAL_MODEL, "").orEmpty()
+        appContext.getSharedPreferences(AI_PREFS, 0).getString(KEY_AI_LOCAL_MODEL, "").orEmpty()
 
     /** 本地对话请求的自定义 JSON 参数（原始字符串，空串=未配置）。
      *  旧版 ai_local_think 布尔开关首次读取时自动迁移为 {"think": <旧值>} 并清除旧键 */
     fun localChatParams(): String {
-        val prefs = activity.getSharedPreferences(AI_PREFS, 0)
+        val prefs = appContext.getSharedPreferences(AI_PREFS, 0)
         var raw = prefs.getString(KEY_AI_LOCAL_PARAMS, null)
         if (raw.isNullOrBlank() && prefs.contains(KEY_AI_LOCAL_THINK_LEGACY)) {
             raw = runCatching {
@@ -331,7 +326,7 @@ class CxrLHiRokidSession(
 
     /** 保存本地对话请求的自定义 JSON 参数（空串=清除；调用方负责校验 JSON 合法性） */
     fun setLocalChatParams(json: String) {
-        activity.getSharedPreferences(AI_PREFS, 0).edit()
+        appContext.getSharedPreferences(AI_PREFS, 0).edit()
             .putString(KEY_AI_LOCAL_PARAMS, json).apply()
     }
 
@@ -353,7 +348,7 @@ class CxrLHiRokidSession(
      * 不叠加本地开关——即使当前在本地模型模式，也返回用户最后保存的在线服务配置。
      */
     fun getOnlineAiConfig(): AiConfig {
-        val prefs = activity.getSharedPreferences(AI_PREFS, 0)
+        val prefs = appContext.getSharedPreferences(AI_PREFS, 0)
         val baseUrl = prefs.getString(KEY_AI_BASE_URL, "").orEmpty().ifBlank { "https://api.deepseek.com" }
         val apiKey = prefs.getString(KEY_AI_API_KEY, "").orEmpty()
         val model = prefs.getString(KEY_AI_MODEL, "").orEmpty().ifBlank { "deepseek-chat" }
@@ -372,7 +367,7 @@ class CxrLHiRokidSession(
         val name = modelName.trim()
         if (name.isEmpty()) return
         runCatching {
-            activity.getSharedPreferences(AI_PREFS, 0).edit()
+            appContext.getSharedPreferences(AI_PREFS, 0).edit()
                 .putBoolean(KEY_AI_USE_LOCAL, true)
                 .putString(KEY_AI_LOCAL_MODEL, name)
                 .apply()
@@ -392,7 +387,7 @@ class CxrLHiRokidSession(
     /** 仅保存拍照答题指令（不切换对话来源；本地模型模式下点「保存」时用） */
     fun setQuizInstructionOnly(text: String) {
         runCatching {
-            activity.getSharedPreferences(AI_PREFS, 0).edit()
+            appContext.getSharedPreferences(AI_PREFS, 0).edit()
                 .putString(KEY_QUIZ_INSTRUCTION, text.trim())
                 .apply()
         }
@@ -402,7 +397,7 @@ class CxrLHiRokidSession(
     fun backfillOnlineApiKey(key: String) {
         if (key.isBlank()) return
         runCatching {
-            activity.getSharedPreferences(AI_PREFS, 0).edit()
+            appContext.getSharedPreferences(AI_PREFS, 0).edit()
                 .putString(KEY_AI_API_KEY, key)
                 .apply()
         }
@@ -411,12 +406,12 @@ class CxrLHiRokidSession(
 
     /** 在线模型长思考是否开启（默认关闭：思考吞输出预算导致工具调用空轮，已实测） */
     fun isThinkingEnabled(): Boolean =
-        activity.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_AI_THINKING, false)
+        appContext.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_AI_THINKING, false)
 
     /** 持久化在线模型长思考开关（全局生效：眼镜语音与手机聊天共用同一在线槽位） */
     fun setThinkingEnabled(enabled: Boolean) {
         runCatching {
-            activity.getSharedPreferences(AI_PREFS, 0).edit()
+            appContext.getSharedPreferences(AI_PREFS, 0).edit()
                 .putBoolean(KEY_AI_THINKING, enabled)
                 .apply()
         }
@@ -457,7 +452,7 @@ class CxrLHiRokidSession(
      * 本地模型开启且已选模型 → 指向本机 Ollama；否则返回在线槽位配置。
      */
     fun getAiConfig(): AiConfig {
-        val prefs = activity.getSharedPreferences(AI_PREFS, 0)
+        val prefs = appContext.getSharedPreferences(AI_PREFS, 0)
         val quizInstruction = prefs.getString(KEY_QUIZ_INSTRUCTION, "").orEmpty()
         if (prefs.getBoolean(KEY_AI_USE_LOCAL, false)) {
             val localModel = prefs.getString(KEY_AI_LOCAL_MODEL, "").orEmpty()
@@ -546,301 +541,43 @@ class CxrLHiRokidSession(
         stopTtsOnGlass()
     }
 
-    /**
-     * 在眼镜上打开一个 AIUI agent（.aix 智能体应用），如「我是黑客」。
-     *
-     * 协议（逆向自 AssistServer，真机 19:37 日志验证成功打开）：
-     *  - CXR 通道 "Ai"，caps[0] = "Ai_RenderPayload"（AIJSUIHandler 分派键），
-     *    caps[1] = 双层 JSON 字符串：外层 {"type":"jsui","jsui":"<内层 JSON 字符串>"}，
-     *    内层含 agentId / nativeVersion / tools（页面入口描述）。AssistServer 收到后
-     *    ingress 到 AiuiSystem，AgentResolver 按 agentId 查 PACKAGE_INDEX（须已安装）
-     *    命中即渲染该 agent 页面。无发送者鉴权，CXR 会话下行即可触发。
-     *
-     * 已知内置 agent 参考：
-     *  - 我是黑客：agentId=5aac922daa854dcd9ae77d9556c764f2，nativeVersion=0.0.74
-     *
-     * @param agentId 已安装 agent 的 UUID（AgentStore PACKAGE_INDEX 主键）
-     * @param agentName 展示名（描述文本用，非索引匹配依据）
-     * @param nativeVersion agent 包登记的 native 版本（需与安装记录一致）
-     * @param pageName agent 页面入口（默认 pages/index/index）
-     * @return 发送结果码（0=成功，非 0=失败）
-     */
+    /** AIUI 微前端控制器（AgentStore/直启/自托管宿主全链路，从本类拆出） */
+    private val aiui = AiuiFrontendController(
+        appContext = appContext,
+        appScope = appScope,
+        routeManager = (appContext as LabApplication).routeManager,
+        linkProvider = { cxrLink },
+        cmdLock = aiCmdLock,
+        rawSendCmd = { link, cmd, caps -> rawSendCustomCmd(link, cmd, caps) },
+        adbClientProvider = { getAdbShellClient() },
+    )
+
+    /** 在眼镜上打开一个 AIUI agent（.aix），协议与参数见 AiuiFrontendController */
     fun openAiuiAgent(
         agentId: String,
         agentName: String,
         nativeVersion: String = "0.0.74",
         pageName: String = "pages/index/index",
-    ): Int {
-        val link = cxrLink ?: return -2
-        return try {
-            // 内层 jsui 描述（tools 的 function.name 即 .aix 内的页面入口路径）
-            val layout = JSONObject().put("width", 480).put("height", 168)
-            val funcParams = JSONObject()
-                .put("type", "object")
-                .put("properties", JSONObject())
-                .put("required", JSONArray())
-            val func = JSONObject()
-                .put("name", pageName)
-                .put("description", agentName)
-                .put("parameters", funcParams)
-            val tool = JSONObject()
-                .put("type", "function")
-                .put("target", "_current")
-                .put("layout", layout)
-                .put("function", func)
-                .put("ink_version", ">=0.14.0")
-            val inner = JSONObject()
-                .put("agentId", agentId)
-                .put("nativeVersion", nativeVersion)
-                .put("tools", JSONArray().put(tool))
-            // 外层包装：jsui 字段是内层 JSON 的字符串（与官方下行载荷一致）
-            val payload = JSONObject()
-                .put("type", "jsui")
-                .put("jsui", inner.toString())
+    ): Int = aiui.openAiuiAgent(agentId, agentName, nativeVersion, pageName)
 
-            val caps = Caps()
-            caps.write("Ai_RenderPayload")
-            caps.write(payload.toString())
-            val result = synchronized(aiCmdLock) {
-                link.sendCustomCmd("Ai", caps)
-            }
-            Log.i(TAG, "openAiuiAgent(agentId=$agentId) sendCustomCmd(Ai/Ai_RenderPayload) -> $result")
-            result ?: -3
-        } catch (e: Exception) {
-            Log.e(TAG, "openAiuiAgent(agentId=$agentId) failed", e)
-            -1
-        }
-    }
+    /** 直启眼镜 cxr 目录已存在的 .aix（Sys_AIUI_Start） */
+    fun startAiuiPackage(packageName: String): Int = aiui.startAiuiPackage(packageName)
 
-    /**
-     * 直启眼镜上已存在于 cxr 目录的 .aix（Sys_AIUI_Start，不经过 AgentStore/目录同步）。
-     *
-     * 协议（逆向自 AssistServer SysCmdHelper + AiuiPackageManager，真机验证）：
-     *  - CXR 通道 "Sys"，caps[0] = "Sys_AIUI_Start"（SysCmdHelper received 分派键，取 caps[0]），
-     *    caps[1] = packageName（.aix 文件名去 .aix 后缀）。AssistServer 收到后调
-     *    AiuiPackageManager.startAiui(context, packageName)：在 device-protected
-     *    filesDir/aiui/package/cxr/<packageName>.aix 查找文件，存在则
-     *    AiuiActivity.launch(context, 文件路径) 直接渲染该 .aix（不入 AgentStore、
-     *    不被 syncAgentList purge、无需网络下载）。
-     *
-     * .aix 落盘通道（开发者工具）：启动眼镜 WebServerService（广播
-     * com.rokid.glass.er.webserver.command, extra cmd=running_start）后
-     * POST multipart http://127.0.0.1:8848/server/upload 字段 upfile=<pkg>.aix，
-     * 服务端以原名存入上述 cxr 目录（>5 个自动删最旧）。
-     *
-     * @param packageName .aix 文件名（不含 .aix），须与上传到 cxr 目录的文件一致
-     * @return 发送结果码（0=成功下发，非 0=失败；不代表渲染成功）
-     */
-    fun startAiuiPackage(packageName: String): Int {
-        val link = cxrLink ?: return -2
-        return try {
-            val caps = Caps()
-            caps.write("Sys_AIUI_Start")
-            caps.write(packageName)
-            val result = synchronized(aiCmdLock) { rawSendCustomCmd(link, "Sys", caps) }
-            Log.i(TAG, "startAiuiPackage(packageName=$packageName) rawSendCustomCmd(Sys/Sys_AIUI_Start) -> $result")
-            result
-        } catch (e: Exception) {
-            Log.e(TAG, "startAiuiPackage(packageName=$packageName) failed", e)
-            -1
-        }
-    }
+    /** 关闭眼镜上正在渲染的 .aix（Sys_AIUI_Stop） */
+    fun stopAiuiPackage(packageName: String): Int = aiui.stopAiuiPackage(packageName)
 
-    /**
-     * 关闭眼镜上正在渲染的 .aix（Sys_AIUI_Stop）。
-     *
-     * 协议（逆向自 AssistServer SysCmdHelper + AiuiPackageManager）：CXR 通道 "Sys"，
-     * caps[0] = "Sys_AIUI_Stop"，caps[1] = packageName。眼镜端比对当前正在运行的
-     * AIUI 包，若一致则 AiuiActivity.finishIfRunning() 关闭渲染（不删除 cxr 目录文件）。
-     *
-     * @param packageName 要关闭的包名（.aix 文件名去 .aix），通常传正在渲染的那个
-     * @return 发送结果码（0=成功下发；不代表已关闭，需眼镜日志/画面确认）
-     */
-    fun stopAiuiPackage(packageName: String): Int {
-        val link = cxrLink ?: return -2
-        return try {
-            val caps = Caps()
-            caps.write("Sys_AIUI_Stop")
-            caps.write(packageName)
-            val result = synchronized(aiCmdLock) { rawSendCustomCmd(link, "Sys", caps) }
-            Log.i(TAG, "stopAiuiPackage(packageName=$packageName) rawSendCustomCmd(Sys/Sys_AIUI_Stop) -> $result")
-            result
-        } catch (e: Exception) {
-            Log.e(TAG, "stopAiuiPackage(packageName=$packageName) failed", e)
-            -1
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────
-    //  AIUI 自托管宿主（RokidLink Web 宿主链路：推 .aix → 7658 端口 → AiuiLinkActivity）
-    // ─────────────────────────────────────────────────────────────
-
-    /** 宿主控制通道名（双端同源，勿改） */
-    private val AIUI_HOST_TOPIC = "rokidlab_aiui_host"
-
-    /** 打开宿主渲染本地已推送的 .aix（fileName 不含 .aix 亦可） */
-    fun openAiuiHost(fileName: String? = null): Int = sendAiuiHostCmd("open", fileName)
+    /** 打开自托管宿主渲染本地已推送的 .aix */
+    fun openAiuiHost(fileName: String? = null): Int = aiui.openAiuiHost(fileName)
 
     /** 关闭正在渲染的宿主 */
-    fun closeAiuiHost(): Int = sendAiuiHostCmd("close", null)
+    fun closeAiuiHost(): Int = aiui.closeAiuiHost()
 
-    /** 以 onMessage 协议向宿主页面注入消息（伪交互补充通道） */
-    fun sendAiuiHostMessage(json: String): Int = sendAiuiHostCmd("msg", json)
+    /** 以 onMessage 协议向宿主页面注入消息 */
+    fun sendAiuiHostMessage(json: String): Int = aiui.sendAiuiHostMessage(json)
 
-    private fun sendAiuiHostCmd(cmd: String, arg: String?): Int {
-        val link = cxrLink ?: return -2
-        return try {
-            val caps = Caps()
-            caps.write(cmd)
-            if (arg != null) caps.write(arg)
-            val result = synchronized(aiCmdLock) { rawSendCustomCmd(link, AIUI_HOST_TOPIC, caps) }
-            Log.i(TAG, "sendAiuiHostCmd($cmd) -> $result")
-            result
-        } catch (e: Exception) {
-            Log.e(TAG, "sendAiuiHostCmd($cmd) failed", e)
-            -1
-        }
-    }
-
-    /**
-     * 把本地 .aix 推到 RokidLink 的 aiui_host 目录并自动拉起宿主渲染。
-     *
-     * 传输通道说明：眼镜端 adbd 拒绝任意 tcp 转发（`open tcp:7658` 实测报
-     * "adbd does not support arbitrary tcp connections"），且同一眼镜同一时刻仅允许
-     * 一条 RFCOMM（adb 常驻隧道占满，BT 7659→7658 隧道会 "BT RFCOMM connect failed"）。
-     * 因此 7658 socket 通道在 Rokid 眼镜上不可靠，主通道改为**复用常驻 adb shell**：
-     * run-as 分块 base64 落盘到 RokidLink filesDir/aiui_host/<name>.aix
-     * （RokidLink 为 debug 构建，run-as 可写私有目录；AiuiPackageServer 目录同名，
-     * handleAiuiHost open 直接命中）。BT/adb socket 仅作兜底。
-     *
-     * @return null=失败；"OK"=已落盘（openAfter=true 会自动拉起宿主渲染）
-     */
-    fun pushAixToRokidLinkHost(aixFile: File, openAfter: Boolean = true): String? {
-        if (!aixFile.isFile) {
-            Log.w(TAG, "pushAixToRokidLinkHost: file missing ${aixFile.absolutePath}")
-            return null
-        }
-        val app = activity.application as LabApplication
-        // BT 隧道空闲 60s 会自动断开，断后再推首连常失败（resolve 尚未恢复）：
-        // adb client 获取失败时短退避重试，覆盖隧道重连窗口，避免 AIUI 首推报失败。
-        var client = getAdbShellClient()
-        var attempt = 0
-        while (client == null && attempt < 3) {
-            attempt++
-            Thread.sleep(1500L * attempt)
-            Log.w(TAG, "pushAixToRokidLinkHost: no adb client, retry $attempt/3...")
-            runCatching { app.routeManager.clearRouteCache() }
-            client = getAdbShellClient()
-        }
-        val name = aixFile.name
-        val body = aixFile.readBytes()
-
-        if (client != null) {
-            try {
-                // Android 12+ 后台启动限制(BAL)：需先确保 RokidLink 拥有 SYSTEM_ALERT_WINDOW
-                // 授权，否则纯后台服务拉起 AiuiLinkActivity 会被系统静默拒绝。
-                runCatching {
-                    val r = client.executeShellCommand(
-                        "appops set com.rokidlab.rokidlink android:system_alert_window allow 2>&1",
-                        10_000,
-                    )
-                    if (r.isNotBlank() && !r.contains("Unknown", ignoreCase = true)) {
-                        Log.i(TAG, "grant system_alert_window on glasses: $r")
-                    }
-                }.onFailure { Log.w(TAG, "grant system_alert_window failed: ${it.message}") }
-                // 通道 1（主）：run-as 分块 base64 落盘（覆盖 AIUI 包常见大小，块 60K base64≈45KB）。
-                // 注意：整个 shell 逻辑必须包进 run-as 的 sh -c —— run-as 只作用于其后第一个
-                // 可执行程序；`run-as pkg A && rm …`/`wc -c < file` 的 rm/重定向若放在外层，
-                // 会由 adbd 的 shell 用户执行，无权操作 app 私有目录（实测 rm 静默失败导致
-                // 文件残留叠加、wc 输出为空）。
-                val pkgDir = "com.rokidlab.rokidlink"
-                client.executeShellCommand(
-                    "run-as $pkgDir sh -c 'mkdir -p files/aiui_host && rm -f files/aiui_host/$name'",
-                    10_000,
-                )
-                val b64 = android.util.Base64.encodeToString(body, android.util.Base64.NO_WRAP)
-                var off = 0
-                var wroteOk = true
-                // 命令本身无 stdout（echo|base64 -d 静默写盘），不能以输出判成败，
-                // 统一靠最后 wc -c 校验字节数兜底。
-                val step = 60000
-                while (off < b64.length) {
-                    val end = minOf(off + step, b64.length)
-                    val chunk = b64.substring(off, end)
-                    off = end
-                    try {
-                        client.executeShellCommand(
-                            "run-as $pkgDir sh -c 'echo $chunk | base64 -d >> files/aiui_host/$name'",
-                            30_000,
-                        )
-                    } catch (e: Exception) {
-                        wroteOk = false
-                        Log.w(TAG, "pushAixToRokidLinkHost($name): chunk write failed at $off: ${e.message}")
-                        break
-                    }
-                }
-                if (wroteOk) {
-                    val wc = client.executeShellCommand(
-                        "run-as $pkgDir sh -c 'wc -c < files/aiui_host/$name'",
-                        10_000,
-                    )
-                    val written = wc?.trim()?.toLongOrNull()
-                    Log.i(TAG, "pushAixToRokidLinkHost($name) written=$written expect=${body.size}")
-                    if (written == body.size.toLong()) {
-                        if (openAfter) openAiuiHost(name)
-                        return "OK"
-                    }
-                }
-                Log.w(TAG, "pushAixToRokidLinkHost($name): run-as write failed, fallback socket push...")
-            } catch (e: Exception) {
-                Log.e(TAG, "pushAixToRokidLinkHost run-as failed: ${e.message}")
-            }
-        }
-        // 通道 2（兜底）：7658 socket —— 蓝牙隧道直连 AiuiPackageServer 或 adb smart socket。
-        // 前者要求 adb 未占用唯一 RFCOMM，后者要求 adbd 放行 tcp 转发，多数环境不可用，
-        // 仅保底（如 Wi-Fi 直连 adb 且隧道空闲）。
-        val nameB = name.toByteArray(Charsets.UTF_8)
-        val frame = java.io.ByteArrayOutputStream(body.size + nameB.size + 6).apply {
-            write((nameB.size shr 8) and 0xFF); write(nameB.size and 0xFF)
-            write(nameB)
-            write((body.size ushr 24) and 0xFF); write((body.size ushr 16) and 0xFF)
-            write((body.size ushr 8) and 0xFF); write(body.size and 0xFF)
-            write(body)
-        }.toByteArray()
-        var ack: String? = null
-        app.routeManager.tunnelTo(7658)?.let { localPort ->
-            Log.i(TAG, "pushAixToRokidLinkHost: BT tunnel 127.0.0.1:$localPort → :7658")
-            ack = try {
-                java.net.Socket().apply {
-                    connect(java.net.InetSocketAddress("127.0.0.1", localPort), 5_000)
-                    tcpNoDelay = true
-                    soTimeout = 20_000
-                }.use { sock ->
-                    val out = sock.getOutputStream()
-                    out.write(frame)
-                    out.flush()
-                    val resp = ByteArray(64)
-                    val n = sock.getInputStream().read(resp)
-                    if (n <= 0) null else String(resp, 0, n, Charsets.UTF_8).trim()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "pushAixToRokidLinkHost: BT push failed: ${e.message}")
-                null
-            }
-        }
-        if (ack == null) {
-            try {
-                client?.let { ack = it.sendTcpStream(7658, frame) }
-            } catch (e: Exception) {
-                Log.e(TAG, "pushAixToRokidLinkHost: adb push failed: ${e.message}")
-            }
-        }
-        Log.i(TAG, "pushAixToRokidLinkHost($name) fallback ack=${ack?.take(16)}")
-        if (ack?.trim() == "OK" && openAfter) {
-            openAiuiHost(name)
-        }
-        return ack
-    }
+    /** 把本地 .aix 推到 RokidLink aiui_host 目录并自动拉起宿主渲染 */
+    fun pushAixToRokidLinkHost(aixFile: File, openAfter: Boolean = true): String? =
+        aiui.pushAixToRokidLinkHost(aixFile, openAfter)
 
     /**
      * CXR-L 1.1.0 的 ExternalAppClient.sendCustomCmd 内置保留 cmd 黑名单
@@ -866,22 +603,7 @@ class CxrLHiRokidSession(
         return svc.sendCustomCmd(cmd, caps.serialize())
     }
 
-    /**
-     * 向眼镜端 AssistServer 下发「安装 AIUI agent」指令（Jsai_AddNativeAgent）。
-     *
-     * 协议（逆向自 AssistServer + 真机日志验证触发）：CXR 通道 "Jsai"，
-     * caps[0] = "Jsai_AddNativeAgent"（JsaiCmdHelper 分派键），caps[1] = JSON 载荷：
-     * {agentId, agentName, url, fileMd5, nativeVersion, inkVersion, ...}。
-     * AssistServer 收到后走 AIUI_JsaiAgentDownload 官方下载链路：眼镜经手机 NetProxy
-     * 代理拉取 url 指定的 .aix（本机用 [AiuiProject.hostAix] 托管，127.0.0.1 由代理解析到手机），
-     * 校验 fileMd5 后写入 agents_index.json（PACKAGE_INDEX），之后即可用 Ai_RenderPayload 打开。
-     *
-     * @param agentId agent UUID（.aix 内 VERSION 内容，须与打包时一致）
-     * @param agentName 展示名
-     * @param url .aix 下载地址（手机本地托管，眼镜经代理访问）
-     * @param fileMd5 .aix 文件 MD5（眼镜端下载后校验）
-     * @return 发送结果码（0=成功下发，非 0=失败；不代表眼镜端下载/安装完成）
-     */
+    /** 安装 AIUI agent 到眼镜（Jsai_AddNativeAgent） */
     fun installAiuiAgent(
         agentId: String,
         agentName: String,
@@ -889,56 +611,9 @@ class CxrLHiRokidSession(
         fileMd5: String,
         nativeVersion: String = "0.0.74",
         agentDesc: String = "",
-    ): Int {
-        val link = cxrLink ?: return -2
-        return try {
-            val payload = JSONObject()
-                .put("agentId", agentId)
-                .put("agentName", agentName)
-                .put("url", url)
-                .put("fileMd5", fileMd5)
-                .put("nativeVersion", nativeVersion)
-                .put("inkVersion", "")
-                .put("agentDesc", agentDesc)
-                .put("agentLogo", "")
-            val caps = Caps()
-            caps.write("Jsai_AddNativeAgent")
-            caps.write(payload.toString())
-            val result = synchronized(aiCmdLock) {
-                link.sendCustomCmd("Jsai", caps)
-            }
-            Log.i(TAG, "installAiuiAgent(agentId=$agentId url=$url md5=$fileMd5) -> $result")
-            result ?: -3
-        } catch (e: Exception) {
-            Log.e(TAG, "installAiuiAgent(agentId=$agentId) failed", e)
-            -1
-        }
-    }
+    ): Int = aiui.installAiuiAgent(agentId, agentName, url, fileMd5, nativeVersion, agentDesc)
 
-    /**
-     * 直装 .aix 并在下载完成后自动打开一次（满足「安装完唤醒一次」）。
-     *
-     * 实测结论（2026-09-05）：目录注入路线不可行——眼镜只认领「自己发起的
-     * phone_request_info 询问」（仅在官方 AI 会话连接时触发，走官方 App 链路），
-     * 手机主动 push 的 Jsai_GetRequestInfo 全部被眼镜记为
-     * "onMobileRequestInfo ignored: no active request flight"，agent 永不进入目录，
-     * AgentResolver 报 RECORD_NOT_FOUND → OPEN_FAIL。
-     *
-     * 因此改回 Jsai_AddNativeAgent 直装：眼镜自行按 url（本机 AixHttpServer 托管，
-     * 127.0.0.1 经 NetProxy 中继到手机）下载 .aix 并写入 PACKAGE_INDEX。
-     * 该包按 REMOTE_SYNC 落盘，可能被后续周期 sync purge，但下载+登记只需 1~2s；
-     * 安装完成后 [delay] 内自动发起 Ai_RenderPayload 打开一次并重试，
-     * 在 purge 发生前完成本次运行即可（用户只需要这一次唤醒）。
-     *
-     * @param agentId agent UUID（.aix 内 VERSION，须与打包一致）
-     * @param agentName 展示名
-     * @param url .aix 下载地址（手机本地托管）
-     * @param fileMd5 .aix 文件 MD5（眼镜下载后校验）
-     * @param openDelayMs 下发安装后等待眼镜下载完成的毫秒数
-     * @param openRetryMs 打开失败（包尚未就绪）时的重试间隔
-     * @param openTimeoutMs 打开重试总超时
-     * @return 安装指令发送结果码（0=已下发；不等于渲染成功）
-     */
+    /** 直装 .aix 并自动打开一次 */
     fun installAndOpenAiuiAgentOnce(
         agentId: String,
         agentName: String,
@@ -947,133 +622,22 @@ class CxrLHiRokidSession(
         openDelayMs: Long = 3000L,
         openRetryMs: Long = 2000L,
         openTimeoutMs: Long = 25_000L,
-    ): Int {
-        stopAgentListPushWindow()
-        val install = installAiuiAgent(
-            agentId = agentId,
-            agentName = agentName,
-            url = url,
-            fileMd5 = fileMd5,
-            nativeVersion = "0.0.74",
-            agentDesc = agentName,
-        )
-        Log.i(TAG, "installAndOpenAiuiAgentOnce: AddNativeAgent -> $install")
-        if (install != 0) return install
-        appScope.launch(Dispatchers.IO) {
-            delay(openDelayMs)
-            val deadline = System.currentTimeMillis() + openTimeoutMs
-            var attempt = 0
-            while (System.currentTimeMillis() < deadline && isActive) {
-                attempt++
-                val r = openAiuiAgent(agentId, agentName)
-                Log.i(TAG, "installAndOpenAiuiAgentOnce: open attempt#$attempt -> $r")
-                if (r == 0) break
-                delay(openRetryMs)
-            }
-        }
-        return 0
-    }
+    ): Int = aiui.installAndOpenAiuiAgentOnce(agentId, agentName, url, fileMd5, openDelayMs, openRetryMs, openTimeoutMs)
 
-    /**
-     * 向眼镜下发「native agent 目录地址」（Jsai_GetRequestInfo）。
-     *
-     * 逆向依据：眼镜 JsaiAiuiHostProvider 周期 fetchAndSyncNativeAgentList 时使用
-     * JsaiAuthStore.agentListUrl 拉取目录；该 URL 由手机通过 Jsai 命令
-     * caps[0]="Jsai_GetRequestInfo"、caps[1]=JSON{agentListUrl,tokenKey,tokenValue,env}
-     * 下发（onMobileRequestInfo → JsaiAuthStore.update）。若不下发，眼镜沿用官方云端
-     * 目录，其中不含我方私有 agent → syncAgentList 取消下载(code=499)并 purge。
-     *
-     * 下发后眼镜即把 [agentListUrl] 当作目录：我方在该地址返回含目标 agent 的
-     * data 数组（见 AiuiProject/AixHttpServer /agents.json），眼镜据此合法下载安装，
-     * 不再取消。
-     *
-     * ⚠️ 实测（2026-09-05）：此主动 push 通道对眼镜无效——眼镜一律忽略为
-     * "no active request flight"，仅剩注册表回复兜底与记录价值。
-     *
-     * @return 发送结果码（0=成功下发）
-     */
-    fun pushAiuiAgentListUrl(agentListUrl: String): Int {
-        val link = cxrLink ?: return -2
-        return try {
-            val payload = JSONObject()
-                .put("agentListUrl", agentListUrl)
-                .put("tokenKey", "")
-                .put("tokenValue", "")
-                .put("env", 2)
-            val caps = Caps()
-            caps.write("Jsai_GetRequestInfo")
-            caps.write(payload.toString())
-            val result = synchronized(aiCmdLock) {
-                link.sendCustomCmd("Jsai", caps)
-            }
-            Log.i(TAG, "pushAiuiAgentListUrl(url=$agentListUrl) -> $result")
-            result ?: -3
-        } catch (e: Exception) {
-            Log.e(TAG, "pushAiuiAgentListUrl failed", e)
-            -1
-        }
-    }
+    /** 向眼镜下发 native agent 目录地址（Jsai_GetRequestInfo） */
+    fun pushAiuiAgentListUrl(agentListUrl: String): Int = aiui.pushAiuiAgentListUrl(agentListUrl)
 
-    /**
-     * 在时间窗口内周期下发目录配置（Jsai_GetRequestInfo+JSON）。
-     *
-     * 背景：眼镜只在 phone_request_info 飞行激活期间认领手机回复（60s 窗口、首个生效）。
-     * 该飞行由眼镜 AI 会话连接（glassAppConnectChange=true）或空配置时的
-     * NotifyGlassGetList 触发。若本地未及时观察到询问（询问可能只发给官方 App 链路），
-     * 用周期推送兜底：一旦窗口打开，我们窗口内的下一条推送即被认领。
-     * 未被认领的推送眼镜侧忽略（"duplicate or stale"/"no active flight"），无副作用。
-     */
-    @Volatile
-    private var agentListPushWindowJob: Job? = null
-
+    /** 在时间窗口内周期下发目录配置 */
     fun startAgentListPushWindow(
         catalogUrl: String,
         durationMs: Long = 60_000L,
         intervalMs: Long = 1_500L,
-    ) {
-        stopAgentListPushWindow()
-        agentListPushWindowJob = appScope.launch(Dispatchers.IO) {
-            val deadline = System.currentTimeMillis() + durationMs
-            var n = 0
-            while (System.currentTimeMillis() < deadline && isActive) {
-                n++
-                val r = pushAiuiAgentListUrl(catalogUrl)
-                Log.i(TAG, "agentListPushWindow #$n url=$catalogUrl -> $r")
-                delay(intervalMs)
-            }
-            Log.i(TAG, "agentListPushWindow done ($n pushes)")
-        }
-    }
+    ) = aiui.startAgentListPushWindow(catalogUrl, durationMs, intervalMs)
 
-    fun stopAgentListPushWindow() {
-        agentListPushWindowJob?.cancel()
-        agentListPushWindowJob = null
-    }
+    fun stopAgentListPushWindow() = aiui.stopAgentListPushWindow()
 
-    /**
-     * 通知眼镜立即重新拉取 native agent 目录（Jsai_NotifyGlassGetList）。
-     *
-     * 眼镜收到后 notifyGlassGetList → fetchAndSyncNativeAgentList（用刚下发的
-     * agentListUrl），从而立刻同步并下载我方目录中的 .aix，无需等周期同步。
-     * 该命令无载荷（caps 仅一项）。
-     *
-     * @return 发送结果码（0=成功下发）
-     */
-    fun notifyGlassGetAgentList(): Int {
-        val link = cxrLink ?: return -2
-        return try {
-            val caps = Caps()
-            caps.write("Jsai_NotifyGlassGetList")
-            val result = synchronized(aiCmdLock) {
-                link.sendCustomCmd("Jsai", caps)
-            }
-            Log.i(TAG, "notifyGlassGetAgentList() -> $result")
-            result ?: -3
-        } catch (e: Exception) {
-            Log.e(TAG, "notifyGlassGetAgentList failed", e)
-            -1
-        }
-    }
+    /** 通知眼镜立即重新拉取 native agent 目录（Jsai_NotifyGlassGetList） */
+    fun notifyGlassGetAgentList(): Int = aiui.notifyGlassGetAgentList()
 
     /**
      * 向眼镜发送 NetProxy 应答帧（cmd="Proxy"，caps0=Proxy_NetResponse），
@@ -1099,8 +663,8 @@ class CxrLHiRokidSession(
             runCatching { it.disconnect() }
         }
         return runCatching {
-            val app = activity.application as LabApplication
-            val prefs = activity.getSharedPreferences("adb_prefs", 0)
+            val app = appContext as LabApplication
+            val prefs = appContext.getSharedPreferences("adb_prefs", 0)
             val wifiIp = prefs.getString("ip", "192.168.1.168") ?: "192.168.1.168"
             val route = runBlocking { app.routeManager.resolve(wifiIp, 5555) }
             val (targetIp, targetPort) = when (route) {
@@ -1108,7 +672,7 @@ class CxrLHiRokidSession(
                 is ConnectionRoute.Bluetooth -> route.ip to route.localPort
                 is ConnectionRoute.None -> return null
             }
-            val client = com.rokidlab.phone.adb.AdbShellClient(activity.applicationContext, targetIp, targetPort)
+            val client = com.rokidlab.phone.adb.AdbShellClient(appContext, targetIp, targetPort)
             if (client.connect()) {
                 adbShellClient = client
                 client
@@ -1124,7 +688,7 @@ class CxrLHiRokidSession(
     /** 当前「按键答题」开关状态（手机端本地持久化） */
     fun isKeyQuizEnabled(): Boolean {
         return runCatching {
-            activity.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_KEY_QUIZ_ENABLED, false)
+            appContext.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_KEY_QUIZ_ENABLED, false)
         }.getOrDefault(false)
     }
 
@@ -1146,7 +710,7 @@ class CxrLHiRokidSession(
             onResult?.invoke(success)
         }
         runCatching {
-            activity.getSharedPreferences(AI_PREFS, 0).edit()
+            appContext.getSharedPreferences(AI_PREFS, 0).edit()
                 .putBoolean(KEY_KEY_QUIZ_ENABLED, enabled)
                 .apply()
         }
@@ -1247,7 +811,7 @@ class CxrLHiRokidSession(
     init {
         // 从 SharedPreferences 恢复之前保存的授权令牌
         runCatching {
-            val prefs = activity.getSharedPreferences(PREFS_NAME, 0)
+            val prefs = appContext.getSharedPreferences(PREFS_NAME, 0)
             prefs.getString(tokenPrefKey(hostApp), null)?.takeIf { it.isNotBlank() }?.let {
                 token = it
             }
@@ -1275,7 +839,7 @@ class CxrLHiRokidSession(
         hostApp = nextHostApp
         // 尝试加载新 hostApp 之前保存的令牌
         runCatching {
-            val prefs = activity.getSharedPreferences(PREFS_NAME, 0)
+            val prefs = appContext.getSharedPreferences(PREFS_NAME, 0)
             prefs.getString(tokenPrefKey(hostApp), null)?.takeIf { it.isNotBlank() }?.let {
                 token = it
             }
@@ -1290,10 +854,10 @@ class CxrLHiRokidSession(
     fun isHostAppInstalled(targetHostApp: RokidHostApp = hostApp): Boolean {
         return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                activity.packageManager.getPackageInfo(targetHostApp.packageName, PackageManager.PackageInfoFlags.of(0))
+                appContext.packageManager.getPackageInfo(targetHostApp.packageName, PackageManager.PackageInfoFlags.of(0))
             } else {
                 @Suppress("DEPRECATION")
-                activity.packageManager.getPackageInfo(targetHostApp.packageName, 0)
+                appContext.packageManager.getPackageInfo(targetHostApp.packageName, 0)
             }
         }.isSuccess
     }
@@ -1301,7 +865,7 @@ class CxrLHiRokidSession(
     fun requestAuthorization() {
         val targetHostApp = hostApp
         if (!isHostAppInstalled(targetHostApp)) {
-            onStatus(activity.getString(R.string.install_glasses_host_first, targetHostApp.displayName))
+            onStatus(appContext.getString(R.string.install_glasses_host_first, targetHostApp.displayName))
             return
         }
 
@@ -1313,12 +877,18 @@ class CxrLHiRokidSession(
         val launcher = authLauncher
         if (launcher != null) {
             launcher(launchIntent)
-            onStatus(activity.getString(R.string.auth_page_opened, targetHostApp.displayName))
+            onStatus(appContext.getString(R.string.auth_page_opened, targetHostApp.displayName))
         } else {
-            // 兜底：使用已废弃的 startActivityForResult（无现代 Launcher 时）
+            // 兜底：使用已废弃的 startActivityForResult（无现代 Launcher 时）；
+            // Activity 已被回收（弱引用失效）时无法跳授权页，仅提示
+            val currentActivity = activityRef.get()
+            if (currentActivity == null || currentActivity.isDestroyed || currentActivity.isFinishing) {
+                onStatus(appContext.getString(R.string.authorize_in_host, targetHostApp.displayName))
+                return
+            }
             @Suppress("DEPRECATION")
-            activity.startActivityForResult(launchIntent, 4027)
-            onStatus(activity.getString(R.string.auth_page_opened, targetHostApp.displayName))
+            currentActivity.startActivityForResult(launchIntent, 4027)
+            onStatus(appContext.getString(R.string.auth_page_opened, targetHostApp.displayName))
         }
     }
 
@@ -1330,36 +900,36 @@ class CxrLHiRokidSession(
                 grantGlassPermissions()
                 // 持久化保存授权令牌，Activity 重建（如切换语言）后可恢复
                 runCatching {
-                    activity.getSharedPreferences(PREFS_NAME, 0)
+                    appContext.getSharedPreferences(PREFS_NAME, 0)
                         .edit()
                         .putString(tokenPrefKey(hostApp), result.token)
                         .apply()
                 }
-                onStatus(activity.getString(R.string.auth_token_obtained, hostApp.displayName))
+                onStatus(appContext.getString(R.string.auth_token_obtained, hostApp.displayName))
                 notifyConnectionChanged()
             }
 
             is AuthResult.AuthCancel -> {
                 token = null
                 runCatching {
-                    activity.getSharedPreferences(PREFS_NAME, 0)
+                    appContext.getSharedPreferences(PREFS_NAME, 0)
                         .edit()
                         .remove(tokenPrefKey(hostApp))
                         .apply()
                 }
-                onStatus(activity.getString(R.string.auth_cancelled, hostApp.displayName))
+                onStatus(appContext.getString(R.string.auth_cancelled, hostApp.displayName))
                 notifyConnectionChanged()
             }
 
             is AuthResult.AuthFail -> {
                 token = null
                 runCatching {
-                    activity.getSharedPreferences(PREFS_NAME, 0)
+                    appContext.getSharedPreferences(PREFS_NAME, 0)
                         .edit()
                         .remove(tokenPrefKey(hostApp))
                         .apply()
                 }
-                onStatus(activity.getString(R.string.auth_failed_simple, hostApp.displayName))
+                onStatus(appContext.getString(R.string.auth_failed_simple, hostApp.displayName))
                 notifyConnectionChanged()
             }
         }
@@ -1386,11 +956,11 @@ class CxrLHiRokidSession(
 
         onBusyChanged(true)
         runCatching {
-            onStatus(activity.getString(R.string.detected_package, packageName))
+            onStatus(appContext.getString(R.string.detected_package, packageName))
             connectAndUpload(authToken, targetHostApp, packageName, apkFile, onInstallResult)
         }.onFailure { error ->
             android.util.Log.e("CxrLInstall", "installApk: exception: ${error.javaClass.simpleName}: ${error.message}")
-            onStatus(activity.getString(R.string.cxrl_failed_msg, error.message ?: error.javaClass.simpleName))
+            onStatus(appContext.getString(R.string.cxrl_failed_msg, error.message ?: error.javaClass.simpleName))
             onBusyChanged(false)
             onInstallResult?.invoke(false)
         }
@@ -1433,10 +1003,10 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = "com.rokidlab.rokidlink",
                 timeoutMillis = 10_000,
-                timeoutMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_timeout),
-                bindMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_binding),
-                configureFailureMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_config_failed),
-                bindFailureMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_bind_failed),
+                timeoutMessage = appContext.getString(com.rokidlab.phone.R.string.key_btn_timeout),
+                bindMessage = appContext.getString(com.rokidlab.phone.R.string.key_btn_binding),
+                configureFailureMessage = appContext.getString(com.rokidlab.phone.R.string.key_btn_config_failed),
+                bindFailureMessage = appContext.getString(com.rokidlab.phone.R.string.key_btn_bind_failed),
                 showConnectionStatus = false,
                 onReady = { link ->
                     // CUSTOMAPP 场景构建完成后 cxr-service 才会把自定义指令路由给眼镜端：
@@ -1450,11 +1020,11 @@ class CxrLHiRokidSession(
                                     .forEach { caps.write(it) }
                                 val result = link.sendCustomCmd(AiChannel.TOPIC_KEY_CONFIG, caps)
                                 val resultMsg = if (result == 0) "OK" else "error=$result"
-                                onStatus(activity.getString(com.rokidlab.phone.R.string.key_btn_sent, shortPkg, longPkg, resultMsg))
+                                onStatus(appContext.getString(com.rokidlab.phone.R.string.key_btn_sent, shortPkg, longPkg, resultMsg))
                                 onResult?.invoke(result == 0)
                             } else {
                                 Log.w(TAG, "appStart failed, cannot send key config")
-                                onStatus(activity.getString(com.rokidlab.phone.R.string.key_btn_send_failed))
+                                onStatus(appContext.getString(com.rokidlab.phone.R.string.key_btn_send_failed))
                                 onResult?.invoke(false)
                             }
                             completeActiveOperation()
@@ -1495,10 +1065,10 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = "com.rokidlab.rokidlink",
                 timeoutMillis = 30_000,
-                timeoutMessage = activity.getString(com.rokidlab.phone.R.string.wifi_config_timeout),
-                bindMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_binding),
-                configureFailureMessage = activity.getString(com.rokidlab.phone.R.string.wifi_config_failed),
-                bindFailureMessage = activity.getString(com.rokidlab.phone.R.string.key_btn_bind_failed),
+                timeoutMessage = appContext.getString(com.rokidlab.phone.R.string.wifi_config_timeout),
+                bindMessage = appContext.getString(com.rokidlab.phone.R.string.key_btn_binding),
+                configureFailureMessage = appContext.getString(com.rokidlab.phone.R.string.wifi_config_failed),
+                bindFailureMessage = appContext.getString(com.rokidlab.phone.R.string.key_btn_bind_failed),
                 showConnectionStatus = false,
                 onReady = { link ->
                     val json = """{"module":"setting","ssid":"$ssid","password":"$password","forceReconnect":true}"""
@@ -1509,7 +1079,7 @@ class CxrLHiRokidSession(
                     caps.write(json)
                     
                     var statusReceived = false
-                    val timeoutHandler = android.os.Handler(activity.mainLooper)
+                    val timeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
                     
                     // WiFi 状态回执由统一指令监听（registerGlobalCmdListener）转发到此处
                     wifiStatusCallback = { statusJson ->
@@ -1526,11 +1096,11 @@ class CxrLHiRokidSession(
                             onBusyChanged(false)
                             
                             if (code == 0 && status == "CONNECTED") {
-                                onStatus(activity.getString(com.rokidlab.phone.R.string.wifi_config_success, ssid))
+                                onStatus(appContext.getString(com.rokidlab.phone.R.string.wifi_config_success, ssid))
                                 onResult?.invoke(true, null)
                             } else {
                                 val errorMsg = jsonObj.optString("message", "连接失败，请检查密码")
-                                onStatus(activity.getString(com.rokidlab.phone.R.string.wifi_config_failed) + ": $errorMsg")
+                                onStatus(appContext.getString(com.rokidlab.phone.R.string.wifi_config_failed) + ": $errorMsg")
                                 onResult?.invoke(false, errorMsg)
                             }
                         } catch (e: Exception) {
@@ -1619,7 +1189,7 @@ class CxrLHiRokidSession(
         val targetHostApp = hostApp
         if (!hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
             Log.w(TAG, "sendAiTextMessage: missing prerequisites")
-            activity.runOnUiThread { onResult?.invoke(false, "missing prerequisites") }
+            mainHandler.post { onResult?.invoke(false, "missing prerequisites") }
             return
         }
         val authToken = token.orEmpty()
@@ -1648,7 +1218,7 @@ class CxrLHiRokidSession(
                 onFailure = {
                     cleanup()
                     onBusyChanged(false)
-                    activity.runOnUiThread { onResult?.invoke(false, "connection failed") }
+                    mainHandler.post { onResult?.invoke(false, "connection failed") }
                 },
             ),
         )
@@ -1716,105 +1286,15 @@ class CxrLHiRokidSession(
         )
     }
 
-    /**
-     * 「拍照问 AI」全流程（镜腿按键 / 手机端按钮共用入口）：
-     * 眼镜拍照 → 本地 OCR 识别题目文字 → 知识库检索（RAG）→ OpenAI 兼容 AI 生成答案
-     * → 答案经 Ai 通道发回眼镜显示 + tts_play 语音播报。
-     *
-     * @param onStage 阶段状态回调（参数为 strings.xml 资源 id，UI 层可展示流程气泡）
-     * @param onReply 最终答案回调（同时已发送到眼镜显示+播报）
-     */
-    fun startPhotoAsk(
-        onStage: (Int) -> Unit = photoAskStageCb,
-        onText: (String) -> Unit = photoAskTextCb,
-        onReply: (String) -> Unit = photoAskReplyCb,
-    ) {
-        if (photoAskInProgress) {
-            Log.i(TAG, "startPhotoAsk: already in progress, skip")
-            return
-        }
-        photoAskInProgress = true
-        // 全链路起点：记录开始时间，各阶段打印相对耗时（拍照/OCR/KB/AI），定位「出答案慢」
-        val askStartMs = System.currentTimeMillis()
-        Log.i(TAG, "startPhotoAsk: BEGIN, trigger=photo ask")
-        onStage(com.rokidlab.phone.R.string.chat_photo_status)
+    /** 「拍照问 AI」全流程入口（无显式回调，用聊天界面注册的默认回调；编排见 PhotoQuizFlow.start） */
+    fun startPhotoAsk() = photoQuiz.start()
 
-        takeGlassesPhoto(
-            width = 1024,
-            height = 768,
-            quality = 80,
-            onPhoto = { jpeg ->
-                Thread {
-                    try {
-                        Log.i(TAG, "photoAsk: photo received (${jpeg.size}B) after ${System.currentTimeMillis() - askStartMs}ms, starting OCR")
-                        activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_ocr_status) }
-                        // 2) 本地 OCR 识别题目文字
-                        val tOcr = System.currentTimeMillis()
-                        val text = runCatching {
-                            val bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
-                                ?: return@runCatching ""
-                            try {
-                                com.rokidlab.phone.ai.LocalOcr.recognize(activity, bmp)
-                            } finally {
-                                bmp.recycle()
-                            }
-                        }.getOrDefault("").trim()
-                        Log.i(TAG, "photoAsk: OCR done in ${System.currentTimeMillis() - tOcr}ms -> ${text.take(50)}")
-                        if (text.isEmpty()) {
-                            Log.w(TAG, "photoAsk: OCR result empty, abort")
-                            photoAskInProgress = false
-                            activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_ocr_empty) }
-                            return@Thread
-                        }
-                        // 3) 把识别出的文字回调给 UI（作为「用户消息」气泡展示）
-                        activity.runOnUiThread { onText(text) }
-                        // 4) 知识库检索相关资料（RAG）
-                        activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_kb_status) }
-                        val tKb = System.currentTimeMillis()
-                        val kbText = com.rokidlab.phone.ai.KnowledgeBase
-                            .search(activity, text, topK = 3)
-                            .joinToString("\n\n")
-                        Log.i(TAG, "photoAsk: KB search done in ${System.currentTimeMillis() - tKb}ms, hits=${kbText.length} chars")
-                        // 4) 生成答案并发送到眼镜（显示 + 播报）
-                        activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_ai_status) }
-                        val tAi = System.currentTimeMillis()
-                        sendAiTextMessage(
-                            text,
-                            contextText = kbText.ifBlank { null },
-                            // 答题完成后保留眼镜端回复显示：skipTtsAudioFinished=true 不发送
-                            // TTS_AudioFinished（该消息会触发官方会话 startNewTalk 重置，清掉刚显示的答案）
-                            skipTtsAudioFinished = true,
-                            // 注入设置页填写的答题指令（如「只显示答案」「给出解题步骤」）
-                            instruction = getAiConfig().quizInstruction.ifBlank { null },
-                            // 一次性问答且带答题指令，不记录到 Agent 会话记忆（避免污染闲聊上下文）
-                            recordHistory = false,
-                            onResult = { success, err ->
-                                photoAskInProgress = false
-                                Log.i(TAG, "photoAsk: AI send onResult success=$success err=$err after ${System.currentTimeMillis() - tAi}ms (total ${System.currentTimeMillis() - askStartMs}ms)")
-                                if (!success) {
-                                    // 失败且无 onReply：通知 UI 复位 photoAsking（否则拍照问 AI 入口永久失效）
-                                    activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_photo_failed) }
-                                }
-                            },
-                            onReply = { reply ->
-                                Log.i(TAG, "photoAsk: AI reply received (${reply.length} chars) after ${System.currentTimeMillis() - askStartMs}ms total")
-                                onReply(reply)
-                            },
-                        )
-                    } catch (e: Exception) {
-                        Log.e(TAG, "startPhotoAsk failed", e)
-                        photoAskInProgress = false
-                        activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_photo_failed) }
-                    }
-                }.start()
-            },
-            onError = { err ->
-                Log.e(TAG, "startPhotoAsk photo error: $err")
-                photoAskInProgress = false
-                activity.runOnUiThread { onStage(com.rokidlab.phone.R.string.chat_photo_failed) }
-            },
-        )
-    }
+    /** 「拍照问 AI」全流程入口（显式回调；编排见 PhotoQuizFlow.start） */
+    fun startPhotoAsk(
+        onStage: (Int) -> Unit,
+        onText: (String) -> Unit,
+        onReply: (String) -> Unit,
+    ) = photoQuiz.start(onStage, onText, onReply)
 
     /**
      * 安全切回主线程执行 UI 回调：Activity 已销毁（保活后台运行）时直接跳过，
@@ -1822,8 +1302,11 @@ class CxrLHiRokidSession(
      */
     private fun safeRunOnUiThread(block: () -> Unit) {
         try {
-            if (activity.isDestroyed || activity.isFinishing) return
-            activity.runOnUiThread {
+            // Activity 已销毁（保活后台运行）或已被回收（弱引用失效）时直接跳过，
+            // 避免在已销毁 Activity 上执行 UI 回调导致崩溃，同时下行链路不受影响。
+            val currentActivity = activityRef.get()
+            if (currentActivity == null || currentActivity.isDestroyed || currentActivity.isFinishing) return
+            mainHandler.post {
                 try {
                     block()
                 } catch (e: Exception) {
@@ -1845,20 +1328,10 @@ class CxrLHiRokidSession(
      *    在眼镜端显示 Lab 回复并播报。
      * 同时通过 glassesAi 回调把提问与回复同步显示到乐奇聊天窗口。
      */
-    private fun handleGlassesAiAsrText(text: String) {
+    /** ASR 文字分发核心（去重由 AsrBridgeCoordinator.onAsrText 负责，此处只做对话链路） */
+    private fun dispatchGlassesAsrText(text: String) {
         try {
-            // 双通道去重：push 推送 / 文件轮询 / Wifi_Connect_Status 上行可能同时收到
-            // 同一段 ASR 文字（重复处理会并发触发 sendAiTextMessage，加剧 link 竞态）。
-            // 3s 内相同文字只处理一次。
-            val now = System.currentTimeMillis()
-            if (text == lastAsrText && now - lastAsrTextAt < 3000) {
-                Log.i(TAG, "handleGlassesAiAsrText: duplicate ASR text within 3s, skip")
-                return
-            }
-            lastAsrText = text
-            lastAsrTextAt = now
-
-            Log.i(TAG, "handleGlassesAiAsrText: $text")
+            Log.i(TAG, "dispatchGlassesAsrText: $text")
             // 用户提问同步到聊天窗口（轮询在 IO 线程，需切回主线程更新 Compose 状态）
             safeRunOnUiThread { glassesAiTextCb(text) }
             sendAiTextMessage(
@@ -1881,209 +1354,6 @@ class CxrLHiRokidSession(
             )
         } catch (e: Exception) {
             Log.e(TAG, "handleGlassesAiAsrText error", e)
-        }
-    }
-
-    /**
-     * 文件通道轮询（兜底）：
-     * 眼镜端把 ASR 文字追加写入 ai_asr.log（每行 [ts] text），手机端经 ADB（蓝牙隧道）tail 读取。
-     * 按时间戳去重并持久化，app 重启不会重复处理旧文本。
-     * 主通道为 AsrPushClient（第二 RFCOMM 长连接，毫秒级实时接收）；
-     * 眼镜端推送成功时不写文件，因此正常情况轮询无新数据，仅作为推送通道不可用时的兜底。
-     */
-    private fun startAiAsrBridgePolling() {
-        aiAsrPollJob?.cancel()
-        aiAsrPollJob = appScope.launch(Dispatchers.IO) {
-            val prefs = activity.getSharedPreferences("adb_prefs", 0)
-            var lastTs = prefs.getLong(KEY_LAST_ASR_TS, 0L)
-            // 隧道异常退避：连接失败时逐步拉大间隔（5s→10s→…→30s），
-            // 推送断开期间不再固定 5s 打一次隧道，避免 5556 本地端口积压溢出
-            var backoffMs = AI_ASR_POLL_INTERVAL_MS
-            while (isActive) {
-                try {
-                    // 主通道推送健康时跳过文件轮询：蓝牙隧道（RFCOMM）单串行连接，
-                    // 每轮 ADB 连接都会占用隧道，推送正常时打隧道会造成
-                    // 5556 本地端口接收积压溢出 → "connection refused"。
-                    // 推送通道断开时才启用文件兜底轮询。
-                    if (aiAsrPushClient?.isConnected != true) {
-                        val r = readAiAsrBridgeTextOnce(lastTs)
-                        if (r != null) {
-                            if (r.tunnelOk) {
-                                backoffMs = AI_ASR_POLL_INTERVAL_MS
-                            } else {
-                                backoffMs = (backoffMs * 2).coerceAtMost(AI_ASR_BACKOFF_MAX_MS)
-                                Log.w(TAG, "ASR tunnel unavailable, backoff to ${backoffMs}ms")
-                            }
-                            r.text?.let { (ts, text) ->
-                                lastTs = ts
-                                prefs.edit().putLong(KEY_LAST_ASR_TS, ts).apply()
-                                Log.i(TAG, "ASR via ADB bridge (fallback): $text")
-                                // 打断已由眼镜端本地完成（KeyButtonService interruptOfficialLocally 发 Ai/Exit），
-                                // 处理链路放后台线程执行（下行 sleep + DeepSeek join 耗时数秒），避免阻塞主线程。
-                                Thread { handleGlassesAiAsrText(text) }.start()
-                            }
-                        }
-                    } else {
-                        // 推送恢复：复位退避
-                        backoffMs = AI_ASR_POLL_INTERVAL_MS
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "aiAsrBridge poll error", e)
-                    backoffMs = (backoffMs * 2).coerceAtMost(AI_ASR_BACKOFF_MAX_MS)
-                }
-                delay(backoffMs)
-            }
-        }
-        // 推送通道：第二 RFCOMM 长连接，毫秒级实时接收眼镜端推送（正常主通道）。
-        // 眼镜端推送成功时不会写文件，轮询自然无新数据；推送失败才写文件由轮询兜底。
-        aiAsrPushClient?.stop()
-        aiAsrPushClient = AsrPushClient(activity.applicationContext) { text ->
-            try {
-                // 用户关闭助手标记（眼镜端双击退出对话窗口时推送，新版）：
-                // 停止音乐 + 停眼镜端播报 + 取消运行中的 Lab 模型请求
-                if (text == ABORT_AI_MARKER) {
-                    Log.i(TAG, "Abort-AI marker received from glasses (assistant closed by user)")
-                    com.rokidlab.phone.ai.MusicPlayerController.stop()
-                    stopTtsOnGlass()
-                    abortCurrentAi()
-                    return@AsrPushClient
-                }
-                // 音乐停止标记：眼镜端双击退出对话窗口时推送，收到后停止手机端音乐播放
-                if (text == MUSIC_STOP_MARKER) {
-                    Log.i(TAG, "Music stop marker received from glasses (conversation exited)")
-                    com.rokidlab.phone.ai.MusicPlayerController.stop()
-                    return@AsrPushClient
-                }
-                // 拍照答题标记：眼镜端镜腿按键时经 RFCOMM 通道推送（可靠区分按键意图，
-                // 不依赖 AI App 网关，也不会被真实 resume 事件误触发）
-                if (text == PHOTO_ASK_MARKER) {
-                    Log.i(TAG, "Photo-ask marker received via RFCOMM push channel")
-                    // 拍照+OCR+AI 全流程耗时数秒，切后台线程执行，避免阻塞 RFCOMM 读线程
-                    Thread { startPhotoAsk() }.start()
-                    return@AsrPushClient
-                }
-                // ASR 识别完成信号：眼镜端收到官方 ASR_End 后推送，此刻官方识别已完成。
-                // 眼镜端 KeyButtonService 已同步本地接管（interruptOfficialLocally + openAiSession +
-                // showAiUserText 显示提问），此处只记录不再重复打断——若再发 Ai/open（startNewTalk）
-                // 会与眼镜端本地 open 竞态，重置官方会话导致后续 TTS_Result 回复文字不显示
-                // （语音正常但文字丢失，实测 12:03 双 open 竞态）。
-                if (text == ASR_READY_MARKER) {
-                    Log.i(TAG, "ASR_READY received via RFCOMM push (glasses already took over, skip interrupt)")
-                    return@AsrPushClient
-                }
-                // 更新去重游标：推送文字无真实时间戳，用接收时刻作为游标，
-                // 防止轮询兜底读到同一条文字重复处理（眼镜端推送失败写文件的场景）。
-                val prefs = activity.getSharedPreferences("adb_prefs", 0)
-                prefs.edit().putLong(KEY_LAST_ASR_TS, System.currentTimeMillis()).apply()
-                Log.i(TAG, "ASR via push channel: $text")
-                Thread { handleGlassesAiAsrText(text) }.start()
-            } catch (e: Exception) {
-                Log.e(TAG, "asr push handle error", e)
-            }
-        }
-        aiAsrPushClient?.start()
-        Log.i(TAG, "startAiAsrBridgePolling: started (push + file fallback)")
-        // 连接期启动下行存活探测（链接断开/清理时随 stopAiAsrBridgePolling 一起停止）
-        startDownlinkPing()
-    }
-
-    private fun stopAiAsrBridgePolling() {
-        aiAsrPollJob?.cancel()
-        aiAsrPollJob = null
-        aiAsrPushClient?.stop()
-        aiAsrPushClient = null
-        stopDownlinkPing()
-    }
-
-    // ──────────────────────────────────────────────
-    //  下行存活探测（ping）：驱动眼镜端 RokidLink 断线自愈
-    // ──────────────────────────────────────────────
-
-    /** 启动下行存活探测：连接存活期间每 DOWNLINK_PING_INTERVAL_MS（60s）下发一条
-     *  AiChannel.TOPIC_PING 空消息。眼镜端 RokidLink 收到即刷新下行活性；
-     *  断线重连后若分发路由 stale（收不到任何下行）则在观察窗口到期后自杀重启。 */
-    private fun startDownlinkPing() {
-        downlinkPingJob?.cancel()
-        downlinkPingJob = appScope.launch(Dispatchers.IO) {
-            while (isActive) {
-                try {
-                    val link = cxrLink
-                    if (link != null && cxrlConnected) {
-                        // 按条加锁与下行主链路（KeyDown/open/ASR/TTS）串行，避免插入指令序列中间
-                        val caps = Caps().also { it.write("ping") }
-                        val r = synchronized(aiCmdLock) { link.sendCustomCmd(AiChannel.TOPIC_PING, caps) }
-                        if (r == 0) {
-                            Log.d(TAG, "downlink ping sent (${AiChannel.TOPIC_PING})")
-                        } else {
-                            Log.w(TAG, "downlink ping sendCustomCmd(${AiChannel.TOPIC_PING}) -> $r")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "downlink ping error", e)
-                }
-                delay(DOWNLINK_PING_INTERVAL_MS)
-            }
-        }
-    }
-
-    private fun stopDownlinkPing() {
-        downlinkPingJob?.cancel()
-        downlinkPingJob = null
-    }
-
-    /**
-     * 创建一次性 ADB 短连接（用后即断），避免后台轮询长连接独占蓝牙隧道。
-     * 必须在后台线程调用（同步阻塞连接握手）。连接失败返回 null。
-     */
-    private fun createShortAdbClient(): com.rokidlab.phone.adb.AdbShellClient? {
-        return runCatching {
-            val app = activity.application as LabApplication
-            val prefs = activity.getSharedPreferences("adb_prefs", 0)
-            val wifiIp = prefs.getString("ip", "192.168.1.168") ?: "192.168.1.168"
-            val route = runBlocking { app.routeManager.resolve(wifiIp, 5555) }
-            val (targetIp, targetPort) = when (route) {
-                is ConnectionRoute.Wifi -> route.ip to route.port
-                is ConnectionRoute.Bluetooth -> route.ip to route.localPort
-                is ConnectionRoute.None -> return null
-            }
-            val client = com.rokidlab.phone.adb.AdbShellClient(activity.applicationContext, targetIp, targetPort)
-            if (client.connect()) client else {
-                runCatching { client.disconnect() }
-                // 连接失败：清除线路缓存，下轮重新探测重建隧道（蓝牙隧道可能已断开）
-                runCatching { app.routeManager.clearRouteCache() }
-                null
-            }
-        }.getOrNull()
-    }
-
-    /** 文件通道轮询单次结果：text=读到的新文本（可能 null）；tunnelOk=隧道连接是否成功 */
-    private data class AsrBridgeRead(val text: Pair<Long, String>?, val tunnelOk: Boolean)
-
-    /**
-     * 通过 ADB 读取眼镜端 ai_asr.log 中时间戳大于 lastTs 的最新 ASR_TEXT（短连接，用后即断）。
-     * 返回 AsrBridgeRead：tunnelOk=false 表示隧道不可用（调用方应退避，避免持续打隧道），
-     * text 为 null 表示隧道正常但无新文本。
-     */
-    private fun readAiAsrBridgeTextOnce(lastTs: Long): AsrBridgeRead? {
-        val client = createShortAdbClient() ?: return AsrBridgeRead(null, false)
-        return try {
-            val out = runCatching {
-                client.executeShellCommand("tail -n 20 $GLASSES_ASR_FILE 2>/dev/null", 10_000)
-            }.getOrNull()
-            if (out == null) return AsrBridgeRead(null, false)
-            val latest = out.lineSequence()
-                .mapNotNull { line ->
-                    // 每行格式：[epochMs] text；解析失败（半行/脏数据）则忽略
-                    val m = Regex("""\[(\d+)\] (.*)""").matchEntire(line.trim()) ?: return@mapNotNull null
-                    val ts = m.groupValues[1].toLongOrNull() ?: return@mapNotNull null
-                    val text = m.groupValues[2].trim()
-                    if (text.isEmpty()) null else ts to text
-                }
-                .lastOrNull()
-            // 隧道连接成功；latest 可能为 null（无新数据），也可能时间戳不新
-            AsrBridgeRead(if (latest != null && latest.first > lastTs) latest else null, true)
-        } finally {
-            runCatching { client.disconnect() }
         }
     }
 
@@ -2123,7 +1393,7 @@ class CxrLHiRokidSession(
         photoRequestTimeoutJob?.cancel()
         photoRequestTimeoutJob = appScope.launch {
             delay(15_000)
-            activity.runOnUiThread {
+            mainHandler.post {
                 if (!done) {
                     Log.w(TAG, "requestPhotoFromLink: no image callback within 15s, forcing error")
                     finish { onError("photo timeout") }
@@ -2134,19 +1404,19 @@ class CxrLHiRokidSession(
         link.setCXRImageCbk(object : IImageStreamCbk {
             override fun onImageReceived(data: ByteArray) {
                 Log.i(TAG, "onImageReceived: ${data.size} bytes")
-                activity.runOnUiThread { finish { onPhoto(data) } }
+                mainHandler.post { finish { onPhoto(data) } }
             }
 
             override fun onImageError(code: Int, message: String) {
                 Log.e(TAG, "onImageError($code): $message")
-                activity.runOnUiThread { finish { onError("photo error($code): $message") } }
+                mainHandler.post { finish { onError("photo error($code): $message") } }
             }
         })
 
         val ok = link.takePhoto(width, height, quality)
         Log.i(TAG, "takePhoto -> $ok")
         if (!ok) {
-            activity.runOnUiThread { finish { onError("takePhoto failed") } }
+            mainHandler.post { finish { onError("takePhoto failed") } }
         }
     }
 
@@ -2158,7 +1428,7 @@ class CxrLHiRokidSession(
     private fun abortAiSendIfLinkInvalid(link: CXRLink, onResult: ((Boolean, String?) -> Unit)?): Boolean {
         if (cxrLink === link && cxrlConnected) return true
         Log.w(TAG, "sendAiTextViaLink: link stale/closed, abort send")
-        activity.runOnUiThread {
+        mainHandler.post {
             completeActiveOperation()
             onBusyChanged(false)
             onResult?.invoke(false, "link disconnected")
@@ -2228,23 +1498,13 @@ class CxrLHiRokidSession(
         // 避免过期任务抢到锁后继续跑多轮工具（用户新请求正在等待接管）
         if (generation != aiGenSeq) {
             Log.i(TAG, "sendAiTextViaLink superseded by newer request, abort (gen=$generation != latest=$aiGenSeq)")
-            activity.runOnUiThread {
+            mainHandler.post {
                 completeActiveOperation()
                 onBusyChanged(false)
                 onResult?.invoke(false, null)
             }
             return
         }
-        // 反射绕过 CXR-L SDK 的 cmd 黑名单
-        try {
-            val field = link.javaClass.superclass.getDeclaredField("d")
-            field.isAccessible = true
-            field.set(link, arrayOf<String>())
-            Log.i(TAG, "CXR-L cmd blacklist bypassed (cleared)")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to bypass CXR-L cmd blacklist", e)
-        }
-
         onBusyChanged(true)
 
         // 下行显示段与发送段（两个 try 块）共享的变量，提升到 try 外避免作用域不可见
@@ -2256,12 +1516,17 @@ class CxrLHiRokidSession(
         // ===== 步骤-1: （可选）先打断官方乐奇会话 =====
         // 语音唤醒链路中眼镜端已本地打断（interruptOfficialLocally），此处作为双保险，
         // 等待时间从 1000ms 压缩到 300ms 提速。localTakeover 时眼镜端已打断，跳过。
-        if (interruptOfficialFirst && !localTakeover) {
-            val exitCaps = Caps()
-            exitCaps.write("Exit")
-            val exitResult = link.sendCustomCmd("Ai", exitCaps)
-            Log.i(TAG, "sendCustomCmd(Ai, Exit) interrupt official -> $exitResult")
-            Thread.sleep(300)
+        // 注意：实际执行挪到 deepSeekThread 启动之后（见下方 runOfficialInterrupt 调用处），
+        // 让 AI 网络请求与这 300ms 等待并行——对官方 App 的指令时序完全不变（Exit 仍先于
+        // KeyDown_Client 下发），仅 AI 提前 ~300ms 开跑，缩短端到端首响。
+        val runOfficialInterrupt: () -> Unit = {
+            if (interruptOfficialFirst && !localTakeover) {
+                val exitCaps = Caps()
+                exitCaps.write("Exit")
+                val exitResult = link.sendCustomCmd("Ai", exitCaps)
+                Log.i(TAG, "sendCustomCmd(Ai, Exit) interrupt official -> $exitResult")
+                Thread.sleep(300)
+            }
         }
 
         // ===== 步骤3 提前并行：后台线程调用 AI 获取回复（与下行显示并行，省 1.5~2s）=====
@@ -2289,20 +1554,21 @@ class CxrLHiRokidSession(
                 val agentSession = com.rokidlab.phone.ai.AgentSessionManager
                 agentSession.maybeExpire()
                 // 同时校验 AgentSessionManager 开关，关闭时本次不注入历史也不记录本轮
-                val memoryEnabled = agentSession.isEnabled(activity)
+                val memoryEnabled = agentSession.isEnabled(appContext)
                 val effectiveRecord = recordHistory && memoryEnabled
                 // 长期记忆：跨会话记住用户事实/偏好（注入 <memories> + 注册 manage_memory 工具）
                 val longTermMemory = com.rokidlab.phone.ai.LongTermMemoryManager
-                val longTermOn = longTermMemory.isEnabled(activity)
-                val longTermContext = if (longTermOn) longTermMemory.memoriesContext(activity) else null
+                val longTermOn = longTermMemory.isEnabled(appContext)
+                // 检索式注入：按当前提问相关性取 top-K 长期记忆（无相关性时回退最近 K 条）
+                val longTermContext = if (longTermOn) longTermMemory.memoriesContext(appContext, text) else null
                 val messages = JSONArray()
                 // 本地模型 → 本地轻量会话：不装配工具/技能/长期记忆工具，精简人设，仅闲聊问答。
                 // 本地小模型背不动全部工具 Schema（每轮全量下发拖慢 prefill 且小模型调用工具不可靠），
                 // 设备操作/联网等能力由用户切回在线 Agent 提供（对齐 RikkaHub 按会话装配思路）。
                 val localLight = localBase
                 // 用户自定义技能：注入技能清单（第 1 层渐进披露）+ 注册 load_skill 伪工具（仅在线 Agent）
-                val skillsContext = if (!localLight && com.rokidlab.phone.ai.SkillRegistry.isEnabled(activity)) {
-                    com.rokidlab.phone.ai.SkillRegistry.skillsContext(activity)
+                val skillsContext = if (!localLight && com.rokidlab.phone.ai.SkillRegistry.isEnabled(appContext)) {
+                    com.rokidlab.phone.ai.SkillRegistry.skillsContext(appContext)
                 } else null
                 messages.put(
                     service.buildSystemMessage(
@@ -2331,7 +1597,7 @@ class CxrLHiRokidSession(
                 // buildTools 按域装配，并附上仅在线 Agent 的长期记忆 manage_memory 与技能
                 // load_skill/load_skill_section 两个动态伪工具；切换子集时复用同一装配逻辑。
                 val buildTools: (Set<String>) -> MutableList<JSONObject> = { domains ->
-                    ToolRegistry.schemasFor(activity, domains).toMutableList().apply {
+                    ToolRegistry.schemasFor(appContext, domains).toMutableList().apply {
                         if (longTermOn && !localLight) add(longTermMemory.schema())
                         if (skillsContext != null) {
                             add(com.rokidlab.phone.ai.SkillRegistry.schema())
@@ -2343,6 +1609,39 @@ class CxrLHiRokidSession(
                 val isCodeGenCall: (String, String) -> Boolean = { name, args ->
                     name == ToolRegistry.TOOL_CODE_FILE ||
                         (name == com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME && args.contains("aiui-dev"))
+                }
+                // 工具执行统一入口（主循环与总结兜底轮共用）：异常类失败（网络抖动/ADB 隧道
+                // 瞬断等瞬时错误）自动重试一次（500ms 退避）再如实回报模型——瞬时失败直接
+                // 上报会让模型过早放弃或向用户播报失败；业务性失败（"没有找到歌曲"等字符串
+                // 返回值）不重试，语义已经是确定性结果。
+                fun runTool(tc: com.rokidlab.phone.ai.ToolCallInfo): String {
+                    var lastError: Exception? = null
+                    repeat(2) { attempt ->
+                        if (attempt > 0) {
+                            try {
+                                Thread.sleep(500)
+                            } catch (_: InterruptedException) {
+                                Thread.currentThread().interrupt()
+                            }
+                            Log.w(TAG, "tool ${tc.name} retry after transient failure: ${lastError?.message}")
+                        }
+                        try {
+                            return when (tc.name) {
+                                com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME ->
+                                    longTermMemory.execute(appContext, tc.arguments)
+                                com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME ->
+                                    com.rokidlab.phone.ai.SkillRegistry.execute(appContext, tc.arguments)
+                                com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION ->
+                                    com.rokidlab.phone.ai.SkillRegistry.executeSection(appContext, tc.arguments)
+                                else -> ToolRegistry.execute(appContext, tc.name, tc.arguments)
+                            }
+                        } catch (e: Exception) {
+                            lastError = e
+                            Log.w(TAG, "tool ${tc.name} attempt ${attempt + 1} failed: ${e.message}")
+                        }
+                    }
+                    Log.e(TAG, "tool execute failed after retry: ${tc.name}", lastError)
+                    return "工具执行失败: ${lastError?.message}"
                 }
                 var activeTools = buildTools(
                     if (localLight) ToolRegistry.SESSION_LOCAL_DOMAINS
@@ -2374,8 +1673,9 @@ class CxrLHiRokidSession(
                         tools = activeTools,
                         onDelta = onDelta,
                         isCancelled = { generation != aiGenSeq },
-                        // 本地 Ollama 不重试：首字慢是「加载/思考中」而非抖动，重试只会重复加载翻倍等待
-                        retryAttempts = if (localBase) 1 else 2,
+                        // 本地 Ollama 不重试：首字慢是「加载/思考中」而非抖动，重试只会重复加载翻倍等待；
+                        // 远程 3 次配合指数退避（500ms→1s→2s），重放安全边界=尚无 content 推给 UI
+                        retryAttempts = if (localBase) 1 else 3,
                     )
                     if (turn.toolCalls.isEmpty()) {
                         // 有正文：最终回复，收尾
@@ -2454,20 +1754,7 @@ class CxrLHiRokidSession(
                                     else ToolRegistry.statusText(tc.name),
                                 )
                             }
-                            results[idx] = try {
-                                when (tc.name) {
-                                    com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME ->
-                                        longTermMemory.execute(activity, tc.arguments)
-                                    com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME ->
-                                        com.rokidlab.phone.ai.SkillRegistry.execute(activity, tc.arguments)
-                                    com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION ->
-                                        com.rokidlab.phone.ai.SkillRegistry.executeSection(activity, tc.arguments)
-                                    else -> ToolRegistry.execute(activity, tc.name, tc.arguments)
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "tool execute failed: ${tc.name}", e)
-                                "工具执行失败: ${e.message}"
-                            }
+                            results[idx] = runTool(tc)
                             // 落盘结果一句话回报眼镜（覆盖上面的「正在生成」，最终 TTS 总结再覆盖）
                             if (isCodeFile && relFile.isNotEmpty()) {
                                 val r = results[idx]
@@ -2571,20 +1858,7 @@ class CxrLHiRokidSession(
                         messages.put(assistantMsg)
                         // 同步执行本轮工具调用并回填结果（总结轮工具极少，无需并发）
                         finalTurn.toolCalls.forEach { tc ->
-                            val out = try {
-                                when (tc.name) {
-                                    com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME ->
-                                        longTermMemory.execute(activity, tc.arguments)
-                                    com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME ->
-                                        com.rokidlab.phone.ai.SkillRegistry.execute(activity, tc.arguments)
-                                    com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION ->
-                                        com.rokidlab.phone.ai.SkillRegistry.executeSection(activity, tc.arguments)
-                                    else -> ToolRegistry.execute(activity, tc.name, tc.arguments)
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "final-chat tool failed: ${tc.name}", e)
-                                "工具执行失败: ${e.message}"
-                            }
+                            val out = runTool(tc)
                             if (tc.name == ToolRegistry.TOOL_CODE_FILE) {
                                 codeGenUsed = true
                                 if (out.startsWith("已生成")) {
@@ -2646,6 +1920,9 @@ class CxrLHiRokidSession(
                 replyRef.set("抱歉，AI 服务暂时不可用。")
             }
         }.apply { start() }
+
+        // 步骤-1 在 AI 线程启动后执行（原位置在 thread 启动前）：打断等待 300ms 与 AI 请求并行
+        runOfficialInterrupt()
 
         // ===== 步骤0+1+2: 开启会话 + 显示提问 + 结束识别 =====
         // localTakeover：眼镜端已本地完成（KeyButtonService ASR_End 后立即 open + 显示提问），
@@ -2712,7 +1989,7 @@ class CxrLHiRokidSession(
         // 复位状态并把链路让给新请求（join 期间 deepSeekThread 已提前退出，等待有界）
         if (generation != aiGenSeq) {
             Log.i(TAG, "sendAiTextViaLink: reply superseded during generation (gen=$generation != $aiGenSeq), skip downlink")
-            activity.runOnUiThread {
+            mainHandler.post {
                 completeActiveOperation()
                 onBusyChanged(false)
                 onResult?.invoke(false, null)
@@ -2724,7 +2001,7 @@ class CxrLHiRokidSession(
         } catch (e: Exception) {
             // 下行指令段（sendCustomCmd/sleep/join）异常：统一复位状态，避免 sending/busy 永久卡死
             Log.e(TAG, "AI send downlink failed", e)
-            activity.runOnUiThread {
+            mainHandler.post {
                 completeActiveOperation()
                 onBusyChanged(false)
                 onResult?.invoke(false, "AI send error: ${e.message}")
@@ -2779,7 +2056,7 @@ class CxrLHiRokidSession(
                 Log.i(TAG, "skipTtsAudioFinished=true: TTS_AudioFinished not sent (keep Lab reply visible)")
             }
 
-            activity.runOnUiThread {
+            mainHandler.post {
                 onStatus("AI 回复已发送: \"${reply.take(30)}...\"")
                 completeActiveOperation()
                 onBusyChanged(false)
@@ -2787,7 +2064,7 @@ class CxrLHiRokidSession(
             }
         } catch (e: Exception) {
             Log.e(TAG, "AI reply send failed", e)
-            activity.runOnUiThread {
+            mainHandler.post {
                 onStatus("AI 回复失败: ${e.message}")
                 completeActiveOperation()
                 onBusyChanged(false)
@@ -2861,7 +2138,15 @@ class CxrLHiRokidSession(
         android.util.Log.i("CxrLInstall", "cleanup() called")
         timeoutJob?.cancel()
         timeoutJob = null
-        stopAiAsrBridgePolling()
+        asrBridge.stop()
+        // 补漏：取消其余遗留协程任务（原实现漏取消导致后台任务残留）
+        aiConfigPushJob?.cancel()
+        aiConfigPushJob = null
+        photoRequestTimeoutJob?.cancel()
+        photoRequestTimeoutJob = null
+        aiui.stopAgentListPushWindow()
+        // 解除 Rokid 主机 App 服务绑定（applicationContext 绑定不随 Activity 销毁自动解绑）
+        unbindAllHostServices()
         // 打断在途 AI：bump 代际号让 deepSeekThread 自弃（避免断连后仍空跑至超时），
         // 并趁链路尚在通知眼镜端停止播报；随后才断开连接
         abortCurrentAi()
@@ -2893,18 +2178,18 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = packageName,
                 timeoutMillis = 90_000,
-                timeoutMessage = activity.getString(R.string.waiting_install_result, targetHostApp.displayName),
-                bindMessage = activity.getString(R.string.binding_service, targetHostApp.displayName),
-                configureFailureMessage = activity.getString(R.string.cxrl_config_failed),
-                bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
+                timeoutMessage = appContext.getString(R.string.waiting_install_result, targetHostApp.displayName),
+                bindMessage = appContext.getString(R.string.binding_service, targetHostApp.displayName),
+                configureFailureMessage = appContext.getString(R.string.cxrl_config_failed),
+                bindFailureMessage = appContext.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 showConnectionStatus = true,
                 onReady = { link ->
                     android.util.Log.i("CxrLInstall", "connectAndUpload: onReady! Starting appUploadAndInstall...")
-                    onStatus(activity.getString(R.string.cxrl_ready_installing))
+                    onStatus(appContext.getString(R.string.cxrl_ready_installing))
                     link.appUploadAndInstall(apkFile.absolutePath, glassAppCallback(
                         onInstall = { success ->
                             completeActiveOperation()
-                            onStatus(if (success) activity.getString(R.string.glasses_install_success) else activity.getString(R.string.glasses_install_failed))
+                            onStatus(if (success) appContext.getString(R.string.glasses_install_success) else appContext.getString(R.string.glasses_install_failed))
                             onBusyChanged(false)
                             onInstallResult?.invoke(success)
                         },
@@ -2935,9 +2220,9 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = packageName,
                 timeoutMillis = 30_000,
-                timeoutMessage = activity.getString(R.string.query_timeout, packageName),
-                configureFailureMessage = activity.getString(R.string.query_config_failed, packageName),
-                bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
+                timeoutMessage = appContext.getString(R.string.query_timeout, packageName),
+                configureFailureMessage = appContext.getString(R.string.query_config_failed, packageName),
+                bindFailureMessage = appContext.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 onReady = { link ->
                     link.appIsInstalled(glassAppCallback(
                         onQuery = { installed ->
@@ -2970,17 +2255,17 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = packageName,
                 timeoutMillis = 60_000,
-                timeoutMessage = activity.getString(R.string.uninstall_timeout, packageName),
-                bindMessage = activity.getString(R.string.binding_service, targetHostApp.displayName),
-                configureFailureMessage = activity.getString(R.string.uninstall_config_failed, packageName),
-                bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
+                timeoutMessage = appContext.getString(R.string.uninstall_timeout, packageName),
+                bindMessage = appContext.getString(R.string.binding_service, targetHostApp.displayName),
+                configureFailureMessage = appContext.getString(R.string.uninstall_config_failed, packageName),
+                bindFailureMessage = appContext.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 showConnectionStatus = true,
                 onReady = { link ->
-                    onStatus(activity.getString(R.string.cxrl_ready_uninstalling, packageName))
+                    onStatus(appContext.getString(R.string.cxrl_ready_uninstalling, packageName))
                     link.appUninstall(glassAppCallback(
                         onUninstall = { success ->
                             completeActiveOperation()
-                            onStatus(if (success) activity.getString(R.string.glasses_uninstall_success) else activity.getString(R.string.glasses_uninstall_failed))
+                            onStatus(if (success) appContext.getString(R.string.glasses_uninstall_success) else appContext.getString(R.string.glasses_uninstall_failed))
                             onBusyChanged(false)
                             onUninstallResult?.invoke(success)
                         },
@@ -3009,13 +2294,13 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = packageName,
                 timeoutMillis = 30_000,
-                timeoutMessage = activity.getString(R.string.launch_timeout, packageName),
-                bindMessage = activity.getString(R.string.binding_service, targetHostApp.displayName),
-                configureFailureMessage = activity.getString(R.string.launch_config_failed, packageName),
-                bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
+                timeoutMessage = appContext.getString(R.string.launch_timeout, packageName),
+                bindMessage = appContext.getString(R.string.binding_service, targetHostApp.displayName),
+                configureFailureMessage = appContext.getString(R.string.launch_config_failed, packageName),
+                bindFailureMessage = appContext.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 showConnectionStatus = true,
                 onReady = { link ->
-                    onStatus(activity.getString(R.string.cxrl_ready_launching, packageName))
+                    onStatus(appContext.getString(R.string.cxrl_ready_launching, packageName))
                     // 文档要求 appStart 使用 "${packageName}${activityClassName}" 格式
                     val entryUri = "$packageName$activityClass"
                     link.appStart(entryUri, object : IGlassAppCbk {
@@ -3036,11 +2321,11 @@ class CxrLHiRokidSession(
                                 if (sendCmdAfterLaunch != null) {
                                     // 眼镜端已启动，发送自定义命令触发自动操作
                                     val cmdResult = link.sendCustomCmd(sendCmdAfterLaunch, Caps())
-                                    onStatus(activity.getString(R.string.cmd_result, sendCmdAfterLaunch, cmdResult))
+                                    onStatus(appContext.getString(R.string.cmd_result, sendCmdAfterLaunch, cmdResult))
                                 }
                             }
                             completeActiveOperation()
-                            onStatus(if (success) activity.getString(R.string.glasses_launch_success, packageName) else activity.getString(R.string.glasses_launch_failed, packageName))
+                            onStatus(if (success) appContext.getString(R.string.glasses_launch_success, packageName) else appContext.getString(R.string.glasses_launch_failed, packageName))
                             onBusyChanged(false)
                             onLaunchResult?.invoke(success)
                         }
@@ -3070,20 +2355,20 @@ class CxrLHiRokidSession(
             operation = CxrAppOperation(
                 packageName = packageName,
                 timeoutMillis = 30_000,
-                timeoutMessage = activity.getString(R.string.stop_timeout, packageName),
-                bindMessage = activity.getString(R.string.binding_service, targetHostApp.displayName),
-                configureFailureMessage = activity.getString(R.string.stop_config_failed, packageName),
-                bindFailureMessage = activity.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
+                timeoutMessage = appContext.getString(R.string.stop_timeout, packageName),
+                bindMessage = appContext.getString(R.string.binding_service, targetHostApp.displayName),
+                configureFailureMessage = appContext.getString(R.string.stop_config_failed, packageName),
+                bindFailureMessage = appContext.getString(R.string.service_bind_failed, targetHostApp.displayName, targetHostApp.displayName),
                 showConnectionStatus = true,
                 onReady = { link ->
-                    onStatus(activity.getString(R.string.cxrl_ready_stopping, packageName))
+                    onStatus(appContext.getString(R.string.cxrl_ready_stopping, packageName))
                     link.appStop(object : IGlassAppCbk {
                         override fun onInstallAppResult(success: Boolean) = Unit
                         override fun onUnInstallAppResult(success: Boolean) = Unit
                         override fun onOpenAppResult(success: Boolean) = Unit
                         override fun onStopAppResult(success: Boolean) {
                             completeActiveOperation()
-                            onStatus(if (success) activity.getString(R.string.glasses_stop_success, packageName) else activity.getString(R.string.glasses_stop_failed, packageName))
+                            onStatus(if (success) appContext.getString(R.string.glasses_stop_success, packageName) else appContext.getString(R.string.glasses_stop_failed, packageName))
                             onBusyChanged(false)
                             onStopResult?.invoke(success)
                         }
@@ -3110,21 +2395,24 @@ class CxrLHiRokidSession(
         operation: CxrAppOperation,
     ) {
         cleanup()
-        val link = CXRLink(activity.applicationContext).also { newLink ->
+        val link = CXRLink(appContext).also { newLink ->
+            // 反射绕过 CXR-L SDK 的 cmd 黑名单（一次到位：连接建立时清理，
+            // 避免过去在 sendAiTextViaLink 每条 AI 消息下行都重复反射一次的开销）
+            bypassCmdBlacklist(newLink)
             newLink.setCXRLinkCbk(FullCXRLinkCallback(
                 onConnected = { connected ->
-                    activity.runOnUiThread {
+                    mainHandler.post {
                         cxrlConnected = connected
-                        if (operation.showConnectionStatus) onStatus(activity.getString(R.string.cxrl_service_connected, connected.toString()))
-                        if (connected) startAiAsrBridgePolling() else stopAiAsrBridgePolling()
+                        if (operation.showConnectionStatus) onStatus(appContext.getString(R.string.cxrl_service_connected, connected.toString()))
+                        if (connected) asrBridge.start() else asrBridge.stop()
                         notifyConnectionChanged()
                         maybeRunPendingOperation()
                     }
                 },
                 onBtConnected = { connected ->
-                    activity.runOnUiThread {
+                    mainHandler.post {
                         glassBtConnected = connected
-                        if (operation.showConnectionStatus) onStatus(activity.getString(R.string.bluetooth_connected_status, connected.toString()))
+                        if (operation.showConnectionStatus) onStatus(appContext.getString(R.string.bluetooth_connected_status, connected.toString()))
                         notifyConnectionChanged()
                         maybeRunPendingOperation()
                     }
@@ -3178,7 +2466,7 @@ class CxrLHiRokidSession(
         }
         android.util.Log.i("CxrLInstall", "connectAndRun: bindRokidHostService OK, waiting for connected+btConnected...")
         // 直接启动 AI 文字轮询（不依赖 onCXRLConnected：实测该回调在部分会话中不触发）
-        startAiAsrBridgePolling()
+        asrBridge.start()
         // 连接建立后补发一次 AI 配置到眼镜端（setAiConfig 时可能尚未连接）
         pushAiConfigToGlass(getAiConfig())
     }
@@ -3209,7 +2497,7 @@ class CxrLHiRokidSession(
         // appStart 后的真实 resume 通过一次性冷却标志（quizResumeCooling）过滤。
         link.setCXRGlassAppCbk(object : IGlassAppCbk {
             override fun onGlassAppResume(resumed: Boolean) {
-                val quiz = activity.getSharedPreferences(AI_PREFS, 0)
+                val quiz = appContext.getSharedPreferences(AI_PREFS, 0)
                     .getBoolean(KEY_KEY_QUIZ_ENABLED, false)
                 // 一次性冷却：消费 appStart 触发的真实 resume（不会再来第二次），
                 // 之后任意时刻按键触发的 resume 不再被时间窗口误过滤（修复「开启后第一次按键没反应」）
@@ -3261,7 +2549,7 @@ class CxrLHiRokidSession(
                             Log.i(TAG, "Wifi_Connect_Status carrying ASR text: $asrText")
                             // SDK 回调在 binder 线程：handleGlassesAiAsrText 内含 sleep+join（最长 30s+），
                             // 必须切后台线程，否则独占 binder 线程池导致其他 SDK 回调延迟/超时
-                            appScope.launch(Dispatchers.IO) { handleGlassesAiAsrText(asrText) }
+                            appScope.launch(Dispatchers.IO) { asrBridge.onAsrText(asrText) }
                         } else {
                             val json = String(data ?: ByteArray(0))
                             Log.i(TAG, "Received Wifi_Connect_Status: $json")
@@ -3277,7 +2565,7 @@ class CxrLHiRokidSession(
                         val text = parseAiAsrPollText(data)
                         if (!text.isNullOrBlank()) {
                             Log.i(TAG, "AI ASR poll got text: $text")
-                            appScope.launch(Dispatchers.IO) { handleGlassesAiAsrText(text) }
+                            appScope.launch(Dispatchers.IO) { asrBridge.onAsrText(text) }
                         }
                     }
                     "Proxy" -> {
@@ -3327,21 +2615,21 @@ class CxrLHiRokidSession(
     ): IGlassAppCbk = object : IGlassAppCbk {
         override fun onInstallAppResult(success: Boolean) {
             android.util.Log.i("CxrLInstall", "glassAppCallback: onInstallAppResult(success=$success)")
-            activity.runOnUiThread { onInstall(success) }
+            mainHandler.post { onInstall(success) }
         }
 
         override fun onUnInstallAppResult(success: Boolean) {
-            activity.runOnUiThread { onUninstall(success) }
+            mainHandler.post { onUninstall(success) }
         }
 
         override fun onOpenAppResult(success: Boolean) {
-            activity.runOnUiThread { onStart(success) }
+            mainHandler.post { onStart(success) }
         }
         override fun onStopAppResult(success: Boolean) = Unit
         override fun onGlassAppResume(resumed: Boolean) = Unit
 
         override fun onQueryAppResult(installed: Boolean) {
-            activity.runOnUiThread { onQuery(installed) }
+            mainHandler.post { onQuery(installed) }
         }
     }
 
@@ -3374,13 +2662,47 @@ class CxrLHiRokidSession(
 
     private fun bindRokidHostService(link: CXRLink, targetHostApp: RokidHostApp, authToken: String): Boolean {
         val conn = findServiceConnection(link) ?: return false
-        return runCatching {
+        val ok = runCatching {
             val intent = Intent(MEDIA_SERVICE_ACTION)
                 .setPackage(targetHostApp.packageName)
                 .putExtra(AUTH_TOKEN_EXTRA, authToken)
-                .putExtra(AUTH_PACKAGE_EXTRA, activity.packageName)
-            activity.applicationContext.bindService(intent, conn, Context.BIND_AUTO_CREATE)
+                .putExtra(AUTH_PACKAGE_EXTRA, appContext.packageName)
+            // 注意：applicationContext 绑定的连接不会随 Activity 销毁自动解绑，
+            // 必须登记并在 cleanup() 统一 unbind，否则 ServiceConnection 泄漏
+            appContext.bindService(intent, conn, Context.BIND_AUTO_CREATE)
         }.getOrDefault(false)
+        if (ok) boundConnections.add(conn)
+        return ok
+    }
+
+    /** 已 bind 的 Rokid 主机 App ServiceConnection（cleanup 时统一 unbind，防泄漏） */
+    private val boundConnections = java.util.concurrent.CopyOnWriteArrayList<ServiceConnection>()
+
+    /**
+     * 反射清空 CXR-L SDK 的 cmd 黑名单字段（混淆名 "d"，String[] 类型）。
+     * 仅在 CXRLink 创建时调用一次；SDK 升级导致字段名变化时静默失败并记日志，
+     * 不影响主链路（与旧实现每条消息重试的行为等价——字段名变了旧代码同样每条失败）。
+     */
+    private fun bypassCmdBlacklist(link: CXRLink) {
+        try {
+            val field = link.javaClass.superclass.getDeclaredField("d")
+            field.isAccessible = true
+            field.set(link, arrayOf<String>())
+            Log.i(TAG, "CXR-L cmd blacklist bypassed (cleared at link creation)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to bypass CXR-L cmd blacklist", e)
+        }
+    }
+
+    /** 统一解除所有已登记的服务绑定 */
+    private fun unbindAllHostServices() {
+        if (boundConnections.isEmpty()) return
+        // SDK 若已自行解绑，重复 unbind 会抛 IllegalArgumentException，逐个容错
+        boundConnections.forEach { conn ->
+            runCatching { appContext.unbindService(conn) }
+                .onFailure { Log.w(TAG, "unbindService failed (may already be unbound): ${it.message}") }
+        }
+        boundConnections.clear()
     }
 
     private fun findServiceConnection(link: CXRLink): ServiceConnection? {
@@ -3414,7 +2736,7 @@ class CxrLHiRokidSession(
     }
 
     private fun isWifiEnabled(): Boolean {
-        val wifiManager = activity.applicationContext.getSystemService(WifiManager::class.java)
+        val wifiManager = appContext.getSystemService(WifiManager::class.java)
         return wifiManager?.isWifiEnabled == true
     }
 
@@ -3423,11 +2745,11 @@ class CxrLHiRokidSession(
         requestAuthorizationIfMissing: Boolean,
     ): Boolean {
         if (!isHostAppInstalled(targetHostApp)) {
-            onStatus(activity.getString(R.string.install_host_first, targetHostApp.displayName))
+            onStatus(appContext.getString(R.string.install_host_first, targetHostApp.displayName))
             return false
         }
         if (token.isNullOrBlank()) {
-            onStatus(activity.getString(R.string.authorize_in_host, targetHostApp.displayName))
+            onStatus(appContext.getString(R.string.authorize_in_host, targetHostApp.displayName))
             if (requestAuthorizationIfMissing) requestAuthorization()
             return false
         }
@@ -3443,7 +2765,7 @@ class CxrLHiRokidSession(
         // 先尝试从 APK 读取（部分国产手机 getPackageArchiveInfo 可能返回 null）
         @Suppress("DEPRECATION")
         val info = runCatching {
-            activity.packageManager.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_ACTIVITIES)
+            appContext.packageManager.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_ACTIVITIES)
         }.getOrNull()
         val fromApk = info?.packageName?.takeIf { it.isNotBlank() }
         if (fromApk != null) return fromApk
