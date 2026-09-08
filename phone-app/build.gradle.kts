@@ -100,12 +100,17 @@ android {
 // ── 眼镜端 RokidLink APK 自动构建集成 ──
 // 构建 phone-app 时, 先构建 RokidLink 模块, 将输出的 APK 拷贝到 assets
 // 这样 installRokidLinkToGlasses() 读取的总是最新版 RokidLink
-val rokidLinkProject by lazy { rootProject.project(":cxrl:RokidLab:RokidLink") }
+// 兼容两种构建布局：仓库根（RokidLab/）为 ":RokidLink"；外层壳工程（D:\rokidapp）为 ":cxrl:RokidLab:RokidLink"
+val rokidLinkProject by lazy {
+    rootProject.findProject(":RokidLink")
+        ?: rootProject.findProject(":cxrl:RokidLab:RokidLink")
+        ?: error("找不到 RokidLink 模块（既不在 :RokidLink 也不在 :cxrl:RokidLab:RokidLink）")
+}
 
 val buildRokidLinkDebug by tasks.registering {
     description = "构建 RokidLink (debug) 并拷贝到 phone-app assets"
     group = "build"
-    dependsOn(":cxrl:RokidLab:RokidLink:assembleDebug")
+    dependsOn("${rokidLinkProject.path}:assembleDebug")
     doLast {
         val sourceApk = rokidLinkProject.buildDir.resolve("outputs/apk/debug/RokidLink-debug.apk")
         val targetFile = file("src/main/assets/RokidLink.apk")
@@ -117,7 +122,7 @@ val buildRokidLinkDebug by tasks.registering {
 val buildRokidLinkRelease by tasks.registering {
     description = "构建 RokidLink (release) 并拷贝到 phone-app assets"
     group = "build"
-    dependsOn(":cxrl:RokidLab:RokidLink:assembleRelease")
+    dependsOn("${rokidLinkProject.path}:assembleRelease")
     doLast {
         val releaseDir = rokidLinkProject.buildDir.resolve("outputs/apk/release")
         // 优先取已签名的 APK，失败则取未签名的
@@ -177,11 +182,18 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    // OkHttp：连接池复用 + HTTP/2，替代 HttpURLConnection 每请求重握手
+    implementation(libs.okhttp)
     
-    // CXR-L SDK v1.1.0 (Maven, 自带 16KB 对齐的 jni so, 兼容 Android 16)
-    // 1.1.0 内置 CXRServiceBridge/Caps/CXRSocketProtocol, 不再需要单独的 cxr-service-bridge
-    implementation("com.rokid.cxr:client-l:1.1.0")
-    // 移除本地旧版 AAR (client-l-1.0.3 纯 Java; cxr-service-bridge-1.0 的 so 为 4KB 对齐, 不兼容 16KB 设备)
+    // CXR-L SDK 1.1.2 (Maven)
+    // 1.1.1 起 client-l 改为瘦 aar：CXRServiceBridge/Caps/CXRSocketProtocol/RLog 拆到独立
+    // artifact com.rokid.cxr:cxr-service-bridge，由 client-l 传递依赖引入（so 仍在 bridge 内）。
+    implementation("com.rokid.cxr:client-l:1.1.2")
+    // ⚠️ 显式锁定 bridge 版本：1.1.2 的 POM 依赖的是「固定时间戳 SNAPSHOT」
+    //    cxr-service-bridge:1.0-20260715.121510-107，而该 artifact 的 release 1.0 与它内容并不相同
+    //    （1076548 vs 1126241 字节）。此处显式声明同一版本，保证构建可复现；
+    //    若将来 Nexus 清理掉该 SNAPSHOT，需改用 release 1.0 并真机回归。
+    implementation("com.rokid.cxr:cxr-service-bridge:1.0-20260715.121510-107")
     
     // client-l SDK 内部依赖 Gson，需要显式引入
     implementation("com.google.code.gson:gson:2.10.1")
