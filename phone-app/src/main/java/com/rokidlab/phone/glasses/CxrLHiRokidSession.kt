@@ -4,7 +4,6 @@ import com.rokidlab.phone.app.*
 import com.rokidlab.phone.adb.*
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.filemanager.*
-import com.rokidlab.phone.glasses.*
 import com.rokidlab.phone.mirror.*
 import com.rokidlab.phone.model.*
 import com.rokidlab.phone.network.*
@@ -12,6 +11,7 @@ import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
 import com.rokidlab.phone.ai.ToolRegistry
+import com.rokidlab.phone.ai.AiuiProject
 import com.rokidlab.phone.connection.ConnectionRoute
 import com.rokidlab.phone.R
 import android.content.ComponentName
@@ -23,9 +23,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
 import com.rokid.cxr.link.CXRLink
-import com.rokid.cxr.link.callbacks.ICXRLinkCbk
 import com.rokid.cxr.link.callbacks.IGlassAppCbk
 import com.rokid.cxr.link.callbacks.IImageStreamCbk
 import com.rokid.cxr.link.utils.CxrDefs
@@ -33,7 +31,9 @@ import com.rokid.cxr.Caps
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult
 import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper
 import com.rokid.sprite.aiapp.externalapp.auth.GlassPermission
+import com.rokid.sprite.aiapp.externalapp.IMediaStreamService
 import java.io.File
+import java.lang.reflect.Field
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -82,15 +82,26 @@ class CxrLHiRokidSession(
         private const val AI_ASR_POLL_INTERVAL_MS = 5000L
         /** 隧道异常退避上限：轮询连接失败时指数退避，避免推送断开期间持续打隧道导致 5556 报错 */
         private const val AI_ASR_BACKOFF_MAX_MS = 30_000L
+        /** 下行存活探测周期：连接存活期间每 60s 下发一条 ping（AiChannel.TOPIC_PING）。
+         *  眼镜端 RokidLink 断线重连后 cxr-service 分发路由可能 stale（订阅返回 0 但实际不投递，
+         *  ai_config/tts/show_main 全部静默丢失，仅进程重启可恢复）——RokidLink 以「重连后
+         *  150s 内是否收到过任意下行（含本 ping）」判定路由失效并自杀重启。 */
+        private const val DOWNLINK_PING_INTERVAL_MS = 60_000L
         /** ASR 文字文件通道：眼镜端把 ASR_TEXT 追加写入该文件，手机端轮询 tail 读取。
          *  logcat 缓冲会被眼镜高频系统日志数秒内冲掉，文件通道保证可靠读到 */
         private const val GLASSES_ASR_FILE = "/sdcard/Android/data/com.rokidlab.rokidlink/files/ai_asr.log"
         private const val KEY_LAST_ASR_TS = "ai_asr_last_ts"
-        /** 按键答题开关下发通道（手机端 → 眼镜端） */
-        private const val QUIZ_CONFIG_CMD = "rokidlab_key_quiz"
 
         /** 眼镜端「双击退出对话窗口」时经 RFCOMM 推送通道上行到手机的音乐停止标记 */
         private const val MUSIC_STOP_MARKER = "__LAB_MUSIC_STOP__"
+
+        /**
+         * 眼镜端「用户关闭助手/退出对话」时经 RFCOMM 推送通道上行到手机的中止标记：
+         * 手机收到后停止音乐、下发 tts_stop 停眼镜端播报，并取消正在运行的 Lab 模型请求
+         * （bump aiGenSeq 让 deepSeekThread 在检查点自弃），避免退出后模型继续生成、
+         * 跑完又下行 tts_play 造成"关了助手语音还复活"。
+         */
+        private const val ABORT_AI_MARKER = "__LAB_ABORT_AI__"
 
         /**
          * 眼镜端「按键拍照答题」控制指令：经 RFCOMM 推送通道（AsrPushServer）上行，
@@ -101,26 +112,36 @@ class CxrLHiRokidSession(
         /** ASR 识别完成信号（眼镜端 AsrPushServer.CTRL_ASR_READY，经 RFCOMM 通道推送） */
         private const val ASR_READY_MARKER = "__LAB_ASR_READY__"
 
-        /** 工具输出回填上限：超过即截断（防超长 dumpsys 等撑爆模型上下文 / 浪费 token） */
-        private const val MAX_TOOL_OUTPUT_CHARS = 4000
-        /** 截断后保留的开头预览字符数 */
-        private const val TOOL_OUTPUT_PREVIEW_CHARS = 1500
-
         /** OpenAI 兼容 AI 配置存储 */
         private const val AI_PREFS = "chat_prefs"
         private const val KEY_AI_BASE_URL = "ai_base_url"
         private const val KEY_AI_API_KEY = "ai_api_key"
         private const val KEY_AI_MODEL = "ai_model"
-        /** 对话模型模式：official（官方乐奇）/ custom（Lab 自定义模型），持久化 + 下发眼镜端 */
+        /** 对话模型模式键：official（官方乐奇）/ custom（Lab 自定义模型），持久化 + 下发眼镜端（值常量统一见 AiChannel.AI_MODE_*） */
         private const val KEY_AI_MODE = "ai_mode"
-        const val AI_MODE_OFFICIAL = "official"
-        const val AI_MODE_CUSTOM = "custom"
         /** 拍照答题指令：答题时注入 AI 提示词控制回答方式 */
         private const val KEY_QUIZ_INSTRUCTION = "quiz_instruction"
+        /** 本地模型（Ollama）是否作为眼镜对话模型：true=对话仅走本机 Ollama；
+         *  与在线槽位（KEY_AI_BASE_URL/API_KEY/MODEL/MODE）相互独立，互不覆盖 */
+        private const val KEY_AI_USE_LOCAL = "ai_use_local"
+        /** 当前选择的本地对话模型名（如 qwen2.5:0.5b） */
+        private const val KEY_AI_LOCAL_MODEL = "ai_local_model"
+        /** 本地对话请求的用户自定义 JSON 参数（逐字段合并进每次本地请求体，如 {"think": false}；
+         *  空串=不附加。替代原「深度思考」布尔开关，兼容任何模型的调参需求） */
+        private const val KEY_AI_LOCAL_PARAMS = "ai_local_params"
+        /** 旧版「深度思考」布尔开关键（已废弃，读取时自动迁移到 KEY_AI_LOCAL_PARAMS 后清除） */
+        private const val KEY_AI_LOCAL_THINK_LEGACY = "ai_local_think"
+        /** 在线模型长思考开关（DeepSeek V4/V3.2 系生效）：默认关闭（推理吞预算→空轮）；
+         *  与发送键旁的「思考」切换按钮共享此键（ChatScreen 直接读写同一 prefs） */
+        private const val KEY_AI_THINKING = "ai_thinking"
         private const val KEY_KEY_QUIZ_ENABLED = "key_quiz_enabled"
 
         private fun tokenPrefKey(hostApp: RokidHostApp) = KEY_TOKEN_PREFIX + hostApp.packageName
     }
+
+    // ═══════════════════════════════════════════════════
+    // 内部状态字段 / UI 回调注册 / AI 配置（持久化与下发眼镜端）
+    // ═══════════════════════════════════════════════════
 
     private var hostApp: RokidHostApp = initialHostApp
     private var token: String? = null
@@ -137,6 +158,9 @@ class CxrLHiRokidSession(
     private var timeoutJob: Job? = null
     /** AI 文字轮询任务（连接后定期拉取眼镜端 ASR 文字，推送通道不可用时的兜底） */
     private var aiAsrPollJob: Job? = null
+    /** 下行存活探测任务：连接存活期间每 60s 下发 ping（AiChannel.TOPIC_PING），
+     *  供眼镜端 RokidLink 判定 cxr-service 分发路由健康（驱动断线重连后的自愈重启） */
+    private var downlinkPingJob: Job? = null
     /** ASR 文字推送客户端（第二 RFCOMM 通道长连接，实时接收眼镜端推送） */
     private var aiAsrPushClient: AsrPushClient? = null
     private var aiConfigPushJob: Job? = null
@@ -164,6 +188,22 @@ class CxrLHiRokidSession(
      * 当前所有 aiCmdLock 临界区均在 aiSendLock 持有期间调用，顺序一致，无死锁风险。
      */
     private val aiCmdLock = Any()
+
+    /**
+     * 手机端 NetProxy 应答器：眼镜端 Jsai 下载 .aix（installAiuiAgent）时，
+     * 眼镜经 BLE 代理把 HTTP 流量发到手机，本中继在手机侧执行真实 socket 收发后
+     * 以 Proxy_NetResponse 应答（协议详见 GlassProxyRelay）。
+     */
+    private val proxyRelay: GlassProxyRelay = GlassProxyRelay(::sendProxyFrame)
+
+    /**
+     * AI 生成代际计数：每次新的 sendAiTextMessage（语音唤醒/聊天/拍照答题）进入即 +1。
+     * 执行中或排队中的旧请求检测到自身代际已过期（用户已发起新请求）即放弃继续生成，
+     * 避免旧的多步工具任务长时间占用 aiSendLock 链路，让新语音/消息尽快接管
+     * （用户打断场景：Agent 还在跑工具循环时用户再说话，旧任务应让路）。
+     */
+    @Volatile
+    private var aiGenSeq = 0L
 
     /** 最近一次眼镜 ASR 文字及时间（双通道去重：push 与轮询/WiFi 上行可能同时收到同一段文字） */
     @Volatile
@@ -239,13 +279,16 @@ class CxrLHiRokidSession(
         val baseUrl: String = "https://api.deepseek.com",
         val apiKey: String = "",
         val model: String = "deepseek-chat",
-        /** 对话模型模式：AI_MODE_OFFICIAL（官方乐奇）/ AI_MODE_CUSTOM（Lab 自定义模型） */
-        val mode: String = AI_MODE_CUSTOM,
+        /** 对话模型模式：AiChannel.AI_MODE_OFFICIAL（官方乐奇）/ AiChannel.AI_MODE_CUSTOM（Lab 自定义模型） */
+        val mode: String = AiChannel.AI_MODE_CUSTOM,
         /** 拍照答题指令：设置页填写，答题时注入 AI 提示词控制回答方式（如「只显示答案」「给出解题步骤」） */
         val quizInstruction: String = "",
     )
 
-    /** 保存 AI 配置（持久化到 SharedPreferences） */
+    /**
+     * 保存「在线」AI 配置（自定义服务/乐奇官方），并关闭本地模型模式。
+     * 本地模型走 [setLocalChatModel]，不会写入本槽位。
+     */
     fun setAiConfig(config: AiConfig) {
         runCatching {
             activity.getSharedPreferences(AI_PREFS, 0).edit()
@@ -254,11 +297,130 @@ class CxrLHiRokidSession(
                 .putString(KEY_AI_MODEL, config.model)
                 .putString(KEY_AI_MODE, config.mode)
                 .putString(KEY_QUIZ_INSTRUCTION, config.quizInstruction)
+                .putBoolean(KEY_AI_USE_LOCAL, false)
                 .apply()
         }
         if (config.apiKey.isNotBlank()) deepSeekApiKey = config.apiKey
         // 同步下发到眼镜端：唤醒词识别出的文字由眼镜端直接调用该模型回复
         pushAiConfigToGlass(config)
+    }
+
+    /** 是否已启用本地 Ollama 作为眼镜对话模型 */
+    fun isLocalChatActive(): Boolean =
+        activity.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_AI_USE_LOCAL, false)
+
+    /** 当前选择的本地对话模型名（未启用/未选择返回空串） */
+    fun localChatModel(): String =
+        activity.getSharedPreferences(AI_PREFS, 0).getString(KEY_AI_LOCAL_MODEL, "").orEmpty()
+
+    /** 本地对话请求的自定义 JSON 参数（原始字符串，空串=未配置）。
+     *  旧版 ai_local_think 布尔开关首次读取时自动迁移为 {"think": <旧值>} 并清除旧键 */
+    fun localChatParams(): String {
+        val prefs = activity.getSharedPreferences(AI_PREFS, 0)
+        var raw = prefs.getString(KEY_AI_LOCAL_PARAMS, null)
+        if (raw.isNullOrBlank() && prefs.contains(KEY_AI_LOCAL_THINK_LEGACY)) {
+            raw = runCatching {
+                JSONObject().put("think", prefs.getBoolean(KEY_AI_LOCAL_THINK_LEGACY, false)).toString()
+            }.getOrNull()
+            if (raw != null) {
+                prefs.edit().putString(KEY_AI_LOCAL_PARAMS, raw).remove(KEY_AI_LOCAL_THINK_LEGACY).apply()
+            }
+        }
+        return raw.orEmpty()
+    }
+
+    /** 保存本地对话请求的自定义 JSON 参数（空串=清除；调用方负责校验 JSON 合法性） */
+    fun setLocalChatParams(json: String) {
+        activity.getSharedPreferences(AI_PREFS, 0).edit()
+            .putString(KEY_AI_LOCAL_PARAMS, json).apply()
+    }
+
+    /** 解析本地请求参数为 JSON 对象；未配置/非法返回 null（非法时打日志并忽略，不影响对话） */
+    private fun parseLocalChatParams(): JSONObject? {
+        val raw = localChatParams().trim()
+        if (raw.isEmpty()) return null
+        return runCatching {
+            val obj = JSONObject(raw)
+            if (obj.length() == 0) null else obj
+        }.getOrElse {
+            Log.w(TAG, "parseLocalChatParams: 非法 JSON 已忽略: $raw")
+            null
+        }
+    }
+
+    /**
+     * 读取「在线」配置槽位原始值（设置页表单回填用），
+     * 不叠加本地开关——即使当前在本地模型模式，也返回用户最后保存的在线服务配置。
+     */
+    fun getOnlineAiConfig(): AiConfig {
+        val prefs = activity.getSharedPreferences(AI_PREFS, 0)
+        val baseUrl = prefs.getString(KEY_AI_BASE_URL, "").orEmpty().ifBlank { "https://api.deepseek.com" }
+        val apiKey = prefs.getString(KEY_AI_API_KEY, "").orEmpty()
+        val model = prefs.getString(KEY_AI_MODEL, "").orEmpty().ifBlank { "deepseek-chat" }
+        val mode = prefs.getString(KEY_AI_MODE, AiChannel.AI_MODE_CUSTOM).orEmpty().ifBlank { AiChannel.AI_MODE_CUSTOM }
+        val quizInstruction = prefs.getString(KEY_QUIZ_INSTRUCTION, "").orEmpty()
+        return AiConfig(baseUrl, apiKey, model, mode, quizInstruction)
+    }
+
+    /**
+     * 切换到本地模型并设为眼镜对话模型（[modelName] 如 qwen2.5:0.5b）。
+     * 仅持久化本地槽位与开关，不影响在线槽位配置；随后把有效配置下发眼镜端。
+     * 切换后自动在后台卸载其他已驻留模型（ollama 每个模型独立 llama-server，
+     * 默认 keep_alive ~5 分钟，不清理会长期多进程并存抢内存/CPU）。
+     */
+    fun setLocalChatModel(modelName: String) {
+        val name = modelName.trim()
+        if (name.isEmpty()) return
+        runCatching {
+            activity.getSharedPreferences(AI_PREFS, 0).edit()
+                .putBoolean(KEY_AI_USE_LOCAL, true)
+                .putString(KEY_AI_LOCAL_MODEL, name)
+                .apply()
+        }
+        pushAiConfigToGlass(getAiConfig())
+        val unloadThread = Thread {
+            try {
+                com.rokidlab.phone.ai.LocalOllamaManager.unloadOtherModels(name)
+            } catch (e: Exception) {
+                Log.w(TAG, "unloadOtherModels failed: ${e.message}")
+            }
+        }
+        unloadThread.name = "ollama-unload-others"
+        unloadThread.start()
+    }
+
+    /** 仅保存拍照答题指令（不切换对话来源；本地模型模式下点「保存」时用） */
+    fun setQuizInstructionOnly(text: String) {
+        runCatching {
+            activity.getSharedPreferences(AI_PREFS, 0).edit()
+                .putString(KEY_QUIZ_INSTRUCTION, text.trim())
+                .apply()
+        }
+    }
+
+    /** 仅回填在线槽位的 API Key（旧版 deepseek_key 迁移用，不影响本地开关与在线其他字段） */
+    fun backfillOnlineApiKey(key: String) {
+        if (key.isBlank()) return
+        runCatching {
+            activity.getSharedPreferences(AI_PREFS, 0).edit()
+                .putString(KEY_AI_API_KEY, key)
+                .apply()
+        }
+        pushAiConfigToGlass(getAiConfig())
+    }
+
+    /** 在线模型长思考是否开启（默认关闭：思考吞输出预算导致工具调用空轮，已实测） */
+    fun isThinkingEnabled(): Boolean =
+        activity.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_AI_THINKING, false)
+
+    /** 持久化在线模型长思考开关（全局生效：眼镜语音与手机聊天共用同一在线槽位） */
+    fun setThinkingEnabled(enabled: Boolean) {
+        runCatching {
+            activity.getSharedPreferences(AI_PREFS, 0).edit()
+                .putBoolean(KEY_AI_THINKING, enabled)
+                .apply()
+        }
+        Log.i(TAG, "AI thinking mode = $enabled")
     }
 
     /** 下发 AI 配置（baseUrl/apiKey/model/mode）到眼镜端，供眼镜端本地直接调用模型。
@@ -274,13 +436,11 @@ class CxrLHiRokidSession(
                     return@repeat
                 }
                 try {
+                    // 版本化载荷：[cmd, version, baseUrl, apiKey, model, mode]
                     val caps = Caps()
-                    caps.write("ai_config")
-                    caps.write(config.baseUrl)
-                    caps.write(config.apiKey)
-                    caps.write(config.model)
-                    caps.write(config.mode)
-                    val r = link.sendCustomCmd("rokidlab_ai_config", caps)
+                    AiChannel.encodeAiConfig(config.baseUrl, config.apiKey, config.model, config.mode)
+                        .forEach { caps.write(it) }
+                    val r = link.sendCustomCmd(AiChannel.TOPIC_AI_CONFIG, caps)
                     Log.i(TAG, "pushAiConfigToGlass: attempt=$attempt r=$r model=${config.model} mode=${config.mode}")
                     if (r == 0) return@launch
                 } catch (e: Exception) {
@@ -292,15 +452,26 @@ class CxrLHiRokidSession(
         }
     }
 
-    /** 读取 AI 配置（prefs 优先，缺省回退默认值；key 未配置时留空，由用户在设置页显式填写） */
+    /**
+     * 读取「有效」AI 配置（对话/下发眼镜端实际使用）：
+     * 本地模型开启且已选模型 → 指向本机 Ollama；否则返回在线槽位配置。
+     */
     fun getAiConfig(): AiConfig {
         val prefs = activity.getSharedPreferences(AI_PREFS, 0)
-        val baseUrl = prefs.getString(KEY_AI_BASE_URL, "").orEmpty().ifBlank { "https://api.deepseek.com" }
-        val apiKey = prefs.getString(KEY_AI_API_KEY, "").orEmpty()
-        val model = prefs.getString(KEY_AI_MODEL, "").orEmpty().ifBlank { "deepseek-chat" }
-        val mode = prefs.getString(KEY_AI_MODE, AI_MODE_CUSTOM).orEmpty().ifBlank { AI_MODE_CUSTOM }
         val quizInstruction = prefs.getString(KEY_QUIZ_INSTRUCTION, "").orEmpty()
-        return AiConfig(baseUrl, apiKey, model, mode, quizInstruction)
+        if (prefs.getBoolean(KEY_AI_USE_LOCAL, false)) {
+            val localModel = prefs.getString(KEY_AI_LOCAL_MODEL, "").orEmpty()
+            if (localModel.isNotBlank()) {
+                return AiConfig(
+                    baseUrl = com.rokidlab.phone.ai.LocalOllamaManager.CHAT_BASE,
+                    apiKey = "",
+                    model = localModel,
+                    mode = AiChannel.AI_MODE_CUSTOM,
+                    quizInstruction = quizInstruction,
+                )
+            }
+        }
+        return getOnlineAiConfig()
     }
 
     // ═══════════════════════════════════════════════════
@@ -321,9 +492,8 @@ class CxrLHiRokidSession(
         return try {
             fun send(): Int? {
                 val caps = Caps()
-                caps.write("tts_play")
-                caps.write(text)
-                return link.sendCustomCmd("tts_play", caps)
+                AiChannel.encodeTtsPlay(text).forEach { caps.write(it) }
+                return link.sendCustomCmd(AiChannel.TOPIC_TTS_PLAY, caps)
             }
             var result: Int? = send()
             Log.i(TAG, "sendTtsToGlass(\"${text.take(40)}...\") -> $result")
@@ -335,6 +505,586 @@ class CxrLHiRokidSession(
             result ?: -3
         } catch (e: Exception) {
             Log.e(TAG, "sendTtsToGlass failed", e)
+            -1
+        }
+    }
+
+    /**
+     * 通知眼镜端立即停止本地 TTS 播报（tts_stop 下行通道）。
+     * 对话退出/打断播报时调用：眼镜端 RokidLink 订阅 tts_stop 后调用
+     * TtsPlaybackHelper.stop() 作废排队分块并释放正在等待的分块。
+     * @return 发送结果码（0=成功，非 0=失败）
+     */
+    fun stopTtsOnGlass(): Int {
+        val link = cxrLink ?: return -2
+        return try {
+            val caps = Caps()
+            caps.write(AiChannel.CMD_TTS_STOP)
+            // 与下行主链路串行（aiCmdLock），避免打断指令与 TTS_Result/tts_play 序列交错
+            val result = synchronized(aiCmdLock) {
+                link.sendCustomCmd(AiChannel.TOPIC_TTS_STOP, caps)
+            }
+            Log.i(TAG, "sendCustomCmd(${AiChannel.TOPIC_TTS_STOP}) -> $result")
+            result ?: -3
+        } catch (e: Exception) {
+            Log.e(TAG, "stopTtsOnGlass failed", e)
+            -1
+        }
+    }
+
+    /**
+     * 取消当前正在运行的 Lab AI 请求（用户关闭助手/停止播报时调用）。
+     * 实现 = bump 代际号：deepSeekThread 在每轮工具循环/下行检查点比较
+     * generation != aiGenSeq 后自弃；SSE 流式读取在 isCancelled 回调处中断。
+     * 局限：若模型阻塞在 readLine 等待网络，最坏延迟一个 readTimeout 才退出，
+     * 但不会再发送任何下行（各下行点均有 abortAiSendIfLinkInvalid/代际校验）。
+     */
+    fun abortCurrentAi() {
+        val seq = ++aiGenSeq
+        Log.i(TAG, "abortCurrentAi: bumped aiGenSeq -> $seq (in-flight AI request will self-abort)")
+        // 同步通知眼镜端停止正在播放的语音（tts_stop 下行通道）
+        stopTtsOnGlass()
+    }
+
+    /**
+     * 在眼镜上打开一个 AIUI agent（.aix 智能体应用），如「我是黑客」。
+     *
+     * 协议（逆向自 AssistServer，真机 19:37 日志验证成功打开）：
+     *  - CXR 通道 "Ai"，caps[0] = "Ai_RenderPayload"（AIJSUIHandler 分派键），
+     *    caps[1] = 双层 JSON 字符串：外层 {"type":"jsui","jsui":"<内层 JSON 字符串>"}，
+     *    内层含 agentId / nativeVersion / tools（页面入口描述）。AssistServer 收到后
+     *    ingress 到 AiuiSystem，AgentResolver 按 agentId 查 PACKAGE_INDEX（须已安装）
+     *    命中即渲染该 agent 页面。无发送者鉴权，CXR 会话下行即可触发。
+     *
+     * 已知内置 agent 参考：
+     *  - 我是黑客：agentId=5aac922daa854dcd9ae77d9556c764f2，nativeVersion=0.0.74
+     *
+     * @param agentId 已安装 agent 的 UUID（AgentStore PACKAGE_INDEX 主键）
+     * @param agentName 展示名（描述文本用，非索引匹配依据）
+     * @param nativeVersion agent 包登记的 native 版本（需与安装记录一致）
+     * @param pageName agent 页面入口（默认 pages/index/index）
+     * @return 发送结果码（0=成功，非 0=失败）
+     */
+    fun openAiuiAgent(
+        agentId: String,
+        agentName: String,
+        nativeVersion: String = "0.0.74",
+        pageName: String = "pages/index/index",
+    ): Int {
+        val link = cxrLink ?: return -2
+        return try {
+            // 内层 jsui 描述（tools 的 function.name 即 .aix 内的页面入口路径）
+            val layout = JSONObject().put("width", 480).put("height", 168)
+            val funcParams = JSONObject()
+                .put("type", "object")
+                .put("properties", JSONObject())
+                .put("required", JSONArray())
+            val func = JSONObject()
+                .put("name", pageName)
+                .put("description", agentName)
+                .put("parameters", funcParams)
+            val tool = JSONObject()
+                .put("type", "function")
+                .put("target", "_current")
+                .put("layout", layout)
+                .put("function", func)
+                .put("ink_version", ">=0.14.0")
+            val inner = JSONObject()
+                .put("agentId", agentId)
+                .put("nativeVersion", nativeVersion)
+                .put("tools", JSONArray().put(tool))
+            // 外层包装：jsui 字段是内层 JSON 的字符串（与官方下行载荷一致）
+            val payload = JSONObject()
+                .put("type", "jsui")
+                .put("jsui", inner.toString())
+
+            val caps = Caps()
+            caps.write("Ai_RenderPayload")
+            caps.write(payload.toString())
+            val result = synchronized(aiCmdLock) {
+                link.sendCustomCmd("Ai", caps)
+            }
+            Log.i(TAG, "openAiuiAgent(agentId=$agentId) sendCustomCmd(Ai/Ai_RenderPayload) -> $result")
+            result ?: -3
+        } catch (e: Exception) {
+            Log.e(TAG, "openAiuiAgent(agentId=$agentId) failed", e)
+            -1
+        }
+    }
+
+    /**
+     * 直启眼镜上已存在于 cxr 目录的 .aix（Sys_AIUI_Start，不经过 AgentStore/目录同步）。
+     *
+     * 协议（逆向自 AssistServer SysCmdHelper + AiuiPackageManager，真机验证）：
+     *  - CXR 通道 "Sys"，caps[0] = "Sys_AIUI_Start"（SysCmdHelper received 分派键，取 caps[0]），
+     *    caps[1] = packageName（.aix 文件名去 .aix 后缀）。AssistServer 收到后调
+     *    AiuiPackageManager.startAiui(context, packageName)：在 device-protected
+     *    filesDir/aiui/package/cxr/<packageName>.aix 查找文件，存在则
+     *    AiuiActivity.launch(context, 文件路径) 直接渲染该 .aix（不入 AgentStore、
+     *    不被 syncAgentList purge、无需网络下载）。
+     *
+     * .aix 落盘通道（开发者工具）：启动眼镜 WebServerService（广播
+     * com.rokid.glass.er.webserver.command, extra cmd=running_start）后
+     * POST multipart http://127.0.0.1:8848/server/upload 字段 upfile=<pkg>.aix，
+     * 服务端以原名存入上述 cxr 目录（>5 个自动删最旧）。
+     *
+     * @param packageName .aix 文件名（不含 .aix），须与上传到 cxr 目录的文件一致
+     * @return 发送结果码（0=成功下发，非 0=失败；不代表渲染成功）
+     */
+    fun startAiuiPackage(packageName: String): Int {
+        val link = cxrLink ?: return -2
+        return try {
+            val caps = Caps()
+            caps.write("Sys_AIUI_Start")
+            caps.write(packageName)
+            val result = synchronized(aiCmdLock) { rawSendCustomCmd(link, "Sys", caps) }
+            Log.i(TAG, "startAiuiPackage(packageName=$packageName) rawSendCustomCmd(Sys/Sys_AIUI_Start) -> $result")
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "startAiuiPackage(packageName=$packageName) failed", e)
+            -1
+        }
+    }
+
+    /**
+     * 关闭眼镜上正在渲染的 .aix（Sys_AIUI_Stop）。
+     *
+     * 协议（逆向自 AssistServer SysCmdHelper + AiuiPackageManager）：CXR 通道 "Sys"，
+     * caps[0] = "Sys_AIUI_Stop"，caps[1] = packageName。眼镜端比对当前正在运行的
+     * AIUI 包，若一致则 AiuiActivity.finishIfRunning() 关闭渲染（不删除 cxr 目录文件）。
+     *
+     * @param packageName 要关闭的包名（.aix 文件名去 .aix），通常传正在渲染的那个
+     * @return 发送结果码（0=成功下发；不代表已关闭，需眼镜日志/画面确认）
+     */
+    fun stopAiuiPackage(packageName: String): Int {
+        val link = cxrLink ?: return -2
+        return try {
+            val caps = Caps()
+            caps.write("Sys_AIUI_Stop")
+            caps.write(packageName)
+            val result = synchronized(aiCmdLock) { rawSendCustomCmd(link, "Sys", caps) }
+            Log.i(TAG, "stopAiuiPackage(packageName=$packageName) rawSendCustomCmd(Sys/Sys_AIUI_Stop) -> $result")
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "stopAiuiPackage(packageName=$packageName) failed", e)
+            -1
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    //  AIUI 自托管宿主（RokidLink Web 宿主链路：推 .aix → 7658 端口 → AiuiLinkActivity）
+    // ─────────────────────────────────────────────────────────────
+
+    /** 宿主控制通道名（双端同源，勿改） */
+    private val AIUI_HOST_TOPIC = "rokidlab_aiui_host"
+
+    /** 打开宿主渲染本地已推送的 .aix（fileName 不含 .aix 亦可） */
+    fun openAiuiHost(fileName: String? = null): Int = sendAiuiHostCmd("open", fileName)
+
+    /** 关闭正在渲染的宿主 */
+    fun closeAiuiHost(): Int = sendAiuiHostCmd("close", null)
+
+    /** 以 onMessage 协议向宿主页面注入消息（伪交互补充通道） */
+    fun sendAiuiHostMessage(json: String): Int = sendAiuiHostCmd("msg", json)
+
+    private fun sendAiuiHostCmd(cmd: String, arg: String?): Int {
+        val link = cxrLink ?: return -2
+        return try {
+            val caps = Caps()
+            caps.write(cmd)
+            if (arg != null) caps.write(arg)
+            val result = synchronized(aiCmdLock) { rawSendCustomCmd(link, AIUI_HOST_TOPIC, caps) }
+            Log.i(TAG, "sendAiuiHostCmd($cmd) -> $result")
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "sendAiuiHostCmd($cmd) failed", e)
+            -1
+        }
+    }
+
+    /**
+     * 把本地 .aix 推到 RokidLink 的 aiui_host 目录并自动拉起宿主渲染。
+     *
+     * 传输通道说明：眼镜端 adbd 拒绝任意 tcp 转发（`open tcp:7658` 实测报
+     * "adbd does not support arbitrary tcp connections"），且同一眼镜同一时刻仅允许
+     * 一条 RFCOMM（adb 常驻隧道占满，BT 7659→7658 隧道会 "BT RFCOMM connect failed"）。
+     * 因此 7658 socket 通道在 Rokid 眼镜上不可靠，主通道改为**复用常驻 adb shell**：
+     * run-as 分块 base64 落盘到 RokidLink filesDir/aiui_host/<name>.aix
+     * （RokidLink 为 debug 构建，run-as 可写私有目录；AiuiPackageServer 目录同名，
+     * handleAiuiHost open 直接命中）。BT/adb socket 仅作兜底。
+     *
+     * @return null=失败；"OK"=已落盘（openAfter=true 会自动拉起宿主渲染）
+     */
+    fun pushAixToRokidLinkHost(aixFile: File, openAfter: Boolean = true): String? {
+        if (!aixFile.isFile) {
+            Log.w(TAG, "pushAixToRokidLinkHost: file missing ${aixFile.absolutePath}")
+            return null
+        }
+        val app = activity.application as LabApplication
+        // BT 隧道空闲 60s 会自动断开，断后再推首连常失败（resolve 尚未恢复）：
+        // adb client 获取失败时短退避重试，覆盖隧道重连窗口，避免 AIUI 首推报失败。
+        var client = getAdbShellClient()
+        var attempt = 0
+        while (client == null && attempt < 3) {
+            attempt++
+            Thread.sleep(1500L * attempt)
+            Log.w(TAG, "pushAixToRokidLinkHost: no adb client, retry $attempt/3...")
+            runCatching { app.routeManager.clearRouteCache() }
+            client = getAdbShellClient()
+        }
+        val name = aixFile.name
+        val body = aixFile.readBytes()
+
+        if (client != null) {
+            try {
+                // Android 12+ 后台启动限制(BAL)：需先确保 RokidLink 拥有 SYSTEM_ALERT_WINDOW
+                // 授权，否则纯后台服务拉起 AiuiLinkActivity 会被系统静默拒绝。
+                runCatching {
+                    val r = client.executeShellCommand(
+                        "appops set com.rokidlab.rokidlink android:system_alert_window allow 2>&1",
+                        10_000,
+                    )
+                    if (r.isNotBlank() && !r.contains("Unknown", ignoreCase = true)) {
+                        Log.i(TAG, "grant system_alert_window on glasses: $r")
+                    }
+                }.onFailure { Log.w(TAG, "grant system_alert_window failed: ${it.message}") }
+                // 通道 1（主）：run-as 分块 base64 落盘（覆盖 AIUI 包常见大小，块 60K base64≈45KB）。
+                // 注意：整个 shell 逻辑必须包进 run-as 的 sh -c —— run-as 只作用于其后第一个
+                // 可执行程序；`run-as pkg A && rm …`/`wc -c < file` 的 rm/重定向若放在外层，
+                // 会由 adbd 的 shell 用户执行，无权操作 app 私有目录（实测 rm 静默失败导致
+                // 文件残留叠加、wc 输出为空）。
+                val pkgDir = "com.rokidlab.rokidlink"
+                client.executeShellCommand(
+                    "run-as $pkgDir sh -c 'mkdir -p files/aiui_host && rm -f files/aiui_host/$name'",
+                    10_000,
+                )
+                val b64 = android.util.Base64.encodeToString(body, android.util.Base64.NO_WRAP)
+                var off = 0
+                var wroteOk = true
+                // 命令本身无 stdout（echo|base64 -d 静默写盘），不能以输出判成败，
+                // 统一靠最后 wc -c 校验字节数兜底。
+                val step = 60000
+                while (off < b64.length) {
+                    val end = minOf(off + step, b64.length)
+                    val chunk = b64.substring(off, end)
+                    off = end
+                    try {
+                        client.executeShellCommand(
+                            "run-as $pkgDir sh -c 'echo $chunk | base64 -d >> files/aiui_host/$name'",
+                            30_000,
+                        )
+                    } catch (e: Exception) {
+                        wroteOk = false
+                        Log.w(TAG, "pushAixToRokidLinkHost($name): chunk write failed at $off: ${e.message}")
+                        break
+                    }
+                }
+                if (wroteOk) {
+                    val wc = client.executeShellCommand(
+                        "run-as $pkgDir sh -c 'wc -c < files/aiui_host/$name'",
+                        10_000,
+                    )
+                    val written = wc?.trim()?.toLongOrNull()
+                    Log.i(TAG, "pushAixToRokidLinkHost($name) written=$written expect=${body.size}")
+                    if (written == body.size.toLong()) {
+                        if (openAfter) openAiuiHost(name)
+                        return "OK"
+                    }
+                }
+                Log.w(TAG, "pushAixToRokidLinkHost($name): run-as write failed, fallback socket push...")
+            } catch (e: Exception) {
+                Log.e(TAG, "pushAixToRokidLinkHost run-as failed: ${e.message}")
+            }
+        }
+        // 通道 2（兜底）：7658 socket —— 蓝牙隧道直连 AiuiPackageServer 或 adb smart socket。
+        // 前者要求 adb 未占用唯一 RFCOMM，后者要求 adbd 放行 tcp 转发，多数环境不可用，
+        // 仅保底（如 Wi-Fi 直连 adb 且隧道空闲）。
+        val nameB = name.toByteArray(Charsets.UTF_8)
+        val frame = java.io.ByteArrayOutputStream(body.size + nameB.size + 6).apply {
+            write((nameB.size shr 8) and 0xFF); write(nameB.size and 0xFF)
+            write(nameB)
+            write((body.size ushr 24) and 0xFF); write((body.size ushr 16) and 0xFF)
+            write((body.size ushr 8) and 0xFF); write(body.size and 0xFF)
+            write(body)
+        }.toByteArray()
+        var ack: String? = null
+        app.routeManager.tunnelTo(7658)?.let { localPort ->
+            Log.i(TAG, "pushAixToRokidLinkHost: BT tunnel 127.0.0.1:$localPort → :7658")
+            ack = try {
+                java.net.Socket().apply {
+                    connect(java.net.InetSocketAddress("127.0.0.1", localPort), 5_000)
+                    tcpNoDelay = true
+                    soTimeout = 20_000
+                }.use { sock ->
+                    val out = sock.getOutputStream()
+                    out.write(frame)
+                    out.flush()
+                    val resp = ByteArray(64)
+                    val n = sock.getInputStream().read(resp)
+                    if (n <= 0) null else String(resp, 0, n, Charsets.UTF_8).trim()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "pushAixToRokidLinkHost: BT push failed: ${e.message}")
+                null
+            }
+        }
+        if (ack == null) {
+            try {
+                client?.let { ack = it.sendTcpStream(7658, frame) }
+            } catch (e: Exception) {
+                Log.e(TAG, "pushAixToRokidLinkHost: adb push failed: ${e.message}")
+            }
+        }
+        Log.i(TAG, "pushAixToRokidLinkHost($name) fallback ack=${ack?.take(16)}")
+        if (ack?.trim() == "OK" && openAfter) {
+            openAiuiHost(name)
+        }
+        return ack
+    }
+
+    /**
+     * CXR-L 1.1.0 的 ExternalAppClient.sendCustomCmd 内置保留 cmd 黑名单
+     * （Dev/Med/Ota/Ai/Ntf/Nav/Sys/ARTC/Trans/Pay/Settings/Custom_View/Schedule/Memo），
+     * 命中即返回 -1，外部无法直发 "Sys"/"Ai"。SDK 内部封装（appStart/openApp 等）
+     * 同样绕过黑名单直接走 Binder 层 IMediaStreamService.sendCustomCmd(cmd, bytes)。
+     * 这里用反射取 ExternalAppClient 私有字段 b（IMediaStreamService）绕过黑名单直发。
+     */
+    private fun rawSendCustomCmd(link: CXRLink, cmd: String, caps: Caps): Int {
+        var clazz: Class<*>? = link.javaClass
+        var field: Field? = null
+        while (clazz != null && field == null) {
+            field = try {
+                clazz.getDeclaredField("b")
+            } catch (e: NoSuchFieldException) {
+                null
+            }
+            clazz = clazz.superclass
+        }
+        val f = field ?: return -3
+        f.isAccessible = true
+        val svc = f.get(link) as? IMediaStreamService ?: return -4
+        return svc.sendCustomCmd(cmd, caps.serialize())
+    }
+
+    /**
+     * 向眼镜端 AssistServer 下发「安装 AIUI agent」指令（Jsai_AddNativeAgent）。
+     *
+     * 协议（逆向自 AssistServer + 真机日志验证触发）：CXR 通道 "Jsai"，
+     * caps[0] = "Jsai_AddNativeAgent"（JsaiCmdHelper 分派键），caps[1] = JSON 载荷：
+     * {agentId, agentName, url, fileMd5, nativeVersion, inkVersion, ...}。
+     * AssistServer 收到后走 AIUI_JsaiAgentDownload 官方下载链路：眼镜经手机 NetProxy
+     * 代理拉取 url 指定的 .aix（本机用 [AiuiProject.hostAix] 托管，127.0.0.1 由代理解析到手机），
+     * 校验 fileMd5 后写入 agents_index.json（PACKAGE_INDEX），之后即可用 Ai_RenderPayload 打开。
+     *
+     * @param agentId agent UUID（.aix 内 VERSION 内容，须与打包时一致）
+     * @param agentName 展示名
+     * @param url .aix 下载地址（手机本地托管，眼镜经代理访问）
+     * @param fileMd5 .aix 文件 MD5（眼镜端下载后校验）
+     * @return 发送结果码（0=成功下发，非 0=失败；不代表眼镜端下载/安装完成）
+     */
+    fun installAiuiAgent(
+        agentId: String,
+        agentName: String,
+        url: String,
+        fileMd5: String,
+        nativeVersion: String = "0.0.74",
+        agentDesc: String = "",
+    ): Int {
+        val link = cxrLink ?: return -2
+        return try {
+            val payload = JSONObject()
+                .put("agentId", agentId)
+                .put("agentName", agentName)
+                .put("url", url)
+                .put("fileMd5", fileMd5)
+                .put("nativeVersion", nativeVersion)
+                .put("inkVersion", "")
+                .put("agentDesc", agentDesc)
+                .put("agentLogo", "")
+            val caps = Caps()
+            caps.write("Jsai_AddNativeAgent")
+            caps.write(payload.toString())
+            val result = synchronized(aiCmdLock) {
+                link.sendCustomCmd("Jsai", caps)
+            }
+            Log.i(TAG, "installAiuiAgent(agentId=$agentId url=$url md5=$fileMd5) -> $result")
+            result ?: -3
+        } catch (e: Exception) {
+            Log.e(TAG, "installAiuiAgent(agentId=$agentId) failed", e)
+            -1
+        }
+    }
+
+    /**
+     * 直装 .aix 并在下载完成后自动打开一次（满足「安装完唤醒一次」）。
+     *
+     * 实测结论（2026-09-05）：目录注入路线不可行——眼镜只认领「自己发起的
+     * phone_request_info 询问」（仅在官方 AI 会话连接时触发，走官方 App 链路），
+     * 手机主动 push 的 Jsai_GetRequestInfo 全部被眼镜记为
+     * "onMobileRequestInfo ignored: no active request flight"，agent 永不进入目录，
+     * AgentResolver 报 RECORD_NOT_FOUND → OPEN_FAIL。
+     *
+     * 因此改回 Jsai_AddNativeAgent 直装：眼镜自行按 url（本机 AixHttpServer 托管，
+     * 127.0.0.1 经 NetProxy 中继到手机）下载 .aix 并写入 PACKAGE_INDEX。
+     * 该包按 REMOTE_SYNC 落盘，可能被后续周期 sync purge，但下载+登记只需 1~2s；
+     * 安装完成后 [delay] 内自动发起 Ai_RenderPayload 打开一次并重试，
+     * 在 purge 发生前完成本次运行即可（用户只需要这一次唤醒）。
+     *
+     * @param agentId agent UUID（.aix 内 VERSION，须与打包一致）
+     * @param agentName 展示名
+     * @param url .aix 下载地址（手机本地托管）
+     * @param fileMd5 .aix 文件 MD5（眼镜下载后校验）
+     * @param openDelayMs 下发安装后等待眼镜下载完成的毫秒数
+     * @param openRetryMs 打开失败（包尚未就绪）时的重试间隔
+     * @param openTimeoutMs 打开重试总超时
+     * @return 安装指令发送结果码（0=已下发；不等于渲染成功）
+     */
+    fun installAndOpenAiuiAgentOnce(
+        agentId: String,
+        agentName: String,
+        url: String,
+        fileMd5: String,
+        openDelayMs: Long = 3000L,
+        openRetryMs: Long = 2000L,
+        openTimeoutMs: Long = 25_000L,
+    ): Int {
+        stopAgentListPushWindow()
+        val install = installAiuiAgent(
+            agentId = agentId,
+            agentName = agentName,
+            url = url,
+            fileMd5 = fileMd5,
+            nativeVersion = "0.0.74",
+            agentDesc = agentName,
+        )
+        Log.i(TAG, "installAndOpenAiuiAgentOnce: AddNativeAgent -> $install")
+        if (install != 0) return install
+        appScope.launch(Dispatchers.IO) {
+            delay(openDelayMs)
+            val deadline = System.currentTimeMillis() + openTimeoutMs
+            var attempt = 0
+            while (System.currentTimeMillis() < deadline && isActive) {
+                attempt++
+                val r = openAiuiAgent(agentId, agentName)
+                Log.i(TAG, "installAndOpenAiuiAgentOnce: open attempt#$attempt -> $r")
+                if (r == 0) break
+                delay(openRetryMs)
+            }
+        }
+        return 0
+    }
+
+    /**
+     * 向眼镜下发「native agent 目录地址」（Jsai_GetRequestInfo）。
+     *
+     * 逆向依据：眼镜 JsaiAiuiHostProvider 周期 fetchAndSyncNativeAgentList 时使用
+     * JsaiAuthStore.agentListUrl 拉取目录；该 URL 由手机通过 Jsai 命令
+     * caps[0]="Jsai_GetRequestInfo"、caps[1]=JSON{agentListUrl,tokenKey,tokenValue,env}
+     * 下发（onMobileRequestInfo → JsaiAuthStore.update）。若不下发，眼镜沿用官方云端
+     * 目录，其中不含我方私有 agent → syncAgentList 取消下载(code=499)并 purge。
+     *
+     * 下发后眼镜即把 [agentListUrl] 当作目录：我方在该地址返回含目标 agent 的
+     * data 数组（见 AiuiProject/AixHttpServer /agents.json），眼镜据此合法下载安装，
+     * 不再取消。
+     *
+     * ⚠️ 实测（2026-09-05）：此主动 push 通道对眼镜无效——眼镜一律忽略为
+     * "no active request flight"，仅剩注册表回复兜底与记录价值。
+     *
+     * @return 发送结果码（0=成功下发）
+     */
+    fun pushAiuiAgentListUrl(agentListUrl: String): Int {
+        val link = cxrLink ?: return -2
+        return try {
+            val payload = JSONObject()
+                .put("agentListUrl", agentListUrl)
+                .put("tokenKey", "")
+                .put("tokenValue", "")
+                .put("env", 2)
+            val caps = Caps()
+            caps.write("Jsai_GetRequestInfo")
+            caps.write(payload.toString())
+            val result = synchronized(aiCmdLock) {
+                link.sendCustomCmd("Jsai", caps)
+            }
+            Log.i(TAG, "pushAiuiAgentListUrl(url=$agentListUrl) -> $result")
+            result ?: -3
+        } catch (e: Exception) {
+            Log.e(TAG, "pushAiuiAgentListUrl failed", e)
+            -1
+        }
+    }
+
+    /**
+     * 在时间窗口内周期下发目录配置（Jsai_GetRequestInfo+JSON）。
+     *
+     * 背景：眼镜只在 phone_request_info 飞行激活期间认领手机回复（60s 窗口、首个生效）。
+     * 该飞行由眼镜 AI 会话连接（glassAppConnectChange=true）或空配置时的
+     * NotifyGlassGetList 触发。若本地未及时观察到询问（询问可能只发给官方 App 链路），
+     * 用周期推送兜底：一旦窗口打开，我们窗口内的下一条推送即被认领。
+     * 未被认领的推送眼镜侧忽略（"duplicate or stale"/"no active flight"），无副作用。
+     */
+    @Volatile
+    private var agentListPushWindowJob: Job? = null
+
+    fun startAgentListPushWindow(
+        catalogUrl: String,
+        durationMs: Long = 60_000L,
+        intervalMs: Long = 1_500L,
+    ) {
+        stopAgentListPushWindow()
+        agentListPushWindowJob = appScope.launch(Dispatchers.IO) {
+            val deadline = System.currentTimeMillis() + durationMs
+            var n = 0
+            while (System.currentTimeMillis() < deadline && isActive) {
+                n++
+                val r = pushAiuiAgentListUrl(catalogUrl)
+                Log.i(TAG, "agentListPushWindow #$n url=$catalogUrl -> $r")
+                delay(intervalMs)
+            }
+            Log.i(TAG, "agentListPushWindow done ($n pushes)")
+        }
+    }
+
+    fun stopAgentListPushWindow() {
+        agentListPushWindowJob?.cancel()
+        agentListPushWindowJob = null
+    }
+
+    /**
+     * 通知眼镜立即重新拉取 native agent 目录（Jsai_NotifyGlassGetList）。
+     *
+     * 眼镜收到后 notifyGlassGetList → fetchAndSyncNativeAgentList（用刚下发的
+     * agentListUrl），从而立刻同步并下载我方目录中的 .aix，无需等周期同步。
+     * 该命令无载荷（caps 仅一项）。
+     *
+     * @return 发送结果码（0=成功下发）
+     */
+    fun notifyGlassGetAgentList(): Int {
+        val link = cxrLink ?: return -2
+        return try {
+            val caps = Caps()
+            caps.write("Jsai_NotifyGlassGetList")
+            val result = synchronized(aiCmdLock) {
+                link.sendCustomCmd("Jsai", caps)
+            }
+            Log.i(TAG, "notifyGlassGetAgentList() -> $result")
+            result ?: -3
+        } catch (e: Exception) {
+            Log.e(TAG, "notifyGlassGetAgentList failed", e)
+            -1
+        }
+    }
+
+    /**
+     * 向眼镜发送 NetProxy 应答帧（cmd="Proxy"，caps0=Proxy_NetResponse），
+     * 供 [GlassProxyRelay] 下行使用。与 AI 主链路同一把 aiCmdLock 串行。
+     */
+    private fun sendProxyFrame(caps: Caps): Int {
+        val link = cxrLink ?: return -2
+        return try {
+            synchronized(aiCmdLock) { link.sendCustomCmd("Proxy", caps) } ?: -3
+        } catch (e: Exception) {
+            Log.e(TAG, "sendProxyFrame failed", e)
             -1
         }
     }
@@ -438,10 +1188,9 @@ class CxrLHiRokidSession(
                                 // 这里重新注册「按键答题」的 resume 监听，恢复短按触发拍照答题
                                 registerKeyQuizResumeListener(link)
                                 val caps = Caps()
-                                caps.write("quiz_enabled")
-                                caps.write(enabled.toString())
-                                val result = link.sendCustomCmd(QUIZ_CONFIG_CMD, caps)
-                                Log.i(TAG, "sendCustomCmd($QUIZ_CONFIG_CMD, enabled=$enabled) -> $result")
+                                AiChannel.encodeQuizConfig(enabled).forEach { caps.write(it) }
+                                val result = link.sendCustomCmd(AiChannel.TOPIC_KEY_QUIZ, caps)
+                                Log.i(TAG, "sendCustomCmd(${AiChannel.TOPIC_KEY_QUIZ}, enabled=$enabled) -> $result")
                                 deliver(result == 0)
                             } else {
                                 Log.w(TAG, "appStart failed, cannot send quiz config")
@@ -697,12 +1446,9 @@ class CxrLHiRokidSession(
                         onStart = { success ->
                             if (success) {
                                 val caps = Caps()
-                                caps.write("key_config")
-                                caps.write(shortPkg)
-                                caps.write(shortActivity)
-                                caps.write(longPkg)
-                                caps.write(longActivity)
-                                val result = link.sendCustomCmd("rokidlab_key_config", caps)
+                                AiChannel.encodeKeyConfig(shortPkg, shortActivity, longPkg, longActivity)
+                                    .forEach { caps.write(it) }
+                                val result = link.sendCustomCmd(AiChannel.TOPIC_KEY_CONFIG, caps)
                                 val resultMsg = if (result == 0) "OK" else "error=$result"
                                 onStatus(activity.getString(com.rokidlab.phone.R.string.key_btn_sent, shortPkg, longPkg, resultMsg))
                                 onResult?.invoke(result == 0)
@@ -823,6 +1569,10 @@ class CxrLHiRokidSession(
         )
     }
 
+    // ═══════════════════════════════════════════════════
+    // AI 下行主链路：sendAiTextMessage / sendAiTextViaLink / 拍照答题 / ASR 上行去重与轮询
+    // ═══════════════════════════════════════════════════
+
     /**
      * 【临时测试】通过 CXR-L SDK 发送文字指令到眼镜端 AssistServer。
      * 协议（反编译自 RokidSpriteAssistServer）：
@@ -853,11 +1603,14 @@ class CxrLHiRokidSession(
     ) {
         Log.i(TAG, "sendAiTextMessage(\"$text\") called. cxrlConnected=$cxrlConnected, glassBtConnected=$glassBtConnected, cxrLink=${cxrLink != null}, token=${token?.take(8) ?: "null"}")
 
+        // 抢占新一代际：让正在执行/排队的旧 Agent 任务让路（用户打断）
+        val myGen = ++aiGenSeq
+
         // 快速路径: 如果 CXR 已连接且 link 可用，直接发送（跳过前置检查 + 重新 connect）
         val link = cxrLink
         if (cxrlConnected && glassBtConnected && link != null) {
             Log.i(TAG, "sendAiTextMessage: using existing CXRLink (fast path)")
-            sendAiTextViaLink(link, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta)
+            sendAiTextViaLink(link, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen)
             return
         }
 
@@ -889,7 +1642,7 @@ class CxrLHiRokidSession(
                     // 必须切后台线程执行，否则慢速路径阻塞主线程导致 ANR/闪退。
                     // onStatus/onBusyChanged 已线程安全，onReply 由调用方切主线程，onResult 内部 runOnUiThread。
                     appScope.launch(Dispatchers.IO) {
-                        sendAiTextViaLink(l, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta)
+                        sendAiTextViaLink(l, text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen)
                     }
                 },
                 onFailure = {
@@ -1064,22 +1817,6 @@ class CxrLHiRokidSession(
     }
 
     /**
-     * 解析眼镜端轮询响应中的 ASR 文字（眼镜端 reply.end(Caps[text])）。
-     */
-    private fun parseAiAsrPollText(data: ByteArray?): String? {
-        try {
-            if (data == null || data.isEmpty()) return null
-            val caps = Caps.fromBytes(data)
-            if (caps == null || caps.size() < 1 || caps.at(0) == null) return null
-            val text = caps.at(0).getString()?.trim().orEmpty()
-            return text.ifEmpty { null }
-        } catch (e: Exception) {
-            Log.e(TAG, "parseAiAsrPollText error", e)
-            return null
-        }
-    }
-
-    /**
      * 安全切回主线程执行 UI 回调：Activity 已销毁（保活后台运行）时直接跳过，
      * 避免在已销毁 Activity 上调用 runOnUiThread 导致崩溃，同时下行链路不受影响。
      */
@@ -1202,6 +1939,15 @@ class CxrLHiRokidSession(
         aiAsrPushClient?.stop()
         aiAsrPushClient = AsrPushClient(activity.applicationContext) { text ->
             try {
+                // 用户关闭助手标记（眼镜端双击退出对话窗口时推送，新版）：
+                // 停止音乐 + 停眼镜端播报 + 取消运行中的 Lab 模型请求
+                if (text == ABORT_AI_MARKER) {
+                    Log.i(TAG, "Abort-AI marker received from glasses (assistant closed by user)")
+                    com.rokidlab.phone.ai.MusicPlayerController.stop()
+                    stopTtsOnGlass()
+                    abortCurrentAi()
+                    return@AsrPushClient
+                }
                 // 音乐停止标记：眼镜端双击退出对话窗口时推送，收到后停止手机端音乐播放
                 if (text == MUSIC_STOP_MARKER) {
                     Log.i(TAG, "Music stop marker received from glasses (conversation exited)")
@@ -1237,6 +1983,8 @@ class CxrLHiRokidSession(
         }
         aiAsrPushClient?.start()
         Log.i(TAG, "startAiAsrBridgePolling: started (push + file fallback)")
+        // 连接期启动下行存活探测（链接断开/清理时随 stopAiAsrBridgePolling 一起停止）
+        startDownlinkPing()
     }
 
     private fun stopAiAsrBridgePolling() {
@@ -1244,6 +1992,43 @@ class CxrLHiRokidSession(
         aiAsrPollJob = null
         aiAsrPushClient?.stop()
         aiAsrPushClient = null
+        stopDownlinkPing()
+    }
+
+    // ──────────────────────────────────────────────
+    //  下行存活探测（ping）：驱动眼镜端 RokidLink 断线自愈
+    // ──────────────────────────────────────────────
+
+    /** 启动下行存活探测：连接存活期间每 DOWNLINK_PING_INTERVAL_MS（60s）下发一条
+     *  AiChannel.TOPIC_PING 空消息。眼镜端 RokidLink 收到即刷新下行活性；
+     *  断线重连后若分发路由 stale（收不到任何下行）则在观察窗口到期后自杀重启。 */
+    private fun startDownlinkPing() {
+        downlinkPingJob?.cancel()
+        downlinkPingJob = appScope.launch(Dispatchers.IO) {
+            while (isActive) {
+                try {
+                    val link = cxrLink
+                    if (link != null && cxrlConnected) {
+                        // 按条加锁与下行主链路（KeyDown/open/ASR/TTS）串行，避免插入指令序列中间
+                        val caps = Caps().also { it.write("ping") }
+                        val r = synchronized(aiCmdLock) { link.sendCustomCmd(AiChannel.TOPIC_PING, caps) }
+                        if (r == 0) {
+                            Log.d(TAG, "downlink ping sent (${AiChannel.TOPIC_PING})")
+                        } else {
+                            Log.w(TAG, "downlink ping sendCustomCmd(${AiChannel.TOPIC_PING}) -> $r")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "downlink ping error", e)
+                }
+                delay(DOWNLINK_PING_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun stopDownlinkPing() {
+        downlinkPingJob?.cancel()
+        downlinkPingJob = null
     }
 
     /**
@@ -1429,6 +2214,8 @@ class CxrLHiRokidSession(
         recordHistory: Boolean = true,
         /** AI 回复流式增量回调（每个 content delta），用于 UI 边生成边显示；眼镜 TTS 仍整段发送 */
         onDelta: ((String) -> Unit)? = null,
+        /** 发起时的代际号（sendAiTextMessage 入口抢占）。期间若有更新的代际进入（用户打断），本请求应放弃 */
+        generation: Long,
     ) {
         // 串行化所有 AI 下行发送：聊天发送 / ASR push / 文件轮询 / SDK 上行多个并发入口
         // 在 WiFi 稳定连接时全部命中快速路径，同一 CXRLink 并发 sendCustomCmd 会与
@@ -1437,6 +2224,17 @@ class CxrLHiRokidSession(
         synchronized(aiSendLock) {
         // 入口校验：link 必须仍是最新且未断开（防止慢速路径 cleanup 后使用旧 link）
         if (!abortAiSendIfLinkInvalid(link, onResult)) return
+        // 排队期间已有更新的请求进入（用户再次说话/发消息）：本请求作废，让出链路并复位调用方，
+        // 避免过期任务抢到锁后继续跑多轮工具（用户新请求正在等待接管）
+        if (generation != aiGenSeq) {
+            Log.i(TAG, "sendAiTextViaLink superseded by newer request, abort (gen=$generation != latest=$aiGenSeq)")
+            activity.runOnUiThread {
+                completeActiveOperation()
+                onBusyChanged(false)
+                onResult?.invoke(false, null)
+            }
+            return
+        }
         // 反射绕过 CXR-L SDK 的 cmd 黑名单
         try {
             val field = link.javaClass.superclass.getDeclaredField("d")
@@ -1474,7 +2272,19 @@ class CxrLHiRokidSession(
             val tGenStart = System.currentTimeMillis()
             try {
                 val cfg = getAiConfig()
-                val service = com.rokidlab.phone.ai.OpenAiService(cfg.apiKey, cfg.model, cfg.baseUrl)
+                // 本地 Ollama 端点：首次加载大模型/思考模型首字远慢于远程，读超时放宽到 3 分钟
+                val localBase = cfg.baseUrl.contains("127.0.0.1") || cfg.baseUrl.contains("localhost") ||
+                    cfg.baseUrl.contains("11434")
+                // 本地用户自定义请求参数（JSON，替代原「深度思考」布尔开关）：逐字段合并进每次
+                // 本地对话请求体（如 {"think": false, "options": {"num_ctx": 2048}}）；远程服务不附加
+                val extraBody = if (localBase) parseLocalChatParams() else null
+                val service = com.rokidlab.phone.ai.OpenAiService(
+                    cfg.apiKey, cfg.model, cfg.baseUrl,
+                    readTimeoutMs = if (localBase) 180000 else 30000,
+                    extraBody = extraBody,
+                    // 发送键旁「思考」开关：仅在线 DeepSeek V4/V3.2 生效；本地模型由 extraBody 自行调参
+                    thinkingEnabled = !localBase && isThinkingEnabled(),
+                )
                 // Agent 会话记忆：超时清理 + 注入历史消息（多轮上下文），使 AI 能理解「再来一首」等指代
                 val agentSession = com.rokidlab.phone.ai.AgentSessionManager
                 agentSession.maybeExpire()
@@ -1486,7 +2296,23 @@ class CxrLHiRokidSession(
                 val longTermOn = longTermMemory.isEnabled(activity)
                 val longTermContext = if (longTermOn) longTermMemory.memoriesContext(activity) else null
                 val messages = JSONArray()
-                messages.put(service.buildSystemMessage(contextText, instruction, longTermContext))
+                // 本地模型 → 本地轻量会话：不装配工具/技能/长期记忆工具，精简人设，仅闲聊问答。
+                // 本地小模型背不动全部工具 Schema（每轮全量下发拖慢 prefill 且小模型调用工具不可靠），
+                // 设备操作/联网等能力由用户切回在线 Agent 提供（对齐 RikkaHub 按会话装配思路）。
+                val localLight = localBase
+                // 用户自定义技能：注入技能清单（第 1 层渐进披露）+ 注册 load_skill 伪工具（仅在线 Agent）
+                val skillsContext = if (!localLight && com.rokidlab.phone.ai.SkillRegistry.isEnabled(activity)) {
+                    com.rokidlab.phone.ai.SkillRegistry.skillsContext(activity)
+                } else null
+                messages.put(
+                    service.buildSystemMessage(
+                        contextText = contextText,
+                        instruction = instruction,
+                        memories = longTermContext,
+                        skills = skillsContext,
+                        localMode = localLight,
+                    ),
+                )
                 if (effectiveRecord) {
                     agentSession.getHistory().forEach { msg ->
                         messages.put(JSONObject().apply {
@@ -1500,24 +2326,96 @@ class CxrLHiRokidSession(
                 userMsg.put("content", text)
                 messages.put(userMsg)
 
-                // 可用工具：常规工具 + 长期记忆工具（开关开启时注册给 AI 自主调用）
-                val availableTools = ToolRegistry.schemas(activity).toMutableList()
-                if (longTermOn) availableTools.add(longTermMemory.schema())
+                // 可用工具随会话推进可变：主 Agent 全量域起步；命中 AIUI 生成场景后切到精简
+                // AIUI 子集，每轮少发 ~14 个无关工具 Schema（省 input token、加快 prefill）。
+                // buildTools 按域装配，并附上仅在线 Agent 的长期记忆 manage_memory 与技能
+                // load_skill/load_skill_section 两个动态伪工具；切换子集时复用同一装配逻辑。
+                val buildTools: (Set<String>) -> MutableList<JSONObject> = { domains ->
+                    ToolRegistry.schemasFor(activity, domains).toMutableList().apply {
+                        if (longTermOn && !localLight) add(longTermMemory.schema())
+                        if (skillsContext != null) {
+                            add(com.rokidlab.phone.ai.SkillRegistry.schema())
+                            add(com.rokidlab.phone.ai.SkillRegistry.sectionSchema())
+                        }
+                    }
+                }
+                // 命中该调用的回合视为进入 AIUI/代码生成会话 → 下轮起切精简工具子集（仅切一次）
+                val isCodeGenCall: (String, String) -> Boolean = { name, args ->
+                    name == ToolRegistry.TOOL_CODE_FILE ||
+                        (name == com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME && args.contains("aiui-dev"))
+                }
+                var activeTools = buildTools(
+                    if (localLight) ToolRegistry.SESSION_LOCAL_DOMAINS
+                    else ToolRegistry.SESSION_AGENT_DOMAINS,
+                )
 
                 var reply = ""
                 val toolTrace = mutableListOf<String>()
+                // 空轮打断：连续 2 个空轮后注入一条硬引导（只注入一次），阻止推理模型"只思考不出手"
+                var emptyNudgeSent = false
+                // AIUI 生成场景标志：命中 load_skill(aiui-dev)/save_code_file 后置位，并把 tools 切到
+                // 精简 AIUI 子集（SESSION_AIUI_DOMAINS），仅切换一次
+                var aiuiMode = false
+                // AIUI/代码生成回合收敛标记：本轮是否执行过 save_code_file，是则最终回复只允许简短结论
+                var codeGenUsed = false
+                // 记录各项目成功生成的源文件（project -> 文件名集合），供收敛时生成权威结论
+                val genFilesByProject = LinkedHashMap<String, MutableSet<String>>()
                 // 最多 6 轮工具循环：支持多步任务（先查时间再设定时等），同时防止模型反复请求工具导致死循环
                 for (round in 0 until 6) {
-                    // 流式：实时推送 content 增量给 UI（工具调用轮 content 通常为空，最终回复轮逐字推送）
-                    val turn = service.chatTurnStream(messages, tools = availableTools, onDelta = onDelta)
+                    // 用户打断（有更新代际的请求进入）：放弃后续生成，尽快让出 aiSendLock
+                    if (generation != aiGenSeq) {
+                        Log.i(TAG, "AI generation superseded at round=$round (gen=$generation), abort")
+                        return@Thread
+                    }
+                    // 流式：实时推送 content 增量给 UI（工具调用轮 content 通常为空，最终回复轮逐字推送）；
+                    // isCancelled 使 SSE 行间隙可感知打断并立即停止读取
+                    val turn = service.chatTurnStream(
+                        messages,
+                        tools = activeTools,
+                        onDelta = onDelta,
+                        isCancelled = { generation != aiGenSeq },
+                        // 本地 Ollama 不重试：首字慢是「加载/思考中」而非抖动，重试只会重复加载翻倍等待
+                        retryAttempts = if (localBase) 1 else 2,
+                    )
                     if (turn.toolCalls.isEmpty()) {
-                        reply = turn.content.orEmpty()
-                        break
+                        // 有正文：最终回复，收尾
+                        if (!turn.content.isNullOrBlank()) {
+                            reply = turn.content
+                            break
+                        }
+                        // 空轮（既无工具也无文本）：推理模型可能在反复"思考但不落子"。
+                        // 实测每轮空转 60-75s，代价极高：首轮空即注入硬引导打断（此前等 round>=2
+                        // 会白耗 ~2 轮），若进入 AIUI 代码生成模式则给出具体的分文件落盘指令。
+                        if (round >= 5) {
+                            reply = ""
+                            break
+                        }
+                        if (round >= 1 && !emptyNudgeSent) {
+                            emptyNudgeSent = true
+                            val nudge = if (aiuiMode) {
+                                "请立即行动，不要再空想：你已加载 aiui-dev 技能。按顺序调用 save_code_file，" +
+                                    "先保存 app.json（含 pages 与 window 配置），再逐文件保存页面代码（pages/index/index），" +
+                                    "一次只写一个文件、不要一次输出超大 JSON。全部写完后再用一两句中文总结。"
+                            } else {
+                                "请不要再停留在思考：如果任务需要写代码，立即调用 save_code_file 一次写一个文件；" +
+                                    "如果已写完或无法完成，直接用一两句中文给出最终结论。"
+                            }
+                            messages.put(JSONObject().apply {
+                                put("role", "user")
+                                put("content", nudge)
+                            })
+                            Log.i(TAG, "chatTurnStream empty turn round=$round, injected nudge (aiuiMode=$aiuiMode)")
+                        }
+                        Log.i(TAG, "chatTurnStream empty turn round=$round, one more stream round")
+                        continue
                     }
                     // 回填 assistant 消息（OpenAI 协议要求原样带上 tool_calls）
                     val assistantMsg = JSONObject()
                     assistantMsg.put("role", "assistant")
                     assistantMsg.put("content", JSONObject.NULL)
+                    // 思考开启时（thinkingEnabled=true）DeepSeek V4 要求把 reasoning_content
+                    // 原样回传历史，否则多轮工具循环直接 400；关闭思考时服务端无此字段，恒为 null
+                    if (turn.reasoning != null) assistantMsg.put("reasoning_content", turn.reasoning)
                     val calls = JSONArray()
                     turn.toolCalls.forEach { tc ->
                         calls.put(JSONObject().apply {
@@ -1539,19 +2437,45 @@ class CxrLHiRokidSession(
                     val latch = java.util.concurrent.CountDownLatch(turn.toolCalls.size)
                     turn.toolCalls.forEachIndexed { idx, tc ->
                         Thread {
-                            // 长期记忆工具是静默上下文维护，无用户可见进度，跳过进度推送
-                            if (tc.name != com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME) {
-                                sendGlassesProgress(link, ToolRegistry.statusText(tc.name))
+                            // 静默工具：长期记忆维护 + load_skill 系列本地即时读取，均无用户可见进度，跳过推送
+                            val silent = tc.name == com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME ||
+                                tc.name == com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME ||
+                                tc.name == com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION
+                            // 代码落盘工具：进度提示要带具体文件名（「正在生成 app.json…」→「app.json 生成成功」）
+                            val isCodeFile = tc.name == ToolRegistry.TOOL_CODE_FILE
+                            val relFile = if (isCodeFile) {
+                                runCatching { JSONObject(tc.arguments).optString("file").trim() }
+                                    .getOrDefault("")
+                            } else ""
+                            if (!silent) {
+                                sendGlassesProgress(
+                                    link,
+                                    if (isCodeFile && relFile.isNotEmpty()) "正在生成 $relFile…"
+                                    else ToolRegistry.statusText(tc.name),
+                                )
                             }
                             results[idx] = try {
-                                if (tc.name == com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME) {
-                                    longTermMemory.execute(activity, tc.arguments)
-                                } else {
-                                    ToolRegistry.execute(activity, tc.name, tc.arguments)
+                                when (tc.name) {
+                                    com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME ->
+                                        longTermMemory.execute(activity, tc.arguments)
+                                    com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME ->
+                                        com.rokidlab.phone.ai.SkillRegistry.execute(activity, tc.arguments)
+                                    com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION ->
+                                        com.rokidlab.phone.ai.SkillRegistry.executeSection(activity, tc.arguments)
+                                    else -> ToolRegistry.execute(activity, tc.name, tc.arguments)
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "tool execute failed: ${tc.name}", e)
                                 "工具执行失败: ${e.message}"
+                            }
+                            // 落盘结果一句话回报眼镜（覆盖上面的「正在生成」，最终 TTS 总结再覆盖）
+                            if (isCodeFile && relFile.isNotEmpty()) {
+                                val r = results[idx]
+                                sendGlassesProgress(
+                                    link,
+                                    if (r?.startsWith("已生成") == true) "$relFile 生成成功"
+                                    else "生成 $relFile 失败，请换个说法再试",
+                                )
                             }
                             latch.countDown()
                         }.start()
@@ -1559,16 +2483,36 @@ class CxrLHiRokidSession(
                     latch.await()
                     // 按原顺序回填 tool 消息
                     turn.toolCalls.forEachIndexed { idx, tc ->
+                        // 收集代码落盘事实：供本回合最终回复收敛为“已生成 N 个文件…”的简短结论
+                        if (tc.name == ToolRegistry.TOOL_CODE_FILE) {
+                            codeGenUsed = true
+                            if (results[idx]?.startsWith("已生成") == true) {
+                                runCatching {
+                                    val fa = JSONObject(tc.arguments)
+                                    val p = fa.optString("project").trim()
+                                    val f = fa.optString("file").trim()
+                                    if (p.isNotEmpty() && f.isNotEmpty()) {
+                                        genFilesByProject.getOrPut(p) { LinkedHashSet() }.add(f)
+                                    }
+                                }
+                            }
+                        }
                         val raw = results[idx] ?: "工具执行失败"
                         // 工具输出截断：dumpsys/df 等可能返回超长文本，全量回填浪费 token 且易超模型上下文。
-                        // 参考 RikkaHub maybeTruncateToolOutput：超过上限截断为开头预览 + 明确提示
-                        // （模型通常只用开头几行结论；若确实需要更多可说明已截断让模型如实回复）。
-                        val result = if (raw.length > MAX_TOOL_OUTPUT_CHARS) {
-                            Log.w(TAG, "tool ${tc.name} output truncated: ${raw.length} chars -> ${MAX_TOOL_OUTPUT_CHARS}")
-                            raw.take(TOOL_OUTPUT_PREVIEW_CHARS) +
-                                "\n…（工具输出过长已截断，仅保留开头 ${TOOL_OUTPUT_PREVIEW_CHARS} 字符，原始 ${raw.length} 字符）"
-                        } else {
+                        // 超过上限截断为开头预览 + 明确提示（模型通常只用开头几行结论；
+                        // 若确实需要更多可说明已截断让模型如实回复）。实现见 ToolRegistry.truncateToolOutput。
+                        // load_skill 系列返回的是技能说明书/章节全文，必须完整给模型，跳过截断。
+                        // read_code_file 返回项目源码全文，同样跳过截断（截断会导致模型基于残缺代码改写）。
+                        val skipTruncate = tc.name == com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME ||
+                            tc.name == com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION ||
+                            tc.name == ToolRegistry.TOOL_READ_CODE_FILE
+                        val result = if (skipTruncate) {
                             raw
+                        } else {
+                            com.rokidlab.phone.ai.truncateToolOutput(raw)
+                        }
+                        if (result !== raw) {
+                            Log.w(TAG, "tool ${tc.name} output truncated: ${raw.length} chars")
                         }
                         Log.i(TAG, "tool ${tc.name}(${tc.arguments}) -> ${result.take(100)}")
                         messages.put(JSONObject().apply {
@@ -1577,15 +2521,113 @@ class CxrLHiRokidSession(
                             put("content", result)
                         })
                     }
+                    // AIUI/代码生成会话降载：本轮执行过 save_code_file 或 load_skill(aiui-dev) 后，
+                    // 自下一轮起只装配精简 AIUI 子集，省去 ~14 个无关工具的 Schema 反复下发。
+                    if (!aiuiMode && turn.toolCalls.any { isCodeGenCall(it.name, it.arguments) }) {
+                        aiuiMode = true
+                        activeTools = buildTools(ToolRegistry.SESSION_AIUI_DOMAINS)
+                        Log.i(TAG, "aiuiMode on: tools switched to SESSION_AIUI_DOMAINS subset (${activeTools.size} schemas)")
+                    }
                 }
-                // 6 轮工具用尽仍无最终回复：基于已收集的工具结果，不带 tools 再请求一次强制生成总结，
-                // 避免多步任务最后一步被吞掉（原实现直接给固定兜底文案，丢失工具结果）
+                // 6 轮工具用尽或某轮空返回，仍无最终回复：必须先带 tools 再请求一次强制生成总结。
+                // AIUI/代码生成回合模型可能仍需调 save_code_file 等工具落盘；摘掉工具会导致它只能
+                // 把源码当纯文本输出、随后被 finalizeCodeGenReply 收敛丢弃（“生成卡死/白耗”根因）。
+                // 允许总结轮再执行最多 2 轮工具调用，之后若仍无文本再走固定兜底文案。
                 if (reply.isBlank()) {
-                    val finalTurn = try {
-                        service.chatTurn(messages, tools = null)
-                    } catch (_: Exception) { null }
+                    // 用户已打断：跳过非流式兜底请求，直接放弃
+                    if (generation != aiGenSeq) {
+                        Log.i(TAG, "AI summary superseded (gen=$generation), skip final chat")
+                        return@Thread
+                    }
+                    var finalTurn: com.rokidlab.phone.ai.ChatTurn? = null
+                    for (retry in 0 until 3) {
+                        finalTurn = try {
+                            // 总结轮常携带大工具参数/大段代码，deepseek 单次生成可能远超默认 30s：
+                            // 用 120s 单次（不重试，避免翻倍等待）保证能等到模型产出 save_code_file 调用。
+                            service.chatTurn(messages, tools = activeTools, readTimeout = 120_000, attempts = 1)
+                        } catch (_: Exception) {
+                            null
+                        }
+                        if (finalTurn == null || finalTurn.toolCalls.isEmpty()) break
+                        // 回填 assistant tool_calls 消息（协议要求原样携带）
+                        val assistantMsg = JSONObject()
+                        assistantMsg.put("role", "assistant")
+                        assistantMsg.put("content", JSONObject.NULL)
+                        // 思考开启时回传 reasoning_content（同主循环，DeepSeek V4 多轮校验）
+                        if (finalTurn.reasoning != null) assistantMsg.put("reasoning_content", finalTurn.reasoning)
+                        val calls = JSONArray()
+                        finalTurn.toolCalls.forEach { tc ->
+                            calls.put(JSONObject().apply {
+                                put("id", tc.id)
+                                put("type", "function")
+                                put("function", JSONObject().apply {
+                                    put("name", tc.name)
+                                    put("arguments", tc.arguments)
+                                })
+                            })
+                            toolTrace.add("${tc.name}(${tc.arguments})")
+                        }
+                        assistantMsg.put("tool_calls", calls)
+                        messages.put(assistantMsg)
+                        // 同步执行本轮工具调用并回填结果（总结轮工具极少，无需并发）
+                        finalTurn.toolCalls.forEach { tc ->
+                            val out = try {
+                                when (tc.name) {
+                                    com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME ->
+                                        longTermMemory.execute(activity, tc.arguments)
+                                    com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME ->
+                                        com.rokidlab.phone.ai.SkillRegistry.execute(activity, tc.arguments)
+                                    com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION ->
+                                        com.rokidlab.phone.ai.SkillRegistry.executeSection(activity, tc.arguments)
+                                    else -> ToolRegistry.execute(activity, tc.name, tc.arguments)
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "final-chat tool failed: ${tc.name}", e)
+                                "工具执行失败: ${e.message}"
+                            }
+                            if (tc.name == ToolRegistry.TOOL_CODE_FILE) {
+                                codeGenUsed = true
+                                if (out.startsWith("已生成")) {
+                                    runCatching {
+                                        val fa = JSONObject(tc.arguments)
+                                        val p = fa.optString("project").trim()
+                                        val f = fa.optString("file").trim()
+                                        if (p.isNotEmpty() && f.isNotEmpty()) {
+                                            genFilesByProject.getOrPut(p) { LinkedHashSet() }.add(f)
+                                        }
+                                    }
+                                }
+                            }
+                            messages.put(JSONObject().apply {
+                                put("role", "tool")
+                                put("tool_call_id", tc.id)
+                                put("content", out)
+                            })
+                        }
+                        // 兜底总结轮同样支持进入 AIUI 精简工具子集（省 token），下一轮重试即生效
+                        if (!aiuiMode && finalTurn.toolCalls.any { isCodeGenCall(it.name, it.arguments) }) {
+                            aiuiMode = true
+                            activeTools = buildTools(ToolRegistry.SESSION_AIUI_DOMAINS)
+                            Log.i(TAG, "aiuiMode on (final chat): tools switched to SESSION_AIUI_DOMAINS (${activeTools.size})")
+                        }
+                    }
                     reply = finalTurn?.content?.takeIf { it.isNotBlank() }
                         ?: "抱歉，我暂时无法处理这个问题，请换个说法再试一次。"
+                }
+                // AIUI/代码生成回合：把模型最终回复收敛为简短结论，严禁把整段源码当回复
+                // 播报/显示到眼镜；同时保证写入会话记忆的是干净文本，避免历史脏样本反复
+                // 诱导模型继续输出代码（“回复里还有出现代码”的根因之一）
+                if (codeGenUsed) {
+                    val totalFiles = genFilesByProject.values.sumOf { it.size }
+                    val projName = genFilesByProject.keys.firstOrNull()
+                    val authoritative = if (totalFiles > 0) {
+                        buildString {
+                            append("已生成 $totalFiles 个文件，保存在手机下载目录")
+                            if (!projName.isNullOrBlank()) append("的“$projName”项目")
+                            append("。")
+                        }
+                    } else null
+                    reply = com.rokidlab.phone.ai.finalizeCodeGenReply(reply, authoritative)
                 }
                 replyRef.set(reply)
                 // 记录本轮到会话记忆（含工具轨迹，catch 分支的失败兜底回复不记录，避免污染上下文）
@@ -1594,6 +2636,12 @@ class CxrLHiRokidSession(
                 }
                 Log.i(TAG, "AI reply generated in ${System.currentTimeMillis() - tGenStart}ms: ${reply.take(80)}...")
             } catch (e: Exception) {
+                // 用户打断导致的终止（chatTurnStream 被取消 / 轮间 return 前的异常）：
+                // 静默退出，不覆盖 replyRef（保持空），也避免误播"服务不可用"
+                if (generation != aiGenSeq) {
+                    Log.i(TAG, "AI generation aborted by user interrupt (gen=$generation): ${e.message}")
+                    return@Thread
+                }
                 Log.e(TAG, "DeepSeek API failed", e)
                 replyRef.set("抱歉，AI 服务暂时不可用。")
             }
@@ -1660,6 +2708,17 @@ class CxrLHiRokidSession(
         // ===== 等待 DeepSeek 完成（下行显示期间已并行执行）=====
         deepSeekThread.join()
         reply = replyRef.get()
+        // 生成期间用户已发起新请求（新语音/新消息）：本回复已过期，放弃显示/播报/回调，
+        // 复位状态并把链路让给新请求（join 期间 deepSeekThread 已提前退出，等待有界）
+        if (generation != aiGenSeq) {
+            Log.i(TAG, "sendAiTextViaLink: reply superseded during generation (gen=$generation != $aiGenSeq), skip downlink")
+            activity.runOnUiThread {
+                completeActiveOperation()
+                onBusyChanged(false)
+                onResult?.invoke(false, null)
+            }
+            return
+        }
         Log.i(TAG, "AI reply ready: ${reply.take(40)}")
         onReply?.invoke(reply)
         } catch (e: Exception) {
@@ -1693,9 +2752,8 @@ class CxrLHiRokidSession(
             fun sendTtsPlay(): Int? {
                 if (!abortAiSendIfLinkInvalid(link, onResult)) return -99
                 val ttsPlayCaps = Caps()
-                ttsPlayCaps.write("tts_play")
-                ttsPlayCaps.write(reply)
-                return link.sendCustomCmd("tts_play", ttsPlayCaps)
+                AiChannel.encodeTtsPlay(reply).forEach { ttsPlayCaps.write(it) }
+                return link.sendCustomCmd(AiChannel.TOPIC_TTS_PLAY, ttsPlayCaps)
             }
             var ttsPlayResult: Int? = sendTtsPlay()
             Log.i(TAG, "sendCustomCmd(tts_play, \"${reply.take(40)}...\") -> $ttsPlayResult")
@@ -1738,6 +2796,10 @@ class CxrLHiRokidSession(
         }
         }
     }
+
+    // ═══════════════════════════════════════════════════
+    // App 管理对外入口与 connectAnd* 应用操作（stop / uninstall / query / upload / launch）
+    // ═══════════════════════════════════════════════════
 
     fun stopApp(packageName: String, onStopResult: ((Boolean) -> Unit)? = null) {
         val targetHostApp = hostApp
@@ -1800,8 +2862,16 @@ class CxrLHiRokidSession(
         timeoutJob?.cancel()
         timeoutJob = null
         stopAiAsrBridgePolling()
+        // 打断在途 AI：bump 代际号让 deepSeekThread 自弃（避免断连后仍空跑至超时），
+        // 并趁链路尚在通知眼镜端停止播报；随后才断开连接
+        abortCurrentAi()
         runCatching { cxrLink?.disconnect() }
         cxrLink = null
+        // 断开共享 ADB 常驻连接（会话重建/操作失败清理时释放，避免隧道连接泄漏；
+        // 下次工具调用经 getAdbShellClient 自动重建）
+        runCatching { adbShellClient?.disconnect() }
+        adbShellClient = null
+        proxyRelay.closeAll()
         pendingOperation = null
         queryQueue.clear()
         cxrlConnected = false
@@ -2030,6 +3100,10 @@ class CxrLHiRokidSession(
         )
     }
 
+    // ═══════════════════════════════════════════════════
+    // 连接编排内核 / pending 调度 / 全局指令监听 / bind 反射与授权前置检查
+    // ═══════════════════════════════════════════════════
+
     private fun connectAndRunCustomAppOperation(
         authToken: String,
         targetHostApp: RokidHostApp,
@@ -2123,12 +3197,6 @@ class CxrLHiRokidSession(
     }
 
     /**
-     * 统一注册手机端收到的「眼镜 → 手机」指令监听。
-     * 每个新建立的 CXRLink 都要注册一次，处理：
-     *  - Wifi_Connect_Status：WiFi 连接状态回执（转发给 sendWifiConfig）
-     *  - rokidlab_photo_ask：眼镜端镜腿按键触发「拍照问AI」
-     */
-    /**
      * 注册「按键答题」的眼镜端 resume 监听（经 Sys 频道上行触发拍照答题）。
      *
      * 注意：SDK 的 [CXRLink.appStart] 内部会调用 setCXRGlassAppCbk(传入 cbk) 覆盖本回调，
@@ -2172,6 +3240,12 @@ class CxrLHiRokidSession(
         })
     }
 
+    /**
+     * 统一注册手机端收到的「眼镜 → 手机」指令监听。
+     * 每个新建立的 CXRLink 都要注册一次，处理：
+     *  - Wifi_Connect_Status：WiFi 连接状态回执（转发给 sendWifiConfig）
+     *  - rokidlab_photo_ask：眼镜端镜腿按键触发「拍照问AI」
+     */
     private fun registerGlobalCmdListener(link: CXRLink) {
         try {
             registerKeyQuizResumeListener(link)
@@ -2204,6 +3278,24 @@ class CxrLHiRokidSession(
                         if (!text.isNullOrBlank()) {
                             Log.i(TAG, "AI ASR poll got text: $text")
                             appScope.launch(Dispatchers.IO) { handleGlassesAiAsrText(text) }
+                        }
+                    }
+                    "Proxy" -> {
+                        // 眼镜端 AssistServer NetProxy 请求（Jsai 下载 .aix 时眼镜经手机代理拉文件）。
+                        // 手机侧作为 TCP 中继应答：解析 Proxy_NetRequest → 本机 socket 收发 →
+                        // 以 Proxy_NetResponse 应答（协议与状态机详见 GlassProxyRelay）。
+                        proxyRelay.onInbound(data)
+                    }
+                    "Jsai_GetRequestInfo" -> {
+                        // 眼镜发起「agent 目录配置询问」（phone_request_info 飞行，60s 内首个回复被认领：
+                        // claimPhoneResponse → parseMobileRequestInfo → JsaiAuthStore.update → 用新 URL 重拉）。
+                        // 仅在本地有托管目录时回复，避免无谓覆盖官方配置导致官方 agent 被 purge。
+                        val catalogUrl = AiuiProject.currentCatalogUrl()
+                        if (catalogUrl != null) {
+                            val r = pushAiuiAgentListUrl(catalogUrl)
+                            Log.i(TAG, "Jsai_GetRequestInfo asked -> replied catalogUrl=$catalogUrl result=$r")
+                        } else {
+                            Log.i(TAG, "Jsai_GetRequestInfo asked -> no hosted catalog, keep silent")
                         }
                     }
                     else -> {
@@ -2371,16 +3463,4 @@ class CxrLHiRokidSession(
             ),
         )
     }
-}
-
-data class CxrConnectionState(
-    val authorized: Boolean = false,
-    val cxrlConnected: Boolean = false,
-    val glassBtConnected: Boolean = false,
-) {
-    val connected: Boolean
-        get() = cxrlConnected && glassBtConnected
-
-    val connecting: Boolean
-        get() = authorized && (cxrlConnected || glassBtConnected) && !connected
 }

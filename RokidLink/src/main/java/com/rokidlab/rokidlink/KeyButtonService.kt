@@ -1,9 +1,10 @@
 package com.rokidlab.rokidlink
 
-import android.app.Activity
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -47,10 +48,29 @@ import java.util.concurrent.TimeUnit
  */
 class KeyButtonService : Service() {
     private var bridge: CXRServiceBridge? = null
-    private var bridgeActivityRunning = false
+
+    /** AIUI .aix 接收服务（7658）：手机端推送 .aix → 落盘 → 拉起自托管宿主 */
+    private var aiuiPkgServer: AiuiPackageServer? = null
+    /** 最近成功落盘的 .aix（供宿主打开，可被 AIUI_HOST_TOPIC 命令覆盖打开） */
+    private var aiuiLastFile: File? = null
 
     /** 显示状态页指令防抖：手机端指令可能广播式重复到达，500ms 内只响应一次 */
     private var lastShowMainMs = 0L
+
+    /** 断线自愈：最近一次成功收到下行消息的时间戳（0=从未收到）。
+     *  任意经 CXR bridge 订阅到达的消息（ping/config/tts/Ai）都会刷新，证明
+     *  cxr-service → 本 App 的分发路由健康（重连后路由可能 stale，见 scheduleSelfHealCheck）。 */
+    @Volatile
+    private var lastDownlinkMs = 0L
+    /** 是否处于「断线武装」状态：onDisconnected 置 true，重连成功后启动观察窗口 */
+    private var reconnectArmed = false
+    /** 重连成功时刻：观察窗口起点，窗口内无下行则判定路由失效 */
+    private var reconnectAtMs = 0L
+    /** 自愈检查任务引用（主线程 Handler），cancel 用 */
+    private var selfHealCheck: Runnable? = null
+    /** CXR bridge 当前是否已连接 */
+    @Volatile
+    private var bridgeConnected = false
 
     /** 唤醒词+语音的 ASR 流式文字（覆盖式累积，ASR_End 时取最后一条） */
     private var pendingAiText: String? = null
@@ -143,12 +163,17 @@ class KeyButtonService : Service() {
                     downTimeMs = 0L  // clear pending DOWN so UP won't double-trigger
                     launchConfiguredTarget(context, isLong = true)
                 }
-                // 双击 = 退出对话窗口：通知手机端停止音乐播放。
+                // 双击 = 退出对话窗口：立即停止本地 TTS 播报（若正在播长回复），
+                // 并上行通知手机端「用户已关闭助手」→ 手机停音乐 + 停播报 + 取消模型运行。
                 // 不 abortBroadcast，让官方 App 正常关闭 AI 对话界面。
                 "com.android.action.ACTION_SPRITE_BUTTON_DOUBLE_CLICK" -> {
-                    Log.i(TAG, "DOUBLE_CLICK → conversation exit, notify phone to stop music")
-                    if (!AsrPushServer.push(MUSIC_STOP_MARKER)) {
-                        Log.w(TAG, "ASR push channel unavailable, music stop marker dropped")
+                    Log.i(TAG, "DOUBLE_CLICK → conversation exit, stop local TTS + abort AI on phone")
+                    TtsPlaybackHelper.stop()
+                    if (!AsrPushServer.push(ABORT_AI_MARKER)) {
+                        Log.w(TAG, "ASR push channel unavailable, fallback to music-stop marker")
+                        if (!AsrPushServer.push(MUSIC_STOP_MARKER)) {
+                            Log.w(TAG, "ASR push channel unavailable, abort marker dropped")
+                        }
                     }
                 }
             }
@@ -338,8 +363,15 @@ class KeyButtonService : Service() {
         internal const val KEY_LONG_PKG = "long_pkg"
         internal const val KEY_LONG_ACT = "long_act"
         internal const val TOPIC = "rokidlab_key_config"
+        /**
+         * 已废弃：WiFi 配置实际走官方 "Wifi" 频道（Wifi_Connect），手机端已无发送方，
+         * 本订阅仅作历史兜底保留，勿再新增发送侧。
+         */
+        @Deprecated("wifi_config 通道已废弃：WiFi 配置走官方 Wifi 频道（Wifi_Connect）")
         internal const val WIFI_TOPIC = "wifi_config"
         internal const val TTS_TOPIC = "tts_play"
+        /** 停止 TTS 播报下行通道（手机端 → 眼镜端）：退出对话/打断播报时手机端主动下发，眼镜端立即停本地 TTS */
+        internal const val TTS_STOP_TOPIC = "tts_stop"
         /** 「按键答题」开关下发通道（手机端 → 眼镜端） */
         internal const val QUIZ_TOPIC = "rokidlab_key_quiz"
         /** 拍照问AI 指令上行通道（眼镜端 → 手机端） */
@@ -348,6 +380,11 @@ class KeyButtonService : Service() {
         internal const val AI_ASR_TOPIC = "rokidlab_ai_asr"
         /** 双击退出对话窗口时经 RFCOMM 推送通道上行的音乐停止标记（与手机端保持一致） */
         internal const val MUSIC_STOP_MARKER = "__LAB_MUSIC_STOP__"
+        /**
+         * 用户关闭助手/退出对话时经 RFCOMM 推送通道上行的中止标记（与手机端保持一致）：
+         * 手机收到后停音乐 + 下发 tts_stop 停眼镜播报 + 取消运行中的 Lab 模型请求
+         */
+        internal const val ABORT_AI_MARKER = "__LAB_ABORT_AI__"
         /**
          * AI 文字轮询通道（手机端 → 眼镜端）：RokidLab 定时 sendCustomCmd 轮询，
          * 眼镜端可回复订阅返回 ASR 文字。采用请求-响应机制以绕过 AI App 对未知上行指令的过滤。
@@ -359,18 +396,39 @@ class KeyButtonService : Service() {
         internal const val SHOW_MAIN_TOPIC = "rokidlab_show_main"
         /** AI 配置下发通道（手机端 → 眼镜端）：baseUrl/apiKey/model，供眼镜端直接调用模型 */
         internal const val AI_CONFIG_TOPIC = "rokidlab_ai_config"
+        /**
+         * AIUI 自托管宿主控制通道（手机端 → 眼镜端）：
+         * 载荷 [cmd, arg]，cmd ∈ open / close / msg
+         *  - open [open, fileName?]：打开 filesDir/aiui_host/<fileName>.aix（缺省用最近推送包）渲染于本宿主
+         *  - close：关闭正在渲染的 AIUI 宿主
+         *  - msg  [msg, json]：把 JSON 以 onMessage 协议注入页面（伪交互补充通道）
+         */
+        internal const val AIUI_HOST_TOPIC = "rokidlab_aiui_host"
+        private const val CMD_AIUI_OPEN = "open"
+        private const val CMD_AIUI_CLOSE = "close"
+        private const val CMD_AIUI_MSG = "msg"
         /** AI 配置持久化 key */
         internal const val KEY_AI_BASE_URL = "ai_base_url"
         internal const val KEY_AI_API_KEY = "ai_api_key"
         internal const val KEY_AI_MODEL = "ai_model"
         /** 对话模型模式持久化 key：custom = Lab 拦截回复；official = 官方乐奇 */
         internal const val KEY_AI_MODE = "ai_mode"
-        internal const val AI_MODE_OFFICIAL = "official"
-        internal const val AI_MODE_CUSTOM = "custom"
+        // 模型模式值统一引用 AiChannel.AI_MODE_OFFICIAL / AiChannel.AI_MODE_CUSTOM（协议规范单源）
         /** 「按键答题」开关存储 key */
         internal const val KEY_QUIZ_ENABLED = "key_quiz_enabled"
         /** KeyButtonBridgeActivity 触发拍照答题时通知 Service 的 action */
         internal const val ACTION_QUIZ_PHOTO_ASK = "rokidlab.action.QUIZ_PHOTO_ASK"
+
+        /** 断线重连后下行路由 stale 的自愈：Alarm 拉活广播 action（SelfRestartReceiver 处理） */
+        internal const val ACTION_SELF_HEAL_RESTART = "com.rokidlab.rokidlink.SELF_HEAL_RESTART"
+        /** 自愈兜底拉起广播 action：自杀后若粘性重启失败，Alarm 在新进程显式拉起服务 */
+        internal const val ACTION_SELF_HEAL_BOOTSTRAP = "com.rokidlab.rokidlink.SELF_HEAL_BOOTSTRAP"
+        /** 重连成功后的下行观察窗口：手机端 ping 周期 60s，观察 150s 覆盖 ≥2 个周期，避免正常空闲误判 */
+        private const val SELF_HEAL_CHECK_DELAY_MS = 150_000L
+        /** Alarm 拉活与自杀之间的延迟：留给系统注册 alarm */
+        private const val SELF_HEAL_RESTART_DELAY_MS = 3_000L
+        /** 自杀后兜底拉起的延迟：给 START_STICKY 留出重启时间，超时未起则由兜底闹钟显式拉起 */
+        private const val SELF_HEAL_BOOTSTRAP_DELAY_MS = 20_000L
 
         /** 按键按下时间戳 */
         @Volatile
@@ -391,6 +449,10 @@ class KeyButtonService : Service() {
         }
     }
 
+    // ──────────────────────────────────────────────
+    //  Service 生命周期与自愈
+    // ──────────────────────────────────────────────
+
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "Service creating")
@@ -402,6 +464,8 @@ class KeyButtonService : Service() {
         acquireWakeLock()
         startHeartbeat()
         initCxrBridge()
+        // AIUI .aix 接收服务常驻：等手机端推包即可拉起自托管宿主渲染
+        startAiuiHostServer()
         // 预热绑定系统 TTS 服务，避免首次「拍照问 AI」回复要等异步绑定
         TtsPlaybackHelper.ensureBound(this)
     }
@@ -420,6 +484,9 @@ class KeyButtonService : Service() {
     override fun onDestroy() {
         Log.i(TAG, "Service destroying")
         handler.removeCallbacksAndMessages(null)
+        // 停 AIUI 接收服务（自愈重启后会在新实例 onCreate 重新拉起）
+        runCatching { aiuiPkgServer?.stop() }
+        aiuiPkgServer = null
         // 解绑系统 TtsService：避免 ServiceConnection 泄漏（服务重建时旧连接残留）
         runCatching { TtsPlaybackHelper.unbind(this) }
         // 停止本地接管执行器（openAiSession 等含 sleep 的任务不再继续）
@@ -519,10 +586,8 @@ class KeyButtonService : Service() {
             }
             startActivity(intent)
             Log.i(TAG, "BridgeActivity started")
-            bridgeActivityRunning = true
         } catch (e: Exception) {
             Log.w(TAG, "startBridgeActivity: ${e::class.simpleName}: ${e.message}")
-            bridgeActivityRunning = false
         }
     }
 
@@ -540,7 +605,6 @@ class KeyButtonService : Service() {
         mainHandler.postDelayed(restoreBridgeRunnable, BRIDGE_YIELD_HOLD_MS)
         if (KeyButtonBridgeActivity.isAlive) {
             runCatching { sendBroadcast(Intent(KeyButtonBridgeActivity.ACTION_YIELD)) }
-            bridgeActivityRunning = false
             Log.i(TAG, "BridgeActivity yield requested (official AI active)")
         } else {
             Log.d(TAG, "BridgeActivity already gone, keep yielded")
@@ -695,8 +759,21 @@ class KeyButtonService : Service() {
             bridge?.setStatusListener(object : CXRServiceBridge.StatusListener {
                 override fun onConnected(name: String, address: String, type: Int) {
                     Log.i(TAG, "CXR connected: name=$name, address=$address, type=$type")
+                    bridgeConnected = true
+                    // 断线重连成功：cxr-service 分发路由可能在重连后 stale（订阅返回 0 但实际不投递，
+                    // 实测 ai_config/tts/show_main 全部静默丢失，仅进程重启可恢复）。
+                    // 启动观察窗口：期间收到任何下行（ping/config/tts）即健康，否则判定路由失效自愈。
+                    if (reconnectArmed) {
+                        reconnectArmed = false
+                        reconnectAtMs = System.currentTimeMillis()
+                        scheduleSelfHealCheck()
+                    }
                 }
                 override fun onDisconnected() {
+                    bridgeConnected = false
+                    // 断线期不做路由判定：取消观察并武装，待重连成功后重新启动观察
+                    reconnectArmed = true
+                    cancelSelfHealCheck()
                     Log.i(TAG, "CXR disconnected, will re-init in 3s")
                     // 断线期间清空下行过滤窗口与累积 ASR，避免重连后误吞用户提问/误拦文本
                     downlinkUntilMs = 0L
@@ -723,15 +800,26 @@ class KeyButtonService : Service() {
             })
             Log.i(TAG, "subscribe($TOPIC) -> $result")
 
-            val wifiResult = bridge?.subscribe(WIFI_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
-                handleWifiConfig(args)
-            })
-            Log.i(TAG, "subscribe($WIFI_TOPIC) -> $wifiResult")
+            // 历史兜底订阅（wifi_config 已废弃，仅保留兼容旧版手机端；WiFi 配置主通道为官方 Wifi 频道）
+            @Suppress("DEPRECATION")
+            run {
+                val wifiResult = bridge?.subscribe(WIFI_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
+                    handleWifiConfig(args)
+                })
+                Log.i(TAG, "subscribe($WIFI_TOPIC) -> $wifiResult")
+            }
 
             val ttsResult = bridge?.subscribe(TTS_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
                 handleTtsPlay(args)
             })
             Log.i(TAG, "subscribe($TTS_TOPIC) -> $ttsResult")
+
+            val ttsStopResult = bridge?.subscribe(TTS_STOP_TOPIC, CXRServiceBridge.MsgCallback { _, _, _ ->
+                markDownlink()
+                Log.i(TAG, "Received tts_stop, stopping local TTS")
+                TtsPlaybackHelper.stop()
+            })
+            Log.i(TAG, "subscribe($TTS_STOP_TOPIC) -> $ttsStopResult")
 
             val quizResult = bridge?.subscribe(QUIZ_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
                 handleQuizConfig(args)
@@ -754,13 +842,101 @@ class KeyButtonService : Service() {
             subscribeAiAsrPoll()
             // 订阅显示状态页指令：手机端「打开 RokidLink」时带 EXTRA_SHOW_UI 显示 IP 状态页
             val showMainResult = bridge?.subscribe(SHOW_MAIN_TOPIC, CXRServiceBridge.MsgCallback { _, _, _ ->
+                markDownlink()
                 showMainActivity()
             })
             Log.i(TAG, "subscribe($SHOW_MAIN_TOPIC) -> $showMainResult")
+
+            // AIUI 自托管宿主控制：open / close / msg（onMessage 伪交互通道）
+            val aiuiHostResult = bridge?.subscribe(AIUI_HOST_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
+                markDownlink()
+                handleAiuiHost(args)
+            })
+            Log.i(TAG, "subscribe($AIUI_HOST_TOPIC) -> $aiuiHostResult")
+
+            // 下行存活探测订阅：手机端连接期间每 60s 下发一条空消息。
+            // 断线重连后 cxr-service 分发路由可能 stale（订阅返回 0 但实际不投递，
+            // 实测 ai_config/tts/show_main 全部静默丢失，仅进程重启可恢复）。
+            // ping 一旦到达即证明路由健康；观察窗口到期仍收不到则 Alarm 重启进程自愈。
+            val pingResult = bridge?.subscribe(AiChannel.TOPIC_PING, CXRServiceBridge.MsgCallback { _, _, _ ->
+                markDownlink()
+                Log.i(TAG, "Received ping — downlink route healthy")
+            })
+            Log.i(TAG, "subscribe(${AiChannel.TOPIC_PING}) -> $pingResult")
         } catch (e: Exception) {
             Log.e(TAG, "initCxrBridge failed", e)
         }
     }
+
+    // ──────────────────────────────────────────────
+    //  断线自愈（cxr-service 分发路由 stale 探测）
+    // ──────────────────────────────────────────────
+
+    /** 记录一次下行活性：任意经 CXR bridge 订阅收到的消息都证明
+     *  cxr-service → 本 App 的分发路由健康（断线重连后可能 stale）。 */
+    private fun markDownlink() {
+        lastDownlinkMs = System.currentTimeMillis()
+    }
+
+    /** 重连成功（此前断线过）后启动观察：SELF_HEAL_CHECK_DELAY_MS 后检查
+     *  期间是否收到过下行。路由 stale 时 cxr-service 不再投递任何订阅消息，
+     *  进程内重建 bridge 无法恢复（实测仅进程重启有效），故经 Alarm 自杀重启。 */
+    private fun scheduleSelfHealCheck() {
+        cancelSelfHealCheck()
+        selfHealCheck = Runnable {
+            selfHealCheck = null
+            runSelfHealCheck()
+        }
+        mainHandler.postDelayed(selfHealCheck!!, SELF_HEAL_CHECK_DELAY_MS)
+        Log.i(TAG, "Self-heal check armed in ${SELF_HEAL_CHECK_DELAY_MS}ms (reconnectAt=$reconnectAtMs)")
+    }
+
+    private fun cancelSelfHealCheck() {
+        selfHealCheck?.let { mainHandler.removeCallbacks(it) }
+        selfHealCheck = null
+    }
+
+    /** 观察窗口到期判定：bridge 仍连接 且 窗口内无任何下行 → 路由 stale，重启进程 */
+    private fun runSelfHealCheck() {
+        selfHealCheck = null
+        if (!bridgeConnected) {
+            Log.i(TAG, "Self-heal check: bridge disconnected, skip (will re-arm on reconnect)")
+            return
+        }
+        if (lastDownlinkMs >= reconnectAtMs) {
+            Log.i(TAG, "Self-heal check: downlink healthy (last=$lastDownlinkMs reconnectAt=$reconnectAtMs)")
+            return
+        }
+        Log.w(TAG, "Self-heal check: NO downlink since reconnect — cxr-service route stale, restarting process")
+        selfHealRestart()
+    }
+
+    /** AlarmManager 延迟 SELF_HEAL_RESTART_DELAY_MS 后触发 SelfRestartReceiver：
+     *  Handler.postDelayed 在进程自杀后不存活，必须用系统级 Alarm（RTC_WAKEUP）确保广播可投递。
+     *  双闹钟设计：① 自杀闹钟（3s）→ 接收器杀进程，由 START_STICKY/显式启动重建订阅；
+     *  ② 兜底拉起闹钟（+20s）→ 若粘性重启失败，Alarm 唤醒新进程显式启动两个常驻服务。 */
+    private fun selfHealRestart() {
+        try {
+            val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val now = System.currentTimeMillis()
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            val killPi = PendingIntent.getBroadcast(this, 0,
+                Intent(this, SelfRestartReceiver::class.java).setAction(ACTION_SELF_HEAL_RESTART), flags)
+            am.set(AlarmManager.RTC_WAKEUP, now + SELF_HEAL_RESTART_DELAY_MS, killPi)
+            val bootPi = PendingIntent.getBroadcast(this, 1,
+                Intent(this, SelfRestartReceiver::class.java).setAction(ACTION_SELF_HEAL_BOOTSTRAP), flags)
+            am.set(AlarmManager.RTC_WAKEUP,
+                now + SELF_HEAL_RESTART_DELAY_MS + SELF_HEAL_BOOTSTRAP_DELAY_MS, bootPi)
+            Log.w(TAG, "Self-heal: process restart scheduled (kill+${SELF_HEAL_RESTART_DELAY_MS}ms, " +
+                "bootstrap+${SELF_HEAL_RESTART_DELAY_MS + SELF_HEAL_BOOTSTRAP_DELAY_MS}ms)")
+        } catch (e: Exception) {
+            Log.e(TAG, "selfHealRestart failed", e)
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    //  Ai 频道消息分发与本地接管
+    // ──────────────────────────────────────────────
 
     /**
      * 处理 "Ai" 频道消息（官方 AI 链路，手机端 → 眼镜端）。
@@ -1008,33 +1184,31 @@ class KeyButtonService : Service() {
     /** 当前对话模型模式是否为自定义（Lab 拦截并回复）；official 模式放行官方乐奇 */
     private fun isCustomAiMode(): Boolean =
         getSharedPreferences(PREFS_NAME, 0)
-            .getString(KEY_AI_MODE, AI_MODE_CUSTOM)
+            .getString(KEY_AI_MODE, AiChannel.AI_MODE_CUSTOM)
             .orEmpty()
-            .let { if (it.isBlank()) AI_MODE_CUSTOM else it } == AI_MODE_CUSTOM
+            .let { if (it.isBlank()) AiChannel.AI_MODE_CUSTOM else it } == AiChannel.AI_MODE_CUSTOM
 
-    /** 接收手机端下发的 AI 配置（baseUrl/apiKey/model/mode）并持久化 */
+    // ──────────────────────────────────────────────
+    //  AiChannel 版本化订阅回调处理
+    // ──────────────────────────────────────────────
+
+    /** 接收手机端下发的 AI 配置（baseUrl/apiKey/model/mode）并持久化。
+     *  载荷经 AiChannel 版本化编解码：cmd 不符/版本不支持/长度不足时整体丢弃（防错位写入）。 */
     private fun handleAiConfig(args: Caps) {
         try {
-            if (args.size() < 4) {
-                Log.w(TAG, "Invalid ai_config size: ${args.size()}")
+            markDownlink()
+            val cfg = AiChannel.decodeAiConfig(capsToStrings(args)) ?: run {
+                Log.w(TAG, "handleAiConfig: rejected invalid/unsupported payload (size=${args.size()})")
                 return
             }
-            val action = args.at(0).getString()
-            if (action != "ai_config") return
-            val baseUrl = args.at(1).getString().orEmpty()
-            val apiKey = args.at(2).getString().orEmpty()
-            val model = args.at(3).getString().orEmpty()
-            // 第 5 个字段为对话模式（official/custom），旧版本下发无该字段时保持默认 custom
-            val mode = if (args.size() >= 5) {
-                args.at(4).getString()?.takeIf { it.isNotBlank() } ?: AI_MODE_CUSTOM
-            } else AI_MODE_CUSTOM
             getSharedPreferences(PREFS_NAME, 0).edit()
-                .putString(KEY_AI_BASE_URL, baseUrl)
-                .putString(KEY_AI_API_KEY, apiKey)
-                .putString(KEY_AI_MODEL, model)
-                .putString(KEY_AI_MODE, mode)
+                .putString(KEY_AI_BASE_URL, cfg.baseUrl)
+                .putString(KEY_AI_API_KEY, cfg.apiKey)
+                .putString(KEY_AI_MODEL, cfg.model)
+                .putString(KEY_AI_MODE, cfg.mode)
                 .apply()
-            Log.i(TAG, "AI config saved: baseUrl=$baseUrl model=$model keyLen=${apiKey.length} mode=$mode")
+            Log.i(TAG, "AI config saved: baseUrl=${cfg.baseUrl} model=${cfg.model} " +
+                "keyLen=${cfg.apiKey.length} mode=${cfg.mode}")
         } catch (e: Exception) {
             Log.e(TAG, "handleAiConfig error", e)
         }
@@ -1046,6 +1220,7 @@ class KeyButtonService : Service() {
         val b = bridge ?: return
         try {
             val r = b.subscribe(AI_ASR_POLL_TOPIC, CXRServiceBridge.MsgReplyCallback { _, _, _, reply ->
+                markDownlink()
                 reply.end(Caps())
                 Log.d(TAG, "AI poll reply: empty")
             })
@@ -1080,18 +1255,15 @@ class KeyButtonService : Service() {
         }
     }
 
-    /** 收到手机端文字消息后，调用眼镜本地 TTS 播放语音 */
+    /** 收到手机端文字消息后，调用眼镜本地 TTS 播放语音（AiChannel v1 编解码，兼容 v0） */
     private fun handleTtsPlay(args: Caps) {
         try {
-            if (args.size() < 2 || args.at(1) == null ||
-                args.at(1).type() != Caps.Value.TYPE_STRING
-            ) {
-                Log.w(TAG, "Invalid tts_play payload: size=${args.size()}")
+            val text = AiChannel.decodeTtsPlay(capsToStrings(args)) ?: run {
+                Log.w(TAG, "handleTtsPlay: rejected invalid/unsupported payload (size=${args.size()})")
                 return
             }
-            val text = args.at(1).getString()
-            Log.i(TAG, "Received tts_play: ${text?.take(40)}...")
-            if (!text.isNullOrBlank()) {
+            Log.i(TAG, "Received tts_play: ${text.take(40)}...")
+            if (text.isNotBlank()) {
                 TtsPlaybackHelper.play(this, text)
             }
         } catch (e: Exception) {
@@ -1099,16 +1271,14 @@ class KeyButtonService : Service() {
         }
     }
 
-    /** 接收手机端下发的「按键答题」开关状态并持久化 */
+    /** 接收手机端下发的「按键答题」开关状态并持久化（AiChannel 版本化编解码） */
     private fun handleQuizConfig(args: Caps) {
         try {
-            if (args.size() < 2) {
-                Log.w(TAG, "Invalid quiz config size: ${args.size()}")
+            markDownlink()
+            val enabled = AiChannel.decodeQuizConfig(capsToStrings(args)) ?: run {
+                Log.w(TAG, "handleQuizConfig: rejected invalid/unsupported payload (size=${args.size()})")
                 return
             }
-            val action = args.at(0).getString()
-            if (action != "quiz_enabled") return
-            val enabled = args.at(1).getString() == "true"
             getSharedPreferences(PREFS_NAME, 0).edit()
                 .putBoolean(KEY_QUIZ_ENABLED, enabled)
                 .apply()
@@ -1160,28 +1330,87 @@ class KeyButtonService : Service() {
         }
     }
 
+    // ──────────────────────────────────────────────
+    //  AIUI 自托管宿主（.aix 接收 / open / close / msg）
+    // ──────────────────────────────────────────────
+
+    /** 启动 .aix 接收服务：收到完整包后自动拉起 AiuiLinkActivity 渲染 */
+    private fun startAiuiHostServer() {
+        if (aiuiPkgServer?.isRunning == true) return
+        val server = AiuiPackageServer(listener = object : AiuiPackageServer.Listener {
+            override fun onPackageReceived(file: File) {
+                aiuiLastFile = file
+                Log.i(TAG, "AIUI package received: ${file.name} -> open host")
+                handler.post { openAiuiHost(file) }
+            }
+        })
+        aiuiPkgServer = server
+        if (!server.start(this)) {
+            Log.e(TAG, "AIUI package server failed to start on 7658")
+        }
+    }
+
+    /** AIUI_HOST_TOPIC 指令：open [fileName?] / close / msg [json] */
+    private fun handleAiuiHost(args: Caps) {
+        try {
+            val f = capsToStrings(args)
+            if (f.isEmpty() || f[0].isNullOrBlank()) return
+            when (f[0]) {
+                CMD_AIUI_OPEN -> {
+                    val name = f.getOrNull(1)?.takeIf { it.isNotBlank() }
+                    val file = if (name != null) File(filesDir, "aiui_host/$name") else aiuiLastFile
+                    if (file == null || !file.isFile) {
+                        Log.w(TAG, "aiui open: no file to open ($name / last=${aiuiLastFile?.name})")
+                        return
+                    }
+                    aiuiLastFile = file
+                    handler.post { openAiuiHost(file) }
+                }
+                CMD_AIUI_CLOSE -> handler.post { AiuiLinkActivity.closeActive() }
+                CMD_AIUI_MSG -> {
+                    val json = f.getOrNull(1)
+                    if (!json.isNullOrBlank()) {
+                        AiuiLinkActivity.dispatchMessageToActive(json)
+                    }
+                }
+                else -> Log.w(TAG, "aiui host unknown cmd: ${f[0]}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "handleAiuiHost error", e)
+        }
+    }
+
+    private fun openAiuiHost(file: File) {
+        try {
+            AiuiLinkActivity.open(this, file.absolutePath)
+        } catch (e: Exception) {
+            Log.e(TAG, "open AiuiLinkActivity failed", e)
+        }
+    }
+
     private fun handleConfig(args: Caps) {
         try {
-            if (args.size() < 5) {
-                Log.w(TAG, "Invalid config size: ${args.size()}")
+            val cfg = AiChannel.decodeKeyConfig(capsToStrings(args)) ?: run {
+                Log.w(TAG, "handleConfig: rejected invalid/unsupported payload (size=${args.size()})")
                 return
             }
-            val action = args.at(0).getString()
-            if (action != "key_config") return
-
             getSharedPreferences(PREFS_NAME, 0).edit()
-                .putString(KEY_SHORT_PKG, args.at(1).getString())
-                .putString(KEY_SHORT_ACT, args.at(2).getString())
-                .putString(KEY_LONG_PKG, args.at(3).getString())
-                .putString(KEY_LONG_ACT, args.at(4).getString())
+                .putString(KEY_SHORT_PKG, cfg.shortPkg)
+                .putString(KEY_SHORT_ACT, cfg.shortActivity)
+                .putString(KEY_LONG_PKG, cfg.longPkg)
+                .putString(KEY_LONG_ACT, cfg.longActivity)
                 .apply()
 
-            Log.i(TAG, "Config saved: short=${args.at(1).getString()}/${args.at(2).getString()}, " +
-                  "long=${args.at(3).getString()}/${args.at(4).getString()}")
+            Log.i(TAG, "Config saved: short=${cfg.shortPkg}/${cfg.shortActivity}, " +
+                "long=${cfg.longPkg}/${cfg.longActivity}")
         } catch (e: Exception) {
             Log.e(TAG, "handleConfig error", e)
         }
     }
+
+    // ──────────────────────────────────────────────
+    //  WiFi 使能 / 连接（wifi_config 历史兜底）
+    // ──────────────────────────────────────────────
 
     private fun handleWifiConfig(args: Caps) {
         try {

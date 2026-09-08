@@ -26,6 +26,8 @@ class AsrPushClient(
         val PUSH_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34F9")
 
         private const val RECONNECT_DELAY_MS = 3000L
+        /** 连接建立失败重试最长退避：眼镜不可达时避免每 3s 盲重连冲击蓝牙协议栈 */
+        private const val BACKOFF_MAX_MS = 30_000L
         private const val MAX_FRAME = 65536
     }
 
@@ -46,7 +48,11 @@ class AsrPushClient(
         if (running) return
         running = true
         thread = Thread {
+            // 连续「连接建立失败」次数：眼镜不可达/蓝牙栈忙时指数退避，
+            // 避免每 3s 盲重连冲击蓝牙协议栈（加重隧道不稳定）。
+            var connectFailures = 0
             while (running) {
+                var established = false
                 try {
                     // 优先 A2DP 当前活跃连接的眼镜，避免多台绑定（含残留旧眼镜）时选错设备
                     val glasses = selectActiveGlasses(context)
@@ -54,6 +60,8 @@ class AsrPushClient(
                     val s = glasses.createRfcommSocketToServiceRecord(PUSH_UUID)
                     socket = s
                     s.connect()
+                    established = true
+                    connectFailures = 0
                     Log.i(TAG, "ASR push connected")
                     val input = DataInputStream(s.inputStream)
                     while (running) {
@@ -79,9 +87,13 @@ class AsrPushClient(
                     socket = null
                 }
                 if (!running) break
-                // 断线重连
+                // 已建立后中途断开（短暂掉线）保持 3s 快速重连，尽早恢复推送；
+                // 只有连接一直建立不起来（对端不可达）才指数退避到最长 30s。
+                if (!established) connectFailures++
+                val backoffSteps = minOf((connectFailures - 1).coerceAtLeast(0), 3)
+                val delay = (RECONNECT_DELAY_MS shl backoffSteps).coerceAtMost(BACKOFF_MAX_MS)
                 try {
-                    Thread.sleep(RECONNECT_DELAY_MS)
+                    Thread.sleep(delay)
                 } catch (_: InterruptedException) {
                     break
                 }

@@ -56,6 +56,12 @@ object AppConfig {
     /** ADB Socket 超时时间（毫秒） */
     const val ADB_SOCKET_TIMEOUT_MS = 3000
 
+    /** ADB 握手期读超时（毫秒）：需覆盖蓝牙隧道整条链路建连耗时。
+     *  手机端 RFCOMM 建连兜底 8s（BtTunnelClient.BT_CONNECT_TIMEOUT_MS）+ 眼镜端连本地 adbd
+     *  （3s）+ 首包回传余量；握手一旦开始（首包到达）即毫秒级完成，故正常路径不受此上限影响，
+     *  仅防止隧道建连慢时被命令期 3s 超时误判为"连接失败"。 */
+    const val ADB_HANDSHAKE_TIMEOUT_MS = 15_000
+
     /** 投屏 Socket 连接超时时间（毫秒） */
     const val MIRROR_CONNECT_TIMEOUT_MS = 3000
 

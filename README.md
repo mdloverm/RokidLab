@@ -77,8 +77,32 @@ Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、蓝牙�
   - **定时任务**："5分钟后提醒我喝水""明早8点叫我""17点打开小智"（到点眼镜语音播报，可同时打开应用）
   - **查询类**：眼镜电量、系统信息、存储空间、已装应用、当前时间、知识库检索
   - 工具开关在聊天设置 →「管理 AI 工具」子页面统一管理，支持中英文
+- **本地模型支持**：内置 Ollama 连接器，无需云端 API 即可在手机端调用本地大模型对话（设置 → AI 服务 → 本地模型）
 - **聊天界面**：AI 消息支持长按选择复制；顶部可一键清空对话（同时重置 Agent 上下文）；消息跨页面切换不丢失
 - **会话稳定性**：ASR_READY 控制信号避免眼镜语音会话在识别完成前被过早打断；眼镜端本地接管负责打断/打开/文字显示，杜绝双 open 竞态；长工具输出自动截断防上下文膨胀
+- **代码清洗**：生成 AIUI 代码后自动剥除 markdown 围栏代码块，将超长/形似代码的回复收敛为短结论，避免源码通过 TTS_Result 下发到眼镜
+
+### AIUI 智能体生成（对话即开发）
+v3.4 全新功能 —— 与乐奇对话，直接在眼镜上生成和运行 AIUI 智能体应用，无需写代码、无需 IDE。
+
+- **对话生成**：对乐奇说「做个番茄钟」「做一个汇率换算器」「做一个歌词显示界面」，AI 自动生成完整 AIUI 项目代码（.ink 页面 + app.json 清单），打包为 .aix 推送到眼镜渲染运行
+- **技能体系（Skill）**：内置 AIUI 开发技能文档（Skill），AI 在生成代码前自动加载官方组件规范、API 参考和设计指南，确保生成的代码符合眼镜渲染引擎要求：
+  - **自动加载**：首次提到 AIUI 相关需求时自动拉取技能全文注入上下文
+  - **按章节精读**：需要特定组件/API 时按章节读取（components.md / apis-*.md），避免全量注入浪费 token
+  - **本地缓存**：技能文件内置在 assets/skills/ 目录，无需网络
+- **代码修改（先读再改）**：对已生成的 AIUI 不满意？直接说「把上次那个番茄钟颜色改成红色」「加一个暂停按钮」——AI 先读取项目现有源码（read_code_file），基于真实代码精准修改，再覆盖写回并重装到眼镜，不凭记忆整文件重编
+- **项目管理**：设置 → AI 服务 → 管理 AIUI 程序页面统一管理所有已生成的智能体应用：
+  - 查看应用列表（名称、项目名、更新时间、来源）
+  - 打开/关闭应用（直接在眼镜上演示）
+  - 重新安装（修改后一键重装）
+  - 删除应用（支持同时删除源码文件 + 眼镜端文件，带确认弹窗）
+- **本地上传 .aix**：支持从手机本地选择 .aix 文件上传到眼镜，享受与对话生成相同的安装/管理流程
+- **语音指令修改**：通过语音对话即可修改已生成的 AIUI 程序，无需重新描述整个项目
+- **多线路推送**：AIUI 项目上传优先使用 WiFi 链路（眼镜 IP:8848），失败时自动回退至蓝牙隧道，确保推送成功率
+- **WebServer 预热**：上传前通过 ADB-over-隧道发广播拉起眼镜端 WebServer（8848 端口），并等待端口就绪，避免空闲超时导致上传失败
+- **系统命令直通**：通过反射绕过 CXR-L SDK 内置 cmd 黑名单，支持直接发送 Sys_AIUI_Start/Sys_AIUI_Stop 等系统命令控制官方渲染层
+- **退出 AIUI**：支持主动退出正在运行的 AIUI 程序（stop_aiui_app 工具），而非仅能退出已启动的程序
+- **内容指纹版本控制**：VERSION 字段使用内容指纹，代码有变化时眼镜端自动重新解压渲染，无需手动清缓存
 
 ### 屏幕镜像
 - 将眼镜屏幕实时显示在手机上（ADB over TCP 自定义实现）
@@ -150,6 +174,8 @@ Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、蓝牙�
   - OpenAI 兼容协议客户端（`OpenAiService`，可切换任意服务商）
   - 本地 OCR（RapidOCR / PP-OCRv4 + ONNX Runtime，完全离线）
   - 本地知识库 RAG（txt 导入，SQLite 分块检索）
+  - AIUI 开发 Skill 体系（内置官方组件规范 + API 参考 + 设计指南，`SkillRegistry` 自动加载/按章节读取）
+  - 本地模型支持（`LocalOllamaManager`，Ollama 协议直连）
 - **投屏**: MediaProjection API + Socket 传输
 - **统一 HTTP 工具**: `HttpClient` 对象封装（替代裸 `HttpURLConnection`）
 - **统一交互组件**: `BrewButton`/`BrewOutlineButton`/`BrewCompactButton`/`BrewIconButton` 标准按钮系统、`BrewDialog` 标准对话框（RokidLink 卡片样式：彩色标题栏 + 装饰分隔线 + 彩色边框）、`BrewStatusDot`/`BrewStatusPill`/`BrewStateCard` 标准状态指示器（详见 [UI-DESIGN.md](./UI-DESIGN.md)）
@@ -236,12 +262,19 @@ RokidLab/
 │   │   │   │   └── CoolBlueColors.kt     第二主题（冰蓝冰川）
 │   │   │   └── RokidHostApp.kt    HostApp 枚举
 │   │   │   ├── ai/          AI 能力
-│   │   │   │   ├── OpenAiService.kt    OpenAI 兼容服务（可切换任意服务商）
-│   │   │   │   ├── ToolRegistry.kt     AI 工具注册表（语音控制：打开应用/定时任务/查询类）
-│   │   │   │   ├── AgentSessionManager.kt   Agent 会话记忆（多轮历史，10 分钟自动清空）
+│   │   │   │   ├── OpenAiService.kt        OpenAI 兼容服务（可切换任意服务商）
+│   │   │   │   ├── ToolRegistry.kt         AI 工具注册表（语音控制 + AIUI 代码生成/读取/安装/打开/停止）
+│   │   │   │   ├── WebTools.kt             AIUI 项目文件读写工具（save_code_file / read_code_file）
+│   │   │   │   ├── AiuiProject.kt          AIUI 项目打包/校验（.aix 生成 + VERSION 内容指纹）
+│   │   │   │   ├── AiuiAppRegistry.kt      AIUI 应用注册表（项目记录持久化）
+│   │   │   │   ├── SkillRegistry.kt        技能文档注册表（AIUI 开发 Skill 加载/章节读取）
+│   │   │   │   ├── SkillMarkdown.kt        Skill Markdown 解析器
+│   │   │   │   ├── SkillFetcher.kt         技能文件获取器
+│   │   │   │   ├── AgentSessionManager.kt  Agent 会话记忆（多轮历史，10 分钟自动清空）
 │   │   │   │   ├── LongTermMemoryManager.kt 长期记忆（manage_memory 工具 + 跨会话持久化）
-│   │   │   │   ├── LocalOcr.kt         本地 OCR（PP-OCRv4 + ONNX Runtime）
-│   │   │   │   └── KnowledgeBase.kt    本地知识库 RAG（txt 导入、分块、SQLite 检索）
+│   │   │   │   ├── LocalOcr.kt             本地 OCR（PP-OCRv4 + ONNX Runtime）
+│   │   │   │   ├── LocalOllamaManager.kt   本地模型连接器（Ollama 协议）
+│   │   │   │   └── KnowledgeBase.kt        本地知识库 RAG（txt 导入、分块、SQLite 检索）
 │   │   │   ├── connection/  连接路由
 │   │   │   │   └── ConnectionRouteManager.kt  WiFi 直连 / 蓝牙隧道双线路路由管理
 │   │   │   ├── filemanager/  文件管理
@@ -277,6 +310,15 @@ RokidLab/
 │   │   │   ├── store/       商店 UI
 │   │   │   │   ├── StoreHomeScreen.kt    主界面入口（含 ADB工具/底栏等全部页面）
 │   │   │   │   ├── ChatScreen.kt         乐奇聊天界面（对话/拍照问 AI/知识库管理/AI 设置）
+│   │   │   │   ├── ChatBubble.kt         聊天气泡组件
+│   │   │   │   ├── ChatHeader.kt         聊天顶部栏
+│   │   │   │   ├── ChatSettingsDialog.kt 聊天设置弹窗（AI 服务/模型/Agent 设置）
+│   │   │   │   ├── ChatFormat.kt        聊天文本格式化
+│   │   │   │   ├── AiuiManagePage.kt    AIUI 程序管理页面（列表/打开/重装/删除）
+│   │   │   │   ├── SkillsManagePage.kt  技能管理页面
+│   │   │   │   ├── ToolsManagePage.kt   AI 工具管理页面（开关/排序）
+│   │   │   │   ├── LocalModelPage.kt    本地模型配置页面（Ollama）
+│   │   │   │   ├── AgentSectionPage.kt  Agent 设置页（记忆/长期记忆管理）
 │   │   │   │   ├── ChatStateHolder.kt    聊天消息单例状态（跨页面切换不丢失）
 │   │   │   │   ├── StoreComponents.kt    通用 UI 组件
 │   │   │   │   ├── StoreInstallState.kt  安装状态组件
@@ -298,12 +340,26 @@ RokidLab/
 │   │   │   ├── values/strings.xml   简体中文（默认语言）
 │   │   │   └── values-en/strings.xml  English
 │   │   └── assets/          内置资源
+│   │       ├── skills/                    AIUI 开发技能文档（Skill）
+│   │       │   └── aiui-dev/             AIUI 开发指南（SKILL.md + components.md + apis-*.md + lab-runtime.md）
+│   │       ├── apps.json                   商店应用列表（gitee 分支）
+│   │       └── scrcpy-server.jar           ADB 推送到 /data/local/tmp/，供 scrcpy-server 启动使用
 │   └── build.gradle.kts
 │
 ├── RokidLink/                            眼镜端配套应用（RokidLink，自动打包到 phone-app assets）
 │   ├── src/main/
 │   │   ├── java/com/rokidlab/rokidlink/
 │   │   │   ├── MainActivity.kt              WiFi/ADB 状态面板 + ADB TCP 自动开启
+│   │   │   ├── BtTunnelServer.kt            蓝牙隧道服务（RFCOMM 转发，双线路通信）
+│   │   │   ├── AiChannel.kt                 AI 指令通道（ASR/工具/接管串行化）
+│   │   │   ├── AiuiLinkActivity.kt          AIUI 渲染宿主 Activity
+│   │   │   ├── AiuiPackageServer.kt         AIUI .aix 包上传/解压/渲染服务
+│   │   │   ├── AixBundleReader.kt           .aix 包读取器（清单解析 + 文件提取）
+│   │   │   ├── TtsPlaybackHelper.kt          TTS 语音播报辅助
+│   │   │   ├── KeyButtonBridgeActivity.kt   按键事件桥接
+│   │   │   ├── KeyButtonService.kt          按键服务
+│   │   │   ├── SelfRestartReceiver.kt       自重启广播接收器
+│   │   │   ├── ServiceHelpers.kt           服务辅助工具集
 │   │   │   ├── PhoneMirrorActivity.kt       投屏接收画面（onResume 自愈 + singleTask 重新拉起）
 │   │   │   ├── PhoneMirrorServer.kt         Socket 服务端（灰度图接收 + Bitmap 双缓冲 + 线程安全锁）
 │   │   │   ├── TextInputService.kt          TCP 文字输入服务（监听 7656 端口，接收手机文字 → 设置剪贴板 → 尝试粘贴）
@@ -347,7 +403,7 @@ RokidLab/
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v3.3-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v3.4-debug.apk
 ```
 
 ### 眼镜端服务
@@ -362,7 +418,7 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 2. 在手机端打开 RokidLab，按照引导授权并连接眼镜
 3. 导航栏分为八个模块：
    - **应用商店**：浏览并安装应用到手机或眼镜
-   - **乐奇聊天**：与 AI 文字聊天（回复眼镜语音播报）、拍照问 AI、本地知识库
+   - **乐奇聊天**：与 AI 文字聊天（回复眼镜语音播报）、拍照问 AI、本地知识库、**对话生成 AIUI 智能体应用**
    - **屏幕镜像**：查看眼镜屏幕画面
    - **手机投屏**：将手机画面投射到眼镜
    - **文件管理**：浏览和管理眼镜文件

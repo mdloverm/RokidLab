@@ -26,7 +26,7 @@ object BrewThemeManager {
 
     private lateinit var prefs: SharedPreferences
 
-    private var _currentTheme by mutableStateOf(BrewTheme.VELVET_DARK)
+    private var _currentTheme by mutableStateOf(BrewTheme.COOL_BLUE)
 
     val currentTheme: BrewTheme get() = _currentTheme
 

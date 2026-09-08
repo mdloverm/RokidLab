@@ -56,14 +56,27 @@
             android:exported="true"
             android:theme="@style/Theme.RokidLink.Transparent" />
 
-        <!-- 常驻透明 Activity：保持进程 VISIBLE 状态，Service 双重保障 -->
+        <!-- 常驻透明 Activity：保持进程 VISIBLE 状态，Service 双重保障。
+             必须用全透明主题（windowBackground=transparent）：系统 Theme.Translucent.NoTitleBar
+             自带半透明灰黑背景，未 setContentView 时整屏挂一层暗层，AIUI/投屏/桌面
+             右上角边缘会出现半透明"虚影"（实测）。 -->
         <activity
             android:name=".KeyButtonBridgeActivity"
             android:exported="false"
             android:excludeFromRecents="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:theme="@style/Theme.RokidLink.Transparent"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:noHistory="false" />
+
+        <!-- AIUI Web 宿主（官方 @yodaos-pkg/ink browser-integration + wasm）：
+             渲染 Lab 生成的 .aix，眼镜按键 / Lab 蓝牙手柄(HID→KeyEvent) 注入为 ink 输入 -->
+        <activity
+            android:name=".AiuiLinkActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden"
+            android:theme="@style/Theme.RokidLink.Transparent" />
 
         <service
             android:name=".KeyButtonService"
@@ -74,6 +87,12 @@
             android:name=".BtTunnelService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- 断线自愈重启接收器：KeyButtonService 检测到 cxr-service 分发路由 stale 后
+             经 AlarmManager 触发自杀重启（仅本应用内部广播，故 exported=false） -->
+        <receiver
+            android:name=".SelfRestartReceiver"
+            android:exported="false" />
 
     </application>
 

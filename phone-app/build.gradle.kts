@@ -25,8 +25,8 @@ android {
         applicationId = "com.rokidlab.phone"
         minSdk = 29
         targetSdk = 34
-        versionCode = 18
-        versionName = "3.3"
+        versionCode = 19
+        versionName = "3.4"
         manifestPlaceholders["cleartextTrafficPermitted"] = "false"
 
         // 本地 OCR（onnxruntime + opencv）体积较大，只保留主流真机 ABI
@@ -130,6 +130,37 @@ val buildRokidLinkRelease by tasks.registering {
     }
 }
 
+// ── 双端 AiChannel 协议同源守护 ──
+// AiChannel.kt（配置通道协议）在 phone-app 与 RokidLink 各持一份同源副本，
+// 修改必须双端同步（否则接收端按错位偏移解析，这正是协议版本化要防的问题）。
+// 本任务在 preBuild 时校验：除 package 行与空行外必须逐字节一致，不一致直接构建失败。
+val checkAiChannelSynced by tasks.registering {
+    group = "verification"
+    description = "校验 phone-app 与 RokidLink 的 AiChannel.kt 同源（仅允许 package 行不同）"
+    doLast {
+        fun normalized(f: File): String = f.readText()
+            .lineSequence()
+            .filterNot { it.startsWith("package ") || it.isBlank() }
+            .joinToString("\n")
+        val phone = file("src/main/java/com/rokidlab/phone/glasses/AiChannel.kt")
+        val glasses = rokidLinkProject.projectDir.resolve(
+            "src/main/java/com/rokidlab/rokidlink/AiChannel.kt",
+        )
+        val p = normalized(phone)
+        val g = normalized(glasses)
+        if (p != g) {
+            error(
+                "AiChannel 双端不同源！\n  phone-app: $phone\n  RokidLink: $glasses\n" +
+                    "修改协议必须同步修改两端文件（仅 package 行允许不同），并同步升 SCHEMA_VERSION。",
+            )
+        }
+        logger.lifecycle("checkAiChannelSynced: AiChannel 双端同源校验通过")
+    }
+}
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(checkAiChannelSynced)
+}
+
 // 在合并 assets 前先同步 RokidLink APK
 tasks.matching { it.name.startsWith("mergeDebug") && it.name.endsWith("Assets") }.configureEach {
     dependsOn(buildRokidLinkDebug)
@@ -174,4 +205,9 @@ dependencies {
     }
     implementation("org.opencv:opencv:4.12.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+
+    // ── JVM 单元测试（纯 Kotlin 协议/状态机/裁剪逻辑，无需真机）──
+    testImplementation("junit:junit:4.13.2")
+    // 真实 org.json 实现：android.jar 中为抛 "not mocked" 的桩，SSE 解析单测需要真实解析
+    testImplementation("org.json:json:20231013")
 }

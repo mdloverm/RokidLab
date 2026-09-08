@@ -101,7 +101,9 @@ class AdbFileManagerClient(
 
             socket = Socket()
             socket?.tcpNoDelay = true
-            socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+            // 握手期使用独立超时：蓝牙隧道场景下 CNXN 需等 RFCOMM 建连（兜底 8s）才被转发，
+            // 命令期 3s 超时会在此阶段误报 Read timed out（见 AdbShellClient.connect 注释）。
+            socket?.soTimeout = AppConfig.ADB_HANDSHAKE_TIMEOUT_MS
             socket?.keepAlive = true
             socket?.connect(java.net.InetSocketAddress(ipAddress, port), AppConfig.ADB_CONNECT_TIMEOUT_MS)
             inputStream = socket?.getInputStream()
@@ -112,6 +114,8 @@ class AdbFileManagerClient(
             keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
             localId.set(1)
             doHandshake()
+            // 握手完成：恢复命令期读超时
+            socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
             adbSessionAlive = true
             Log.i(TAG, "ADB connection successful")
             onStatus(context.getString(R.string.file_manager_connected))

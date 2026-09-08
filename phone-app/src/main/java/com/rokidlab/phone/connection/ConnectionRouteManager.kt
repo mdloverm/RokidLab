@@ -134,6 +134,22 @@ class ConnectionRouteManager(private val context: Context) {
     /** 清除线路缓存（隧道断线等异常后调用，强制重新探测） */
     fun clearRouteCache() = routeCache.clear()
 
+    /**
+     * 建立/复用到眼镜端指定端口（targetPort）的蓝牙隧道，返回手机侧本地端口。
+     *
+     * 适用：眼镜端本地服务（如 RokidLink 的 AiuiPackageServer:7658）不经过 adbd ——
+     * Rokid 眼镜的 adbd 拒绝任意 tcp 转发（"adbd does not support arbitrary tcp
+     * connections"），adb smart-socket 无法直连；BT 隧道（BtTunnelServer 先收目标
+     * 端口再连 127.0.0.1:targetPort）无此限制，是可靠传输通道。
+     *
+     * @param targetPort 眼镜端目标端口（5555=ADB、7658=AIUI .aix 接收）
+     * @return 手机侧本地 TCP 端口；无已配对眼镜/隧道启动失败时返回 null
+     */
+    fun tunnelTo(targetPort: Int): Int? {
+        val localPort = BT_LOCAL_PORT_BASE + targetPort - 5555
+        return if (tunnel.start(localPort, targetPort)) localPort else null
+    }
+
     /** TCP 可达性探测 */
     private fun probeTcp(ip: String, port: Int): Boolean = try {
         Socket().apply {
@@ -279,9 +295,13 @@ class BtTunnelClient(private val context: Context) {
                     try {
                         val tcpSocket = server.accept()
                         Log.i(TAG, "Client connected on :$localPort")
-                        // 注意：RFCOMM 蓝牙连接仅支持单连接，必须串行处理。
-                        // 后台轮询等长连接会独占隧道，其它 ADB 功能请走短连接或独立隧道。
-                        handleConnection(tcpSocket, glasses, targetPort)
+                        // 每 TCP 连接独立线程处理，与眼镜端 BtTunnelServer（v3.2 起并发 accept）对齐：
+                        // 串行处理时同端口任一条长连接（如 AI 对话常驻的共享 ADB client）
+                        // 会阻塞其他模块的短连接，导致 TCP 排队超时（握手失败/命令卡死）。
+                        // 每条 handleConnection 自带空闲超时（TUNNEL_IDLE_TIMEOUT_MS），
+                        // 线程不会无限堆积；RFCOMM 并发由眼镜端 maxActive 上限约束。
+                        Thread { handleConnection(tcpSocket, glasses, targetPort) }
+                            .apply { name = "bt-tunnel-$localPort-conn"; isDaemon = true; start() }
                     } catch (e: IOException) {
                         if (servers.containsKey(localPort)) Log.e(TAG, "Accept error: ${e.message}")
                     }

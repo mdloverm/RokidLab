@@ -1,7 +1,9 @@
 package com.rokidlab.rokidlink
 
+import android.Manifest
 import android.app.Activity
 import android.content.BroadcastReceiver
+import android.content.pm.PackageManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -96,6 +98,58 @@ class MainActivity : Activity() {
         private const val TAG = "RokidLink"
         private const val REQUEST_WIFI = 100
 
+        /** 蓝牙运行时权限（Android 12+ BLUETOOTH_CONNECT）申请请求码 */
+        private const val REQ_BLUETOOTH_CONNECT = 200
+
+        /**
+         * 进程级标记：BLUETOOTH_CONNECT 已授予（授权成功置 true，避免同进程反复弹框）。
+         * 拒绝后保持 false，下次冷启动可再次申请（系统层会抑制频繁弹框）。
+         */
+        @Volatile
+        var btConnectGrantedOnce = false
+
+        /**
+         * 检查并申请蓝牙运行时权限 BLUETOOTH_CONNECT（Android 12+）。
+         *
+         * 蓝牙隧道（BtTunnelServer.listenUsingRfcommWithServiceRecord → BluetoothAdapter.getAddress）
+         * 依赖该权限：缺失时眼镜端抛 SecurityException，隧道 / ASR push / WiFi adb(5555) 全部不可用。
+         * CXR-L「重装眼镜端」/ 卸载重装会清空运行时授权，故启动时必须重新检查并按需申请。
+         * Service 无法发起运行时权限请求，只能在 Activity 内申请，由 MainActivity / KeyButtonBridgeActivity 共用。
+         *
+         * @return 是否发起了权限申请（弹框）
+         */
+        @JvmStatic
+        fun requestBluetoothConnectPermissionIfNeeded(activity: Activity): Boolean {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) return false
+            if (btConnectGrantedOnce) return false
+            val granted = activity.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
+                PackageManager.PERMISSION_GRANTED
+            if (granted) {
+                btConnectGrantedOnce = true
+                return false
+            }
+            android.util.Log.i(TAG, "BLUETOOTH_CONNECT not granted, requesting runtime permission")
+            activity.requestPermissions(
+                arrayOf(Manifest.permission.BLUETOOTH_CONNECT),
+                REQ_BLUETOOTH_CONNECT
+            )
+            return true
+        }
+
+        /** 处理蓝牙权限申请结果（供 MainActivity / KeyButtonBridgeActivity 共用） */
+        @JvmStatic
+        fun handleBluetoothPermissionResult(activity: Activity, requestCode: Int, grantResults: IntArray) {
+            if (requestCode != REQ_BLUETOOTH_CONNECT) return
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            if (granted) {
+                btConnectGrantedOnce = true
+                android.util.Log.i(TAG, "BLUETOOTH_CONNECT granted — BT tunnel auto-recovers via service retry")
+            } else {
+                android.util.Log.w(TAG, "BLUETOOTH_CONNECT denied — BT tunnel & WiFi adb unavailable")
+            }
+        }
+
         /** PhoneMirrorActivity 启动时发出的广播 Action，用于关闭本页面 */
         const val ACTION_FINISH_MAIN = "com.rokidlab.rokidlink.FINISH_MAIN"
 
@@ -159,6 +213,10 @@ class MainActivity : Activity() {
 
         setDotColor(DOT_IDLE)
         startSetup()
+
+        // 蓝牙运行时权限（重装后会被清空）：缺失时蓝牙隧道/ASR push/WiFi adb 全部不可用，
+        // 需在 Activity 内申请。授权后 BtTunnelService 的 3s 重试会自动恢复隧道，无需重启。
+        requestBluetoothConnectPermissionIfNeeded(this)
 
         // 兜底：若 3 秒内未收到窗口焦点（眼镜 ROM 可能不回调 onWindowFocusChanged），直接启动服务
         Handler(Looper.getMainLooper()).postDelayed({
@@ -296,6 +354,18 @@ class MainActivity : Activity() {
             Handler(Looper.getMainLooper()).postDelayed({
                 startSetup()
             }, 1000)
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        handleBluetoothPermissionResult(this, requestCode, grantResults)
+        if (requestCode == REQ_BLUETOOTH_CONNECT) {
+            // 授权成功但服务尚未运行时补启；已在运行时由 3s 重试自动恢复隧道
+            if (btConnectGrantedOnce && !isServiceRunning(BtTunnelService::class.java)) {
+                Log.i(TAG, "Starting BtTunnelService after permission granted")
+                runCatching { BtTunnelService.start(this) }
+            }
         }
     }
 

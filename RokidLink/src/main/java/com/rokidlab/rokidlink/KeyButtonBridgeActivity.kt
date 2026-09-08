@@ -264,6 +264,15 @@ class KeyButtonBridgeActivity : Activity() {
         } else {
             registerReceiver(yieldReceiver, IntentFilter(ACTION_YIELD))
         }
+
+        // 蓝牙运行时权限兜底申请：MainActivity 未被拉起时（服务直启场景），在此补一次。
+        // 授权后 BtTunnelService 的 3s 重试会自动恢复蓝牙隧道。
+        MainActivity.requestBluetoothConnectPermissionIfNeeded(this)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        MainActivity.handleBluetoothPermissionResult(this, requestCode, grantResults)
     }
 
     override fun onDestroy() {

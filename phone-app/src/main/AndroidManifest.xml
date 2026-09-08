@@ -23,6 +23,8 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 本地模型：通过 RUN_COMMAND 在 Termux 中启动/停止 Ollama 服务 -->
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
 
     <queries>
         <package android:name="com.rokid.sprite.global.aiapp" />
@@ -60,6 +62,15 @@
             android:name=".mirror.ScreenMirrorActivity"
             android:exported="false"
             android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
+
+        <!-- debug aix launch entry -->
+        <receiver
+            android:name=".ai.DebugAiuiReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.rokidlab.phone.DEBUG_CMD" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".mirror.PhoneMirrorActivity"

@@ -45,8 +45,10 @@ class BtTunnelServer {
     /** 当前活动的透传连接：stop 时需全部关闭以解除读阻塞 */
     private val activeSockets = java.util.concurrent.ConcurrentHashMap.newKeySet<BluetoothSocket>()
 
-    /** 并发透传连接上限：RFCOMM 多通道可共存，限制避免异常客户端无限占满 */
-    private val maxActive = 3
+    /** 并发透传连接上限：RFCOMM 多通道可共存，限制避免异常客户端无限占满。
+     *  手机端同端口并发（共享 ADB 常驻连接 + 文件管理/定时等短连接）与
+     *  镜像隧道（7654）叠加时可达 3-5 条，放宽到 6 避免新连接被拒。 */
+    private val maxActive = 6
 
     /** 启动蓝牙隧道服务端 */
     fun start(adapter: BluetoothAdapter): Boolean {

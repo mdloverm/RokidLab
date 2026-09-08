@@ -88,7 +88,9 @@ class AdbShellClient(
         Log.i(TAG, "Connecting to $ipAddress:$port...")
         socket = Socket()
         socket?.tcpNoDelay = true
-        socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
+        // 握手期使用独立超时：蓝牙隧道场景 CNXN 写入本地 5556 后，数据要等 RFCOMM
+        // 建连（兜底 8s）才被转发到眼镜 adbd，命令期 3s 超时会在此期间误报 Read timed out。
+        socket?.soTimeout = AppConfig.ADB_HANDSHAKE_TIMEOUT_MS
         socket?.connect(java.net.InetSocketAddress(ipAddress, port), AppConfig.ADB_CONNECT_TIMEOUT_MS)
         Log.i(TAG, "TCP connection established")
         inputStream = socket?.getInputStream()
@@ -96,6 +98,8 @@ class AdbShellClient(
         keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
         nextLocalId = 0
         doHandshake()
+        // 握手完成：恢复命令期读超时（单包级，避免后续命令卡死时拖长等待）
+        socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
         adbSessionAlive = true
         startHeartbeat()
         Log.i(TAG, "ADB connection successful")
@@ -361,6 +365,61 @@ class AdbShellClient(
         return executeShellCommand("input swipe $x1 $y1 $x2 $y2 $durationMs")
     }
 
+    /**
+     * 经 adb "tcp:<port>" 服务直连眼镜本机 TCP 端口并发送完整字节流，随后读回应答文本。
+     * 用途：把 .aix 推到 RokidLink 的 AiuiPackageServer（7658），返回其 "OK" 应答。
+     * 写阶段采用 WRTE + 等 OKAY 的流控节奏（adbd 会向远端 socket 写完后回 OKAY）；
+     * 读阶段镜像 readAllWrites（收到 CLSE 即结束）。
+     * @return 眼镜端回读文本（"OK" 表示成功）；空串表示失败/无应答
+     */
+    fun sendTcpStream(port: Int, payload: ByteArray, timeoutMs: Int = 60_000): String {
+        if (!adbSessionAlive) return ""
+        return lock.withLock {
+            try {
+                val result = open("tcp:$port") ?: run {
+                    Log.w(TAG, "sendTcpStream open tcp:$port failed")
+                    drainStaleMessages()
+                    return@withLock ""
+                }
+                val (localId, remoteId, _) = result
+                // ── 写阶段：分片 WRTE，每片等 OKAY 流控（防远端 socket 缓冲满丢包） ──
+                var off = 0
+                while (off < payload.size) {
+                    val end = minOf(off + MAX_PAYLOAD, payload.size)
+                    val chunk = payload.copyOfRange(off, end)
+                    writeMessage(CMD_WRTE, localId, remoteId, chunk)
+                    // OKAY(arg0=localId, arg1=remoteId) 表示 adbd 已消费该 WRTE
+                    val ok = readMessage()
+                    if (ok.command != CMD_OKAY) {
+                        Log.w(TAG, "sendTcpStream write no OKAY: cmd=0x${ok.command.toString(16)}")
+                        break
+                    }
+                    off = end
+                }
+                // ── 读阶段：收取眼镜端应答，直到 CLSE ──
+                val baos = ByteArrayOutputStream()
+                socket?.soTimeout = timeoutMs
+                val deadline = System.currentTimeMillis() + timeoutMs
+                while (System.currentTimeMillis() < deadline) {
+                    val msg = try { readMessage() } catch (_: Exception) { break }
+                    when {
+                        msg.command == CMD_WRTE && msg.arg0 == remoteId -> {
+                            baos.write(msg.payload)
+                            writeMessage(CMD_OKAY, localId, remoteId, ByteArray(0))
+                            socket?.soTimeout = (deadline - System.currentTimeMillis()).toInt().coerceAtLeast(2000)
+                        }
+                        msg.command == CMD_CLSE && msg.arg0 == remoteId -> break
+                    }
+                }
+                close(localId, remoteId)
+                baos.toString(Charsets.UTF_8)
+            } catch (e: Exception) {
+                Log.e(TAG, "sendTcpStream fail: ${e.message}", e)
+                ""
+            }
+        }
+    }
+
     // ──────────────────────────────────────────────────
     // -- ADB stream protocol: open/close localId must be paired --────────────────────────────────────────────────
 
@@ -526,6 +585,8 @@ class AdbShellClient(
             socket?.soTimeout = 500
             while (true) { readMessage() }
         } catch (_: Exception) { }
+        // 恢复命令期读超时：若残留 500ms，下次 open() 等 OKAY 延迟稍长即被误判超时
+        socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
     }
 
     // -- Message read/write --

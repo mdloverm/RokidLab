@@ -11,8 +11,8 @@ android {
         applicationId = "com.rokidlab.rokidlink"
         minSdk = 28
         targetSdk = 34
-        versionCode = 11
-        versionName = "3.3"
+        versionCode = 12
+        versionName = "3.4"
     }
 
     signingConfigs {
@@ -41,6 +41,12 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+
+    // JVM 单测：android 桩 API 默认返回默认值而非抛 "not mocked"，
+    // 保证未来眼镜端纯逻辑（AiChannel 编解码等）可无真机直接跑测试
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 // RokidLink 不作为独立应用安装到手机，而是打包进 phone-app assets
@@ -53,4 +59,7 @@ tasks.whenTaskAdded {
 
 dependencies {
     implementation(files("libs/cxr-service-bridge-1.0.aar"))
+
+    // ── JVM 单元测试 ──
+    testImplementation("junit:junit:4.13.2")
 }

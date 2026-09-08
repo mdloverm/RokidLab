@@ -22,7 +22,6 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.Manifest
 import android.app.Activity
-import android.app.ActivityManager
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
@@ -35,45 +34,22 @@ import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import java.io.File
@@ -135,12 +111,10 @@ class MainActivity : AppCompatActivity() {
     private var showRefreshDialog by mutableStateOf(false)
     private var refreshDialogSuccess by mutableStateOf(false)
     private var refreshDialogMessage by mutableStateOf("")
-    private var mirrorSourceSelected by mutableStateOf(false)
     private var prerequisitesState by mutableStateOf(PrerequisitesState())
     private var screenMirrorState by mutableStateOf(ScreenMirrorState())
     private var phoneMirrorState by mutableStateOf(PhoneMirrorState())
     private var fileManagerState by mutableStateOf(FileManagerState())
-    private var currentMirrorIndex by mutableStateOf(0)
     private var settingsReinstallError: String? = null
     // 日志列表，用于 UI 实时显示（最多保留 100 条）
     private val logMessages = mutableStateListOf<String>()
@@ -148,12 +122,7 @@ class MainActivity : AppCompatActivity() {
     private var showErrorLogDialog by mutableStateOf(false)
     private var errorLogContent by mutableStateOf("")
     private var errorLogSaved by mutableStateOf(false)
-    
-    // 兼容性引导
-    private var showCompatibilityDialog by mutableStateOf(false)
-    private val compatibilityPrefsName = "compatibility_dialog"
-    private val EXTRA_HAS_SEEN_COMPAT_GUIDE = "has_seen_compatibility_guide"
-    
+
     // 本地APK安装状态
     private var isInstallingLocalApk by mutableStateOf(false)
     private var localApkInstallProgress by mutableStateOf(0)
@@ -357,7 +326,7 @@ class MainActivity : AppCompatActivity() {
         refreshPhoneInstallStates(apps)
 
         // 检查 PhoneMirrorService 是否正在运行（Activity 重建后恢复状态）
-        if (isServiceRunning(PhoneMirrorService::class.java)) {
+        if (isServiceRunning(this, PhoneMirrorService::class.java)) {
             isStartingPhoneMirror = false
             phoneMirrorState = phoneMirrorState.copy(
                 isMirroring = true,
@@ -625,6 +594,9 @@ class MainActivity : AppCompatActivity() {
         checkCompatibilitySettings()
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  通知权限请求与系统设置
+    // ════════════════════════════════════════════════════════════════
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (hasPermission(Manifest.permission.POST_NOTIFICATIONS)) return
@@ -719,6 +691,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  商店刷新 / 镜像源切换 / 本地 APK 安装 / 自更新
+    // ════════════════════════════════════════════════════════════════
     private fun refreshStoreIndex(manual: Boolean) {
         if (refreshing) return
         lifecycleScope.launch {
@@ -832,15 +807,7 @@ class MainActivity : AppCompatActivity() {
                         tempFile.delete()
                         updateBusy(false)
                         
-                        // 3秒后清除状态
-                        Thread {
-                            Thread.sleep(3000)
-                            runOnUiThread {
-                                isInstallingLocalApk = false
-                                localApkInstallProgress = 0
-                                localApkInstallStatus = ""
-                            }
-                        }.start()
+                        scheduleClearLocalApkInstallState()
                     }
                 }.onFailure { error ->
                     log(getString(R.string.apk_install_failed, error.message ?: error.javaClass.simpleName))
@@ -850,6 +817,18 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** 3 秒后清除本地 APK 安装状态（复位进度与状态文本） */
+    private fun scheduleClearLocalApkInstallState() {
+        Thread {
+            Thread.sleep(3000)
+            runOnUiThread {
+                isInstallingLocalApk = false
+                localApkInstallProgress = 0
+                localApkInstallStatus = ""
+            }
+        }.start()
     }
 
     private fun performSelfUpdate() {
@@ -913,6 +892,9 @@ class MainActivity : AppCompatActivity() {
 
     // ── 授权结果由 authLauncher (registerForActivityResult) 处理，无需 onActivityResult ──
 
+    // ════════════════════════════════════════════════════════════════
+    //  应用安装状态同步（眼镜 / 手机）
+    // ════════════════════════════════════════════════════════════════
     private fun checkGlassesInstallStateIfNeeded(app: BrewApp) {
         val artifact = app.artifactFor("glasses") ?: return
         val packageName = artifact.packageName?.takeIf { it.isNotBlank() } ?: return
@@ -1047,6 +1029,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  应用下载 / 启动 / 安装 / 卸载
+    // ════════════════════════════════════════════════════════════════
     private fun launchApp(app: BrewApp, target: String) {
         val artifact = app.artifactFor(target)
         val packageName = artifact?.packageName?.takeIf { it.isNotBlank() }
@@ -1197,6 +1182,9 @@ class MainActivity : AppCompatActivity() {
         log(getString(R.string.log_download_cancelled, key))
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  RokidLink 运维（探测 / 安装 / 重装 / 启停）
+    // ════════════════════════════════════════════════════════════════
     private fun checkRokidLinkInstallation() {
         val app = application as LabApplication
         // 跳过持久化缓存兜底——每次都等 SDK 查询结果，避免卸载后仍显示"已安装"
@@ -1506,6 +1494,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  主机应用与引导 / 日志导出与保活
+    // ════════════════════════════════════════════════════════════════
     private fun loadSelectedHostApp(): RokidHostApp {
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         return RokidHostApp.fromId(prefs.getString(PREF_ROKID_HOST_APP, null))
@@ -1603,12 +1594,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateVersionLabel(version: String?): String {
-        val clean = version?.trim().orEmpty()
-        if (clean.isBlank()) return "latest"
-        return if (clean.startsWith("v", ignoreCase = true)) clean else "v$clean"
-    }
-
+    // ════════════════════════════════════════════════════════════════
+    //  运行前置条件（权限 / 蓝牙 / 待执行操作）
+    // ════════════════════════════════════════════════════════════════
     private fun runWithPrerequisites(action: () -> Unit) {
         if (pendingAction != null) return  // 已有待执行操作，避免竞态覆盖
         pendingAction = action
@@ -1637,6 +1625,9 @@ class MainActivity : AppCompatActivity() {
         return manager.adapter?.isEnabled == true
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  屏幕镜像 / 手机投屏
+    // ════════════════════════════════════════════════════════════════
     private fun startScreenMirror() {
         // 先通过 CXR-L 启动眼镜端的 ScreenMirrorIntentActivity（触发 MediaProjection 权限）
         log(getString(R.string.log_starting_glasses_mirror))
@@ -1722,21 +1713,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 检查指定 Service 是否在运行
-     */
-    private fun isServiceRunning(serviceClass: Class<*>): Boolean {
-        return try {
-            val manager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            manager.getRunningServices(Integer.MAX_VALUE).any { service ->
-                serviceClass.name == service.service.className
-            }
-        } catch (e: Exception) {
-            Log.e("MainActivity", "isServiceRunning failed: ${e.message}")
-            false
-        }
-    }
-
+    // ════════════════════════════════════════════════════════════════
+    //  本地 APK 安装（FileManager 入口）
+    // ════════════════════════════════════════════════════════════════
     // 处理从FileManagerActivity传来的APK安装请求
     private fun handleIncomingApkInstall(intent: Intent?) {
         if (intent?.action == "com.rokidlab.phone.ACTION_INSTALL_APK") {
@@ -1775,15 +1754,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     updateBusy(false)
                     
-                    // 3秒后清除状态
-                    Thread {
-                        Thread.sleep(3000)
-                        runOnUiThread {
-                            isInstallingLocalApk = false
-                            localApkInstallProgress = 0
-                            localApkInstallStatus = ""
-                        }
-                    }.start()
+                    scheduleClearLocalApkInstallState()
                 }
             }.onFailure { error ->
                 log(getString(R.string.apk_install_failed, error.message ?: error.javaClass.simpleName))
@@ -1987,85 +1958,5 @@ class MainActivity : AppCompatActivity() {
                 .show()
         }
         return false
-    }
-}
-
-@Composable
-internal fun MirrorSourceDialog(
-    currentIndex: Int,
-    onSelect: (Int) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val ctx = LocalContext.current
-    BrewDialog(onDismiss = onDismiss, title = ctx.getString(R.string.switch_source_btn), color = BrewCoral) {
-        BrewDialogContent {
-            BrewIndex.MIRRORS.forEachIndexed { index, mirror ->
-                val isSelected = currentIndex == index
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isSelected) BrewCoral.copy(alpha = 0.12f) else Color.Transparent)
-                        .border(
-                            if (isSelected) 1.dp else 0.dp,
-                            if (isSelected) BrewGreenDim else Color.Transparent,
-                            RoundedCornerShape(12.dp),
-                        )
-                        .clickable { onSelect(index) }
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // 源图标
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(BrewShapeSmall)
-                            .background(BrewTextBright.copy(alpha = 0.15f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (mirror.iconRes != null) {
-                            Icon(
-                                painter = painterResource(mirror.iconRes),
-                                contentDescription = mirror.name,
-                                tint = Color.Unspecified,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            mirror.name,
-                            color = if (isSelected) BrewCoral else BrewTextBright,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Text(
-                            ctx.getString(mirror.descriptionRes),
-                            color = BrewMuted,
-                            fontSize = 13.sp,
-                        )
-                    }
-                    if (isSelected) {
-                        Spacer(Modifier.width(8.dp))
-                        Icon(
-                            Icons.Outlined.CheckCircle,
-                            null,
-                            tint = BrewCoral,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                if (index < BrewIndex.MIRRORS.size - 1) {
-                    Spacer(Modifier.height(8.dp))
-                }
-            }
-            Spacer(Modifier.height(20.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onDismiss) {
-                    Text(ctx.getString(R.string.cancel_btn), color = BrewMuted, fontSize = 15.sp)
-                }
-            }
-        }
     }
 }

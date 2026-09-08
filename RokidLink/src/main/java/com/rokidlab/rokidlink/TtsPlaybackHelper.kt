@@ -92,6 +92,18 @@ object TtsPlaybackHelper {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    /**
+     * 播放代际号：play()/stop() 每次递增。排队中的旧任务每播一块前比对代际，
+     * 不一致立即退出——实现「新播报打断旧播报」与「退出对话同步停 TTS」，
+     * 且无需从单线程执行器里抢删任务（FIFO 队列中的陈旧任务会自动快速自停）。
+     */
+    @Volatile
+    private var playEpoch = 0L
+
+    /** 当前分块正在等待播放完成回调（onTtsStop）的闩锁，stop() 释放它以提前结束等待 */
+    @Volatile
+    private var activeLatch: CountDownLatch? = null
+
     @Volatile
     private var bound = false
     @Volatile
@@ -142,12 +154,23 @@ object TtsPlaybackHelper {
             Log.w(TAG, "play: text is blank, ignored")
             return
         }
+        // 新播报抢占新代际：旧播报的排队分块/正在等待的分块立即自停（多轮连续回复不叠声）
+        val epoch = synchronized(this) { ++playEpoch }
+        activeLatch?.countDown()
         // 分块播放：规避 ONNX 引擎对超长文本的 Expand 形状错误（见 TTS_CHUNK_MAX_CHARS 注释）
         val chunks = splitForTts(text)
         if (chunks.size > 1) Log.i(TAG, "play: split ${text.length} chars into ${chunks.size} chunks")
         playExecutor.execute {
             for ((i, chunk) in chunks.withIndex()) {
+                if (epoch != playEpoch) {
+                    Log.i(TAG, "play superseded before chunk ${i + 1} (epoch $epoch != $playEpoch), stop queue")
+                    return@execute
+                }
                 waitUntilBound(context)
+                if (epoch != playEpoch) {
+                    Log.i(TAG, "play superseded during bind wait, stop queue")
+                    return@execute
+                }
                 val server = ttsServer
                 if (server == null) {
                     Log.w(TAG, "TtsService not bound within ${BIND_TIMEOUT_MS}ms, dropping: \"${chunk.take(20)}...\"")
@@ -157,6 +180,16 @@ object TtsPlaybackHelper {
                 invokePlayTtsMsg(server, chunk)
             }
         }
+    }
+
+    /**
+     * 立即停止播放（如用户退出对话窗口/新一轮提问）：作废所有排队分块，
+     * 并释放当前分块正在等待的播放完成闩锁，让播放线程快速退出，不再继续播后续分块。
+     */
+    fun stop() {
+        synchronized(this) { playEpoch++ }
+        activeLatch?.countDown()
+        Log.i(TAG, "stop requested (epoch=$playEpoch)")
     }
 
     /**
@@ -363,8 +396,11 @@ object TtsPlaybackHelper {
             Log.e(TAG, "playTtsMsg failed after retry, dropping: \"${text.take(40)}...\"")
             return
         }
-        // 等待真实播放结束（onTtsStop）；超时兜底继续下一块
+        // 等待真实播放结束（onTtsStop）；超时兜底继续下一块。
+        // 注册 activeLatch：stop() 会 countDown 让等待提前结束（退出对话同步停播）。
+        activeLatch = latch
         val finished = latch.await(TTS_PLAY_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        activeLatch = null
         if (!finished) {
             Log.w(TAG, "onTtsStop timeout after ${TTS_PLAY_TIMEOUT_MS}ms: \"${text.take(30)}...\"")
         }

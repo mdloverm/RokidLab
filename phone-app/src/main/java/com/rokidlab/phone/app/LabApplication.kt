@@ -81,6 +81,9 @@ class LabApplication : Application() {
         // 加载聊天历史落盘记录（App 重启后恢复对话）
         com.rokidlab.phone.store.ChatStateHolder.init(this)
 
+        // 首次启动落盘内置技能（aiui-dev 等，仅当本地不存在；不覆盖用户编辑）
+        com.rokidlab.phone.ai.SkillRegistry.seedBundledSkills(this)
+
         hidManager = BluetoothHidManager(this)
 
         routeManager = ConnectionRouteManager(this)
