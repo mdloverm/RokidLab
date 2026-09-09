@@ -419,3 +419,71 @@ adb/
 3. **验证方式**
    - `src/main/assets/RokidLink.apk` 的修改时间应晚于 `RokidLink/build/outputs/apk/debug/RokidLink-debug.apk`
    - 如果 assets 中的 APK 不是最新，重新构建 phone-app 即可
+
+## 十二、v3.5 架构硬约束
+
+### 12.1 CXR SDK 依赖
+
+- **CXR-L SDK** 必须使用 `com.rokid.cxr:client-l:1.1.2`（Maven），并显式 pin `cxr-service-bridge:1.0-20260715.121510-107` timestamped snapshot
+- **CXR-S SDK** RokidLink 必须使用 `com.rokid.cxr:cxr-service-bridge:1.0`（Maven），**禁止再用本地 `libs/*.aar`**
+- ⚠️ **RokidLink 绝不能切换到 `client-l` 1.1.0+**，其 fat aar 缺 `ReplyImpl` 类，native 层反射加载会 SIGABRT（已在 2026-09-08 真机验证）
+- **R8 启用**：RokidLink release 必须开 R8，`proguard-rules.pro` 必须保留 `keep com.rokid.cxr.**`，因 CXR SDK 通过 JNI 反射调用自身
+
+### 12.2 Lab 工具桥约束
+
+- **AIUI 页面调用手机端工具的唯一入口**是 `ToolGateway.call()`，不得绕过
+- **`ALLOWED_DOMAINS = DOMAIN_ALL`**（用户 2026-09-09 拍板全开），收窄时只改一处
+- **`DENY_TOOLS` 只放技术故障工具**（如 `open_aiui_app` 自指递归），**不放"危险"工具**，安全边界由 `isEnabled` 总开关负责
+- **结果截断 8000 字符**：RFCOMM 单帧上限 64KB，且页面渲染不下超长文本
+- **15s 超时后不 interrupt**：工具可能持有文件/网络资源，强中断留下半写状态，让线程自己跑完（daemon 线程不阻塞进程退出）
+- **AIUI 页面侧必须用 `globalThis.Lab.callTool(...)` 或 `window.Lab.callTool(...)`**，不能写裸 `Lab.callTool` —— ink 沙箱页面 realm 不走 globalThis 解析裸标识符，会 ReferenceError
+- **生成的 AIUI 代码必须 try/catch + loading 态**（见 `lab-runtime.md` 第 8 章）
+- **`__LAB_TOOL__` 复用现有 ASR 推送 RFCOMM 通道**，不新开通道 —— 眼镜端同一时刻只允许一条 RFCOMM（adb 隧道已占满）
+- **`AsrBridgeCoordinator` 必须把 `__LAB_TOOL__` 前缀分流到 `onToolCall`**，绝不能当成 ASR 文字送进对话链路
+
+### 12.3 启动参数下发约束
+
+- `open_aiui_app` 工具的 `params` 字段是 **JSON 对象字符串**（如 `{"songName":"西厢"}`）
+- **非法 JSON 直接丢弃**（`parseLaunchParams` 返回 null），绝不把脏串下发到页面 —— 页面侧无法容错
+- 启动参数必须在 `open` 时一起下发，**不能在 open 之后补一条 msg** —— 页面此刻尚未解包渲染，`hostMessage` 会被 host.js 的 `if (!view) return` 静默丢弃
+- 同一包再次打开换参数时**不重启宿主**，直接更新 `launchParamsJson` 并在已 boot 后 `deliverLaunchParams()` 下发新参数
+- 页面在 `onMessage` 接收（**不能在 `onLoad` 里拿**），且 `e.data` 是 JSON 字符串，必须 `JSON.parse(e.data)`
+
+### 12.4 ASR 防抖与补读约束
+
+- `AsrBridgeCoordinator.onAsrText` 去重条件：**仅当「同文 + 上一条仍在处理中」**才丢弃；用户连说两次同文应当执行两次
+- `asrHandling` 标志由 `CxrLHiRokidSession.dispatchGlassesAsrText` 在处理开始 / 结束时调 `markAsrHandling(true/false)` 维护
+- **90s 兜底超时**：防止异常路径下标志卡死，导致该指令被永久吞掉
+- `AsrPushClient` 必须在 `connect()` 成功**之后**才置 `socket`，避免握手期间 `isConnected` 短暂 true 让上层跳过文件兜底轮询
+- `AsrPushClient.onConnected` 回调置位 `catchUpRequested`，唤醒兜底轮询立刻补读推送断连期间积压的文件文字
+- `start()` 必须做 1.5s 防抖，避免重复创建 push client 抢同一条 RFCOMM 通道把通道搞断
+
+### 12.5 轻量配置下发约束
+
+- `sendKeyQuizConfig` 等轻量配置下发时，若链路已就绪（`cxrLink != null && cxrlConnected && glassBtConnected`），**直接 `sendCustomCmd`** 复用现有连接
+- 不得走 `connectAndRunCustomAppOperation` 的 `cleanup()` 全链路重建 —— 重建期间 ASR 推送通道与 ADB 隧道均不可用，保存设置后紧接着说话的第一条语音必然丢失
+- 复用失败时再退回完整流程重建链路后下发
+
+### 12.6 长期记忆与会话记忆约束
+
+- 长期记忆必须用 SQLite 存储（`LongTermMemoryManager`），不得回退 SharedPreferences
+- FIFO 上限 200 条，90 天过期，旧 SharedPreferences 数据首次启动自动迁移
+- 注入策略必须用中文 bigram 重叠度评分 top-12，不得全量注入（会撑爆 system prompt）
+- 会话记忆超长上下文被裁剪时，前缀必须折叠为 ≤800 字 pinned system message `[summary of earlier conversation]`，不得直接截断丢弃
+
+### 12.7 KeyButtonService 稳定性约束
+
+- **短命 destroy 计数器 `KEY_SHORT_LIVED_DESTROY_COUNT` 必须持久化**，否则崩溃循环会无限重启服务
+- 屏幕亮起接收器必须用 `RECEIVER_NOT_EXPORTED` 注册
+- `CMD_AIUI_OPEN` 必须支持 `caps[2]` 启动参数
+
+### 12.8 CxrLHiRokidSession 拆分约束
+
+- v3.5 已抽出三个协调器，`CxrLHiRokidSession` 保留**每一个 public method 作为委派 facade**，调用方不动
+- 必须改持有 **app context** 而非 Activity；需要 lifecycle owner 的地方用 `WeakReference`，避免内存泄漏
+- 后续仍可拆分连接引擎（`connectAnd*` ~1200 行）和 `sendAiTextViaLink`（~600 行）
+
+### 12.9 HTTP 与文件传输约束
+
+- HTTP 必须用 `HttpClient`（基于 OkHttp 4.12.0），不得回退裸 `HttpURLConnection` —— 连接池 + HTTP/2 复用避免每次重新握手
+- `AdbFileManagerClient` 在 CUT (close-wait) 路径上必须 **drain socket 后再结束传输**，避免截断/丢数据

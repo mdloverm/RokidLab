@@ -34,12 +34,15 @@ internal class AsrBridgeCoordinator(
     private val linkAlive: () -> Boolean,
     /** 与下行主链路（KeyDown/open/ASR/TTS）共用的按条串行锁 */
     private val cmdLock: Any,
-    /** 去重后的 ASR 文字回调（切到会话的 AI 对话分发核心） */
-    private val onAsrText: (String) -> Unit,
+    /** 去重后的 ASR 文字回调（切到会话的 AI 对话分发核心）。
+     *  注意：名字不得与下方 [onAsrText] 方法同名，否则方法体内 this 引用会解析为递归调用自身导致栈溢出。 */
+    private val asrDeliver: (String) -> Unit,
     /** 收到「用户关闭助手」中止标记：停眼镜端播报 + 取消运行中的 Lab 模型请求 */
     private val onAbortAi: () -> Unit,
     /** 收到「拍照答题」标记：启动拍照问答流程 */
     private val onPhotoAsk: () -> Unit,
+    /** 收到 AIUI 页面工具调用（TOOL_CALL_PREFIX + JSON 载荷）：交 ToolGateway 执行并回传结果 */
+    private val onToolCall: (String) -> Unit,
 ) {
     companion object {
         private const val TAG = "AsrBridgeCoordinator"
@@ -76,7 +79,33 @@ internal class AsrBridgeCoordinator(
          */
         private const val PHOTO_ASK_MARKER = "__LAB_PHOTO_ASK__"
         /** ASR 识别完成信号（眼镜端 AsrPushServer.CTRL_ASR_READY，经 RFCOMM 通道推送） */
+        /** AIUI 页面工具调用上行：本前缀 + JSON 载荷 {cbId,name,args}。
+         *  与其他标记不同，它是【前缀】而非整条相等 —— 后面跟着工具参数。 */
+        private const val TOOL_CALL_PREFIX = "__LAB_TOOL__"
         private const val ASR_READY_MARKER = "__LAB_ASR_READY__"
+
+        /**
+         * 相同文字的「回声抑制」窗口（毫秒）。
+         *
+         * 只用于抑制双通道（RFCOMM 推送 + ADB 文件轮询）对【同一次识别】的重复上报，
+         * 不再作为丢弃用户重复指令的依据：用户连说两次「停止播放」应当执行两次。
+         * 真正的「上一条还没处理完」判定交由 [asrHandlingSince]（见 [onAsrText]）。
+         */
+        private const val ASR_DUP_ECHO_MS = 1500L
+
+        /**
+         * 「上一条 ASR 仍在处理中」的最长判定时间（毫秒）。
+         * 处理中又来了完全相同的文字才丢弃（避免并发触发两次 AI 下行加剧链路竞态）；
+         * 加超时上限是防止异常路径下标志卡死，导致该指令被永久吞掉。
+         */
+        private const val ASR_HANDLING_MAX_MS = 90_000L
+
+        /** start() 重入防抖窗口：连接建立期 onConnected 与显式调用会连着调两次 start()，
+         *  两次都会新建 AsrPushClient 抢同一条 RFCOMM 通道，反而把通道搞断。 */
+        private const val START_DEBOUNCE_MS = 1500L
+
+        /** 兜底轮询退避期间的分片唤醒粒度（毫秒）：推送恢复时最多等这么久就补读一次 */
+        private const val POLL_WAKE_STEP_MS = 500L
     }
 
     private var pollJob: Job? = null
@@ -85,30 +114,69 @@ internal class AsrBridgeCoordinator(
     private var lastAsrText = ""
     private var lastAsrTextAt = 0L
 
+    /** 上一条 ASR 是否仍在由会话层处理（AI 下行耗时数秒）：处理中又来同文才吞 */
+    @Volatile private var asrHandling = false
+    @Volatile private var asrHandlingSince = 0L
+
+    /** start() 防抖：记录上次真正执行 start 的时刻 */
+    private var lastStartAtMs = 0L
+
+    /** 推送通道上一次是否处于断连态：用于检测「断连→恢复」以触发兜底补读 */
+    @Volatile private var pushWasDown = false
+
+    /** 推送恢复时置位，打破兜底轮询退避，立刻补读一次积压文件 */
+    @Volatile private var catchUpRequested = false
+
     /**
      * ASR 文字入口（三路共用：push 推送 / 文件轮询 / CXR 全局指令监听）。
-     * 双通道去重：3s 内相同文字只处理一次（重复处理会并发触发 AI 下行，加剧 link 竞态）。
+     *
+     * 丢弃判定（与原 3s 硬窗口语义不同）：仅当「文字与上次相同 **且** 上一条仍在处理中」
+     * 才丢弃——防止同一句话被双通道（push+文件）或链路回声重复触发两次 AI 下行、加剧链路竞态。
+     * 上一条已处理完（或已超时保护）时，用户连说两遍同一指令（如「停止播放」「停止播放」）
+     * 应当执行两遍，不再被当成重复指令吞掉。
      */
     fun onAsrText(text: String) {
         try {
             val now = System.currentTimeMillis()
-            if (text == lastAsrText && now - lastAsrTextAt < 3000) {
-                Log.i(TAG, "onAsrText: duplicate ASR text within 3s, skip")
+            val stillHandling = asrHandling && (now - asrHandlingSince) < ASR_HANDLING_MAX_MS
+            if (text == lastAsrText && stillHandling) {
+                Log.i(TAG, "onAsrText: same text while previous still handling, skip (last=${lastAsrTextAt})")
                 return
             }
             lastAsrText = text
             lastAsrTextAt = now
-            onAsrText(text)
+            // 交给真正的下游处理器（会话的 AI 对话分发核心）。切勿写成 onAsrText(text)——
+            // 那会递归调用本方法自身导致 StackOverflow。
+            asrDeliver(text)
         } catch (e: Exception) {
             Log.e(TAG, "onAsrText error", e)
         }
     }
 
     /**
+     * 由会话层在处理开始/结束时调用，标记当前 ASR 是否仍在处理。
+     * 据此决定后续相同文字是否丢弃（见 [onAsrText]）。
+     */
+    fun markAsrHandling(busy: Boolean) {
+        asrHandling = busy
+        if (busy) asrHandlingSince = System.currentTimeMillis()
+    }
+
+    /**
      * 启动 ASR 桥接（文件轮询兜底 + RFCOMM 推送主通道 + 下行存活 ping）。
-     * 幂等：重复调用会先停旧任务再拉新任务。
+     *
+     * 重入防抖：连接建立期 [onConnected] 回调与显式调用可能连着两次进入（间隔 <
+     * [START_DEBOUNCE_MS]），第二次直接忽略——避免重复创建 [AsrPushClient] 抢同一条
+     * RFCOMM 通道把通道搞断（实测 21:28:46 两个 push client 争相连接致 read failed）。
+     * 注意：cleanup/stop 会把 lastStartAtMs 归零，因此「stop 后重新 start」不受防抖影响。
      */
     fun start() {
+        val now = System.currentTimeMillis()
+        if (now - lastStartAtMs < START_DEBOUNCE_MS) {
+            Log.w(TAG, "start: ignored re-entrant call within ${START_DEBOUNCE_MS}ms (last ${now - lastStartAtMs}ms ago)")
+            return
+        }
+        lastStartAtMs = now
         pollJob?.cancel()
         pollJob = appScope.launch(Dispatchers.IO) {
             val prefs = appContext.getSharedPreferences("adb_prefs", 0)
@@ -116,13 +184,22 @@ internal class AsrBridgeCoordinator(
             // 隧道异常退避：连接失败时逐步拉大间隔（5s→10s→…→30s），
             // 推送断开期间不再固定 5s 打一次隧道，避免 5556 本地端口积压溢出
             var backoffMs = AI_ASR_POLL_INTERVAL_MS
+            // 分片退避：catchUpRequested 置位（推送恢复）时立刻跳出，不等满退避
+            suspend fun delayInterruptible(ms: Long) {
+                var left = ms
+                while (left > 0 && isActive && !catchUpRequested) {
+                    val step = POLL_WAKE_STEP_MS.coerceAtMost(left)
+                    delay(step)
+                    left -= step
+                }
+            }
             while (isActive) {
                 try {
-                    // 主通道推送健康时跳过文件轮询：蓝牙隧道（RFCOMM）单串行连接，
-                    // 每轮 ADB 连接都会占用隧道，推送正常时打隧道会造成
-                    // 5556 本地端口接收积压溢出 → "connection refused"。
-                    // 推送通道断开时才启用文件兜底轮询。
-                    if (pushClient?.isConnected != true) {
+                    val pushUp = pushClient?.isConnected == true
+                    // 断连→恢复：断连期间眼镜端写入文件的 ASR 文字积压在文件里无人读，
+                    // 恢复后必须立刻补读一次，否则这些文字永久丢失（眼镜已显示提问却等不到回复）。
+                    if (!pushUp || catchUpRequested) {
+                        catchUpRequested = false
                         val r = readAiAsrBridgeTextOnce(lastTs)
                         if (r != null) {
                             if (r.tunnelOk) {
@@ -134,28 +211,41 @@ internal class AsrBridgeCoordinator(
                             r.text?.let { (ts, text) ->
                                 lastTs = ts
                                 prefs.edit().putLong(KEY_LAST_ASR_TS, ts).apply()
-                                Log.i(TAG, "ASR via ADB bridge (fallback): $text")
+                                Log.i(TAG, "ASR via ADB bridge (fallback${if (!pushUp) "/catch-up" else ""}): $text")
                                 // 打断已由眼镜端本地完成（KeyButtonService interruptOfficialLocally 发 Ai/Exit），
                                 // 处理链路放后台线程执行（下行 sleep + DeepSeek join 耗时数秒），避免阻塞主线程。
                                 Thread { onAsrText(text) }.start()
                             }
                         }
                     } else {
-                        // 推送恢复：复位退避
+                        // 推送健康：复位退避
                         backoffMs = AI_ASR_POLL_INTERVAL_MS
                     }
+                    // 刷新断连态游标（供下一次循环判断恢复）
+                    pushWasDown = !pushUp
                 } catch (e: Exception) {
                     Log.e(TAG, "aiAsrBridge poll error", e)
                     backoffMs = (backoffMs * 2).coerceAtMost(AI_ASR_BACKOFF_MAX_MS)
                 }
-                delay(backoffMs)
+                delayInterruptible(backoffMs)
             }
         }
         // 推送通道：第二 RFCOMM 长连接，毫秒级实时接收眼镜端推送（正常主通道）。
         // 眼镜端推送成功时不会写文件，轮询自然无新数据；推送失败才写文件由轮询兜底。
+        // onConnected 在每次建链/重连成功时回调：置 catchUpRequested 让兜底轮询立刻补读
+        // 断连期间积压的文件文字（替代旧实现「推送恢复就放心不再读文件」导致的丢字）。
         pushClient?.stop()
-        pushClient = AsrPushClient(appContext) { text ->
+        pushClient = AsrPushClient(appContext, { text ->
             try {
+                // AIUI 页面工具调用（前缀 + JSON 载荷）：不是 ASR 文字，必须最先分流，
+                // 否则会被当成用户提问送进对话链路。
+                if (text.startsWith(TOOL_CALL_PREFIX)) {
+                    val payload = text.substring(TOOL_CALL_PREFIX.length)
+                    Log.i(TAG, "AIUI tool call via push channel: ${payload.take(160)}")
+                    // 工具可能走外网耗时数秒，切后台线程，避免阻塞 RFCOMM 读线程
+                    Thread { onToolCall(payload) }.apply { isDaemon = true; start() }
+                    return@AsrPushClient
+                }
                 // 用户关闭助手标记（眼镜端双击退出对话窗口时推送，新版）：
                 // 停止音乐 + 停眼镜端播报 + 取消运行中的 Lab 模型请求
                 if (text == ABORT_AI_MARKER) {
@@ -196,6 +286,9 @@ internal class AsrBridgeCoordinator(
             } catch (e: Exception) {
                 Log.e(TAG, "asr push handle error", e)
             }
+        }) {
+            // 推送建链/重连成功：唤醒兜底轮询补读积压文字
+            catchUpRequested = true
         }
         pushClient?.start()
         Log.i(TAG, "start: started (push + file fallback)")
@@ -208,6 +301,10 @@ internal class AsrBridgeCoordinator(
         pollJob = null
         pushClient?.stop()
         pushClient = null
+        pushWasDown = false
+        catchUpRequested = false
+        asrHandling = false
+        lastStartAtMs = 0L
         stopDownlinkPing()
     }
 

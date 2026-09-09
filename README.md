@@ -64,26 +64,37 @@ Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、蓝牙�
 ### 乐奇 AI 聊天
 - **文字对话**：与 AI 文字聊天，回复通过眼镜语音播报（OpenAI 兼容协议，默认 DeepSeek，可自由配置 baseUrl / apiKey / model 切换通义千问、Kimi、智谱、本地 Ollama 等任意服务商）
 - **AI Agent 模式**：乐奇以 Agent 形态工作，按人设（Rokid 眼镜 AI 助理）与工具准则播报（≤3 句、纯文本、实时信息必须查证后回答）
-- **多轮会话记忆**：跨请求多轮历史，自动携带上下文（理解「再来一首」「它是什么」等指代）；10 分钟无活动自动清空，最长 12 条 / 6000 字符，从最旧丢弃；可在聊天设置 → Agent 设置页查看/清空
-- **长期记忆**：跨会话记住用户称呼与偏好（说「以后叫我周哥」「我喜欢周杰伦」自动记忆），每次对话注入 system prompt，重启 App 不丢失；支持在 Agent 设置页开关、查看条数、一键清空（禁止存储密码/账号等敏感信息）
+- **多轮会话记忆 + 滚动摘要**：跨请求多轮历史，自动携带上下文（理解「再来一首」「它是什么」等指代）；10 分钟无活动自动清空，最长 12 条 / 6000 字符；**新版改用滚动摘要**——超长上下文被裁剪时，前缀折叠为 ≤800 字的 pinned system message `[summary of earlier conversation]`，跨数小时长会话不再失忆；可在聊天设置 → Agent 设置页查看/清空
+- **长期记忆（SQLite 持久化）**：跨会话记住用户称呼与偏好（说「以后叫我周哥」「我喜欢周杰伦」自动记忆），每次对话注入 system prompt，重启 App 不丢失；**新版改用 SQLite 存储**，FIFO 上限 200 条、90 天过期，首次启动自动迁移旧 SharedPreferences 数据；注入策略从全量改为基于中文 bigram 重叠度评分的 top-12 检索，长记忆库增长后不再撑爆 system prompt；支持在 Agent 设置页开关、查看条数、一键清空（禁止存储密码/账号等敏感信息）
+- **知识库 RAG 评分升级**：本地知识库采用 BM25-style IDF 评分，AI 回答可引用命中的 `docName/chunkIdx` 来源；检索精度大幅提升
+- **SSE 重连更稳**：OpenAI 兼容客户端的 SSE 重连条件从「已开始」收紧为「已发出内容」（无内容时重放是安全的，工具增量可重发），新增指数退避 500ms × 2^n 上限 4s，远程重试 2 → 3 次
 - **多步任务与中间状态播报**：工具循环最多 6 轮，支持「查电量 → 打开应用」等多步任务；执行工具时眼镜实时播报中间状态（如「正在查询眼镜电量…」）
 - **眼镜语音播报**：AI 回复经 CXR-L 通道发送到眼镜端语音朗读
-- **拍照问 AI**：镜腿按键 / 手机按钮双入口触发 —— 眼镜拍照 → 本地 OCR 识别题目文字 → 知识库检索（RAG）→ AI 生成答案并语音播报
+- **拍照问 AI**：镜腿按键 / 手机按钮双入口触发 —— 眼镜拍照 → 本地 OCR 识别题目文字 → 知识库检索（RAG）→ AI 生成答案并语音播报（v3.5 已抽离为独立 `PhotoQuizFlow` 类，会话层只做委派）
 - **本地 OCR**：完全离线识别（PP-OCRv4 模型 + ONNX Runtime 推理），无网络、无 GMS 依赖，16KB 页面设备兼容
 - **本地知识库**：支持导入 txt 文档，自动分块入库（SQLite）并关键词检索，为 AI 提供参考资料（RAG）
 - **按键答题开关**：开启后短按镜腿按键直接触发拍照问 AI，覆盖原自定义按键短按，长按不受影响
-- **AI 工具（语音控制）**：内置 8 个工具，一句话直达能力：
-  - **打开应用**："打开小智""打开浏览器"（自动名称匹配已装应用）
-  - **定时任务**："5分钟后提醒我喝水""明早8点叫我""17点打开小智"（到点眼镜语音播报，可同时打开应用）
-  - **查询类**：眼镜电量、系统信息、存储空间、已装应用、当前时间、知识库检索
-  - 工具开关在聊天设置 →「管理 AI 工具」子页面统一管理，支持中英文
-- **本地模型支持**：内置 Ollama 连接器，无需云端 API 即可在手机端调用本地大模型对话（设置 → AI 服务 → 本地模型）
-- **聊天界面**：AI 消息支持长按选择复制；顶部可一键清空对话（同时重置 Agent 上下文）；消息跨页面切换不丢失
-- **会话稳定性**：ASR_READY 控制信号避免眼镜语音会话在识别完成前被过早打断；眼镜端本地接管负责打断/打开/文字显示，杜绝双 open 竞态；长工具输出自动截断防上下文膨胀
+- **AI 工具（语音 + 手机能力，34 个）**：v3.5 新增 12 个手机域工具，一句话直达能力：
+  - **打开应用**：`open_glasses_app` / `launch_glasses_app`（自动名称匹配已装应用）
+  - **定时任务**：`set_timer` / `list_timers` / `cancel_timer` ——「5分钟后提醒我喝水」「明早8点叫我」「17点打开小智」（到点眼镜语音播报，可同时打开应用）
+  - **查询类**：眼镜电量、系统信息、存储空间、已装应用、当前时间、知识库检索、**天气（Open-Meteo，免 API Key）**、**手机状态**、**日历查询**
+  - **手机域（v3.5 新增）**：`calculate`（递归下降表达式解析器）、`search_contacts` / `call_phone`（电话拨打）、`set_phone_alarm`、`open_phone_app`、`set_phone_volume`、`add_calendar_event` / `query_calendar`、`get_phone_status`
+  - 工具开关在聊天设置 →「管理 AI 工具」子页面统一管理，支持中英文；新增 24 条中英字符串，AndroidManifest 申请 READ_CONTACTS / READ_CALENDAR / WRITE_CALENDAR / SET_ALARM 权限
+- **本地模型支持**：内置 Ollama 连接器，无需云端 API 即可在手机端调用本地大模型对话（设置 → AI 服务 → 本地模型）；**v3.5 修复**：从本地模型页返回才触发自动启用，避免打开设置弹窗时残留的 `ai_local_model` 强制覆盖已选在线服务
+- **聊天界面**：AI 消息支持长按选择复制；顶部可一键清空对话（同时重置 Agent 上下文）；消息跨页面切换不丢失；**v3.5 修复**：取消/重放流的响应不再让消息卡在「sending」状态
+- **会话稳定性（v3.5 全面加固）**：
+  - `ASR_READY` 控制信号避免眼镜语音会话在识别完成前被过早打断
+  - 眼镜端本地接管负责打断/打开/文字显示，杜绝双 open 竞态
+  - **ASR 防抖升级**：去重条件从「3 秒内同文」改为「同文 + 上一条仍在处理中」，用户连说两次「停止播放」会被执行两次而非吞掉；`asrHandling` 标志 + 90 秒兜底超时，防止异常路径下永远吞指令
+  - **推送断连→恢复补读**：推送通道断连期间眼镜写文件的 ASR 文字以前会永久丢失，新版在 `AsrPushClient.onConnected` 回调置位 `catchUpRequested`，唤醒兜底轮询立刻补读积压文字
+  - **start() 防抖**：1.5 秒内重入直接忽略，避免重复创建 push client 抢同一条 RFCOMM 通道把通道搞断
+  - **socket 连接时序修复**：`AsrPushClient` 必须在 `connect()` 成功后才置 `socket`，避免握手期间 `isConnected` 短暂 true 让上层跳过文件兜底轮询
+  - **轻量配置下发复用链路**：保存按键答题开关时若链路已就绪，直接 `sendCustomCmd`，不再走 `cleanup()` 全链路重建——重建期间 ASR 推送通道与 ADB 隧道均不可用，保存设置后紧接着说话的第一条语音必然丢失
+  - 长工具输出自动截断防上下文膨胀
 - **代码清洗**：生成 AIUI 代码后自动剥除 markdown 围栏代码块，将超长/形似代码的回复收敛为短结论，避免源码通过 TTS_Result 下发到眼镜
 
 ### AIUI 智能体生成（对话即开发）
-v3.4 全新功能 —— 与乐奇对话，直接在眼镜上生成和运行 AIUI 智能体应用，无需写代码、无需 IDE。
+v3.4 全新功能 / v3.5 大幅增强 —— 与乐奇对话，直接在眼镜上生成和运行 AIUI 智能体应用，无需写代码、无需 IDE。
 
 - **对话生成**：对乐奇说「做个番茄钟」「做一个汇率换算器」「做一个歌词显示界面」，AI 自动生成完整 AIUI 项目代码（.ink 页面 + app.json 清单），打包为 .aix 推送到眼镜渲染运行
 - **技能体系（Skill）**：内置 AIUI 开发技能文档（Skill），AI 在生成代码前自动加载官方组件规范、API 参考和设计指南，确保生成的代码符合眼镜渲染引擎要求：
@@ -104,6 +115,26 @@ v3.4 全新功能 —— 与乐奇对话，直接在眼镜上生成和运行 AIU
 - **退出 AIUI**：支持主动退出正在运行的 AIUI 程序（stop_aiui_app 工具），而非仅能退出已启动的程序
 - **内容指纹版本控制**：VERSION 字段使用内容指纹，代码有变化时眼镜端自动重新解压渲染，无需手动清缓存
 
+#### v3.5 新增：Lab 工具桥（AIUI 页面可调手机端 34 个工具）
+AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能渲染不能调用外部能力。v3.5 新增 Lab 工具桥，让页面通过 `await globalThis.Lab.callTool(name, args)` 调用手机端全部 34 个工具（音乐 / 天气 / 搜索 / 提醒 / 设备信息 / 电话 / 日历 等），与外部世界交互：
+
+- **页面侧 API**：
+  ```js
+  // 返回 Promise<string>，结果是工具返回的文本
+  const text = await globalThis.Lab.callTool('play_song', { songName: '西厢' });
+  // 能力发现：返回 [{name, description}]
+  const tools = await globalThis.Lab.listTools();
+  ```
+  ⚠️ 必须写 `globalThis.Lab` 或 `window.Lab`——ink 沙箱页面 realm 不走 globalThis 解析裸标识符，直接写 `Lab.callTool` 会 ReferenceError
+- **协议链路**：页面 → `__lab/tool_call_sync` fetch 拦截 → `AiuiLinkActivity` 后台线程 → `AsrPushServer.pushControl(__LAB_TOOL__ + JSON)` 上行 RFCOMM → `AsrBridgeCoordinator` 分流 → `CxrLHiRokidSession.handleAiuiToolCall` → `ToolGateway.call` → `ToolRegistry.execute`，结果按原路回传兑现 Promise（同步阻塞 ≤15s 超时，结果截断 8000 字符）
+- **双桥冗余**：`host.js` 主 realm 提供 `window.Lab`（适配可访问 window 的页面），`lab-page-bridge.js` 自动注入到 `app.js` 前置（解决 ink 沙箱页面 realm 隔离看不到主 realm `window.Lab` 的问题，靠 fetch 拦截同步阻塞）
+- **启动参数下发**：用户说「用 AIUI 播放西厢」时，`open_aiui_app` 工具的 `params` 字段携带 `{"songName":"西厢"}` 经 CXR 下发到眼镜端，页面 boot 完成后作为首条 `hostMessage` (`type=launch`) 投递，页面在 `onMessage` 里接收
+- **安全约束**：
+  - `DENY_TOOLS` 仅 `open_aiui_app`（防自指递归启动）
+  - `ALLOWED_DOMAINS = DOMAIN_ALL`（用户 2026-09-09 拍板全开）
+  - `isEnabled` 总开关作为唯一安全兜底（默认开启）
+- **生成方模型须知**：lab-runtime.md 第 8 章约束生成的 AIUI 代码——必须 try/catch、必须有 loading 态、结果按字符串解析、一次只调一个工具（蓝牙通道串行）
+
 ### 屏幕镜像
 - 将眼镜屏幕实时显示在手机上（ADB over TCP 自定义实现）
 - 基于 scrcpy-server 通过 ADB tunnel_forward 获取 H.264 硬件编码流，手机端 MediaCodec 零拷贝解码渲染
@@ -112,6 +143,7 @@ v3.4 全新功能 —— 与乐奇对话，直接在眼镜上生成和运行 AIU
 - 眼镜端 ADB TCP 断线后自动重连（最多 3 次）
 - **性能优化**：优化灰度转换算法，使用整数运算和缓冲区复用减少 GC 压力
 - **配置集中管理**：通过 `AppConfig` 统一管理镜像端口、超时时间等配置参数
+- **v3.5 修复**：`AdbScreenMirrorClient` + `ScreenStreamDecoder` 对 late/partial H.264 帧加固，丢关键帧不再卡死 surface；`ScreenMirrorActivity` lifecycle / surface teardown 修复；`ConnectionRouteManager` 重连时失效缓存路由，避免复用死路由
 
 ### 手机投屏
 - 将手机屏幕投射到眼镜上（基于 CXR-L + MediaProjection）
@@ -148,6 +180,7 @@ v3.4 全新功能 —— 与乐奇对话，直接在眼镜上生成和运行 AIU
 - **刷新动画**：刷新按钮点击时带旋转动画反馈
 - **中文目录上传修复**：修复 ADB 文件管理器中创建中文目录和上传中文文件名文件时的超时问题
 - **配置集中管理**：通过 `AppConfig` 统一管理 ADB 端口、连接超时等配置参数
+- **v3.5 修复**：`AdbFileManagerClient` 在 CUT (close-wait) 路径上正确 drain socket 后再结束传输，杜绝截断/丢数据；`FileManagerActivity` 并发安装不再 spam toast
 
 ### 设置
 - 眼镜端 RokidLink 服务管理（安装/重装/启动/停止）
@@ -171,13 +204,15 @@ v3.4 全新功能 —— 与乐奇对话，直接在眼镜上生成和运行 AIU
   - 蓝牙 HID Device 协议（手机模拟键盘/鼠标/游戏手柄）
   - 蓝牙隧道（RFCOMM 转发）与 WiFi 直连双线路，`ConnectionRouteManager` 统一路由管理
 - **AI**:
-  - OpenAI 兼容协议客户端（`OpenAiService`，可切换任意服务商）
+  - OpenAI 兼容协议客户端（`OpenAiService`，可切换任意服务商；SSE 重连指数退避 + 远程重试 3 次）
+  - Agent 会话层（`AgentSessionManager`：滚动摘要 ≤800 字 pinned system message；`LongTermMemoryManager`：SQLite + FIFO 200 条 + 90 天过期 + bigram 评分 top-12 检索；`KnowledgeBase`：BM25 IDF + 命中 provenance）
   - 本地 OCR（RapidOCR / PP-OCRv4 + ONNX Runtime，完全离线）
   - 本地知识库 RAG（txt 导入，SQLite 分块检索）
   - AIUI 开发 Skill 体系（内置官方组件规范 + API 参考 + 设计指南，`SkillRegistry` 自动加载/按章节读取）
   - 本地模型支持（`LocalOllamaManager`，Ollama 协议直连）
+  - 内置计算器（`Calculator`：递归下降表达式解析器，纯 Kotlin 无依赖，供 `calculate` 工具调用）
 - **投屏**: MediaProjection API + Socket 传输
-- **统一 HTTP 工具**: `HttpClient` 对象封装（替代裸 `HttpURLConnection`）
+- **统一 HTTP 工具**: `HttpClient` 对象封装（v3.5 切换到 OkHttp 4.12.0，连接池 + HTTP/2 复用，替代裸 `HttpURLConnection` 重新握手）
 - **统一交互组件**: `BrewButton`/`BrewOutlineButton`/`BrewCompactButton`/`BrewIconButton` 标准按钮系统、`BrewDialog` 标准对话框（RokidLink 卡片样式：彩色标题栏 + 装饰分隔线 + 彩色边框）、`BrewStatusDot`/`BrewStatusPill`/`BrewStateCard` 标准状态指示器（详见 [UI-DESIGN.md](./UI-DESIGN.md)）
 
 ### 国际化（i18n）
@@ -262,25 +297,33 @@ RokidLab/
 │   │   │   │   └── CoolBlueColors.kt     第二主题（冰蓝冰川）
 │   │   │   └── RokidHostApp.kt    HostApp 枚举
 │   │   │   ├── ai/          AI 能力
-│   │   │   │   ├── OpenAiService.kt        OpenAI 兼容服务（可切换任意服务商）
-│   │   │   │   ├── ToolRegistry.kt         AI 工具注册表（语音控制 + AIUI 代码生成/读取/安装/打开/停止）
+│   │   │   │   ├── OpenAiService.kt        OpenAI 兼容服务（可切换任意服务商；SSE 重连指数退避 + 远程重试 3 次）
+│   │   │   │   ├── ToolRegistry.kt         AI 工具注册表（34 个工具：DOMAIN_GLASSES / DOMAIN_PHONE / DOMAIN_AIUI / DOMAIN_AI / DOMAIN_KB；语音控制 + AIUI 代码生成/读取/安装/打开/停止 + 手机域）
+│   │   │   │   ├── ToolGateway.kt          AIUI 页面工具网关（v3.5 新增，AIUI 页面 → 手机端 34 工具，15s 超时 + 8000 字截断 + DENY open_aiui_app 防自指递归）
+│   │   │   │   ├── Calculator.kt           递归下降表达式解析器（v3.5 新增，供 calculate 工具调用，纯 Kotlin 无依赖）
+│   │   │   │   ├── WeatherTools.kt         天气工具（v3.5 新增，Open-Meteo，免 API Key）
+│   │   │   │   ├── PhoneTools.kt           手机域工具（v3.5 新增，电话/日历/闹钟/音量/打开应用/联系人搜索）
 │   │   │   │   ├── WebTools.kt             AIUI 项目文件读写工具（save_code_file / read_code_file）
 │   │   │   │   ├── AiuiProject.kt          AIUI 项目打包/校验（.aix 生成 + VERSION 内容指纹）
 │   │   │   │   ├── AiuiAppRegistry.kt      AIUI 应用注册表（项目记录持久化）
 │   │   │   │   ├── SkillRegistry.kt        技能文档注册表（AIUI 开发 Skill 加载/章节读取）
 │   │   │   │   ├── SkillMarkdown.kt        Skill Markdown 解析器
 │   │   │   │   ├── SkillFetcher.kt         技能文件获取器
-│   │   │   │   ├── AgentSessionManager.kt  Agent 会话记忆（多轮历史，10 分钟自动清空）
-│   │   │   │   ├── LongTermMemoryManager.kt 长期记忆（manage_memory 工具 + 跨会话持久化）
+│   │   │   │   ├── AgentSessionManager.kt  Agent 会话记忆（多轮历史，10 分钟自动清空；v3.5 滚动摘要 ≤800 字 pinned system message）
+│   │   │   │   ├── LongTermMemoryManager.kt 长期记忆（v3.5 改 SQLite，FIFO 200 条 / 90 天过期 / bigram 评分 top-12 检索，自动迁移旧 SharedPreferences）
+│   │   │   │   ├── KnowledgeBase.kt        本地知识库 RAG（txt 导入、SQLite 分块检索；v3.5 BM25 IDF 评分 + 命中 provenance）
 │   │   │   │   ├── LocalOcr.kt             本地 OCR（PP-OCRv4 + ONNX Runtime）
-│   │   │   │   ├── LocalOllamaManager.kt   本地模型连接器（Ollama 协议）
-│   │   │   │   └── KnowledgeBase.kt        本地知识库 RAG（txt 导入、分块、SQLite 检索）
+│   │   │   │   └── LocalOllamaManager.kt   本地模型连接器（Ollama 协议）
 │   │   │   ├── connection/  连接路由
-│   │   │   │   └── ConnectionRouteManager.kt  WiFi 直连 / 蓝牙隧道双线路路由管理
+│   │   │   │   └── ConnectionRouteManager.kt  WiFi 直连 / 蓝牙隧道双线路路由管理（v3.5 重连时失效缓存路由，避免复用死路由）
 │   │   │   ├── filemanager/  文件管理
-│   │   │   │   └── FileManagerActivity.kt  文件管理器界面/组件
+│   │   │   │   └── FileManagerActivity.kt  文件管理器界面/组件（v3.5 并发安装不再 spam toast）
 │   │   │   ├── glasses/     眼镜通信/UI
-│   │   │   │   ├── CxrLHiRokidSession.kt        CXR-L 会话封装（AI 对话/拍照问 AI 公共流程）
+│   │   │   │   ├── CxrLHiRokidSession.kt        CXR-L 会话封装（v3.5 拆分 god class，从 3550 → 2780 行；保留全部 public method 作委派 facade；改持有 app context 替代 Activity，WeakReference 修 leak）
+│   │   │   │   ├── AsrBridgeCoordinator.kt      ASR 双通道协调器（v3.5 从 CxrLHiRokidSession 抽离；push + 文件轮询双通道；onAsrText 仅「同文 + 上一条仍在处理中」才丢弃；markAsrHandling API；start 防抖；推送恢复 catchUpRequested 立即补读积压文字；__LAB_TOOL__ 分流到 ToolGateway）
+│   │   │   │   ├── AiuiFrontendController.kt    AIUI 微前端 pipeline 协调器（v3.5 从 CxrLHiRokidSession 抽离；pushAixToRokidLinkHost / openAiuiHost 支持 launchParams）
+│   │   │   │   ├── PhotoQuizFlow.kt            拍照问答流程（v3.5 从 CxrLHiRokidSession 抽离；capture → OCR → RAG → AI 答案）
+│   │   │   │   ├── AsrPushClient.kt            ASR 推送客户端（RFCOMM 长连接，v3.5 修复 socket 在 connect() 成功后才置位 + 新增 onConnected 回调）
 │   │   │   │   ├── ConnectionPanel.kt           连接状态面板
 │   │   │   │   ├── GuideScreen.kt               引导界面
 │   │   │   │   ├── FullCXRLinkCallback.kt       CXR-L 连接回调
@@ -309,17 +352,17 @@ RokidLab/
 │   │   │   │   └── SystemLogPanel.kt   日志面板
 │   │   │   ├── store/       商店 UI
 │   │   │   │   ├── StoreHomeScreen.kt    主界面入口（含 ADB工具/底栏等全部页面）
-│   │   │   │   ├── ChatScreen.kt         乐奇聊天界面（对话/拍照问 AI/知识库管理/AI 设置）
+│   │   │   │   ├── ChatScreen.kt         乐奇聊天界面（对话/拍照问 AI/知识库管理/AI 设置；v3.5 修复取消/重放流时消息卡 sending）
 │   │   │   │   ├── ChatBubble.kt         聊天气泡组件
 │   │   │   │   ├── ChatHeader.kt         聊天顶部栏
-│   │   │   │   ├── ChatSettingsDialog.kt 聊天设置弹窗（AI 服务/模型/Agent 设置）
+│   │   │   │   ├── ChatSettingsDialog.kt 聊天设置弹窗（AI 服务/模型/Agent 设置；v3.5 修复本地模型 LaunchedEffect 误覆盖在线选择）
 │   │   │   │   ├── ChatFormat.kt        聊天文本格式化
 │   │   │   │   ├── AiuiManagePage.kt    AIUI 程序管理页面（列表/打开/重装/删除）
 │   │   │   │   ├── SkillsManagePage.kt  技能管理页面
 │   │   │   │   ├── ToolsManagePage.kt   AI 工具管理页面（开关/排序）
 │   │   │   │   ├── LocalModelPage.kt    本地模型配置页面（Ollama）
 │   │   │   │   ├── AgentSectionPage.kt  Agent 设置页（记忆/长期记忆管理）
-│   │   │   │   ├── ChatStateHolder.kt    聊天消息单例状态（跨页面切换不丢失）
+│   │   │   │   ├── ChatStateHolder.kt    聊天消息单例状态（跨页面切换不丢失；v3.5 修复取消/重放流时消息卡在 sending）
 │   │   │   │   ├── StoreComponents.kt    通用 UI 组件
 │   │   │   │   ├── StoreInstallState.kt  安装状态组件
 │   │   │   │   ├── StoreMedia.kt         媒体/图标组件
@@ -352,12 +395,13 @@ RokidLab/
 │   │   │   ├── MainActivity.kt              WiFi/ADB 状态面板 + ADB TCP 自动开启
 │   │   │   ├── BtTunnelServer.kt            蓝牙隧道服务（RFCOMM 转发，双线路通信）
 │   │   │   ├── AiChannel.kt                 AI 指令通道（ASR/工具/接管串行化）
-│   │   │   ├── AiuiLinkActivity.kt          AIUI 渲染宿主 Activity
+│   │   │   ├── AiuiLinkActivity.kt          AIUI 渲染宿主 Activity（v3.5 大幅增强：Lab 工具桥入口 callTool @JavascriptInterface + deliverToolResult + __lab/ 探测端点 ping/tool_result/tool_call_sync/tool_call/list_tools + pageBridgeJs 自动注入 app.js 前置 + 同步工具队列 ArrayBlockingQueue + 启动参数 EXTRA_LAUNCH_PARAMS）
+│   │   │   ├── AsrPushServer.kt             ASR 推送服务（v3.5 新增 CTRL_TOOL_CALL = "__LAB_TOOL__" 工具调用前缀常量）
 │   │   │   ├── AiuiPackageServer.kt         AIUI .aix 包上传/解压/渲染服务
 │   │   │   ├── AixBundleReader.kt           .aix 包读取器（清单解析 + 文件提取）
 │   │   │   ├── TtsPlaybackHelper.kt          TTS 语音播报辅助
 │   │   │   ├── KeyButtonBridgeActivity.kt   按键事件桥接
-│   │   │   ├── KeyButtonService.kt          按键服务
+│   │   │   ├── KeyButtonService.kt          按键服务（v3.5：持久化短命 destroy 计数器 KEY_SHORT_LIVED_DESTROY_COUNT 防崩溃循环；RECEIVER_NOT_EXPORTED 注册屏幕亮起接收器；CMD_AIUI_OPEN 支持 caps[2] 启动参数）
 │   │   │   ├── SelfRestartReceiver.kt       自重启广播接收器
 │   │   │   ├── ServiceHelpers.kt           服务辅助工具集
 │   │   │   ├── PhoneMirrorActivity.kt       投屏接收画面（onResume 自愈 + singleTask 重新拉起）
@@ -366,7 +410,11 @@ RokidLab/
 │   │   │   └── ScreenMirrorIntentActivity.kt scrcpy 启动中转 Activity（ADB 就绪等待）
 │   │   ├── res/layout/activity_main.xml     状态面板布局
 │   │   └── AndroidManifest.xml
-│   └── build.gradle.kts
+│   └── build.gradle.kts                     v3.5：删除本地 libs/*.aar 改用 Maven com.rokid.cxr:cxr-service-bridge:1.0；启用 R8（13.8MB → 8.7MB）；proguard-rules.pro 已 keep com.rokid.cxr.** 因 CXR SDK 走 JNI 反射
+│
+├── RokidLink/src/main/assets/ink/          AIUI 渲染宿主资源
+│   ├── host.js                              宿主 JS（v3.5：新增 log() / deliverLaunchParams() / window.Lab.callTool/listTools/onToolResult 主 realm 桥）
+│   └── lab-page-bridge.js                  v3.5 新增：页面 realm 的 Lab 工具桥，自动注入到 app.js 前置，靠 fetch + __lab/tool_call_sync 同步阻塞调用
 │
 ├── phone-app/src/main/assets/              内置资源
 │   ├── RokidLink.apk                       通过 CXR-L SDK 安装到眼镜（自动从 RokidLink 构建同步）
@@ -403,7 +451,7 @@ RokidLab/
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v3.4-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v3.5-debug.apk
 ```
 
 ### 眼镜端服务
@@ -411,6 +459,49 @@ adb install phone-app/build/outputs/apk/debug/RokidLab-v3.4-debug.apk
 ```powershell
 adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 ```
+
+## v3.5 更新总览
+
+- **CXR-L SDK 升级 1.1.0 → 1.1.2**，pin `cxr-service-bridge:1.0-20260715.121510-107`
+- **RokidLink 迁移到 Maven bridge**：删除本地 libs/*.aar，使用 `com.rokid.cxr:cxr-service-bridge:1.0`
+- **R8 启用**：RokidLink release 13.8MB → 8.7MB
+- **HTTP 切换 OkHttp 4.12.0**：连接池 + HTTP/2 复用
+- **AI Agent 核心升级**：
+  - 长期记忆：SharedPreferences → SQLite，FIFO 200 条 / 90 天过期 / bigram 评分 top-12 检索（自动迁移旧数据）
+  - 会话记忆：截断 → 滚动摘要 ≤800 字 pinned system message
+  - 知识库：BM25 IDF 评分 + 命中 provenance
+  - SSE 重连：条件收紧 + 指数退避 + 远程重试 2→3
+  - 新增内置计算器（递归下降表达式解析器）
+- **12 个新工具（22 → 34）**：新增 DOMAIN_PHONE 域，含天气 / 电话 / 日历 / 闹钟 / 计算 / 联系人搜索等
+- **CxrLHiRokidSession 拆分 god class**（3550 → 2780 行）：抽出 `AsrBridgeCoordinator` / `AiuiFrontendController` / `PhotoQuizFlow`，保留全部 public method 作委派 facade，改持有 app context 替代 Activity + WeakReference 修 leak
+- **Lab 工具桥（AIUI 页面调手机端 34 工具）**：
+  - 眼镜端：`AiuiLinkActivity` + `host.js` + `lab-page-bridge.js`（页面 realm 桥，靠 fetch + `__lab/tool_call_sync` 同步阻塞）
+  - 手机端：`ToolGateway.kt`（DENY 仅 `open_aiui_app` 防自指递归，15s 超时 + 8000 字截断）
+  - `AsrPushServer.CTRL_TOOL_CALL = "__LAB_TOOL__"` 复用 RFCOMM 通道上行
+  - `AsrBridgeCoordinator` 新增 `__LAB_TOOL__` 分流
+  - `CxrLHiRokidSession.handleAiuiToolCall` 委派 ToolGateway
+- **`open_aiui_app` 工具新增 `params` 参数**：用户说「用 AIUI 播放西厢」时携带 `{"songName":"西厢"}` 经 CXR 下发到眼镜端，页面 boot 完成后作为首条 `hostMessage` (`type=launch`) 投递
+- **ASR 防抖 + 推送恢复补读**：
+  - `onAsrText` 改为「同文 + 上一条仍在处理中」才丢弃，用户连说两次「停止播放」执行两次
+  - `asrHandling` 标志 + 90s 兜底超时，防异常路径永远吞指令
+  - `AsrPushClient` 新增 `onConnected` 回调，置位 `catchUpRequested` 立即补读推送断连期间积压文件
+  - `start()` 1.5s 防抖，避免重复创建 push client 抢同一条 RFCOMM 通道
+  - `AsrPushClient` 修复：socket 必须在 `connect()` 成功后才置位，避免握手期间 `isConnected` 短暂 true 让上层跳过文件兜底轮询
+- **大量 bug 修复**：
+  - `KeyButtonService` 持久化短命 destroy 计数器防崩溃循环 + `RECEIVER_NOT_EXPORTED` 注册屏幕亮起接收器
+  - `AdbFileManagerClient` 在 CUT 路径 drain socket 防丢数据
+  - `AdbScreenMirrorClient` + `ScreenStreamDecoder` 对 late/partial 帧加固
+  - `ChatStateHolder` + `ChatScreen` 消息不再卡在「sending」
+  - `Models` 容错坏 apps.json 条目
+  - `ApkDownloader` 真正取消下载 + 删除临时文件
+  - `IconLoader` 5min TTL 缓存
+  - `LocalModelPage` 预检查磁盘空间 + 可取消进行中拉取
+  - `FileManagerActivity` 并发安装不再 spam toast
+  - `ConnectionRouteManager` 重连时失效缓存路由
+  - `ChatSettingsDialog` 本地模型 LaunchedEffect 不再误覆盖在线选择
+  - `saveAiConfig` 切在线时清掉残留 `ai_local_model`
+  - `sendKeyQuizConfig` 链路就绪时复用现有连接直接 `sendCustomCmd`，不再走 `cleanup()` 全链路重建
+- **新测试**：92 → 98 个，新增 `GoldenAgentEvalTest`（20 个 golden case 覆盖 SSE 重放语义 / 工具声明完整性 / prompt 路由）
 
 ## 使用指南
 
@@ -438,11 +529,14 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 
 ## 依赖
 
-- **CXR-L SDK** (`com.rokid.cxr:client-l:1.1.0`，Maven) — 手机端与眼镜通信，内置 16KB 对齐 so，兼容 Android 16
-- **CXR-S SDK** (`cxr-service-bridge`) — 眼镜端桥接服务（client-l 1.1.0 内置）
+- **CXR-L SDK** (`com.rokid.cxr:client-l:1.1.2`，Maven) — 手机端与眼镜通信，内置 16KB 对齐 so，兼容 Android 16；v3.5 从 1.1.0 升级，pin cxr-service-bridge:1.0-20260715.121510-107 timestamped snapshot（与 1.1.2 POM 指向一致，区别于 release 1.0 二进制）
+- **CXR-S SDK** (`com.rokid.cxr:cxr-service-bridge:1.0`，Maven) — 眼镜端桥接服务；v3.5 RokidLink 删除 1MB 本地 libs/*.aar 改用 Maven 在线依赖（与本地字节级一致：16 类含 ReplyImpl + 10 so）
+  - ⚠️ 眼镜端**绝不能**切换到 client-l 1.1.0+，其 fat aar 缺 `ReplyImpl` 类，native 层反射加载会 SIGABRT（已在 2026-09-08 真机验证）
 - Jetpack Compose (Material 3) — 现代 UI 框架
 - 蓝牙 HID Device Profile — 系统 API（Android 9+）
 - RapidOCR (`rapidocr4j-android` + OpenCV 4.12 + ONNX Runtime 1.22) — 本地离线 OCR
+- OkHttp 4.12.0 — v3.5 替代裸 HttpURLConnection，连接池 + HTTP/2 复用避免每次重新握手
+- R8 — v3.5 RokidLink release 启用（13.8MB → 8.7MB），proguard-rules.pro 已 keep `com.rokid.cxr.**` 因 CXR SDK 通过 JNI 反射调用自身
 
 ## UI 设计
 

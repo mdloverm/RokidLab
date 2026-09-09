@@ -178,13 +178,54 @@ class CxrLHiRokidSession(
         linkProvider = { cxrLink },
         linkAlive = { cxrlConnected },
         cmdLock = aiCmdLock,
-        onAsrText = { text -> dispatchGlassesAsrText(text) },
+        asrDeliver = { text -> dispatchGlassesAsrText(text) },
         onAbortAi = {
             stopTtsOnGlass()
             abortCurrentAi()
         },
         onPhotoAsk = { startPhotoAsk() },
+        onToolCall = { payload -> handleAiuiToolCall(payload) },
     )
+
+    /**
+     * AIUI 页面发起的工具调用（上行 __LAB_TOOL__ + JSON）。
+     *
+     * 页面 → 眼镜端 JS bridge → RFCOMM 上行 → 本方法 → ToolGateway 执行 →
+     * 结果经 CMD_AIUI_MSG 下行 → 眼镜端 dispatchMessageToActive → 页面 Promise resolve。
+     *
+     * 已在 AsrBridgeCoordinator 侧切到后台线程，此处可直接同步执行。
+     */
+    private fun handleAiuiToolCall(payload: String) {
+        var cbId = ""
+        try {
+            val obj = JSONObject(payload)
+            cbId = obj.optString("cbId")
+            val name = obj.optString("name")
+            val args = obj.optString("args").ifBlank { "{}" }
+            Log.i(TAG, "handleAiuiToolCall: name=$name cbId=$cbId")
+            val r = com.rokidlab.phone.ai.ToolGateway.call(appContext, name, args)
+            val out = JSONObject()
+                .put("type", "toolResult")
+                .put("cbId", cbId)
+                .put("ok", r.ok)
+            r.result?.let { out.put("result", it) }
+            r.error?.let { out.put("error", it) }
+            aiui.sendAiuiHostMessage(out.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "handleAiuiToolCall failed", e)
+            // 解析/下发失败也要尽力回传，否则页面 Promise 会挂到超时
+            runCatching {
+                aiui.sendAiuiHostMessage(
+                    JSONObject()
+                        .put("type", "toolResult")
+                        .put("cbId", cbId)
+                        .put("ok", false)
+                        .put("error", "tool call failed: ${e.message}")
+                        .toString(),
+                )
+            }
+        }
+    }
 
     /**
      * 手机端 NetProxy 应答器：眼镜端 Jsai 下载 .aix（installAiuiAgent）时，
@@ -293,6 +334,9 @@ class CxrLHiRokidSession(
                 .putString(KEY_AI_MODE, config.mode)
                 .putString(KEY_QUIZ_INSTRUCTION, config.quizInstruction)
                 .putBoolean(KEY_AI_USE_LOCAL, false)
+                // 切到在线/自定义服务时清掉残留的本地模型名，
+                // 否则 ai_local_model 非空会让设置弹窗的 LaunchedEffect 误判为「仍选本地模型」。
+                .remove(KEY_AI_LOCAL_MODEL)
                 .apply()
         }
         if (config.apiKey.isNotBlank()) deepSeekApiKey = config.apiKey
@@ -576,8 +620,11 @@ class CxrLHiRokidSession(
     fun sendAiuiHostMessage(json: String): Int = aiui.sendAiuiHostMessage(json)
 
     /** 把本地 .aix 推到 RokidLink aiui_host 目录并自动拉起宿主渲染 */
-    fun pushAixToRokidLinkHost(aixFile: File, openAfter: Boolean = true): String? =
-        aiui.pushAixToRokidLinkHost(aixFile, openAfter)
+    fun pushAixToRokidLinkHost(
+        aixFile: File,
+        openAfter: Boolean = true,
+        launchParams: String? = null,
+    ): String? = aiui.pushAixToRokidLinkHost(aixFile, openAfter, launchParams)
 
     /**
      * CXR-L 1.1.0 的 ExternalAppClient.sendCustomCmd 内置保留 cmd 黑名单
@@ -720,6 +767,26 @@ class CxrLHiRokidSession(
             return
         }
         val authToken = token.orEmpty()
+
+        // 轻量配置下发优化：链路已就绪时复用现有连接直接下发自定义指令，
+        // 不再走 connectAndRunCustomAppOperation 的 cleanup() 全链路重建——
+        // 重建期间（3~5s）ASR 推送通道与 ADB 隧道均不可用，保存设置后紧接着说话的
+        // 第一条语音必然丢失（实测 21:28:46：保存设置→cleanup→start 连调两次→通道断开→丢字）。
+        val existingLink = cxrLink
+        if (existingLink != null && cxrlConnected && glassBtConnected) {
+            val caps = Caps()
+            AiChannel.encodeQuizConfig(enabled).forEach { caps.write(it) }
+            val r = synchronized(aiCmdLock) { existingLink.sendCustomCmd(AiChannel.TOPIC_KEY_QUIZ, caps) }
+            Log.i(TAG, "sendKeyQuizConfig: reuse existing link, sendCustomCmd(${AiChannel.TOPIC_KEY_QUIZ}, enabled=$enabled) -> $r")
+            if (r == 0) {
+                deliver(true)
+                onBusyChanged(false)
+                return
+            }
+            // 复用失败（如 CUSTOMAPP 会话尚未 appStart，自定义指令还路由不到眼镜端）：
+            // 退回完整流程重建链路后下发。
+            Log.w(TAG, "sendKeyQuizConfig: reuse failed (r=$r), fall back to full connect")
+        }
 
         onBusyChanged(true)
         connectAndRunCustomAppOperation(
@@ -1330,6 +1397,10 @@ class CxrLHiRokidSession(
      */
     /** ASR 文字分发核心（去重由 AsrBridgeCoordinator.onAsrText 负责，此处只做对话链路） */
     private fun dispatchGlassesAsrText(text: String) {
+        // 标记「本条 ASR 处理中」，供 AsrBridgeCoordinator 判定后续相同文字是否丢弃。
+        // sendAiTextMessage 是异步回调式：onResult 在 AI 下行结束（成功/失败）时回调，
+        // 此处据此复位 handling；AsrBridgeCoordinator 内还有 90s 超时兜底，防异常路径标志卡死。
+        asrBridge.markAsrHandling(true)
         try {
             Log.i(TAG, "dispatchGlassesAsrText: $text")
             // 用户提问同步到聊天窗口（轮询在 IO 线程，需切回主线程更新 Compose 状态）
@@ -1338,6 +1409,7 @@ class CxrLHiRokidSession(
                 text,
                 onResult = { success, err ->
                     Log.i(TAG, "handleGlassesAiAsrText sendAiTextMessage: success=$success err=$err")
+                    asrBridge.markAsrHandling(false)
                 },
                 onReply = { reply ->
                     Log.i(TAG, "handleGlassesAiAsrText reply: ${reply.take(40)}")
@@ -1354,6 +1426,7 @@ class CxrLHiRokidSession(
             )
         } catch (e: Exception) {
             Log.e(TAG, "handleGlassesAiAsrText error", e)
+            asrBridge.markAsrHandling(false)
         }
     }
 

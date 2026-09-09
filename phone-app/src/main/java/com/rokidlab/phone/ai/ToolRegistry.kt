@@ -602,11 +602,12 @@ object ToolRegistry {
 
             "open_aiui_app" -> toolSchema(
                 name = meta.name,
-                description = "在 Rokid 眼镜上打开一个 AIUI 智能体应用（.aix 卡片应用，如“我是黑客”）。当用户说“打开我是黑客”“打开智能体”“打开某 AI 应用/小游戏”“演示/预览我做的应用”等、且该名字命中智能体应用列表时调用；普通应用（小智/浏览器等）请用 launch_glasses_app。本机生成/上传的应用（本地有 .aix）会自动推送到 RokidLink 自托管宿主（官方 ink web 宿主），支持用 Lab 手机蓝牙手柄直接操控页面；内置官方智能体走 AgentStore 打开。",
+                description = "在 Rokid 眼镜上打开一个 AIUI 智能体应用（.aix 卡片应用，如“我是黑客”“音乐播放”）。当用户说“打开/启动/演示/预览 XXX（智能体名）”“打开我是黑客”“打开智能体”“打开某 AI 应用/小游戏”“用/通过/拿 XXX 智能体去做某事（如“用音乐播放智能体播放七里香”）”等、且该名字命中智能体应用列表时调用；普通应用（小智/浏览器等）请用 launch_glasses_app。本机生成/上传的应用（本地有 .aix）会自动推送到 RokidLink 自托管宿主（官方 ink web 宿主），支持用 Lab 手机蓝牙手柄直接操控页面；内置官方智能体走 AgentStore 打开。注意：不要仅仅口头回复“已经打开/已经在播放”，必须实际调用本工具才能把用户请求交给智能体执行。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
-                        "appName" to mapOf("type" to "string", "description" to "用户想要打开的智能体应用名称，原样转述，如“我是黑客”"),
+                        "appName" to mapOf("type" to "string", "description" to "用户想要打开或使用的智能体应用名称，原样转述，如“我是黑客”“音乐播放”"),
+                        "params" to mapOf("type" to "string", "description" to "传给该应用的启动参数，JSON 对象字符串（如 {\"songName\":\"七里香\"}）。只要用户要求“用/通过/拿某个智能体去做某事”并给出了具体对象/参数，就必须填写并调用本工具；只是“打开某应用”时可不传。传参用页面期望的参数名（如 songName / keyword / city），不确定就留空，让页面用自己的默认值处理。"),
                     ),
                     "required" to listOf("appName"),
                 ),
@@ -1028,7 +1029,13 @@ object ToolRegistry {
                 val localAix = AiuiProject.packageFile(context, agent.agentId)
                 if (localAix.isFile) {
                     lastStartedAiuiAgentId = agent.agentId
-                    val ack = app.cxrL.pushAixToRokidLinkHost(localAix)
+                    // 启动参数：模型从用户话里抽取（如“用 AIUI 播放西厢” → {"songName":"西厢"}）。
+                    // 非法 JSON 直接丢弃，绝不把脏串下发给页面（页面侧无法容错）。
+                    val launchParams = parseLaunchParams(args.optString("params"))
+                    if (launchParams != null) {
+                        Log.i(TAG, "open_aiui_app(${agent.name}) with launch params: $launchParams")
+                    }
+                    val ack = app.cxrL.pushAixToRokidLinkHost(localAix, launchParams = launchParams)
                     return if (ack?.trim() == "OK") {
                         "好的，正在眼镜上演示「${agent.name}」（手柄可控宿主），可用 Lab 蓝牙手柄操作"
                     } else {
@@ -1311,6 +1318,24 @@ object ToolRegistry {
     }
 
     /** 组装单个工具的 JSON Schema */
+    /**
+     * 解析 open_aiui_app 的启动参数。
+     *
+     * 只接受 JSON 对象字符串；非法输入返回 null（不下发），避免把脏串送进眼镜端页面。
+     * 空串视为"不带参数"，与"传了但格式错"区分开——后者记警告便于排查模型行为。
+     */
+    private fun parseLaunchParams(raw: String): String? {
+        val s = raw.trim()
+        if (s.isEmpty()) return null
+        return try {
+            val obj = JSONObject(s)
+            obj.toString()
+        } catch (e: Exception) {
+            Log.w(TAG, "open_aiui_app: invalid params JSON, ignored: ${e.message}")
+            null
+        }
+    }
+
     private fun toolSchema(name: String, description: String, parameters: Map<String, Any>): JSONObject {
         return JSONObject().apply {
             put("type", "function")

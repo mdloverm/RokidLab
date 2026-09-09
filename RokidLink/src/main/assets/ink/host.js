@@ -19,6 +19,16 @@ function notify(fn, ...args) {
   } catch (e) { /* ignore */ }
 }
 
+/** 宿主日志 → logcat（WebView 无远程调试，AIUI 链路排查全靠它） */
+function log(msg) {
+  try { console.log(msg); } catch (e) { /* ignore */ }
+  try {
+    if (window.Android && typeof window.Android.log === 'function') {
+      window.Android.log(String(msg));
+    }
+  } catch (e) { /* ignore */ }
+}
+
 /** 归一化文件 map：'app.json' 与 '/app.json' 兼容，二进制 b64 → Uint8Array */
 function toFiles(map) {
   const out = {};
@@ -65,12 +75,45 @@ function key(code, action) {
 
 /** 手机侧经 CXR 下发的 host 消息 → dispatchMessageEvent（页面 onMessage 接收） */
 function hostMessage(jsonOrPayload) {
-  if (!view) return;
+  let payload;
   try {
-    const payload = (typeof jsonOrPayload === 'string') ? JSON.parse(jsonOrPayload) : jsonOrPayload;
+    payload = (typeof jsonOrPayload === 'string') ? JSON.parse(jsonOrPayload) : jsonOrPayload;
+  } catch (e) {
+    console.warn('[aiui-host] hostMessage parse fail:', e);
+    return;
+  }
+  // 工具调用结果：优先尝试兑现外层 window.Lab.callTool 的 Promise（若页面能访问到 Lab），
+  // 同时把结果作为 onMessage 派发给 ink 页面。ink 沙箱内 Lab 不可见，页面必须靠 onMessage 接收。
+  if (payload && payload.type === 'toolResult') {
+    try {
+      if (window.Lab && window.Lab.onToolResult) window.Lab.onToolResult(payload);
+    } catch (e) { /* ignore */ }
+  }
+  if (!view) {
+    log('[aiui-host] hostMessage dropped: view not ready');
+    return;
+  }
+  try {
     view.dispatchMessageEvent(payload, 'rokidlink-host');
   } catch (e) {
-    console.warn('[aiui-host] hostMessage fail:', e);
+    log('[aiui-host] hostMessage fail (engine may not support dispatchMessageEvent): ' + e);
+  }
+}
+
+/**
+ * 启动参数下发：手机端 open 命令携带的 launchParams，在页面渲染完成后作为首条消息投递。
+ * 时序要求：必须在 boot 内 view 就绪之后调用 —— hostMessage 首行 `if (!view) return`，
+ * 早于此处调用会被静默丢弃（页面永远收不到启动参数）。
+ */
+function deliverLaunchParams(config) {
+  const raw = config && config.launchParams;
+  if (!raw) return;
+  try {
+    const params = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+    hostMessage({ type: 'launch', params });
+    log('[aiui-host] launch params delivered: ' + raw);
+  } catch (e) {
+    log('[aiui-host] bad launch params: ' + e);
   }
 }
 
@@ -126,13 +169,72 @@ async function boot(config) {
     // 双保险：DOM focus 经 syncFocus → view.focus()；再显式补一次引擎 focus。
     canvas.focus();
     view.focus();
-    console.log('[aiui-host] view focused');
+    log('[aiui-host] view focused');
     notify('ready');
+    deliverLaunchParams(config);
   } catch (e) {
-    console.error('[aiui-host] boot fail:', e);
+    log('[aiui-host] boot fail: ' + String((e && e.message) || e));
     notify('error', String((e && e.message) || e));
   }
 }
+
+/**
+ * Lab 工具口：AIUI 页面调用手机端工具的唯一入口。
+ *
+ * 页面只写 await Lab.callTool('play_song', { songName: '西厢' })，
+ * 不必关心 RFCOMM 上行、cbId 配对、结果回传等底层细节（全部在此封装）。
+ *
+ * 无 bridge 时（官方 Sys_AIUI_Start / AgentStore 渲染环境）callTool 会 reject，
+ * 页面必须 try/catch 降级，不能让整个页面挂掉。
+ */
+(function () {
+  let seq = 0;
+  const pending = new Map();
+
+  function callTool(name, args) {
+    return new Promise(function (resolve, reject) {
+      if (!window.Android || typeof window.Android.callTool !== 'function') {
+        reject(new Error('tool bridge unavailable'));
+        return;
+      }
+      const cbId = 'cb' + (++seq) + '_' + Date.now();
+      // 浏览器侧超时略大于手机端 ToolGateway 的 15s，让手机端的错误信息有机会回传
+      const timer = setTimeout(function () {
+        pending.delete(cbId);
+        reject(new Error('tool "' + name + '" timed out'));
+      }, 20000);
+      pending.set(cbId, { resolve: resolve, reject: reject, timer: timer });
+      try {
+        window.Android.callTool(name, JSON.stringify(args || {}), cbId);
+      } catch (e) {
+        clearTimeout(timer);
+        pending.delete(cbId);
+        reject(e);
+      }
+    });
+  }
+
+  /** 当前可调用工具清单：[{name, description}]（能力发现，随手机端注册变化） */
+  function listTools() {
+    return callTool('list_tools', {}).then(function (raw) {
+      const parsed = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+      return (parsed && parsed.tools) || [];
+    });
+  }
+
+  /** 由 hostMessage 调用：兑现对应 Promise。返回 true 表示已被消费。 */
+  function onToolResult(payload) {
+    const entry = pending.get(payload.cbId);
+    if (!entry) return false;
+    clearTimeout(entry.timer);
+    pending.delete(payload.cbId);
+    if (payload.ok) entry.resolve(payload.result);
+    else entry.reject(new Error(payload.error || 'tool failed'));
+    return true;
+  }
+
+  window.Lab = { callTool: callTool, listTools: listTools, onToolResult: onToolResult };
+})();
 
 window.__aiuiHost = { key, hostMessage, boot };
 notify('hostReady');

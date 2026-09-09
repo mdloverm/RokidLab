@@ -163,9 +163,16 @@ internal fun ChatSettingsDialog(
         }
     }
 
-    // 从本地模型管理页返回后刷新本地面板：已选模型则自动启用本地模式
+    // 从本地模型管理页返回后刷新本地面板：已选模型则自动启用本地模式。
+    // 关键修复：只在「刚从本地面板返回」时触发（prevLocalPageOpen 为 true），
+    // 不能在设置弹窗首次打开时就触发——否则残留的本地模型名（ai_local_model）
+    // 会强制把 useLocal 置 true，覆盖用户已保存的在线/自定义服务选择，
+    // 导致每次打开设置都默认回到「本地模型」（#bug 上报）。
+    var prevLocalPageOpen by remember { mutableStateOf(false) }
     LaunchedEffect(showLocalModel) {
-        if (!showLocalModel && session != null) {
+        val wasOpen = prevLocalPageOpen
+        prevLocalPageOpen = showLocalModel
+        if (wasOpen && !showLocalModel && session != null) {
             val name = session.localChatModel()
             if (name.isNotBlank()) {
                 useLocal = true

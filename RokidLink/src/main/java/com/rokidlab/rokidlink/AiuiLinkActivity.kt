@@ -25,6 +25,9 @@ import android.widget.FrameLayout
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 /**
  * AIUI Web 宿主：把 Lab 生成的 .aix 在 RokidLink 内用官方 @yodaos-pkg/ink
@@ -43,10 +46,27 @@ class AiuiLinkActivity : Activity() {
     private var jsHostReady = false
     private var currentAppId: String? = null
     private var currentAixPath: String? = null
+    /** 本次启动的启动参数（JSON 对象字符串），页面 boot 完成后作为首条 hostMessage 下发 */
+    private var launchParamsJson: String? = null
     /** boot 后双击 BACK 逃生计时（页面若不响应 Backspace 可强制退出宿主） */
     private var lastBackMs = 0L
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** 工具调用结果缓存：页面 realm 的 Lab 桥经 fetch 轮询 __lab/tool_result 拉取（兼容旧桥）。
+     *  键 cbId → 结果 JSON 文本。带 TTL，避免长期驻留。 */
+    private val toolResults = mutableMapOf<String, Pair<Long, String>>()
+    private val toolResultLock = Any()
+
+    /** 同步工具调用阻塞队列：__lab/tool_call_sync 端点会等待此队列，结果到达后立即返回。 */
+    private val syncToolQueues = ConcurrentHashMap<String, ArrayBlockingQueue<String>>()
+
+    /** 同步工具调用最长阻塞时间（与 ToolGateway 的 15s 对齐）。 */
+    private val SYNC_TOOL_TIMEOUT_MS = 15_000L
+
+    /** 自动注入到每个 AIUI 页面的 Lab 桥（页面 realm 可见，解决 host.js 主 realm Lab 隔离问题）。
+     *  从 assets 读取一次缓存，避免每次装配都 IO。 */
+    private var pageBridgeJs: String? = null
 
     private val bridge = object {
         @JavascriptInterface
@@ -77,6 +97,56 @@ class AiuiLinkActivity : Activity() {
         fun error(msg: String) {
             Log.e(TAG, "js error: $msg")
         }
+
+        /**
+         * 宿主 JS 调试日志 → logcat。
+         *
+         * WebView 未开启远程调试，页面/宿主的 console.log 在 logcat 里看不到，
+         * 排查 AIUI 链路（boot 时序、launch 参数投递、工具调用）全靠此通道。
+         * 仅写日志，无副作用；release 版同样保留（AIUI 调试成本高，值得留）。
+         */
+        @JavascriptInterface
+        fun log(msg: String) {
+            Log.d(TAG, "js: $msg")
+        }
+
+        /**
+         * 页面调用手机端工具（window.Lab.callTool 的底层）。
+         *
+         * 上行复用 ASR 推送的 RFCOMM 通道（带 CTRL_TOOL_CALL 前缀以区别于 ASR 文字），
+         * 不新开通道：眼镜端同一时刻只允许一条 RFCOMM（adb 隧道已占满）。
+         *
+         * 本方法运行在 JS 线程，WebView 相关操作须切主线程。
+         */
+        @JavascriptInterface
+        fun callTool(name: String, argsJson: String, cbId: String) {
+            invokeToolCall(name, argsJson, cbId)
+        }
+    }
+
+    /**
+     * 真正执行工具调用上行的逻辑。供 JS bridge 与 fetch 备用通道共用。
+     * 复用 ASR 推送的 RFCOMM 通道（带 CTRL_TOOL_CALL 前缀），不新建 RFCOMM。
+     */
+    private fun invokeToolCall(name: String, argsJson: String, cbId: String) {
+        Log.i(TAG, "page callTool: name=$name cbId=$cbId")
+        val payload = try {
+            JSONObject()
+                .put("cbId", cbId)
+                .put("name", name)
+                .put("args", if (argsJson.isBlank()) "{}" else argsJson)
+                .toString()
+        } catch (e: Exception) {
+            Log.e(TAG, "callTool payload build failed", e)
+            mainHandler.post { deliverToolResult(cbId, false, null, "bad arguments") }
+            return
+        }
+        val sent = AsrPushServer.pushControl(AsrPushServer.CTRL_TOOL_CALL + payload)
+        if (!sent) {
+            // 手机端未连接：立刻回传失败，否则页面要干等到超时才知道
+            Log.w(TAG, "callTool push failed: no phone connection (cbId=$cbId)")
+            mainHandler.post { deliverToolResult(cbId, false, null, "phone not connected") }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -90,6 +160,10 @@ class AiuiLinkActivity : Activity() {
             return
         }
         currentAixPath = aixPath
+        launchParamsJson = intent?.getStringExtra(EXTRA_LAUNCH_PARAMS)?.takeIf { it.isNotBlank() }
+        if (launchParamsJson != null) {
+            Log.i(TAG, "launch params: $launchParamsJson")
+        }
 
         val dm = resources.displayMetrics
         val screenW = dm.widthPixels
@@ -163,6 +237,78 @@ class AiuiLinkActivity : Activity() {
                 val assetPath = url.removePrefix(BASE_URL)
                 if (assetPath.isEmpty()) return null
 
+                // 连通性探测端点：验证「页面 fetch → 宿主拦截」这条通道是否可用。
+                // 页面运行在 quickjs+wasm 沙箱内，未必能访问 window（JS bridge 可能不可达），
+                // 此时 https://ink.local/__lab/... 是页面上行的唯一可行通道。
+                if (assetPath.startsWith("__lab/")) {
+                    Log.i(TAG, "lab endpoint hit: $assetPath")
+                    return when {
+                        assetPath.startsWith("__lab/ping") -> textResponse("pong")
+                        assetPath.startsWith("__lab/tool_result") -> {
+                            // 页面 realm 的 Lab 桥轮询结果：缓存里有就返回，否则返回 pending。
+                            val cb = request?.url?.getQueryParameter("cbId")?.takeIf { it.isNotBlank() }
+                            val cached = synchronized(toolResultLock) {
+                                cb?.let {
+                                    toolResults[it]?.also { p -> toolResults.remove(it) }?.second
+                                }
+                            }
+                            if (cached != null) {
+                                Log.i(TAG, "tool_result hit cbId=$cb")
+                                textResponse(cached)
+                            } else {
+                                textResponse("{\"status\":\"pending\",\"cbId\":\"${cb ?: ""}\"}")
+                            }
+                        }
+                        assetPath.startsWith("__lab/tool_call_sync") -> {
+                            // 同步工具调用：页面一发 fetch，宿主在此后台线程阻塞等结果。
+                            val q = request?.url
+                            val name = q?.getQueryParameter("name")?.takeIf { it.isNotBlank() }
+                            val args = q?.getQueryParameter("args")?.takeIf { it.isNotBlank() } ?: "{}"
+                            val cbId = q?.getQueryParameter("cbId")?.takeIf { it.isNotBlank() }
+                                ?: ("sync_" + System.currentTimeMillis())
+                            if (name == null) return textResponse("missing name")
+
+                            val queue = ArrayBlockingQueue<String>(1)
+                            syncToolQueues[cbId] = queue
+                            try {
+                                invokeToolCall(name, args, cbId)
+                                val result = queue.poll(SYNC_TOOL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                                if (result == null) {
+                                    Log.w(TAG, "tool_call_sync timeout cbId=$cbId")
+                                    textResponse(syncErrorJson(cbId, "tool timed out"))
+                                } else {
+                                    Log.i(TAG, "tool_call_sync return cbId=$cbId")
+                                    textResponse(result)
+                                }
+                            } finally {
+                                syncToolQueues.remove(cbId)
+                            }
+                        }
+                        assetPath.startsWith("__lab/tool_call") -> {
+                            // fetch 备用通道：页面无法访问 window.Android 时，用 fetch 触发工具调用。
+                            // 因 WebResourceResponse 必须同步返回，此处立即返回 202 Accepted，
+                            // 真实结果通过手机端 CMD_AIUI_MSG 经 onMessage 回传。
+                            val q = request?.url
+                            val name = q?.getQueryParameter("name")?.takeIf { it.isNotBlank() }
+                            val args = q?.getQueryParameter("args")?.takeIf { it.isNotBlank() } ?: "{}"
+                            val cbId = q?.getQueryParameter("cbId")?.takeIf { it.isNotBlank() }
+                                ?: ("fetch_" + System.currentTimeMillis())
+                            if (name == null) {
+                                textResponse("missing name")
+                            } else {
+                                invokeToolCall(name, args, cbId)
+                                textResponse("accepted:$cbId")
+                            }
+                        }
+                        assetPath.startsWith("__lab/list_tools") -> {
+                            val cbId = "fetch_" + System.currentTimeMillis()
+                            invokeToolCall("list_tools", "{}", cbId)
+                            textResponse("accepted:$cbId")
+                        }
+                        else -> textResponse("unknown endpoint: $assetPath")
+                    }
+                }
+
                 // 解包结果 JSON：由宿主 JS 以 fetch('bundle.json') 拉取（同源 https://ink.local）
                 if (assetPath == "bundle.json") {
                     val json = bundleJson ?: return WebResourceResponse(
@@ -209,9 +355,12 @@ class AiuiLinkActivity : Activity() {
     }
 
     private fun bootJs(w: Int, h: Int) {
+        // launchParams 以 **JSON 字符串**（而非对象字面量）传入：JSONObject.quote 会转义，
+        // 页面侧 JSON.parse 还原。避免把内容直接拼进 JS 造成注入/语法破坏。
         val js = "window.__aiuiHost && window.__aiuiHost.boot({" +
             "width:$w,height:$h,bundleUrl:'bundle.json'," +
             "appId:${jsonStr(currentAppId)}," +
+            "launchParams:${jsonStr(launchParamsJson)}," +
             "initialPage:null})"
         webView?.evaluateJavascript(js, null)
     }
@@ -280,6 +429,15 @@ class AiuiLinkActivity : Activity() {
 
     // ── 手机侧 CXR 消息 → 页面 onMessage（预留；由 KeyButtonService 转发） ──
     fun dispatchHostMessage(json: String) {
+        // 工具结果下行：同时写入轮询缓存，供页面 realm 的 Lab 桥 fetch 拉取
+        if (json.contains("\"type\":\"toolResult\"") || json.contains("\"type\": \"toolResult\"")) {
+            try {
+                val obj = JSONObject(json)
+                if (obj.optString("type") == "toolResult") {
+                    cacheToolResult(obj.optString("cbId"), json)
+                }
+            } catch (_: Exception) { /* 不是合法 JSON 则忽略缓存 */ }
+        }
         val js = "window.__aiuiHost && window.__aiuiHost.hostMessage($json)"
         runOnUiThread { webView?.evaluateJavascript(js, null) }
     }
@@ -306,16 +464,19 @@ class AiuiLinkActivity : Activity() {
         private const val TAG = "AiuiLink"
         private const val BASE_URL = "https://ink.local/"
         const val EXTRA_AIX_PATH = "aix_path"
+        /** 启动参数（JSON 对象字符串）：由手机端 open 命令携带，页面 boot 后作为首条 hostMessage 下发 */
+        const val EXTRA_LAUNCH_PARAMS = "launch_params"
 
         private val lock = Any()
         private var activeActivity: AiuiLinkActivity? = null
 
         /** 打开 AIUI 宿主；context 可为 Service（自动加 NEW_TASK） */
         @JvmStatic
-        fun open(context: Context, aixPath: String) {
+        fun open(context: Context, aixPath: String, launchParams: String? = null) {
             val i = Intent(context, AiuiLinkActivity::class.java)
                 .putExtra(EXTRA_AIX_PATH, aixPath)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (!launchParams.isNullOrBlank()) i.putExtra(EXTRA_LAUNCH_PARAMS, launchParams)
             context.startActivity(i)
         }
 
@@ -350,18 +511,99 @@ class AiuiLinkActivity : Activity() {
     /** singleTask 复用实例时换包：旧的直接退，新的立即接管渲染 */
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
-        val p = intent?.getStringExtra(EXTRA_AIX_PATH)
-        if (p == null || p == currentAixPath) return
+        val p = intent?.getStringExtra(EXTRA_AIX_PATH) ?: return
+        val params = intent?.getStringExtra(EXTRA_LAUNCH_PARAMS)?.takeIf { it.isNotBlank() }
+        // 同一个包再次打开（只换参数，如"再用 AIUI 放一首别的"）：不能重启宿主，
+        // 否则会打断页面当前播放/动画。直接更新参数并下发给已运行的页面。
+        // 注意：未 boot 时不能下发（host.js 会在 view 就绪前丢弃），此时只更新字段，
+        // 由 bootJs 把最新参数带进 boot —— 两条路径共用 launchParamsJson，天然自洽。
+        if (p == currentAixPath) {
+            if (params != null && params != launchParamsJson) {
+                launchParamsJson = params
+                Log.i(TAG, "re-launch same package with new params: $params")
+                if (booted) deliverLaunchParams()
+            }
+            return
+        }
         val app = applicationContext
         finish()
-        mainHandler.postDelayed({ open(app, p) }, 150L)
+        mainHandler.postDelayed({ open(app, p, params) }, 150L)
+    }
+
+    /**
+     * 工具调用结果回传页面。手机端执行完后经 CMD_AIUI_MSG 把完整 toolResult 送回来，
+     * 直接走 dispatchHostMessage；本方法只用于眼镜端本地就能判定失败的场合
+     * （如手机端未连接）。
+     */
+    private fun deliverToolResult(cbId: String, ok: Boolean, result: String?, error: String?) {
+        if (isFinishing) return
+        try {
+            val payload = JSONObject()
+                .put("type", "toolResult")
+                .put("cbId", cbId)
+                .put("ok", ok)
+            if (result != null) payload.put("result", result)
+            if (error != null) payload.put("error", error)
+            // 缓存一份供页面 realm 的 Lab 桥轮询拉取（与 onMessage 下行互补，互不冲突）
+            cacheToolResult(cbId, payload.toString())
+            dispatchHostMessage(payload.toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "deliverToolResult failed: ${e.message}")
+        }
+    }
+
+    /** 把工具结果写入轮询缓存，并唤醒同步等待队列。 */
+    private fun cacheToolResult(cbId: String, json: String) {
+        if (cbId.isBlank()) return
+        synchronized(toolResultLock) {
+            toolResults[cbId] = Pair(System.currentTimeMillis() + 30_000L, json)
+            val it = toolResults.entries.iterator()
+            val now = System.currentTimeMillis()
+            while (it.hasNext()) {
+                if (it.next().value.first < now) it.remove()
+            }
+        }
+        // 唤醒同步工具调用等待者（如果有）
+        syncToolQueues[cbId]?.offer(json)
+    }
+
+    private fun syncErrorJson(cbId: String, error: String): String =
+        JSONObject().apply {
+            put("type", "toolResult")
+            put("cbId", cbId)
+            put("ok", false)
+            put("error", error)
+        }.toString()
+
+    /**
+     * 把启动参数作为 hostMessage 下发给页面。
+     * 仅在页面已 boot 后调用；未 boot 时由 [bootJs] 通过 config 带过去。
+     */
+    private fun deliverLaunchParams() {
+        val raw = launchParamsJson ?: return
+        try {
+            val payload = JSONObject()
+                .put("type", "launch")
+                .put("params", JSONObject(raw))
+            dispatchHostMessage(payload.toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "invalid launch params json, dropped: ${e.message}")
+        }
     }
 
     private fun buildBundleJson(bundle: AixBundleReader.Bundle, w: Int, h: Int): String {
         val files = JSONObject()
+        val bridge = loadPageBridge()
         for ((path, v) in bundle.files) {
             val obj = JSONObject()
-            if (v.text != null) obj.put("text", v.text) else obj.put("b64", v.b64)
+            if (v.text != null) {
+                // 把 Lab 桥前置注入 app.js（与页面同 realm，解决 host.js 主 realm 隔离问题）。
+                // 仅注入含 app.js 的入口文件一次，避免重复。
+                val injected = if (path == "app.js" && bridge != null) bridge + "\n" + v.text else v.text
+                obj.put("text", injected)
+            } else {
+                obj.put("b64", v.b64)
+            }
             files.put(path, obj)
         }
         val root = JSONObject()
@@ -391,8 +633,28 @@ class AiuiLinkActivity : Activity() {
         else -> "application/octet-stream"
     }
 
+    /** 纯文本响应（__lab 探测端点用），必须带 Content-Length，否则 ink fetch text() 会挂起 */
+    private fun textResponse(body: String): WebResourceResponse {
+        val bytes = body.toByteArray(Charsets.UTF_8)
+        return WebResourceResponse(
+            "text/plain", "UTF-8", 200, "OK",
+            mutableMapOf("Content-Length" to bytes.size.toString()),
+            ByteArrayInputStream(bytes)
+        )
+    }
+
     private fun jsonStr(s: String?): String {
         if (s == null) return "null"
         return JSONObject.quote(s)
+    }
+
+    /** 读取页面 realm 的 Lab 桥（assets/ink/lab-page-bridge.js），缓存复用 */
+    private fun loadPageBridge(): String? {
+        if (pageBridgeJs != null) return pageBridgeJs
+        pageBridgeJs = runCatching {
+            assets.open("ink/lab-page-bridge.js").bufferedReader().use { it.readText() }
+        }.onFailure { Log.w(TAG, "load lab-page-bridge.js failed: ${it.message}") }
+            .getOrNull()
+        return pageBridgeJs
     }
 }

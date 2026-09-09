@@ -155,7 +155,15 @@ internal class AiuiFrontendController(
     // ─────────────────────────────────────────────────────────────
 
     /** 打开宿主渲染本地已推送的 .aix（fileName 不含 .aix 亦可） */
-    fun openAiuiHost(fileName: String? = null): Int = sendAiuiHostCmd("open", fileName)
+    /**
+     * 打开宿主渲染指定 .aix。
+     *
+     * @param launchParams 启动参数（JSON 对象字符串），由眼镜端在页面 boot 完成后
+     *   作为第一条 hostMessage 下发（type="launch"）。**不能在 open 之后立刻用
+     *   msg 下发**：页面 WebView 尚未解包/渲染，hostMessage 会被静默丢弃。
+     */
+    fun openAiuiHost(fileName: String? = null, launchParams: String? = null): Int =
+        sendAiuiHostCmd("open", fileName, launchParams)
 
     /** 关闭正在渲染的宿主 */
     fun closeAiuiHost(): Int = sendAiuiHostCmd("close", null)
@@ -163,12 +171,13 @@ internal class AiuiFrontendController(
     /** 以 onMessage 协议向宿主页面注入消息（伪交互补充通道） */
     fun sendAiuiHostMessage(json: String): Int = sendAiuiHostCmd("msg", json)
 
-    private fun sendAiuiHostCmd(cmd: String, arg: String?): Int {
+    private fun sendAiuiHostCmd(cmd: String, arg: String?, arg2: String? = null): Int {
         val link = linkProvider() ?: return -2
         return try {
             val caps = Caps()
             caps.write(cmd)
             if (arg != null) caps.write(arg)
+            if (arg2 != null) caps.write(arg2)
             val result = synchronized(cmdLock) { rawSendCmd(link, AIUI_HOST_TOPIC, caps) }
             Log.i(TAG, "sendAiuiHostCmd($cmd) -> $result")
             result
@@ -191,7 +200,11 @@ internal class AiuiFrontendController(
      *
      * @return null=失败；"OK"=已落盘（openAfter=true 会自动拉起宿主渲染）
      */
-    fun pushAixToRokidLinkHost(aixFile: File, openAfter: Boolean = true): String? {
+    fun pushAixToRokidLinkHost(
+        aixFile: File,
+        openAfter: Boolean = true,
+        launchParams: String? = null,
+    ): String? {
         if (!aixFile.isFile) {
             Log.w(TAG, "pushAixToRokidLinkHost: file missing ${aixFile.absolutePath}")
             return null
@@ -263,7 +276,7 @@ internal class AiuiFrontendController(
                     val written = wc?.trim()?.toLongOrNull()
                     Log.i(TAG, "pushAixToRokidLinkHost($name) written=$written expect=${body.size}")
                     if (written == body.size.toLong()) {
-                        if (openAfter) openAiuiHost(name)
+                        if (openAfter) openAiuiHost(name, launchParams)
                         return "OK"
                     }
                 }
@@ -313,7 +326,7 @@ internal class AiuiFrontendController(
         }
         Log.i(TAG, "pushAixToRokidLinkHost($name) fallback ack=${ack?.take(16)}")
         if (ack?.trim() == "OK" && openAfter) {
-            openAiuiHost(name)
+            openAiuiHost(name, launchParams)
         }
         return ack
     }

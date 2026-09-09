@@ -73,5 +73,75 @@
 
 - 只通过 save_code_file 落盘，回复只报项目名与文件数；回复 ≤ 3 句、纯文本、无代码围栏、无源码转述。
 - 用户只说「做个支持手柄的 XX」时直接套官方模板/设计规范产出，不必再询问。
+
+## 8. 调用手机端工具（Lab 工具口）★会调工具的 AIUI
+
+页面可以调用手机端的全部工具（音乐/天气/搜索/提醒/设备信息等）。这是页面与外部世界
+交互的**唯一通道**——不要在页面里自己 fetch 外网，也不要指望官方 API 能做这些事。
+
+### 8.1 调用方式
+
+```js
+// 返回 Promise<string>，结果是工具返回的文本。
+// ⚠️ 必须写 globalThis.Lab 或 window.Lab：ink 页面 realm 的裸标识符不走 globalThis，
+//    直接写 Lab.callTool 会 ReferenceError（页面看不到 host.js 主 realm 的 window.Lab）。
+const text = await globalThis.Lab.callTool('play_song', { songName: '西厢' });
+
+// 不确定有哪些工具时先查，返回 [{name, description}]
+const tools = await globalThis.Lab.listTools();
+```
+
+### 8.2 四条硬性要求
+
+1. **必须 try/catch**：官方渲染环境（Sys_AIUI_Start / AgentStore）没有 JS bridge，
+   `callTool` 会直接 reject。页面必须能降级，不能白屏或卡死。
+2. **必须有 loading 态**：一次调用含蓝牙往返 + 可能的网络请求，通常 1~3 秒，
+   最长 20 秒超时。调用前 setData 置 loading，成功和失败都要清除。
+3. **结果是字符串**：要什么格式自己解析；超长结果不要整段铺满屏幕。
+4. **一次只做一件事**：蓝牙通道是串行的，不要并发发起多个 callTool。
+
+### 8.3 启动参数（带参启动）
+
+用户说「用 AIUI 播放西厢」时，手机端会打开本应用并带上参数，页面在 `onMessage` 接收：
+
+```js
+export default {
+  data: { song: '', loading: false },
+  onMessage(e) {
+    // ⚠️ Lab 自托管 ink 宿主把真实 payload 放在 e.data（JSON 字符串），
+    //    不是直接放在 e.type/e.params。必须 JSON.parse(e.data)。
+    const msg = (typeof e.data === 'string') ? JSON.parse(e.data) : (e.data || e);
+    if (msg.type !== 'launch') return;
+    const p = msg.params || {};
+    if (p.songName) this.play(p.songName);
+  },
+  async play(name) {
+    this.setData({ loading: true });
+    try {
+      // 必须用 globalThis.Lab（或 window.Lab），裸 Lab 在 ink 页面 realm 不可用
+      await globalThis.Lab.callTool('play_song', { songName: name });
+      this.setData({ song: name, loading: false });
+    } catch (err) {
+      this.setData({ loading: false }); // 失败同样要清 loading
+    }
+  },
+}
+```
+
+启动参数只在页面**渲染完成后**投递一次，`onLoad` 里拿不到，必须在 `onMessage` 里接。
+
+### 8.4 常见工具
+
+| 工具 | 参数 | 说明 |
+| --- | --- | --- |
+| play_song | {songName, artist?} | 搜索并播放音乐 |
+| stop_music | {} | 停止播放 |
+| get_weather | {city?} | 天气查询 |
+| get_current_time | {} | 当前时间 |
+| set_timer / list_timers | 见清单 | 定时提醒 |
+| search_web | {query} | 联网搜索 |
+| get_glasses_battery | {} | 眼镜电量 |
+
+上表只是常用项，**完整清单用 `Lab.listTools()` 获取**。手机端新增工具后本文件不需要改动。
 - 用户要求「修改/微调/对之前的不满意」时：先 `read_code_file` 读现网源码（文件清单或单文件全文）再动手，只重写受影响的文件，禁止凭印象整页重编；改完同样用同一 project 名重存，回复仍 ≤ 3 句。
 - 需要组件/API 细节时，用 load_skill_section 读取同目录参考文件（components.md / apis-*.md）对应章节；官方 SKILL.md 正文里的相对链接（如 [components.md](./components.md)）即指向这些文件。

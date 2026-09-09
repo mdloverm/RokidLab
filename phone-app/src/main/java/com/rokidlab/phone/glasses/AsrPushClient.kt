@@ -17,7 +17,12 @@ import java.util.UUID
  */
 class AsrPushClient(
     private val context: Context,
-    private val onText: (String) -> Unit
+    private val onText: (String) -> Unit,
+    /**
+     * 推送通道【连接建立成功】回调（每次成功建链/重连都回调一次）。
+     * 用于通知上层「断连期间可能积压了数据，需要补读一次兜底通道」。
+     */
+    private val onConnected: (() -> Unit)? = null,
 ) {
     companion object {
         private const val TAG = "AsrPushClient"
@@ -58,11 +63,16 @@ class AsrPushClient(
                     val glasses = selectActiveGlasses(context)
                         ?: throw Exception("no glasses device")
                     val s = glasses.createRfcommSocketToServiceRecord(PUSH_UUID)
-                    socket = s
+                    // 注意：必须在 connect() 成功【之后】才置 socket。
+                    // 旧实现在 connect() 前赋值，导致 isConnected 在建链握手期间/建链失败后
+                    // 短暂为 true —— 上层据此认为"主通道健康"而跳过 ADB 文件兜底轮询，
+                    // 建链失败期间产生的 ASR 文字便永久丢失（眼镜端显示了提问却永远等不到回复）。
                     s.connect()
+                    socket = s
                     established = true
                     connectFailures = 0
                     Log.i(TAG, "ASR push connected")
+                    runCatching { onConnected?.invoke() }
                     val input = DataInputStream(s.inputStream)
                     while (running) {
                         val len = input.readInt()

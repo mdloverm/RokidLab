@@ -1399,13 +1399,17 @@ class KeyButtonService : Service() {
             when (f[0]) {
                 CMD_AIUI_OPEN -> {
                     val name = f.getOrNull(1)?.takeIf { it.isNotBlank() }
+                    // caps[2] = 启动参数（JSON 对象字符串），随 open 一起下发：
+                    // 必须走 open 而不是 open 之后补一条 msg —— 页面此刻尚未解包渲染，
+                    // 任何 hostMessage 都会被 host.js 的 `if (!view) return` 静默丢弃。
+                    val launchParams = f.getOrNull(2)?.takeIf { it.isNotBlank() }
                     val file = if (name != null) File(filesDir, "aiui_host/$name") else aiuiLastFile
                     if (file == null || !file.isFile) {
                         Log.w(TAG, "aiui open: no file to open ($name / last=${aiuiLastFile?.name})")
                         return
                     }
                     aiuiLastFile = file
-                    handler.post { openAiuiHost(file) }
+                    handler.post { openAiuiHost(file, launchParams) }
                 }
                 CMD_AIUI_CLOSE -> handler.post { AiuiLinkActivity.closeActive() }
                 CMD_AIUI_MSG -> {
@@ -1421,9 +1425,9 @@ class KeyButtonService : Service() {
         }
     }
 
-    private fun openAiuiHost(file: File) {
+    private fun openAiuiHost(file: File, launchParams: String? = null) {
         try {
-            AiuiLinkActivity.open(this, file.absolutePath)
+            AiuiLinkActivity.open(this, file.absolutePath, launchParams)
         } catch (e: Exception) {
             Log.e(TAG, "open AiuiLinkActivity failed", e)
         }

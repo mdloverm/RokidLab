@@ -72,7 +72,7 @@
              渲染 Lab 生成的 .aix，眼镜按键 / Lab 蓝牙手柄(HID→KeyEvent) 注入为 ink 输入 -->
         <activity
             android:name=".AiuiLinkActivity"
-            android:exported="false"
+            android:exported="true"
             android:launchMode="singleTask"
             android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden"
