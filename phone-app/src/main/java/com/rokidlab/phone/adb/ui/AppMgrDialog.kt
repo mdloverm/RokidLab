@@ -37,6 +37,10 @@ import androidx.compose.animation.core.LinearEasing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Intent
+import android.provider.DocumentsContract
 
 @Composable
 fun AppMgrDialog(
@@ -58,6 +62,7 @@ fun AppMgrDialog(
         var search by remember { mutableStateOf("") }
         var loading by remember { mutableStateOf(true) }
         var selectedPkg by remember { mutableStateOf("") }
+        var extractPkg by remember { mutableStateOf("") }
         var statusMsg by remember { mutableStateOf("") }
 
         val filtered = if (search.isBlank()) packages else packages.filter { it.contains(search, ignoreCase = true) }
@@ -108,6 +113,44 @@ fun AppMgrDialog(
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,
             ) { Text(label, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1) }
+        }
+
+        // ── 提取目录选择器（SAF）：让用户把 APK 存到自选的手机目录 ──
+        val dirPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri == null) {
+                statusMsg = ctx.getString(R.string.extract_no_dir)
+                return@rememberLauncherForActivityResult
+            }
+            val pkg = extractPkg
+            if (pkg.isEmpty()) return@rememberLauncherForActivityResult
+            // 持久化权限，便于后续访问；失败不影响本次写入
+            kotlin.runCatching {
+                ctx.contentResolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+            scope.launch(Dispatchers.IO) {
+                val tmp = c?.pullApkToCache(pkg)
+                if (tmp == null) {
+                    withContext(Dispatchers.Main) { statusMsg = ctx.getString(R.string.extract_pull_failed) }
+                    return@launch
+                }
+                try {
+                    val docName = "$pkg.apk"
+                    val treeDocId = DocumentsContract.getTreeDocumentId(uri)
+                    val dirUri = DocumentsContract.buildDocumentUriUsingTree(uri, treeDocId)
+                    val docUri = DocumentsContract.createDocument(
+                        ctx.contentResolver, dirUri, "application/vnd.android.package-archive", docName
+                    ) ?: throw Exception("create failed")
+                    ctx.contentResolver.openOutputStream(docUri)?.use { out ->
+                        tmp.inputStream().use { it.copyTo(out) }
+                    } ?: throw Exception("open stream failed")
+                    tmp.delete()
+                    withContext(Dispatchers.Main) { statusMsg = ctx.getString(R.string.extract_saved, docName) }
+                } catch (e: Throwable) {
+                    withContext(Dispatchers.Main) { statusMsg = "${ctx.getString(R.string.error_label)}: ${e.message}" }
+                }
+            }
         }
 
         Column(Modifier.fillMaxWidth()) {
@@ -175,7 +218,10 @@ fun AppMgrDialog(
                             ActionButton(if (isSelectedFrozen) ctx.getString(R.string.unfreeze) else ctx.getString(R.string.freeze), if (isSelectedFrozen) BrewTeal else BrewAmber) {
                                 if (isSelectedFrozen) doAction({ c.enableApp(it) }, selectedPkg) else doAction({ c.disableApp(it) }, selectedPkg)
                             }
-                            ActionButton(ctx.getString(R.string.extract), BrewPink) { doAction({ c.extractApkToDownloads(it) }, selectedPkg) }
+                            ActionButton(ctx.getString(R.string.extract), BrewPink) {
+                                extractPkg = selectedPkg
+                                dirPickerLauncher.launch(null)
+                            }
                         }
                     }
                 } else {

@@ -171,6 +171,13 @@ internal fun SettingsScreen(
             enabled = !state.screenMirrorState.isInstallingRokidLink,
             onClick = actions.onSettingsReinstallRokidLink,
         )
+        Spacer(modifier = Modifier.height(12.dp))
+        SettingsCard(
+            title = ctx.getString(R.string.view_glasses_status),
+            content = ctx.getString(R.string.view_glasses_status_desc),
+            color = BrewTeal,
+            onClick = actions.onSettingsOpenGlassesStatus,
+        )
         Spacer(modifier = Modifier.height(24.dp))
 
         // ── 更多 ──
@@ -213,6 +220,15 @@ internal fun SettingsScreen(
             content = ctx.getString(R.string.export_log_desc),
             color = BrewMagenta,
             onClick = actions.onExportLog,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Export compatibility diagnostics
+        SettingsCard(
+            title = ctx.getString(R.string.export_compat_diag),
+            content = ctx.getString(R.string.export_compat_diag_desc),
+            color = BrewInfo,
+            onClick = actions.onExportCompatDiagnostics,
         )
         Spacer(modifier = Modifier.height(48.dp))
     }

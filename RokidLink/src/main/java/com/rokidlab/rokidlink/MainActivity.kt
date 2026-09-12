@@ -18,11 +18,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.widget.TextView
-import android.widget.Toast
 import com.rokid.cxr.CXRServiceBridge
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
@@ -96,7 +94,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val TAG = "RokidLink"
-        private const val REQUEST_WIFI = 100
 
         /** 蓝牙运行时权限（Android 12+ BLUETOOTH_CONNECT）申请请求码 */
         private const val REQ_BLUETOOTH_CONNECT = 200
@@ -348,15 +345,6 @@ class MainActivity : Activity() {
         // BtTunnelService 是前台服务，不随 Activity 销毁
     }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_WIFI) {
-            Handler(Looper.getMainLooper()).postDelayed({
-                startSetup()
-            }, 1000)
-        }
-    }
-
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         handleBluetoothPermissionResult(this, requestCode, grantResults)
@@ -417,12 +405,6 @@ class MainActivity : Activity() {
         val caps = cm.getNetworkCapabilities(network) ?: return false
         // 只检查 WiFi，不检查 ETHERNET（蓝牙网络共享可能映射为 ETHERNET）
         return caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-    }
-
-    private fun openWifiSettings() {
-        Toast.makeText(this, getString(R.string.toast_enable_wifi), Toast.LENGTH_LONG).show()
-        val intent = Intent(Settings.ACTION_WIFI_SETTINGS)
-        startActivityForResult(intent, REQUEST_WIFI)
     }
 
     private fun setDotColor(color: Int) {

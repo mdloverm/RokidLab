@@ -54,4 +54,21 @@ class AiChannelProtocolTest {
         // 未知版本全部拒绝
         assertNull(AiChannel.decodeAiConfig(listOf(AiChannel.CMD_AI_CONFIG, "9", "u", "k", "m", "c")))
     }
+
+    @Test
+    fun `v1 新增下行通道 roundtrip`() {
+        // 眼镜端只需能解析出手机端下发的图片/跳转指令；边界矩阵在 phone-app 的 AiChannelTest
+        assertEquals("192.168.1.23", AiChannel.decodeGlassesIp(AiChannel.encodeGlassesIp("192.168.1.23")))
+        assertEquals(
+            "BASE64JPEG" to "一只猫",
+            AiChannel.decodeShowImage(AiChannel.encodeShowImage("BASE64JPEG", "一只猫")),
+        )
+        assertEquals(
+            "com.rokid.os.sprite.launcher" to ".page.music.MusicPageActivity",
+            AiChannel.decodeOpenApp(AiChannel.encodeOpenApp("com.rokid.os.sprite.launcher", ".page.music.MusicPageActivity")),
+        )
+        // 未知版本一律整体丢弃
+        assertNull(AiChannel.decodeOpenApp(listOf(AiChannel.CMD_OPEN_APP, "9", "p", "a")))
+        assertNull(AiChannel.decodeShowImage(listOf(AiChannel.CMD_SHOW_IMAGE, "9", "x", "c")))
+    }
 }

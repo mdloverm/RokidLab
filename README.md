@@ -1,6 +1,6 @@
 # RokidLab
 
-Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、蓝牙手柄、ADB工具、屏幕镜像、手机投屏、文件管理等功能。
+Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、乐奇工具（双向投屏 / 文件管理 / ADB 工具）、蓝牙手柄等功能。
 
 > 设计师请参考 [UI-DESIGN.md](./UI-DESIGN.md)，开发者请参考 [DEV_GUIDE.md](./DEV_GUIDE.md)。
 
@@ -74,8 +74,8 @@ Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、蓝牙�
 - **本地 OCR**：完全离线识别（PP-OCRv4 模型 + ONNX Runtime 推理），无网络、无 GMS 依赖，16KB 页面设备兼容
 - **本地知识库**：支持导入 txt 文档，自动分块入库（SQLite）并关键词检索，为 AI 提供参考资料（RAG）
 - **按键答题开关**：开启后短按镜腿按键直接触发拍照问 AI，覆盖原自定义按键短按，长按不受影响
-- **AI 工具（语音 + 手机能力，34 个）**：v3.5 新增 12 个手机域工具，一句话直达能力：
-  - **打开应用**：`open_glasses_app` / `launch_glasses_app`（自动名称匹配已装应用）
+- **AI 工具（语音 + 手机能力，34 个）**：v3.5 新增 12 个手机域工具，一句话直达能力（另有独立 `manage_memory` 长期记忆通道，不计入工具表）：
+  - **打开应用**：`launch_glasses_app`（自动名称匹配已装应用）
   - **定时任务**：`set_timer` / `list_timers` / `cancel_timer` ——「5分钟后提醒我喝水」「明早8点叫我」「17点打开小智」（到点眼镜语音播报，可同时打开应用）
   - **查询类**：眼镜电量、系统信息、存储空间、已装应用、当前时间、知识库检索、**天气（Open-Meteo，免 API Key）**、**手机状态**、**日历查询**
   - **手机域（v3.5 新增）**：`calculate`（递归下降表达式解析器）、`search_contacts` / `call_phone`（电话拨打）、`set_phone_alarm`、`open_phone_app`、`set_phone_volume`、`add_calendar_event` / `query_calendar`、`get_phone_status`
@@ -115,8 +115,8 @@ v3.4 全新功能 / v3.5 大幅增强 —— 与乐奇对话，直接在眼镜�
 - **退出 AIUI**：支持主动退出正在运行的 AIUI 程序（stop_aiui_app 工具），而非仅能退出已启动的程序
 - **内容指纹版本控制**：VERSION 字段使用内容指纹，代码有变化时眼镜端自动重新解压渲染，无需手动清缓存
 
-#### v3.5 新增：Lab 工具桥（AIUI 页面可调手机端 34 个工具）
-AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能渲染不能调用外部能力。v3.5 新增 Lab 工具桥，让页面通过 `await globalThis.Lab.callTool(name, args)` 调用手机端全部 34 个工具（音乐 / 天气 / 搜索 / 提醒 / 设备信息 / 电话 / 日历 等），与外部世界交互：
+#### v3.5 新增：Lab 工具桥（AIUI 页面可调手机端 33 个工具）
+AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能渲染不能调用外部能力。v3.5 新增 Lab 工具桥，让页面通过 `await globalThis.Lab.callTool(name, args)` 调用手机端工具（ToolRegistry 全量 34 个中除自指递归的 `open_aiui_app` 外全部开放，即 33 个），涵盖音乐 / 天气 / 搜索 / 提醒 / 设备信息 / 电话 / 日历 等，与外部世界交互：
 
 - **页面侧 API**：
   ```js
@@ -197,14 +197,16 @@ AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能
 - **语言**: Kotlin
 - **UI**: Jetpack Compose (Material 3)
 - **本地化**: Android 原生资源系统（`values/` + `values-en/`），运行时 `AppCompatDelegate.setApplicationLocales()` 切换，Crowdin 云端翻译管理
-- **设计风格**: 双主题配色系统 — 丝绒炭黑（Velvet Dark，暖暗调） + 冰蓝冰川（Cool Blue，浅蓝冷调），8 模块 8 色配色体系，详见 [UI-DESIGN.md](./UI-DESIGN.md)
+- **设计风格**: 双主题配色系统 — 丝绒炭黑（Velvet Dark，暖暗调） + 冰蓝冰川（Cool Blue，浅蓝冷调），模块色配色体系，详见 [UI-DESIGN.md](./UI-DESIGN.md)
 - **通信**:
   - CXR-L SDK（手机-眼镜通信，用于安装/启动/卸载应用、AI 语音播报）
   - ADB over TCP（自定义协议实现，无需 adb.exe，用于文件管理、ADB工具和屏幕镜像）
   - 蓝牙 HID Device 协议（手机模拟键盘/鼠标/游戏手柄）
-  - 蓝牙隧道（RFCOMM 转发）与 WiFi 直连双线路，`ConnectionRouteManager` 统一路由管理
+  - 蓝牙隧道（RFCOMM 转发）与 WiFi 直连双线路，`ConnectionRouteManager` 统一路由管理；同设备同 SCN 单通道约束由 `ChannelArbiter` 按优先级租约仲裁
 - **AI**:
   - OpenAI 兼容协议客户端（`OpenAiService`，可切换任意服务商；SSE 重连指数退避 + 远程重试 3 次）
+  - 工具注册与执行（`ToolRegistry` 34 个工具 / 10 个域，执行分支按域拆到 `ai/tools/`：10 个域 `ToolProvider` + `ToolProvider` 接口 + `ToolSchemas`，共 11 个文件）
+  - 工具风险闸门（`ToolPolicy` + `ToolRisk`：READ_ONLY / LOCAL_SIDE_EFFECT / EXTERNAL_SIDE_EFFECT 三档，per-source 限流 + 眼镜端确认通道 `GlassToolConfirmChannel` + 审计日志）
   - Agent 会话层（`AgentSessionManager`：滚动摘要 ≤800 字 pinned system message；`LongTermMemoryManager`：SQLite + FIFO 200 条 + 90 天过期 + bigram 评分 top-12 检索；`KnowledgeBase`：BM25 IDF + 命中 provenance）
   - 本地 OCR（RapidOCR / PP-OCRv4 + ONNX Runtime，完全离线）
   - 本地知识库 RAG（txt 导入，SQLite 分块检索）
@@ -218,10 +220,12 @@ AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能
 ### 国际化（i18n）
 
 - **完整中英文支持**: 所有用户可见文本均使用 `values/strings.xml`（中文）和 `values-en/strings.xml`（英文）管理，无硬编码字符串
+- **当前规模**: 中文 1100 条 / 英文 1100 条，**双语 key 完全对齐**（此前英文侧缺 5 条，已于 2026-09-12 补齐）
+- **构建期门禁**: `checkI18nKeysSynced` 任务（挂 `preBuild`）强制 phone-app / RokidLink 两模块的 zh↔en key 集合相等，不一致直接构建失败
 - **运行时语言切换**: 通过 `LocalizationManager` + `AppCompatDelegate.setApplicationLocales()` 实现无需重启的语言切换
 - **首次启动自动检测**: 自动检测系统语言并应用对应翻译
 - **例外**: 品牌名（ROKIDLAB、ROKIDLINK）、技术术语（ADB、TCP、HTTP）、作者信息等保持原文
-- **最低版本**: Android 10 (API 29)
+- **最低版本**: Android 10 (API 29)（手机端 minSdk 29；眼镜端 RokidLink minSdk 28，两者 compileSdk / targetSdk 均为 34）
 
 ## 代码质量与安全
 
@@ -247,7 +251,8 @@ AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能
 ### 错误处理
 - **异常捕获**：所有可能失败的操作都使用 try-catch 包裹
 - **用户友好提示**：错误信息通过 Toast 和状态卡片显示，便于用户理解
-- **日志记录**：详细的日志记录便于问题排查和调试
+- **日志记录**：详细的日志记录便于问题排查和调试；**四类关键链路**（ASR 补读 / RFCOMM 隧道 / ADB sync / AIUI 工具网关）的 catch 分支强制落 App 内日志面板 `LogCollector`，且必须带异常对象（只记 `e.message` 无法区分「对端未启动」与「RFCOMM 被栈拒绝」）
+- **构建期门禁**：`checkKeyPathEmptyCatch` 任务（挂 `preBuild`）扫描上述 6 个关键链路文件，空 catch 必须带 `// catch-ok: <原因>` 标注（把"默默吞掉"变成"显式声明的决策"），否则构建失败 —— 见 `RULES.md` §12.14
 
 ## ADB 自实现协议
 
@@ -277,32 +282,79 @@ RokidLab/
 ├── phone-app/                             手机端应用
 │   ├── src/main/
 │   │   ├── java/com/rokidlab/phone/
-│   │   │   ├── app/         主入口
+│   │   │   ├── app/         主入口 / 手动 DI 容器（L5）
 │   │   │   │   ├── MainActivity.kt        主入口、投屏控制、状态管理、权限请求、镜像源对话框
-│   │   │   │   └── LabApplication.kt     全局 Application 状态、HID Manager
-│   │   │   ├── adb/         ADB 协议实现
-│   │   │   │   ├── AdbShellClient.kt        Shell 命令/应用管理/定时功能
-│   │   │   │   ├── AdbFileManagerClient.kt  文件管理 ADB 客户端
-│   │   │   │   ├── AdbScreenMirrorClient.kt 屏幕镜像 ADB 客户端
-│   │   │   │   ├── AdbPasteCompat.kt        ADB 原始协议粘贴工具（TCP 连接眼镜 ADB 5555 端口执行粘贴）
-│   │   │   │   ├── AdbKeyManager.kt         RSA 密钥持久化管理（所有 ADB Client 共享）
-│   │   │   │   └── TimerScheduler.kt        定时任务调度器（持久化 + 常驻触发 + TTS 播报）
-│   │   │   ├── design/      设计系统
-│   │   │   ├── StoreTheme.kt      配色/字体/主题（主入口，主题管理 + 全局颜色）
-│   │   │   ├── DesignComponents.kt 全局 UI 组件（错误/警告/加载/结果卡片）
-│   │   │   ├── theme/              主题目录
-│   │   │   │   ├── BrewColors.kt         配色接口定义（14色）
-│   │   │   │   ├── BrewThemeManager.kt   主题管理器（mutableStateOf）
-│   │   │   │   ├── VelvetDarkColors.kt   默认主题（丝绒炭黑）
-│   │   │   │   └── CoolBlueColors.kt     第二主题（冰蓝冰川）
-│   │   │   └── RokidHostApp.kt    HostApp 枚举
-│   │   │   ├── ai/          AI 能力
+│   │   │   │   ├── LabApplication.kt     全局 Application 状态、HID Manager
+│   │   │   │   ├── AppContainer.kt        手动 DI 容器（集中装配 L0/L1/L3 长生命周期对象，不引 Hilt）
+│   │   │   │   ├── MainDialogs.kt         主界面弹窗集合
+│   │   │   │   └── MainHelpers.kt         主界面辅助函数
+│   │   │   ├── platform/    能力与 hook 适配（L0：全仓唯一反射边界）
+│   │   │   │   ├── CapabilityProbe.kt     启动期能力探测快照（sawGranted 等）
+│   │   │   │   ├── Capability.kt          能力枚举
+│   │   │   │   ├── SdkBridge.kt           CXR-L SDK 私有 API 桥
+│   │   │   │   ├── SdkFieldMap.kt         SDK 字段映射表
+│   │   │   │   ├── HidBridge.kt           HID 隐藏 API 唯一反射边界
+│   │   │   │   ├── AdbTransport.kt        全 App 共享 ADB shell 会话的唯一所有者
+│   │   │   │   ├── ShellOps.kt            shell 命令封装
+│   │   │   │   ├── RomAdapter.kt          ROM 差异适配
+│   │   │   │   └── AvrcpLyricBridge.kt    蓝牙 AVRCP 歌词推送边界
+│   │   │   ├── connection/  通道与仲裁（L1）
+│   │   │   │   ├── ChannelArbiter.kt      通道租约仲裁（BACKGROUND / NORMAL / LONG_LIVED 优先级）
+│   │   │   │   └── ConnectionRouteManager.kt  WiFi 直连 / 蓝牙隧道双线路路由管理（v3.5 重连时失效缓存路由，避免复用死路由）
+│   │   │   ├── glasses/     眼镜会话层（L2）
+│   │   │   │   ├── CxrLHiRokidSession.kt        薄路由 + 兼容门面（六层重构拆分 god class，现 887 行；保留全部 public method 作委派 facade；改持有 app context 替代 Activity，WeakReference 修 leak）
+│   │   │   │   ├── LinkProtocol.kt              双端协议常量收敛（与眼镜端逐字节同源，checkProtocolSynced 构建期守护）
+│   │   │   │   ├── GlassesHandshake.kt          能力握手三态（null=乐观 / false=快速降级 / legacy=4s 超时判旧版）
+│   │   │   │   ├── AiChannel.kt                 双端 CXR 频道/话题常量（与眼镜端同源）
+│   │   │   │   ├── AsrBridgeCoordinator.kt      ASR 双通道协调器（push + 文件轮询双通道；onAsrText 仅「同文 + 上一条仍在处理中」才丢弃；推送恢复 catchUpRequested 立即补读积压文字；__LAB_TOOL__ 分流到 ToolGateway）
+│   │   │   │   ├── AiuiFrontendController.kt    AIUI 微前端 pipeline 协调器（pushAixToRokidLinkHost / openAiuiHost 支持 launchParams）
+│   │   │   │   ├── PhotoQuizFlow.kt             拍照问答流程（capture → OCR → RAG → AI 答案）
+│   │   │   │   ├── AsrPushClient.kt             ASR 推送客户端（RFCOMM 长连接，v3.5 修复 socket 在 connect() 成功后才置位 + 新增 onConnected 回调）
+│   │   │   │   ├── GlassProxyRelay.kt           眼镜端代理中继
+│   │   │   │   ├── GlassesModels.kt             会话数据模型
+│   │   │   │   ├── GlassesHelpers.kt            会话辅助函数
+│   │   │   │   ├── ConnectionPanel.kt           连接状态面板
+│   │   │   │   ├── GuideScreen.kt               引导界面
+│   │   │   │   ├── FullCXRLinkCallback.kt       CXR-L 连接回调
+│   │   │   │   └── PhoneInstallResultReceiver.kt 安装结果接收器
+│   │   │   ├── domain/      领域服务（L3，自 CxrLHiRokidSession 拆分）
+│   │   │   │   ├── ConnectionService.kt      连接编排
+│   │   │   │   ├── AuthorizationService.kt   眼镜端权限补齐
+│   │   │   │   ├── DeviceControlService.kt   设备控制
+│   │   │   │   ├── AiConfigService.kt        AI 配置
+│   │   │   │   ├── AiConversationService.kt  AI 对话
+│   │   │   │   ├── AiuiHostService.kt        AIUI 宿主
+│   │   │   │   ├── MirrorCoordinator.kt      投屏/长连接通道协调
+│   │   │   │   ├── FileTransferService.kt    文件传输
+│   │   │   │   └── PhotoQuizService.kt       拍照问答
+│   │   │   ├── feature/     UI 功能控制器（L5）
+│   │   │   │   ├── MainScreen.kt              主界面骨架
+│   │   │   │   ├── RokidLinkController.kt     眼镜端生命周期控制
+│   │   │   │   ├── AppUpdateController.kt     应用更新
+│   │   │   │   ├── StoreActionsFactory.kt     商店动作工厂
+│   │   │   │   ├── StoreInstallStateHolder.kt 商店安装状态
+│   │   │   │   ├── FileManagerStateHolder.kt  文件管理状态
+│   │   │   │   └── ScreenMirrorStateHolder.kt 屏幕镜像状态
+│   │   │   ├── ai/          AI 能力（L4 agent）
 │   │   │   │   ├── OpenAiService.kt        OpenAI 兼容服务（可切换任意服务商；SSE 重连指数退避 + 远程重试 3 次）
-│   │   │   │   ├── ToolRegistry.kt         AI 工具注册表（34 个工具：DOMAIN_GLASSES / DOMAIN_PHONE / DOMAIN_AIUI / DOMAIN_AI / DOMAIN_KB；语音控制 + AIUI 代码生成/读取/安装/打开/停止 + 手机域）
-│   │   │   │   ├── ToolGateway.kt          AIUI 页面工具网关（v3.5 新增，AIUI 页面 → 手机端 34 工具，15s 超时 + 8000 字截断 + DENY open_aiui_app 防自指递归）
+│   │   │   │   ├── ToolRegistry.kt         AI 工具注册表（34 个工具 / 10 个域：info / knowledge / glasses / timer / media / display / web / files / aiui / phone；execute 按 toolNames 路由到 tools/ 的 Provider）
+│   │   │   │   ├── tools/                  工具域提供者（Phase 4 拆分巨型 when）
+│   │   │   │   │   ├── ToolProvider.kt             提供者接口（toolNames + execute）
+│   │   │   │   │   ├── ToolSchemas.kt              工具 JSON Schema 声明
+│   │   │   │   │   ├── InfoToolProvider.kt         基础信息 / KnowledgeToolProvider.kt 知识库 / GlassesToolProvider.kt 眼镜设备
+│   │   │   │   │   ├── TimerToolProvider.kt        定时 / MediaToolProvider.kt 音乐 / DisplayToolProvider.kt 屏幕展示
+│   │   │   │   │   ├── WebToolProvider.kt          联网 / FilesToolProvider.kt 文件产出 / AiuiToolProvider.kt AIUI 应用
+│   │   │   │   │   └── PhoneToolProvider.kt        手机域
+│   │   │   │   ├── ToolPolicy.kt           工具调用策略闸门（per-source 限流 + 风险闸门 + 审计日志）
+│   │   │   │   ├── ToolRisk.kt             工具风险分级（READ_ONLY / LOCAL_SIDE_EFFECT / EXTERNAL_SIDE_EFFECT）
+│   │   │   │   ├── GlassToolConfirmChannel.kt 副作用工具眼镜端确认通道（下行 TOPIC_TOOL_CONFIRM / 上行 TOPIC_TOOL_CONFIRM_RESULT）
+│   │   │   │   ├── ToolGateway.kt          AIUI 页面工具网关（v3.5 新增，34 个工具中开放 33 个，15s 超时 + 8000 字截断 + DENY open_aiui_app 防自指递归）
 │   │   │   │   ├── Calculator.kt           递归下降表达式解析器（v3.5 新增，供 calculate 工具调用，纯 Kotlin 无依赖）
 │   │   │   │   ├── WeatherTools.kt         天气工具（v3.5 新增，Open-Meteo，免 API Key）
 │   │   │   │   ├── PhoneTools.kt           手机域工具（v3.5 新增，电话/日历/闹钟/音量/打开应用/联系人搜索）
+│   │   │   │   ├── LocationTools.kt        定位工具
+│   │   │   │   ├── MusicPlayerController.kt 音乐播放控制
+│   │   │   │   ├── KuwoMusicApi.kt         酷我音源 API
 │   │   │   │   ├── WebTools.kt             AIUI 项目文件读写工具（save_code_file / read_code_file）
 │   │   │   │   ├── AiuiProject.kt          AIUI 项目打包/校验（.aix 生成 + VERSION 内容指纹）
 │   │   │   │   ├── AiuiAppRegistry.kt      AIUI 应用注册表（项目记录持久化）
@@ -310,26 +362,33 @@ RokidLab/
 │   │   │   │   ├── SkillMarkdown.kt        Skill Markdown 解析器
 │   │   │   │   ├── SkillFetcher.kt         技能文件获取器
 │   │   │   │   ├── AgentSessionManager.kt  Agent 会话记忆（多轮历史，10 分钟自动清空；v3.5 滚动摘要 ≤800 字 pinned system message）
-│   │   │   │   ├── LongTermMemoryManager.kt 长期记忆（v3.5 改 SQLite，FIFO 200 条 / 90 天过期 / bigram 评分 top-12 检索，自动迁移旧 SharedPreferences）
+│   │   │   │   ├── LongTermMemoryManager.kt 长期记忆（v3.5 改 SQLite，FIFO 200 条 / 90 天过期 / bigram 评分 top-12 检索，自动迁移旧 SharedPreferences；独立 manage_memory 通道）
 │   │   │   │   ├── KnowledgeBase.kt        本地知识库 RAG（txt 导入、SQLite 分块检索；v3.5 BM25 IDF 评分 + 命中 provenance）
 │   │   │   │   ├── LocalOcr.kt             本地 OCR（PP-OCRv4 + ONNX Runtime）
-│   │   │   │   └── LocalOllamaManager.kt   本地模型连接器（Ollama 协议）
-│   │   │   ├── connection/  连接路由
-│   │   │   │   └── ConnectionRouteManager.kt  WiFi 直连 / 蓝牙隧道双线路路由管理（v3.5 重连时失效缓存路由，避免复用死路由）
+│   │   │   │   ├── LocalOllamaManager.kt   本地模型连接器（Ollama 协议）
+│   │   │   ├── adb/         ADB 协议实现
+│   │   │   │   ├── AdbShellClient.kt        Shell 命令/应用管理/定时功能
+│   │   │   │   ├── AdbFileManagerClient.kt  文件管理 ADB 客户端
+│   │   │   │   ├── AdbScreenMirrorClient.kt 屏幕镜像 ADB 客户端
+│   │   │   │   ├── ScreenStreamDecoder.kt   H.264 流解码（late/partial 帧加固）
+│   │   │   │   ├── AdbPasteCompat.kt        ADB 原始协议粘贴工具（TCP 连接眼镜 ADB 5555 端口执行粘贴）
+│   │   │   │   ├── AdbKeyManager.kt         RSA 密钥持久化管理（所有 ADB Client 共享）
+│   │   │   │   ├── TimerScheduler.kt        定时任务调度器（持久化 + 常驻触发 + TTS 播报）
+│   │   │   │   └── ui/                      ADB 工具页与子功能弹窗（AdbToolsScreen / AdbDialogContent / SysInfoDialog / AppMgrDialog / TimerDialog / ShellDialog / KeyButtonDialog）
+│   │   │   ├── design/      设计系统
+│   │   │   │   ├── StoreTheme.kt         配色/字体/主题（主入口，主题管理 + 全局颜色）
+│   │   │   │   ├── DesignComponents.kt   全局 UI 组件（错误/警告/加载/结果卡片）
+│   │   │   │   ├── RokidHostApp.kt       HostApp 枚举
+│   │   │   │   └── theme/
+│   │   │   │       ├── BrewColors.kt         配色接口定义
+│   │   │   │       ├── BrewThemeManager.kt   主题管理器（mutableStateOf）
+│   │   │   │       ├── VelvetDarkColors.kt   默认主题（丝绒炭黑）
+│   │   │   │       └── CoolBlueColors.kt     第二主题（冰蓝冰川）
 │   │   │   ├── filemanager/  文件管理
-│   │   │   │   └── FileManagerActivity.kt  文件管理器界面/组件（v3.5 并发安装不再 spam toast）
-│   │   │   ├── glasses/     眼镜通信/UI
-│   │   │   │   ├── CxrLHiRokidSession.kt        CXR-L 会话封装（v3.5 拆分 god class，从 3550 → 2780 行；保留全部 public method 作委派 facade；改持有 app context 替代 Activity，WeakReference 修 leak）
-│   │   │   │   ├── AsrBridgeCoordinator.kt      ASR 双通道协调器（v3.5 从 CxrLHiRokidSession 抽离；push + 文件轮询双通道；onAsrText 仅「同文 + 上一条仍在处理中」才丢弃；markAsrHandling API；start 防抖；推送恢复 catchUpRequested 立即补读积压文字；__LAB_TOOL__ 分流到 ToolGateway）
-│   │   │   │   ├── AiuiFrontendController.kt    AIUI 微前端 pipeline 协调器（v3.5 从 CxrLHiRokidSession 抽离；pushAixToRokidLinkHost / openAiuiHost 支持 launchParams）
-│   │   │   │   ├── PhotoQuizFlow.kt            拍照问答流程（v3.5 从 CxrLHiRokidSession 抽离；capture → OCR → RAG → AI 答案）
-│   │   │   │   ├── AsrPushClient.kt            ASR 推送客户端（RFCOMM 长连接，v3.5 修复 socket 在 connect() 成功后才置位 + 新增 onConnected 回调）
-│   │   │   │   ├── ConnectionPanel.kt           连接状态面板
-│   │   │   │   ├── GuideScreen.kt               引导界面
-│   │   │   │   ├── FullCXRLinkCallback.kt       CXR-L 连接回调
-│   │   │   │   └── PhoneInstallResultReceiver.kt 安装结果接收器
+│   │   │   │   └── FileManagerActivity.kt  文件管理器界面/组件（v3.5 并发安装不再 spam toast；页面已并入「乐奇工具」的文件分组）
 │   │   │   ├── hid/         蓝牙 HID
 │   │   │   │   ├── BluetoothHidManager.kt   HID 设备管理（注册/连接/报表发送）
+│   │   │   │   ├── BtHidCompat.kt           蓝牙 HID 兼容降级（QTI 栈 sendReport 降级等）
 │   │   │   │   ├── GamepadActivity.kt       手柄按键/鼠标模式 Activity
 │   │   │   │   └── HidGamepadScreen.kt      手柄按键自定义布局界面
 │   │   │   ├── keepalive/   后台保活
@@ -337,26 +396,37 @@ RokidLab/
 │   │   │   ├── mirror/      投屏模块
 │   │   │   │   ├── PhoneMirrorActivity.kt     手机投屏页面
 │   │   │   │   ├── PhoneMirrorService.kt      投屏前台 Service（独立线程池异步重连、方向缓存、mirrorLock 同步锁、isReconnecting 防循环、帧健康看门狗30s）
+│   │   │   │   ├── MirrorCompat.kt            全品牌投屏兼容修复（HWC 禁用 / 软件渲染 / 分辨率降级）
 │   │   │   │   ├── PhonePackageInstallHelper.kt APK 安装工具
 │   │   │   │   └── ScreenMirrorActivity.kt    屏幕镜像画面
 │   │   │   ├── model/       数据模型
 │   │   │   │   ├── Models.kt     应用/商店/更新数据模型
 │   │   │   │   └── UserInstallCache.kt 安装记录缓存
+│   │   │   ├── music/       媒体按键
+│   │   │   │   └── LabMediaButtonReceiver.kt   媒体按键广播接收器
 │   │   │   ├── network/     网络层
 │   │   │   │   ├── ApkDownloader.kt   APK 下载（基于 HttpClient）
 │   │   │   │   ├── IconLoader.kt      图标加载（基于 HttpClient）
 │   │   │   │   └── MediaLoader.kt     媒体加载（基于 HttpClient）
 │   │   │   ├── settings/    设置页
 │   │   │   │   ├── SettingsScreen.kt   设置界面
-│   │   │   │   ├── DeveloperScreen.kt  开发者提交应用（Gitee API 直提注册表）
-│   │   │   │   └── SystemLogPanel.kt   日志面板
-│   │   │   ├── store/       商店 UI
-│   │   │   │   ├── StoreHomeScreen.kt    主界面入口（含 ADB工具/底栏等全部页面）
+│   │   │   │   └── DeveloperScreen.kt  开发者提交应用（Gitee API 直提注册表）
+│   │   │   ├── store/       商店与主界面 UI（L5）
+│   │   │   │   ├── StoreHomeScreen.kt    主界面入口（底部 5 Tab：STORE / CHAT / LEQI_TOOLS / HID_GAMEPAD / SETTINGS）
+│   │   │   │   ├── HomeModels.kt         NavPage 枚举（MIRROR_PAIR / FILE_MANAGER / ADB_TOOLS 已合并进 LEQI_TOOLS）
+│   │   │   │   ├── HomeWidgets.kt        主界面通用组件
+│   │   │   │   ├── LeqiToolsModule.kt    乐奇工具页（双向投屏 / 文件管理 / ADB 工具单页分组）
+│   │   │   │   ├── StoreModule.kt        商店模块装配
+│   │   │   │   ├── SettingsModule.kt     设置模块装配
 │   │   │   │   ├── ChatScreen.kt         乐奇聊天界面（对话/拍照问 AI/知识库管理/AI 设置；v3.5 修复取消/重放流时消息卡 sending）
 │   │   │   │   ├── ChatBubble.kt         聊天气泡组件
 │   │   │   │   ├── ChatHeader.kt         聊天顶部栏
 │   │   │   │   ├── ChatSettingsDialog.kt 聊天设置弹窗（AI 服务/模型/Agent 设置；v3.5 修复本地模型 LaunchedEffect 误覆盖在线选择）
 │   │   │   │   ├── ChatFormat.kt        聊天文本格式化
+│   │   │   │   ├── ChatImageCache.kt    聊天图片缓存
+│   │   │   │   ├── ConfirmClearChatDialog.kt 清空对话确认弹窗
+│   │   │   │   ├── KbManageDialog.kt    知识库管理弹窗
+│   │   │   │   ├── SkillDialogs.kt      技能相关弹窗
 │   │   │   │   ├── AiuiManagePage.kt    AIUI 程序管理页面（列表/打开/重装/删除）
 │   │   │   │   ├── SkillsManagePage.kt  技能管理页面
 │   │   │   │   ├── ToolsManagePage.kt   AI 工具管理页面（开关/排序）
@@ -366,7 +436,6 @@ RokidLab/
 │   │   │   │   ├── StoreComponents.kt    通用 UI 组件
 │   │   │   │   ├── StoreInstallState.kt  安装状态组件
 │   │   │   │   ├── StoreMedia.kt         媒体/图标组件
-│   │   │   │   ├── StoreTargetTags.kt    安装目标标签
 │   │   │   │   ├── AppDetailScreen.kt    应用详情
 │   │   │   │   ├── DetailInfoSections.kt 详情信息块
 │   │   │   │   ├── DetailScreenshots.kt  详情截图
@@ -378,6 +447,7 @@ RokidLab/
 │   │   │       ├── LocalizationManager.kt  语言切换管理
 │   │   │       ├── ImageDecoder.kt         图片解码工具
 │   │   │       ├── ManufacturerUtils.kt    全品牌兼容性检测工具
+│   │   │       ├── RomFingerprint.kt       ROM 指纹识别
 │   │   │       └── LogCollector.kt         日志收集器
 │   │   ├── res/             资源文件
 │   │   │   ├── values/strings.xml   简体中文（默认语言）
@@ -394,7 +464,9 @@ RokidLab/
 │   │   ├── java/com/rokidlab/rokidlink/
 │   │   │   ├── MainActivity.kt              WiFi/ADB 状态面板 + ADB TCP 自动开启
 │   │   │   ├── BtTunnelServer.kt            蓝牙隧道服务（RFCOMM 转发，双线路通信）
-│   │   │   ├── AiChannel.kt                 AI 指令通道（ASR/工具/接管串行化）
+│   │   │   ├── BtTunnelService.kt            蓝牙隧道前台 Service
+│   │   │   ├── AiChannel.kt                 AI 指令通道（ASR/工具/接管串行化；与手机端同源）
+│   │   │   ├── LinkProtocol.kt              双端协议常量收敛（v3.5 新增，与手机端逐字节同源）
 │   │   │   ├── AiuiLinkActivity.kt          AIUI 渲染宿主 Activity（v3.5 大幅增强：Lab 工具桥入口 callTool @JavascriptInterface + deliverToolResult + __lab/ 探测端点 ping/tool_result/tool_call_sync/tool_call/list_tools + pageBridgeJs 自动注入 app.js 前置 + 同步工具队列 ArrayBlockingQueue + 启动参数 EXTRA_LAUNCH_PARAMS）
 │   │   │   ├── AsrPushServer.kt             ASR 推送服务（v3.5 新增 CTRL_TOOL_CALL = "__LAB_TOOL__" 工具调用前缀常量）
 │   │   │   ├── AiuiPackageServer.kt         AIUI .aix 包上传/解压/渲染服务
@@ -419,6 +491,10 @@ RokidLab/
 ├── phone-app/src/main/assets/              内置资源
 │   ├── RokidLink.apk                       通过 CXR-L SDK 安装到眼镜（自动从 RokidLink 构建同步）
 │   └── scrcpy-server.jar                   通过 ADB 推送到 /data/local/tmp/，供 scrcpy-server 启动使用
+│
+├── phone-app/src/debug/                    debug 专属源集（release 包完全不含）
+│   ├── AndroidManifest.xml                 仅 debug 合并 debug-AIUI 调试广播 receiver（P0-1 隔离）
+│   └── java/com/rokidlab/phone/ai/DebugAiuiReceiver.kt  AIUI 调试广播接收器（act=start/stop/install/shell/upgrade_ollama）
 │
 ├── crowdin.yml                             Crowdin 翻译管理配置
 ├── UI-DESIGN.md                            UI 设计参考文档
@@ -447,6 +523,38 @@ RokidLab/
 .\gradlew :phone-app:buildRokidLinkDebug
 ```
 
+### 单元测试
+
+```powershell
+# 双端 JVM 单测（当前 14 个测试类 / 155 个用例）
+D:\gradle-8.7\bin\gradle.bat :phone-app:testDebugUnitTest :RokidLink:testDebugUnitTest --offline
+```
+
+覆盖 ADB sync 协议帧、`pullFile` FAIL 分支、HID 描述符字节与 `normalize`、`AiChannel` 跨端载荷矩阵、`ToolRiskMap` 完整性、聊天历史落盘格式（JSONL / 旧格式迁移）。
+
+> ⚠️ **必须在项目根 `d:\rokidapp\cxrl\RokidLab` 执行**（该目录才是含 `:phone-app` / `:RokidLink` 的 Gradle 根）。在外层壳工程 `d:\rokidapp`（`RenewCXRLSample`）执行会报 `Unresolved reference: okhttp`。
+
+### 构建期门禁与发布闸门
+
+四道门禁挂在 `preBuild`（本地每次构建即触发，无需 CI）：
+
+| 任务 | 位置 | 拦住什么 |
+|---|---|---|
+| `checkProtocolSynced` | `phone-app/build.gradle.kts` | 双端 `AiChannel.kt` / `LinkProtocol.kt` 不同源；裸协议字面量（CXR 频道名 / `__LAB_*`） |
+| `checkI18nKeysSynced` | `phone-app/build.gradle.kts` | 两模块 zh↔en key 集合不一致（phone-app 1100 / RokidLink 22） |
+| `checkKeyPathEmptyCatch` | `phone-app/build.gradle.kts` | 6 个关键链路文件出现未标注的空 `catch` |
+| `checkNoBareCatch` | `phone-app/build.gradle.kts` | 全仓未标注空 `catch` 超出棘轮预算（基线 47，只降不升） |
+
+出 release 包另有**两道发布闸门**（`gradle/local-gates.gradle.kts`，双端各自 `apply`，挂在 `packageRelease`）：
+
+- `checkGitClean` —— `git status --porcelain` 非空即构建失败（阻止"发布的不是仓库里的东西"；本地临时验证可加 `-PallowDirtyWorktree=true`，禁止用于正式出包）
+- `packageRelease` 依赖 `testDebugUnitTest` —— 单测没绿出不了包
+
+```powershell
+# 出 release 包（工作区必须已全部提交）
+D:\gradle-8.7\bin\gradle.bat :phone-app:assembleRelease
+```
+
 ## 安装
 
 ### 手机应用
@@ -472,8 +580,13 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
   - 知识库：BM25 IDF 评分 + 命中 provenance
   - SSE 重连：条件收紧 + 指数退避 + 远程重试 2→3
   - 新增内置计算器（递归下降表达式解析器）
-- **12 个新工具（22 → 34）**：新增 DOMAIN_PHONE 域，含天气 / 电话 / 日历 / 闹钟 / 计算 / 联系人搜索等
-- **CxrLHiRokidSession 拆分 god class**（3550 → 2780 行）：抽出 `AsrBridgeCoordinator` / `AiuiFrontendController` / `PhotoQuizFlow`，保留全部 public method 作委派 facade，改持有 app context 替代 Activity + WeakReference 修 leak
+- **12 个新手机域工具，工具总数达 34**：新增 DOMAIN_PHONE 域，含天气 / 电话 / 日历 / 闹钟 / 计算 / 联系人搜索等
+- **手机端六层架构重构（L0~L5）**：`platform`(L0) / `connection`(L1) / `glasses`(L2 session) / `domain`(L3) / `ai`(L4 agent) / `feature`+`store`+`app`(L5)，每层只依赖下一层；`AppContainer` 承担手动 DI 装配（不引 Hilt）
+  - `CxrLHiRokidSession` 拆 god class（**现 887 行**）：连接编排 / 授权 / 设备控制 / AI 配置 / AI 对话 / AIUI 宿主 / 投屏协调 / 文件传输 / 拍照问答 全部下沉到 `domain/` 服务，`CxrLHiRokidSession` 退化为薄路由 + 委派 facade，改持有 app context 替代 Activity + WeakReference 修 leak
+  - `ai/ToolRegistry` 的巨型 `when` 按域拆为 10 个 `ToolProvider`（`ai/tools/`），新增工具只需在 `ToolRegistry` 注册一行
+  - 新增 `ai/ToolPolicy` + `ai/ToolRisk`：工具副作用三档分级（READ_ONLY / LOCAL_SIDE_EFFECT / EXTERNAL_SIDE_EFFECT）+ per-source 限流（AIUI 页面 30/min、对话 120/min）+ 审计日志；EXTERNAL_SIDE_EFFECT 走 `GlassToolConfirmChannel` 眼镜端确认闸门
+  - 新增 `connection/ChannelArbiter`：同设备同 SCN 单通道约束收敛为「按优先级持有租约」（BACKGROUND / NORMAL / LONG_LIVED），`acquire` 非阻塞必成功、`shouldYield` 判断让路，LONG_LIVED 超 10 分钟打疑似泄漏告警
+  - 新增 `glasses/LinkProtocol`（v2，双端逐字节同源 + `checkProtocolSynced` 构建期守护）与 `glasses/GlassesHandshake`（能力握手三态：未知=乐观 / 已确认不支持=快速降级 / 4s 超时判旧版）
 - **Lab 工具桥（AIUI 页面调手机端 34 工具）**：
   - 眼镜端：`AiuiLinkActivity` + `host.js` + `lab-page-bridge.js`（页面 realm 桥，靠 fetch + `__lab/tool_call_sync` 同步阻塞）
   - 手机端：`ToolGateway.kt`（DENY 仅 `open_aiui_app` 防自指递归，15s 超时 + 8000 字截断）
@@ -501,21 +614,20 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
   - `ChatSettingsDialog` 本地模型 LaunchedEffect 不再误覆盖在线选择
   - `saveAiConfig` 切在线时清掉残留 `ai_local_model`
   - `sendKeyQuizConfig` 链路就绪时复用现有连接直接 `sendCustomCmd`，不再走 `cleanup()` 全链路重建
-- **新测试**：92 → 98 个，新增 `GoldenAgentEvalTest`（20 个 golden case 覆盖 SSE 重放语义 / 工具声明完整性 / prompt 路由）
+- **新测试**：共 **14 个测试类 / 155 个 `@Test`**（v3.5 新增 `GoldenAgentEvalTest` 20 个 golden case 覆盖 SSE 重放语义 / 工具声明完整性 / prompt 路由；2026-09-12 补两批回归测试：`AdbSyncProtocolTest` / `AdbFileManagerSyncTest` / `HidReportTest` / `ToolRiskMapTest` / `ChatHistoryStoreTest`，并扩 `AiChannelTest` / `RokidLink/AiChannelProtocolTest`，详见「构建 → 单元测试」）
 
 ## 使用指南
 
 1. 确保眼镜已连接到与手机相同的 WiFi 网络
 2. 在手机端打开 RokidLab，按照引导授权并连接眼镜
-3. 导航栏分为八个模块：
-   - **应用商店**：浏览并安装应用到手机或眼镜
-   - **乐奇聊天**：与 AI 文字聊天（回复眼镜语音播报）、拍照问 AI、本地知识库、**对话生成 AIUI 智能体应用**
-   - **屏幕镜像**：查看眼镜屏幕画面
-   - **手机投屏**：将手机画面投射到眼镜
-   - **文件管理**：浏览和管理眼镜文件
-   - **ADB 工具**：应用管理、定时消息/启动、系统信息、Shell 命令（四子功能使用其他导航栏色区分）
-   - **蓝牙手柄**：鼠标/游戏手柄模式控制眼镜
-   - **设置**：应用配置、服务管理、**提交应用**、**语言切换**
+3. 底部导航分为五个模块（`NavPage`）：
+   - **应用商店**（STORE）：浏览并安装应用到手机或眼镜
+   - **乐奇聊天**（CHAT）：与 AI 文字聊天（回复眼镜语音播报）、拍照问 AI、本地知识库、**对话生成 AIUI 智能体应用**
+   - **乐奇工具**（LEQI_TOOLS）：单页分组——**双向投屏**（眼镜屏幕→手机 / 手机画面→眼镜）、**文件管理**（浏览和管理眼镜文件）、**ADB 工具**（应用管理、定时消息/启动、系统信息、Shell 命令，各子功能使用不同导航栏色区分）
+   - **蓝牙手柄**（HID_GAMEPAD）：鼠标/游戏手柄模式控制眼镜
+   - **设置**（SETTINGS）：应用配置、服务管理、**提交应用**、**语言切换**
+
+> 原独立的 MIRROR_PAIR（双向投屏）、FILE_MANAGER（文件管理）、ADB_TOOLS（ADB 工具）三个导航项已合并进 LEQI_TOOLS 单页；相关功能入口均已保留。
 
 > **RokidLink 卡片色彩规则**：已安装/运行中 → 各自模块导航栏色；未安装/安装中/停止按钮 → 应用商店色（BrewCoral）；启动按钮 → 各自导航栏色。
 
@@ -547,7 +659,7 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 - **冰蓝冰川（Cool Blue）**：浅蓝冷调主题（`#F0F5FF` 底色）
 - 全站 JetBrains Mono 等宽字体
 - 统一 12dp 圆角、1dp 边框
-- 五模块五色撞色方案
+- 模块色撞色方案
 - 设置中可随时切换主题
 
 ## 许可

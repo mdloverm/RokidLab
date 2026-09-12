@@ -13,6 +13,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" tools:targetApi="34" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 保活：前台服务持有 WakeLock 防 CPU 挂起 → 防 HyperOS cgroup 冻结 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 电池优化白名单：请求豁免 Doze / 应用待机限制 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.BLUETOOTH_HID_DEVICE" />
     
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
@@ -24,6 +28,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- AI 工具（通讯录查找/拨号前查号、日程查询与创建） -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <!-- 拨号：有了它才能用 ACTION_CALL 直接拨出（全品牌一致）；未授权时自动退回 ACTION_DIAL -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <!-- AI 工具（手机闹钟，normal 级权限无需运行时请求） -->
@@ -50,6 +56,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="Rokid Lab"
         android:roundIcon="@mipmap/ic_launcher_round"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:usesCleartextTraffic="${cleartextTrafficPermitted}"
         android:supportsRtl="true"
         android:theme="@style/Theme.RokidLabPhone"
@@ -68,15 +75,6 @@
             android:name=".mirror.ScreenMirrorActivity"
             android:exported="false"
             android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
-
-        <!-- debug aix launch entry -->
-        <receiver
-            android:name=".ai.DebugAiuiReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.rokidlab.phone.DEBUG_CMD" />
-            </intent-filter>
-        </receiver>
 
         <activity
             android:name=".mirror.PhoneMirrorActivity"
@@ -123,5 +121,15 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="keep_alive_background_services" />
         </service>
+        <!-- 媒体按键接收器：AVRCP Target 用 getActiveSessions(该组件) 挑选要上报的播放器，
+             缺它会导致眼镜「正在播放」/系统歌词页拿不到元数据 -->
+        <receiver
+            android:name=".music.LabMediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
     </application>
 </manifest>

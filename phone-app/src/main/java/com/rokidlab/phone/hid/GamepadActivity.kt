@@ -17,6 +17,8 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -35,6 +37,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
@@ -110,6 +113,9 @@ class GamepadActivity : ComponentActivity() {
 }
 
 // ===== 模式枚举 =====
+/** 触控板长按阈值：超过此时长且未移动 → 进入「按住左键拖拽」模式 */
+private const val LONG_PRESS_MS = 380L
+
 private const val TAB_GAMEPAD = 0
 private const val TAB_MOUSE   = 1
 
@@ -306,37 +312,54 @@ private fun MouseTouchpad(hidManager: BluetoothHidManager, prefs: SharedPreferen
                     .background(BrewPanel)
                     .border(1.dp, BrewBorder, BrewShapeXLarge)
                     .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragStart = {
-                                // 按下左键，仅按下不释放
-                                hidManager.sendMouseButton(null, button = 1, pressed = true)
-                            },
-                            onDragEnd = {
-                                // 释放左键
-                                hidManager.sendMouseButton(null, button = 1, pressed = false)
-                            },
-                            onDragCancel = {
-                                hidManager.sendMouseButton(null, button = 1, pressed = false)
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                val dx = (dragAmount.x * sensitivity).roundToInt()
-                                val dy = (dragAmount.y * sensitivity).roundToInt()
-                                if (dx != 0 || dy != 0) {
-                                    hidManager.sendMouseMove(null, dx, dy)
+                        // 触控板手势（单一手势识别器，修复「一移动就自动点击」）：
+                        //   轻点            → 左键单击
+                        //   移动            → 只移动光标（**不按键**）
+                        //   长按后拖动       → 按住左键拖拽（松手释放）
+                        //
+                        // 旧实现用两个叠加的 pointerInput：detectDragGestures 在拖动开始时
+                        // 按下左键、拖动结束才释放，于是「移动光标」全程都处于按住状态，
+                        // 松手落在按钮上就等于一次点击（表现为自动点击「确定」）；
+                        // 且 detectTapGestures 与 detectDragGestures 同时消费同一次触摸，
+                        // 还会产生重复点击。
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val downTime = System.currentTimeMillis()
+                            var last = down.position
+                            var movedPx = 0f
+                            var longPressHeld = false
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val ch = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (ch.changedToUp()) {
+                                    val heldMs = System.currentTimeMillis() - downTime
+                                    if (longPressHeld) {
+                                        // 拖拽结束：释放左键
+                                        hidManager.sendMouseButton(null, button = 1, pressed = false)
+                                    } else if (movedPx < viewConfiguration.touchSlop && heldMs < LONG_PRESS_MS) {
+                                        // 未移动且未长按 → 视为轻点
+                                        hidManager.sendMouseClick(null, button = 1)
+                                    }
+                                    ch.consume()
+                                    break
                                 }
-                            },
-                        )
-                    }
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = {
-                                hidManager.sendMouseClick(null, button = 1)
-                            },
-                            onDoubleTap = {
-                                hidManager.sendMouseClick(null, button = 1)
-                            },
-                        )
+                                val delta = ch.position - last
+                                last = ch.position
+                                movedPx += abs(delta.x) + abs(delta.y)
+                                if (!longPressHeld &&
+                                    System.currentTimeMillis() - downTime >= LONG_PRESS_MS &&
+                                    movedPx < viewConfiguration.touchSlop
+                                ) {
+                                    // 长按未移动 → 进入「按住左键拖拽」模式
+                                    longPressHeld = true
+                                    hidManager.sendMouseButton(null, button = 1, pressed = true)
+                                }
+                                val dx = (delta.x * sensitivity).roundToInt()
+                                val dy = (delta.y * sensitivity).roundToInt()
+                                if (dx != 0 || dy != 0) hidManager.sendMouseMove(null, dx, dy)
+                                ch.consume()
+                            }
+                        }
                     },
                 contentAlignment = Alignment.Center,
             ) {

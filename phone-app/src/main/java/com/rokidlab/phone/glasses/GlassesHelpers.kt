@@ -20,3 +20,25 @@ internal fun parseAiAsrPollText(data: ByteArray?): String? {
         return null
     }
 }
+
+/**
+ * 将 CXR 自定义指令的 data（Caps 字节）反序列化为 List<String?>，供 AiChannel 版本化编解码解析。
+ * 眼镜端 glasses_ip / ai_config / key_config 等载荷统一以 [cmd, version, ...] 顺序写入 Caps，
+ * 手机端据此解出字段列表后交给 AiChannel.decodeXxx 校验 cmd+版本。
+ */
+internal fun capsToFieldList(data: ByteArray?): List<String?> {
+    try {
+        if (data == null || data.isEmpty()) return emptyList()
+        val caps = Caps.fromBytes(data) ?: return emptyList()
+        if (caps.size() < 1) return emptyList()
+        val out = ArrayList<String?>(caps.size())
+        for (i in 0 until caps.size()) {
+            val v = caps.at(i)
+            out.add(if (v == null) null else v.getString())
+        }
+        return out
+    } catch (e: Exception) {
+        Log.e("CxrLHiRokidSession", "capsToFieldList error", e)
+        return emptyList()
+    }
+}

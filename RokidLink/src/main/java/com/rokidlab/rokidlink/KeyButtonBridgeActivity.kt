@@ -237,6 +237,18 @@ class KeyButtonBridgeActivity : Activity() {
         isAlive = true
         Log.i(TAG, "onCreate — alive")
 
+        // ── 输入焦点隔离（★ 修复"Lab 蓝牙手柄必须先双击眼镜退出才能控制"）──
+        // 本 Activity 纯保活用：没有 setContentView、没有任何触摸/按键处理，只会注册按键广播接收器。
+        // 但它默认会拿到窗口输入焦点，而眼镜是把 HID 手柄报告转成 **KeyEvent 投给有焦点的窗口**，
+        // 于是方向键/确定键全被这一层吃掉且无人处理 → 表现为"必须先退出这层透明页手柄才生效"。
+        // 置 NOT_FOCUSABLE（不吃按键）+ NOT_TOUCHABLE（不吃触摸）后，输入直接落到下层窗口
+        // （AIUI 页面 / 桌面）。窗口依然可见 → 进程仍是 VISIBLE，Android 12 BAL 豁免不受影响。
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        )
+        Log.i(TAG, "window flags: NOT_FOCUSABLE|NOT_TOUCHABLE (输入不再被保活层吞掉)")
+
         // 按键答题时屏幕已熄的场景：KeyButtonService 以 wake_screen=true 拉起本 Activity，
         // 窗口显示时点亮屏幕（否则 AI 会话处于退出态、相机不可用，拍照会超时）。
         if (intent?.getBooleanExtra(EXTRA_WAKE_SCREEN, false) == true) {

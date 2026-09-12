@@ -23,7 +23,7 @@
 
 ### 1.2 配色方案
 
-配色接口 `BrewColors` 定义 **14 色**，新增主题只需实现此接口：
+配色接口 `BrewColors` 定义 **17 色**（4 底色 + 4 文字 + 1 边框 + 8 模块色），新增主题只需实现此接口：
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -43,9 +43,10 @@
 │  muted      │  #8A8780   风化石         │  #6B7BA0   雾蓝灰                 │
 │  dim        │  #5C5952   深石色         │  #9AABCA   淡蓝灰                 │
 ├────────────┼─────────────────────────┼───────────────────────────────┤
-│  七模块七色 — 撞色方案                                                │
+│  八模块八色 — 撞色方案                                                │
 ├────────────┼─────────────────────────┼───────────────────────────────┤
 │  store      │  #E85D3F   朱砂红         │  #E85D3F   珊瑚红 (撞色)          │
+│  chat       │  #6EE7B7   青翠绿         │  #00D2D3   蓝绿                   │
 │  mirror     │  #5B8FB9   静谧蓝         │  #00B894   翡翠绿                 │
 │  projection │  #D4A85C   画廊金         │  #6C5CE7   明媚紫                 │
 │  fileManager│  #A78BFA   雾紫           │  #F39C12   琥珀金                 │
@@ -83,6 +84,7 @@
 | `BrewDim` | dim | 禁用文字 |
 | `BrewBorder` | border | 边框 |
 | `BrewCoral` | store | 商店 |
+| `BrewChat` | chat | 乐奇聊天 |
 | `BrewCyan` | mirror | 屏幕镜像 |
 | `BrewPurple` | projection | 手机投屏 |
 | `BrewAmber` | fileManager | 文件管理 |
@@ -133,6 +135,7 @@
 | 模块 | 主色 | 互补/辅助色 | 说明 |
 |------|------|------------|------|
 | 商店 (朱砂红) | `BrewCoral=#E85D3F` 朱砂红 | `BrewCyan=#5B8FB9` 静谧蓝 | 暖红 ↔ 冷蓝 |
+| 乐奇聊天 (青翠绿) | `BrewChat=#6EE7B7` 青翠绿 | `#00D2D3` 蓝绿（浅色主题） | 冷调主色 |
 | 屏幕镜像 | `BrewCyan=#5B8FB9` 静谧蓝 | 暖琥珀 | 冷调主色 |
 | 手机投屏 | `BrewPurple=#D4A85C` 画廊金 | 紫色调 | 暖而有质感 |
 | 文件管理 | `BrewAmber=#A78BFA` 雾紫 | 金色调 | 柔和区分 |
@@ -225,11 +228,12 @@
 └──────────────────────────────────────┘
 ```
 
-**四种模块色边框配色：**
+**模块色边框配色（八模块）：**
 
 | 模块 | color | 用途 |
 |------|-------|------|
 | 商店 | `BrewCoral` | 应用安装/更新对话框 |
+| 乐奇聊天 | `BrewChat` | 聊天设置 / 技能 / 本地模型 / 知识库 / 工具管理弹窗 |
 | 屏幕镜像 | `BrewCyan` | 镜像状态/应用管理弹窗 |
 | 手机投屏 | `BrewPurple` | 定时功能弹窗 |
 | 文件管理 | `BrewAmber` | 文件操作确认/Shell 命令弹窗 |
@@ -355,7 +359,7 @@
 | 安装中文字 | "⟳ 安装中..." 14sp Bold BrewCoral letterSpacing 3sp |
 | 脉冲动画 | `infiniteRepeatable(tween 800ms, LinearEasing, Reverse)` |
 
-**颜色规则：`moduleColor` 参数传入各自导航栏色（BrewCoral/Cyan/Purple/Amber/Teal/Pink/Magenta），未安装和安装中统一使用商店色 BrewCoral**
+**颜色规则：`moduleColor` 参数传入各自导航栏色（BrewCoral/Chat/Teal/Pink/Magenta），未安装和安装中统一使用商店色 BrewCoral**
 
 | 场景 | 状态条/图标/文字色 | 按钮色 |
 |------|-------------------|--------|
@@ -364,14 +368,12 @@
 | 安装中 | `BrewCoral` | —（仅显示安装中动画） |
 | 未安装 | `BrewCoral` | 安装按钮 → `BrewCoral` |
 
-**七个模块调用示例：**
+**模块调用示例（五 Tab 改版后）：**
 
 | 模块 | moduleColor | 运行中/已安装 | 未安装/安装中/停止 |
 |------|-----------|-------------|-----------------|
-| 屏幕镜像 | `BrewCyan` | 静谧蓝 | 珊瑚红 |
-| 手机投屏 | `BrewPurple` | 画廊金 | 珊瑚红 |
-| 文件管理 | `BrewAmber` | 雾紫 | 珊瑚红 |
-| ADB 工具 | `BrewTeal` | 薄荷青 | 珊瑚红 |
+| 乐奇聊天 | `BrewChat` | 青翠绿 | 珊瑚红 |
+| 乐奇工具（投屏/文件/ADB 合并页） | `BrewTeal` | 薄荷青 | 珊瑚红 |
 | HID 手柄 | `BrewPink` | 玫瑰粉 | 珊瑚红 |
 
 **手机投屏模块布局规范：** 与其他模块一致，投屏中状态不隐藏 ROKIDLINK 状态卡和 IP 输入框。投屏前显示"开始投屏"按钮，投屏中仅按钮切换为"■ 停止投屏"（红色），其余元素保持不变。
@@ -446,22 +448,22 @@
 | 高度 | 64dp |
 | 背景 | BrewPanel, 圆角 12dp |
 | 边框 | 1dp BrewBorder |
-| 七个按钮等宽 | weight(1f) |
-| 选中态 | 背景=模块色, 文字=BrewTextBright |
+| 按钮宽度 | 80dp 固定宽等距排列；超出可左右滑动（horizontalScroll） |
+| 选中态 | 背景=模块色, 文字=BrewTextBright（`BrewAmber` 特判为 `BrewBg`） |
 | 未选中态 | 背景=BrewPanel, 文字=BrewMuted |
 | 文字 | 10sp Bold, letterSpacing 1sp |
 
-**七模块映射（水平排列，超出可左右滑动，标签文字来自 `R.string.nav_xxx` 资源，随语言切换自动变化）：**
+**五 Tab 映射（水平排列，超出可左右滑动，标签文字来自 `R.string.nav_xxx` 资源，随语言切换自动变化）：**
 
 | 页面 | label | color |
 |------|-------|-------|
 | STORE | "应用商店" | BrewCoral |
-| SCREEN_MIRROR | "屏幕镜像" | BrewCyan |
-| PHONE_MIRROR | "手机投屏" | BrewPurple |
-| FILE_MANAGER | "文件管理" | BrewAmber |
-| ADB_TOOLS | "ADB工具" | BrewTeal |
+| CHAT | "乐奇聊天" | BrewChat |
+| LEQI_TOOLS | "乐奇工具" | BrewTeal |
 | HID_GAMEPAD | "蓝牙手柄" | BrewPink |
 | SETTINGS | "设置" | BrewMagenta |
+
+> `NavPage` 枚举实测仅 5 项（STORE / CHAT / LEQI_TOOLS / HID_GAMEPAD / SETTINGS）。MIRROR_PAIR（双向投屏）/ FILE_MANAGER（文件管理）/ ADB_TOOLS（ADB 工具）三页已合并进 LEQI_TOOLS 单页，`nav_screen_mirror` / `nav_phone_mirror` / `nav_mirror_pair` / `nav_file_manager` / `nav_adb_tools` 等资源已不再用于底部导航。
 
 **页面切换动画：** `AnimatedContent` fadeIn(200ms) + slideInHorizontally(1/4) ⨯ fadeOut + slideOutHorizontally
 
@@ -520,7 +522,7 @@ ADB 工具页面的眼镜连接信息卡片。
 | 行高 | 约 44dp，多行自动折叠 |
 | 列表最大高度 | 420dp，超出可滚动 |
 
-### 2.13 SourceLine（来源行 — 应用详情页）
+### 2.16 SourceLine（来源行 — 应用详情页）
 
 定义：[store/DetailInfoSections.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/DetailInfoSections.kt) `SourceLine`
 
@@ -540,7 +542,7 @@ ADB 工具页面的眼镜连接信息卡片。
 
 **动态判断逻辑**：当 `app.sourceUrl` 包含 `gitee.com` 时显示 Gitee 图标 + 文字，否则显示 GitHub 图标 + 文字。
 
-### 2.14 MirrorSourceDialog（商店源切换对话框）
+### 2.17 MirrorSourceDialog（商店源切换对话框）
 
 定义：[app/MainActivity.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/app/MainActivity.kt) `MirrorSourceDialog`
 
@@ -563,7 +565,7 @@ ADB 工具页面的眼镜连接信息卡片。
 | Gitee | `ic_gitee_mark` | 红色圆形背景 + 白色 G 字 |
 | GitHub | `ic_github_mark` | 白色 GitHub Octocat |
 
-### 2.15 全局错误提示组件
+### 2.18 全局错误提示组件
 
 定义：[design/DesignComponents.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/design/DesignComponents.kt)
 
@@ -621,6 +623,8 @@ ADB 工具页面的眼镜连接信息卡片。
 ---
 
 ## 三、页面构成
+
+> 底部导航实测 5 个 Tab：STORE / CHAT / LEQI_TOOLS / HID_GAMEPAD / SETTINGS。下方 §3.2~§3.5 的屏幕镜像 / 手机投屏 / 文件管理 / ADB 工具已不再是独立 Tab，其入口统一收敛到「乐奇工具」单页（见 §3.9）；这些子页面的内容规格仍然有效。
 
 ### 3.1 Store 页面（应用商店）
 
@@ -720,7 +724,7 @@ ModuleHeader "ADB 工具" / "眼镜应用管理与系统工具" [BrewInfo #5B8FB
 ### 3.6 蓝牙手柄页面
 
 ```
-ModuleHeader "蓝牙手柄" / "通过蓝牙控制眼镜光标和按键" [BrewSuccess #4ADE80]
+ModuleHeader "蓝牙手柄" / "通过蓝牙控制眼镜光标和按键" [BrewPink #FD79A8]
 
 未连接时:
 → BrutalButton "🔍 扫描设备" [BrewCyan]  / "■ 停止扫描" [BrewRed]
@@ -801,6 +805,82 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
     装饰线 32×3dp BrewCoral
     文字 "DLOVER" 24sp Bold BrewCoral
 ```
+
+### 3.8 乐奇聊天页面（CHAT / ChatScreen）
+
+定义：[store/ChatScreen.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/ChatScreen.kt)、[ChatHeader.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/ChatHeader.kt)、[ChatBubble.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/ChatBubble.kt)、[ChatImageCache.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/ChatImageCache.kt)
+
+**ChatHeader（顶栏）**
+| 属性 | 值 |
+|------|-----|
+| 容器 | Row, fillMaxWidth, 背景 BrewPanel, padding(start 16 / end 8 / top 8 / bottom 8) |
+| 标题 | "乐奇聊天" 16sp Bold `BrewChat` |
+| 副标题 | 11sp `BrewMuted` |
+| 操作图标 | 4 个 IconButton（tint `BrewChat`）：拍照问答 `PhotoCamera` / 知识库 `Folder` / 清空会话 `DeleteSweep` / 设置 `Settings` |
+
+**消息列表**
+- `LazyColumn`，contentPadding 14dp（横）/12dp（纵），条目间距 10dp，`key = 消息 id`
+- 空态：提示文字 13sp `BrewMuted` 居中，padding 36dp
+- 会话消息由 `ChatStateHolder` 全局持有，**切换 Tab 不清空**；落盘为 JSONL 增量写 + 单线程后台落盘（不阻塞 UI 线程），重启不丢历史，详见 `DEV_GUIDE.md` §8.6
+
+**ChatBubble（气泡）**
+| 类型 | 对齐 | 背景 | 圆角 |
+|------|------|------|------|
+| 状态消息（isStatus） | 居中 | 无气泡 | — （12sp `BrewMuted`） |
+| 用户 | End | `BrewChat` | (16,16,4,16)dp |
+| AI | Start | `BrewPanelAlt` | (16,16,16,4)dp |
+
+- 气泡宽度上限 300dp，padding 横 12dp / 纵 8dp
+- 文字 15sp / 行高 22sp，用户 `BrewBg` / AI `BrewTextBright`，包在 `SelectionContainer` 内可选中复制
+- 时间戳 10sp（用户 `BrewBg` alpha 0.7 / AI `BrewMuted`），右对齐，上距 4dp
+
+**图片消息（BubbleImage）**
+| 属性 | 值 |
+|------|-----|
+| 高度 | heightIn(min 80dp, max 260dp) |
+| 圆角 | 8dp |
+| 底色 | `BrewPanelAlt` |
+| 缩放 | ContentScale.Fit |
+| 加载中 | CircularProgressIndicator 24dp / stroke 2dp / `BrewMuted` |
+| 失败 | "图片加载失败" 12sp |
+
+> 图片加载走自研轻量 `ChatImageCache`（Bitmap 内存缓存 + 同 URL 并发去重 + OkHttp 连接 8s / 读 15s + 长边缩放 600px），项目未引入 Coil/Glide。
+
+**底部输入行**
+| 属性 | 值 |
+|------|-----|
+| 容器 | 圆角 26dp，`BrewPanel` + 1dp `BrewBorder`（**先 clip 再 background/border**） |
+| 输入框 | `BasicTextField` 15sp `BrewTextBright`，光标 `BrewChat`，maxLines 4，ImeAction.Send |
+| 思考开关 | 38dp 圆；`Icons.Filled/Outlined.Psychology`；点亮底 `BrewAmber` alpha 0.18 + 边框 alpha 0.6，tint `BrewAmber` |
+| 发送/停止 | `Button` 高 42dp、圆角 21dp；发送 `BrewChat` / 停止 `BrewRed`；禁用底 `BrewPanelHi` + 文字 `BrewMuted` |
+
+- 发送走后台线程 `session.sendAiTextMessage(...)`，流式增量经 `ChatStateHolder.appendAiDelta` 追加；停止调用 `abortCurrentAi()`
+- 弹层：`ChatSettingsDialog`（AI 来源/工具/技能/AIUI 管理/本地模型入口）、`ConfirmClearChatDialog`、`KbManageDialog`（见 §4.11）
+
+### 3.9 乐奇工具页面（LEQI_TOOLS / LeqiToolsModule）
+
+定义：[store/LeqiToolsModule.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/LeqiToolsModule.kt)
+
+**由 MIRROR_PAIR（双向投屏）+ FILE_MANAGER（文件管理）+ ADB_TOOLS（ADB 工具）三页合并而成的单页。**
+
+```
+ModuleHeader "乐奇工具" / "投屏 · 文件 · ADB 一站式工具" [BrewTeal]
+verticalScroll + 16dp padding
+
+SectionLabel("投屏", BrewCyan)          ← 12sp Bold, letterSpacing 1sp, 底距 10dp
+  → BrutalButton "开始镜像" [BrewCyan]
+  → 手机投屏切换按钮: 未投屏 "开始投屏" [BrewPurple] / 投屏中 "■ 停止投屏" [BrewRed]
+
+SectionLabel("文件", BrewAmber)
+  → BrutalButton "打开文件管理器" [BrewAmber]
+  → BrutalButton "安装本地 APK" [BrewInfo]（安装中 → BrewCoral）
+
+SectionLabel("ADB 工具", BrewTeal)
+  → 内嵌 com.rokidlab.phone.adb.ui.AdbToolsScreen
+```
+
+- ADB 工具区**不自建会话**，复用全 App 唯一共享 ADB 会话 `app.cxrL.getAdbShellClient()`（含同步握手，须在 `Dispatchers.IO` 调用）—— 规避 RFCOMM「同设备 + 同 SCN 仅一条通道」约束
+- 每个分组的 `SectionLabel` 统一为 12sp Bold、letterSpacing 1sp、下方 10dp 间距
 
 ---
 
@@ -924,7 +1004,101 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
   - 右侧: Switch（checkedTrackColor=BrewChat / unchecked=BrewPanelHi）
   - 开关状态实时修改，点"完成"统一持久化
 
-**工具清单（8 个，默认全开）：** 知识库检索 / 当前时间 / 眼镜电量 / 眼镜系统信息 / 眼镜存储空间 / 已装应用列表 / 打开应用 / 定时任务
+**工具清单（34 个，默认全开，按域分组）：**
+- 信息与知识：知识库检索 / 当前时间 / 天气 / 计算 / 网页搜索 / 网页抓取 / 位置 / 手机状态
+- 眼镜：电量 / 系统信息 / 存储空间 / 已装应用列表 / 打开应用 / 图片显示
+- 定时与媒体：定时任务 / 取消定时 / 列出定时 / 播放音乐 / 停止音乐 / 显示歌词
+- 文件与 AIUI：保存摘要 / 保存代码文件 / 读取代码文件 / 生成并安装 AIUI / 启动 AIUI / 停止 AIUI / 我的 AIUI 列表
+- 手机域：通讯录搜索 / 拨打电话 / 手机闹钟 / 打开手机应用 / 音量 / 日历查询 / 新增日程
+
+> 数量口径以 `ToolRegistry.toolList` 实测为准：**34 条 ToolMeta**（`group = DOMAIN_` 与 `descriptionRes` 计数均 34）；共 10 个工具域（INFO/KNOWLEDGE/GLASSES/TIMER/MEDIA/DISPLAY/WEB/FILES/AIUI/PHONE）。
+
+### 4.9 技能商店（SkillsManagePage / SkillDialogs）
+
+定义：[store/SkillsManagePage.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/SkillsManagePage.kt)、[store/SkillDialogs.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/SkillDialogs.kt)
+
+**SkillsManagePage**
+- 容器：全屏 `Dialog（usePlatformDefaultWidth=false）`，背景 `BrewBg`，padding 20dp
+- 顶栏：标题 "AI 技能" 18sp Bold + 返回按钮（`BrewChat` Bold）；副标题 12sp `BrewMuted`
+- 总开关行：圆角 12dp + `BrewPanel` + 1dp `BrewBorder`；`Switch` 配色 `checkedTrackColor=BrewChat` / `uncheckedTrackColor=BrewPanelHi` / `checkedThumbColor=BrewBg` / `uncheckedThumbColor=BrewMuted`
+- 三入口 `EntryButton`（各 `weight(1f)`，圆角 12dp + `BrewPanel`/`BrewBorder`，文字 `BrewChat` 12sp Bold）：手动填写 / 导入 zip·md / URL 下载
+- 计数文案 → `Column(weight(1f).verticalScroll)` → 空态提示 或 `SkillRow`
+- `SkillRow`：名称 14sp Medium + 描述 11sp（maxLines 2）+ 行内操作 11sp（编辑 / 删除 / 同步官方，仅内置技能）+ 右侧 `Switch`（同配色）
+- 删除确认 `AlertDialog(containerColor = BrewPanel)`：确认按钮 `BrewChat` / 取消按钮 `chat_key_dialog_cancel`
+
+**SkillDialogs**
+| 弹窗 | 规格 |
+|------|------|
+| `SkillEditDialog` | 圆角 20dp + `BrewPanel` + 1dp `BrewBorder`；3 个 `OutlinedTextField`：name（自动转小写并过滤 `[a-z0-9-]`，placeholder `weather-advice`）/ description（`take(300)`）/ body（`take(SkillMarkdown.MAX_BODY_CHARS)`，`heightIn(min 180dp)`）；`focusedBorderColor=BrewChat` / `unfocusedBorderColor=BrewBorder` / 光标 `BrewChat`；保存 `Button(containerColor=BrewChat, contentColor=BrewBg)` 圆角 12dp |
+| `SkillUrlImportDialog` | 多行 URL 输入（minLines 1 / maxLines 3）+ 结果框（圆角 12dp，`BrewPanel.copy(alpha=0.5f)`，12sp）；按钮 `BrewChat`/`BrewBg` |
+
+- 导入来源分类：`SkillFetcher.classify` → ZIP / MD_FILE / REPO_PAGE / UNKNOWN；本地导入读限 512KB，按 zip 魔数（`P K`）判断走 `installFromZip` 或 `installFromMarkdown`
+
+### 4.10 本地模型页面（LocalModelPage）
+
+定义：[store/LocalModelPage.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/LocalModelPage.kt)（约 828 行）
+
+- 容器：全屏 `Dialog`；顶栏 标题 "本地模型" 18sp Bold + 完成按钮（`BrewChat`）；副标题 12sp `BrewMuted`
+- 卡片 `PageCard`：圆角 16dp + `BrewPanel` + 1dp `BrewBorder`，padding 横 14dp / 纵 12dp
+- **服务状态卡**：`StatusDot`（0 检测中灰 / 1 运行中 `BrewSuccess` / 2 已停止 `BrewRed`）+ 状态文案（检测中 / 运行中(版本) / 停止中 / 启动中 / 已停止）
+- **Termux 未安装**：提示文案 + F-Droid 安装按钮
+- **启动引导** `guidance` = `PERMISSION` / `DENIED` / `TIMEOUT` → `BrewWarning` 13sp 提示（同时弹 Toast），并给出授权 / Termux 设置 / 复制安装命令（`pkg update && pkg install -y ollama`）按钮
+- **对话接入卡**：`local_model_chat_title` + `local_model_use_chat`；`chatModel` 非空时展示模型名、1dp 分隔线（`BrewBorder`）与调参 `ParamChipRow`（predict：-1/128/256/512/1024，ctx：-1/2048/4096/8192，temp：-1/0.2/0.7/1.0，选中即时生效）
+- **模型库**：已安装数量 + 拉取区展开/收起；`PullSection`（进度 + 状态 + 取消）+ 建议模型 `SuggestChip` + 内存提示 / 空间不足 / 完成 / 失败文案；`ModelRow`（设为对话模型 / 删除）
+- 删除确认 `AlertDialog(containerColor = BrewPanel)`，确认按钮 `BrewRed`
+
+> ⚠️ **现状说明**：本页当前仍直接使用 Material3 原生组件（`Button` / `TextButton` / `AlertDialog`）与 `RoundedCornerShape(...)` 字面量，**尚未迁移到 `Brew*` 设计系统**；且只提供 `setLocalChatModel()`（切到本地），没有反向开关。完整改进方案见 [docs/UI-IMPROVEMENT-LocalModelPage.md](file:///d:/rokidapp/cxrl/RokidLab/docs/UI-IMPROVEMENT-LocalModelPage.md)（**提案文档，尚未落地**）。
+
+### 4.11 知识库管理弹窗（KbManageDialog）
+
+定义：[store/KbManageDialog.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/store/KbManageDialog.kt)
+
+| 属性 | 值 |
+|------|-----|
+| 容器 | `Dialog(usePlatformDefaultWidth=false)`，水平外边距 28dp |
+| 卡片 | 圆角 20dp + `BrewPanel` + 1dp `BrewBorder`，内 padding 20dp |
+| 标题 | "知识库" 16sp Bold `BrewTextBright` + 副标题 12sp `BrewMuted` |
+| 导入 | 右侧 `TextButton`（导入中显示安装态），`OpenDocument()`，MIME `text/plain` |
+| 空态 | 提示 13sp 居中，`height(120dp)` |
+| 文档列表 | `Column(heightIn(max=320dp))`；每行 名称 14sp Medium（maxLines 1）+ 大小 11sp `BrewMuted` + `IconButton(Delete, tint BrewMuted, 18dp)` |
+| 底部 | `TextButton` 取消 |
+
+- 数据层：`KnowledgeBase.listDocs / importUri / deleteDoc`；导入内容供「拍照问 AI」检索（见 §4.12）
+
+### 4.12 拍照问答 UI（PhotoQuizFlow）
+
+定义：[glasses/PhotoQuizFlow.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/glasses/PhotoQuizFlow.kt)
+
+- 触发：聊天页顶栏「拍照问答」图标，或眼镜端镜腿按键（两者共用同一起点）
+- 阶段气泡（顺序，资源 id）：`chat_photo_status`（拍照中）→ `chat_ocr_status`（识别中）→ `chat_kb_status`（检索知识库）→ `chat_ai_status`（生成答案）
+- OCR 识别出的题目文字作为「用户消息」气泡回显；知识库命中带来源标注 `（《文档名》第N块）`
+- 终态：识别为空 → `chat_ocr_empty`；拍照/流程失败 → `chat_photo_failed`（并复位入口，避免永久失效）
+- 一次性语义：`skipTtsAudioFinished=true` + `recordHistory=false`（不写入会话历史）；`inProgress` 标志防重入
+- 无独立全屏 UI，复用聊天页的消息气泡与阶段回调
+
+### 4.13 工具风险确认弹窗（眼镜端 / 手机端）
+
+定义：[RokidLink/.../KeyButtonService.kt](file:///d:/rokidapp/cxrl/RokidLab/RokidLink/src/main/java/com/rokidlab/rokidlink/KeyButtonService.kt)、[phone-app/.../ai/ToolPolicy.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/ai/ToolPolicy.kt)、[ai/GlassToolConfirmChannel.kt](file:///d:/rokidapp/cxrl/RokidLab/phone-app/src/main/java/com/rokidlab/phone/ai/GlassToolConfirmChannel.kt)
+
+**触发条件**：手机端工具风险档为 `EXTERNAL_SIDE_EFFECT` 时，经 `TOPIC_TOOL_CONFIRM` 下发确认请求（caps = [requestId, 工具名, 摘要]）。
+
+**眼镜端交互**
+| 操作 | 结果 |
+|------|------|
+| 短按（UP / CLICK） | **允许** |
+| 双击（DOUBLE_CLICK） | 取消 |
+| 长按（LONG_PRESS） | 取消 |
+| 30s 无操作 | 超时自动取消 |
+
+- 悬浮层文案：`⚠ {摘要}` + `[短按]允许  [双击]取消`；同时 TTS 播报「是否{摘要}？短按确认，双击取消」
+- 应答后 1.5s 内吞掉按键，防误触；回传 `TOPIC_TOOL_CONFIRM_RESULT`（caps = [requestId, "yes"/"no"]）
+- 手机端等待上限 35s（略大于眼镜 30s 窗口）
+
+**能力协商与降级（如实记录当前实现）**
+- 握手三态：未握手（`supports()` 返回 `null`）→ 乐观视为可用；收到 v2 通告 → 按能力位判断；4s 内无应答 → 判旧版 v1（`supports()` 返回 `false`）→ 快速降级
+- **降级为 Allow（放行）**：确认通道不可用（无连接 / 旧版眼镜端）时不再硬拒，直接放行，工具侧只做无副作用动作；确认超时同样降级放行
+- **拒绝**：仅当用户在眼镜端**显式取消**时为 Deny
+- `LOCAL_SIDE_EFFECT` / `READ_ONLY` 工具不经此闸门，直接放行（如 `call_phone` 自 2026-09-11 起降为 `LOCAL_SIDE_EFFECT`，语音指令即授权直拨）
 
 ---
 
@@ -975,17 +1149,19 @@ ModuleHeader "设置" / "应用配置" [BrewMagenta #8A8780]
 - 英文翻译放在 `values-en/strings.xml`
 - 新增语种：在 `res/` 下新建 `values-{lang}/strings.xml`，Crowdin 自动同步
 
+**当前规模（2026-09-12，v3.5）**：`values/strings.xml` 共 1100 条，`values-en/strings.xml` 共 1100 条，**双语 key 完全对齐**（此前缺 5 条已于 2026-09-12 补齐）。构建期由 `checkI18nKeysSynced` 任务（挂 `preBuild`）强制两模块 key 集合相等，不一致直接构建失败。
+
 ### 6.4 底部导航标签映射
 
 | 页面 | 资源 ID | 中文 | English |
 |------|---------|------|---------|
 | STORE | `nav_store` | 应用商店 | App Store |
-| SCREEN_MIRROR | `nav_screen_mirror` | 屏幕镜像 | Screen Mirror |
-| PHONE_MIRROR | `nav_phone_mirror` | 手机投屏 | Phone Cast |
-| FILE_MANAGER | `nav_file_manager` | 文件管理 | File Manager |
-| ADB_TOOLS | `nav_adb_tools` | ADB工具 | ADB Tools |
+| CHAT | `nav_chat` | 乐奇聊天 | LeQi Chat |
+| LEQI_TOOLS | `nav_leqi_tools` | 乐奇工具 | Leqi Tools |
 | HID_GAMEPAD | `nav_hid_gamepad` | 蓝牙手柄 | Gamepad |
 | SETTINGS | `nav_settings` | 设置 | Settings |
+
+> 遗留未使用的标签资源（`nav_screen_mirror` / `nav_phone_mirror` / `nav_mirror_pair` / `nav_file_manager` / `nav_adb_tools`）仍保留在 strings.xml 中，但已不再被底部导航引用。
 
 ### 6.5 Crowdin 工作流
 
@@ -1264,6 +1440,29 @@ lifecycleScope.launch {
 ---
 
 ## 八、版本历史
+
+### v3.5 (2026-09-09)
+
+**Lab 工具桥 + Agent 核心升级 + ASR 加固 + 构建迁移**
+
+- **AIUI 工具桥**：眼镜端 AIUI 页面可回调手机端 **33 个工具**（`ToolGateway` 统一入口，域全开、仅禁 `open_aiui_app` 防自指递归；结果截断 8000 字符、15s 超时）
+- **启动参数下发**：`open_aiui_app` 的 `params` 随 open 命令一并下发；页面侧需写 `globalThis.Lab.callTool`
+- **Agent 核心升级**：长期记忆改 SQLite（FIFO 200 条 / 90 天过期 / 首启迁移旧 JSON），上下文滚动摘要，BM25/2-gram 检索，SSE 重连指数退避
+- **工具策略闸门**：新增 `ToolRisk` 三级风险 + `ToolPolicy`（按来源限流 AIUI 页面 30/min、对话 120/min；确认通道缺失或超时时降级放行）
+- **ASR 加固**：去重条件改为「同文 + 上一条仍在处理中」；推送客户端连上后才置 socket + 补读断连积压；90s 兜底超时
+- **链路协议 v2**：新增眼镜端能力握手（`GlassesHandshake` 三态：未知乐观 / 确认支持 / 旧版降级）与工具确认弹窗（眼镜端短按允许、双击取消）；`ChannelArbiter` 通道优先级仲裁（BACKGROUND/NORMAL/LONG_LIVED）
+- **构建迁移**：CXR-L 升级 1.1.2（16KB 对齐）、RokidLink 迁移 Maven bridge、启用 R8、HTTP 统一 OkHttp
+- **测试**：**14 个测试类 / 155 个 `@Test`**（2026-09-12 补两批回归测试：<br>① 高危链路 —— ADB sync 帧 / `pullFile` FAIL / HID 描述符字节 / `AiChannel` v0·v1 矩阵 / `ToolRiskMap` 完整性；<br>② 聊天历史落盘 —— `ChatHistoryStore` 的 JSONL 往返 / 同 id 后写覆盖先写 / 旧格式迁移 / 崩溃截断容错）
+
+### v3.4 (2026-09-08)
+
+**AIUI 智能体生成（对话即开发）+ Skill 技能体系 + 本地模型**
+
+- **AIUI 对话即开发**：对 AI 说需求即生成 AIUI 页面并推送到眼镜端渲染（独立 agentId，避免与官方智能体冲突）
+- **Skill 技能体系**：技能 = 说明书（`SKILL.md`），命中描述时先加载完整步骤再调用本地工具；支持手动填写 / 导入 zip·md / URL 下载与开关管理
+- **代码先读再改**：新增 `read_code_file` / `save_code_file`，修改 AIUI 代码前必须先读真实源码再覆盖写回，禁止凭印象整文件重编
+- **本地模型**：新增本地模型页，通过 Termux 运行 Ollama，让眼镜对话使用手机本地离线大模型
+- **眼镜端 AIUI 渲染宿主**：`AiuiLinkActivity` 承载 AIUI 微前端渲染
 
 ### v2.3-beta (2026-08-17)
 

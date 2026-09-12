@@ -19,10 +19,29 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 class AdbShellClient(
-    private val context: Context,
+    /**
+     * 应用 Context。**生产路径必传**；仅 JVM 单测驱动纯流协议（sync 帧编解码 / `pullFile` 分支）
+     * 时允许为 null —— 这条路径完全不触 Context，为它引入 Context mock 得不偿失。
+     * 所有使用处一律经 [requireContext] 取值，缺失时立刻显式报错，不会静默退化成 NPE。
+     */
+    private val context: Context?,
     private val ipAddress: String,
     private val port: Int = 5555,
 ) {
+    /**
+     * 仅供单测：注入内存流直接驱动 ADB 流协议（不建链、不握手，`socket` 保持 null）。
+     *
+     * 存在的意义：`pullFile` 的 FAIL 分支（远端无权限/文件不存在）历史上曾静默产出 0 字节文件
+     * 并被当成成功，只能靠真机复现。有了这个注入口，该分支可以在 JVM 里用脚本化对端锁死。
+     */
+    internal fun attachStreamsForTest(input: InputStream, output: OutputStream) {
+        inputStream = input
+        outputStream = output
+    }
+
+    private fun requireContext(): Context =
+        context ?: error("AdbShellClient 该路径需要 Context（单测构造为 null 时不可调用）")
+
     companion object {
         private const val TAG = "AdbShellClient"
         private const val CMD_CNXN = 0x4e584e43
@@ -95,7 +114,7 @@ class AdbShellClient(
         Log.i(TAG, "TCP connection established")
         inputStream = socket?.getInputStream()
         outputStream = socket?.getOutputStream()
-        keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
+        keyPair = AdbKeyManager.getOrCreateKeyPair(requireContext().filesDir.absolutePath)
         nextLocalId = 0
         doHandshake()
         // 握手完成：恢复命令期读超时（单包级，避免后续命令卡死时拖长等待）
@@ -293,17 +312,35 @@ class AdbShellClient(
 
     fun extractApkToDownloads(packageName: String): String {
         val path = getApkPath(packageName)
-        if (path.isEmpty()) return context.getString(R.string.extract_path_not_found, packageName)
+        if (path.isEmpty()) return requireContext().getString(R.string.extract_path_not_found, packageName)
         // copy to device Download directory (remote glasses)
         val remoteDest = "/sdcard/Download/${packageName}.apk"
         val cpResult = executeShellCommand("cp $path $remoteDest 2>&1 && echo OK")
-        if (!cpResult.trim().endsWith("OK")) return context.getString(R.string.extract_copy_failed)
+        if (!cpResult.trim().endsWith("OK")) return requireContext().getString(R.string.extract_copy_failed)
         // pull from glasses to phone app-private directory (兼容鸿蒙作用域存储，无需存储权限)
-        val localDir = File(context.filesDir, "Download")
+        val localDir = File(requireContext().filesDir, "Download")
         if (!localDir.exists()) localDir.mkdirs()
         val localFile = File(localDir, "${packageName}.apk")
         val pullOk = pullFile(remoteDest, localFile.absolutePath)
-        return if (pullOk) context.getString(R.string.extract_downloaded, packageName) else context.getString(R.string.extract_pull_failed)
+        return if (pullOk) requireContext().getString(R.string.extract_downloaded, packageName) else requireContext().getString(R.string.extract_pull_failed)
+    }
+
+    /**
+     * 将指定应用的 APK 从眼镜拉取到手机缓存目录。
+     * 仅负责"取出到手机"，落盘到哪个目录由 UI 层（用户通过 SAF 选择的目录）决定。
+     * @return 缓存文件（成功且非空），失败返回 null
+     */
+    fun pullApkToCache(packageName: String): File? {
+        val path = getApkPath(packageName)
+        if (path.isEmpty()) return null
+        val remoteTmp = "/sdcard/Download/_extract_${packageName}_${System.currentTimeMillis()}.apk"
+        val cpResult = executeShellCommand("cp $path $remoteTmp 2>&1 && echo OK")
+        if (!cpResult.trim().endsWith("OK")) return null
+        val cacheFile = File(requireContext().cacheDir, "extract_${packageName}.apk")
+        if (cacheFile.exists()) cacheFile.delete()
+        val pullOk = pullFile(remoteTmp, cacheFile.absolutePath)
+        executeShellCommand("rm -f $remoteTmp")
+        return if (pullOk && cacheFile.exists() && cacheFile.length() > 0) cacheFile else null
     }
 
     fun sendNotification(title: String, content: String): String {
@@ -458,6 +495,8 @@ class AdbShellClient(
 
                 val localFile = File(localPath)
                 localFile.parentFile?.mkdirs()
+                var pullFailed = false
+                var failReason = ""
                 FileOutputStream(localFile).use { fos ->
                     socket?.soTimeout = 30000
                     while (true) {
@@ -477,6 +516,17 @@ class AdbShellClient(
                                     writeMessage(CMD_OKAY, localId, remoteId, ByteArray(0))
                                     break
                                 }
+                                "FAIL" -> {
+                                    // 远端文件不存在/无权限：adbd 回 FAIL，原逻辑静默当成功 -> 产出 0 字节文件(A4)
+                                    val len = ByteBuffer.wrap(msg.payload, 4, 4).order(ByteOrder.LITTLE_ENDIAN).getInt()
+                                    failReason = if (len > 0 && 8 + len <= msg.payload.size) {
+                                        String(msg.payload, 8, len, Charsets.UTF_8)
+                                    } else ""
+                                    Log.w(TAG, "pullFile FAIL from device: $failReason")
+                                    writeMessage(CMD_OKAY, localId, remoteId, ByteArray(0))
+                                    pullFailed = true
+                                    break
+                                }
                                 else -> break
                             }
                         } else if (msg.command == CMD_CLSE && msg.arg0 == remoteId) {
@@ -487,6 +537,13 @@ class AdbShellClient(
 
                 close(localId, remoteId)
                 socket?.soTimeout = 5000
+                if (pullFailed) {
+                    // 远端拉取失败：删除已创建的空文件，如实返回失败。
+                    // 下游只认返回值，但残留的半成品文件会被「文件存在即成功」的调用点误判。
+                    runCatching { localFile.delete() }
+                    Log.w(TAG, "pullFile failed: $failReason ($remotePath)")
+                    return false
+                }
                 Log.i(TAG, "pullFile success: $remotePath → $localPath (${localFile.length()} bytes)")
                 LogCollector.i(TAG, "pullFile success: $remotePath → $localPath")
                 return true
@@ -626,6 +683,9 @@ class AdbShellClient(
         val arg1 = buf.getInt()
         val payloadLength = buf.getInt()
         buf.getInt(); buf.getInt() // skip checksum, magic
+        if (payloadLength < 0 || payloadLength > com.rokidlab.phone.util.AppConfig.ADB_MAX_PAYLOAD) {
+            throw java.io.IOException("bad payload length: $payloadLength")
+        }
         val payload = if (payloadLength > 0) {
             val data = ByteArray(payloadLength)
             var pos = 0

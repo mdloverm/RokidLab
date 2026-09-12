@@ -12,23 +12,34 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
-import android.provider.Settings
+import android.graphics.PixelFormat
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.TextView
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import android.util.Base64
 import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiManager
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkRequest
 import android.net.NetworkCapabilities
-import android.net.wifi.WifiNetworkSpecifier
 import com.rokid.cxr.CXRServiceBridge
 import com.rokid.cxr.Caps
 import java.io.File
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -71,6 +82,7 @@ class KeyButtonService : Service() {
     /** CXR bridge 当前是否已连接 */
     @Volatile
     private var bridgeConnected = false
+    private var pendingReconnect: Runnable? = null  // B1：去重断连重建任务，避免堆叠导致订阅倍发
 
     /** 唤醒词+语音的 ASR 流式文字（覆盖式累积，ASR_End 时取最后一条） */
     private var pendingAiText: String? = null
@@ -84,6 +96,17 @@ class KeyButtonService : Service() {
     private val aiSendExecutor = Executors.newFixedThreadPool(2) { r ->
         Thread(r, "ai-send").apply { isDaemon = true }
     }
+
+    /**
+     * 眼镜 WiFi IP 上行：监听 WiFi 可用/变化，拿到真实 IPv4 后经 CXR 通道上报手机端，
+     * 手机端据此免手动输入自动填充到投屏/手机镜像/文件管理/ADB 共用的单一数据源。
+     * 仅在 IP 实际变化时才上行，避免 onCapabilitiesChanged/onLinkPropertiesChanged 高频重复发送。
+     */
+    private var wifiIpReporter: ConnectivityManager.NetworkCallback? = null
+    private var connectivityManager: ConnectivityManager? = null
+    /** 最近一次成功上报的 IP，用于去重（同一 IP 不重复上行） */
+    @Volatile
+    private var lastReportedIp: String? = null
 
     /**
      * 下行过滤：手机端 Lab 回复时下行序列为 Exit→KeyDown_Client→open→ASR_Result→ASR_End→TTS_Result。
@@ -111,6 +134,16 @@ class KeyButtonService : Service() {
     /** 拍照答题去重：一次短按会产生 UP/CLICK 两条广播，1 秒内只上行一次 */
     private var lastPhotoAskMs = 0L
 
+    // ── 工具确认窗口（Phase 4：call_phone 等副作用工具的眼镜端用户确认）──
+    /** 进行中的确认请求 id（null = 无等待中的确认） */
+    @Volatile
+    private var pendingToolConfirmId: String? = null
+    /** 确认超时任务（30s 无操作视为取消） */
+    private var toolConfirmTimeoutRunnable: Runnable? = null
+    /** 应答后的按键吞没窗口截止时间（UP/CLICK 连发时避免误触发启动目标） */
+    @Volatile
+    private var suppressKeyUntilMs = 0L
+
     /** PARTIAL_WAKE_LOCK — 防止 CPU 深度休眠导致广播投递失败 */
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -136,6 +169,34 @@ class KeyButtonService : Service() {
             val action = intent.action ?: return
             // 全链路入口日志：每次按键广播都打印 action + 答题开关状态，便于诊断「按键没反应」
             Log.i(TAG, "Key broadcast: $action quiz=${isKeyQuizEnabled(context)}")
+
+            // Phase 4 确认窗口：有等待中的工具确认时，本次按键先满足确认语义再谈其他。
+            // DOWN 只记录时间直接吞掉；UP/CLICK = 允许；双击/长按 = 取消。
+            if (System.currentTimeMillis() < suppressKeyUntilMs) {
+                Log.i(TAG, "Key suppressed (post-confirm window)")
+                return
+            }
+            if (pendingToolConfirmId != null) {
+                when (action) {
+                    "com.android.action.ACTION_SPRITE_BUTTON_DOWN" -> {
+                        downTimeMs = System.currentTimeMillis()
+                        return
+                    }
+                    "com.android.action.ACTION_SPRITE_BUTTON_UP",
+                    "com.android.action.ACTION_SPRITE_BUTTON_CLICK" -> {
+                        Log.i(TAG, "Key in confirm window -> ALLOW")
+                        respondToolConfirm(true)
+                        return
+                    }
+                    "com.android.action.ACTION_SPRITE_BUTTON_DOUBLE_CLICK",
+                    "com.android.action.ACTION_SPRITE_BUTTON_LONG_PRESS" -> {
+                        Log.i(TAG, "Key in confirm window -> DENY")
+                        downTimeMs = 0L
+                        respondToolConfirm(false)
+                        return
+                    }
+                }
+            }
 
             when (action) {
                 "com.android.action.ACTION_SPRITE_BUTTON_DOWN" -> {
@@ -386,19 +447,19 @@ class KeyButtonService : Service() {
         /** 语音转文字结果上行通道（眼镜端 → 手机端）：唤醒词+语音的 ASR 文字转给 Lab 回复 */
         internal const val AI_ASR_TOPIC = "rokidlab_ai_asr"
         /** 双击退出对话窗口时经 RFCOMM 推送通道上行的音乐停止标记（与手机端保持一致） */
-        internal const val MUSIC_STOP_MARKER = "__LAB_MUSIC_STOP__"
+        internal const val MUSIC_STOP_MARKER = LinkProtocol.MARKER_MUSIC_STOP
         /**
          * 用户关闭助手/退出对话时经 RFCOMM 推送通道上行的中止标记（与手机端保持一致）：
          * 手机收到后停音乐 + 下发 tts_stop 停眼镜播报 + 取消运行中的 Lab 模型请求
          */
-        internal const val ABORT_AI_MARKER = "__LAB_ABORT_AI__"
+        internal const val ABORT_AI_MARKER = LinkProtocol.MARKER_ABORT_AI
         /**
          * AI 文字轮询通道（手机端 → 眼镜端）：RokidLab 定时 sendCustomCmd 轮询，
          * 眼镜端可回复订阅返回 ASR 文字。采用请求-响应机制以绕过 AI App 对未知上行指令的过滤。
          */
         internal const val AI_ASR_POLL_TOPIC = "rokidlab_ai_asr_poll"
         /** AI 频道（手机端 → 眼镜端，AssistServer 全局订阅） */
-        internal const val AI_TOPIC = "Ai"
+        internal const val AI_TOPIC = LinkProtocol.CXR_CHANNEL_AI
         /** 显示状态页指令通道（手机端 → 眼镜端）：用户点「打开 RokidLink」后，MainActivity 带 EXTRA_SHOW_UI 显示 IP 状态页 */
         internal const val SHOW_MAIN_TOPIC = "rokidlab_show_main"
         /** AI 配置下发通道（手机端 → 眼镜端）：baseUrl/apiKey/model，供眼镜端直接调用模型 */
@@ -425,6 +486,10 @@ class KeyButtonService : Service() {
         internal const val KEY_QUIZ_ENABLED = "key_quiz_enabled"
         /** KeyButtonBridgeActivity 触发拍照答题时通知 Service 的 action */
         internal const val ACTION_QUIZ_PHOTO_ASK = "rokidlab.action.QUIZ_PHOTO_ASK"
+        /** 工具确认窗口时长：超时未应答视为取消 */
+        private const val TOOL_CONFIRM_WINDOW_MS = 30_000L
+        /** 确认应答后的按键吞没窗口（UP/CLICK 连发去重） */
+        private const val KEY_SUPPRESS_AFTER_CONFIRM_MS = 1_500L
 
         /** 断线重连后下行路由 stale 的自愈：Alarm 拉活广播 action（SelfRestartReceiver 处理） */
         internal const val ACTION_SELF_HEAL_RESTART = "com.rokidlab.rokidlink.SELF_HEAL_RESTART"
@@ -479,6 +544,8 @@ class KeyButtonService : Service() {
         startAiuiHostServer()
         // 预热绑定系统 TTS 服务，避免首次「拍照问 AI」回复要等异步绑定
         TtsPlaybackHelper.ensureBound(this)
+        // 监听 WiFi 变化并上行眼镜 IP，手机端免手动输入自动填充
+        registerWifiIpReporter()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -513,6 +580,7 @@ class KeyButtonService : Service() {
             quizScreenWakeLock?.let { if (it.isHeld) it.release() }
             quizScreenWakeLock = null
         }
+        runCatching { unregisterWifiIpReporter() }
         runCatching { bridge?.disconnectCXRDevice() }
         bridge = null
         // 崩溃/异常销毁自愈：延迟检查，若服务未恢复则重新拉起。
@@ -543,6 +611,7 @@ class KeyButtonService : Service() {
         } else {
             retryRestartSelf(0)
         }
+        handler.post { clearToolConfirm() }
         super.onDestroy()
     }
 
@@ -801,6 +870,8 @@ class KeyButtonService : Service() {
                 override fun onConnected(name: String, address: String, type: Int) {
                     Log.i(TAG, "CXR connected: name=$name, address=$address, type=$type")
                     bridgeConnected = true
+                    // 连接建立后若已连 WiFi，立即上行眼镜 IP（首次/重连后让手机端尽快拿到）
+                    sendGlassesIp()
                     // 断线重连成功：cxr-service 分发路由可能在重连后 stale（订阅返回 0 但实际不投递，
                     // 实测 ai_config/tts/show_main 全部静默丢失，仅进程重启可恢复）。
                     // 启动观察窗口：期间收到任何下行（ping/config/tts）即健康，否则判定路由失效自愈。
@@ -820,12 +891,22 @@ class KeyButtonService : Service() {
                     downlinkUntilMs = 0L
                     pendingAiText = null
                     // 断线自愈：cxr-service 重启/蓝牙闪断后重建桥接并重订阅，避免永久失联
-                    mainHandler.postDelayed({
+                    // B1 修复：先取消旧任务去重；若 3s 内已自动重连成功则跳过，
+                    //          避免丢弃刚连好的 bridge 重建、造成同一条 config/tts/ai 被重复下发
+                    pendingReconnect?.let { mainHandler.removeCallbacks(it) }
+                    pendingReconnect = Runnable {
+                        pendingReconnect = null
+                        if (bridgeConnected) {
+                            Log.i(TAG, "CXR already reconnected before 3s, skip re-init")
+                            return@Runnable
+                        }
+                        runCatching { bridge?.disconnectCXRDevice() }
                         runCatching {
                             bridge = null
                             initCxrBridge()
                         }.onFailure { Log.e(TAG, "re-init CXR bridge failed", it) }
-                    }, 3000)
+                    }
+                    mainHandler.postDelayed(pendingReconnect!!, 3000)
                 }
                 override fun onConnecting(name: String, address: String, type: Int) {
                     Log.i(TAG, "CXR connecting: name=$name, address=$address, type=$type")
@@ -861,6 +942,16 @@ class KeyButtonService : Service() {
                 TtsPlaybackHelper.stop()
             })
             Log.i(TAG, "subscribe($TTS_STOP_TOPIC) -> $ttsStopResult")
+
+            // 工具确认请求（手机端 → 眼镜端）：call_phone 等副作用工具执行前的用户确认
+            val toolConfirmResult = bridge?.subscribe(
+                LinkProtocol.TOPIC_TOOL_CONFIRM,
+                CXRServiceBridge.MsgCallback { _, args, _ ->
+                    markDownlink()
+                    handleToolConfirm(args)
+                }
+            )
+            Log.i(TAG, "subscribe(${LinkProtocol.TOPIC_TOOL_CONFIRM}) -> $toolConfirmResult")
 
             val quizResult = bridge?.subscribe(QUIZ_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
                 handleQuizConfig(args)
@@ -904,6 +995,59 @@ class KeyButtonService : Service() {
                 Log.i(TAG, "Received ping — downlink route healthy")
             })
             Log.i(TAG, "subscribe(${AiChannel.TOPIC_PING}) -> $pingResult")
+
+            // 协议握手（插播 B · LinkProtocol v2）：手机端主动询问时回报版本与能力，
+            // 覆盖「眼镜端后启动 / 手机端重连」场景。
+            val helloResult = bridge?.subscribe(LinkProtocol.TOPIC_HELLO_REQ, CXRServiceBridge.MsgCallback { _, _, _ ->
+                markDownlink()
+                announceHello()
+            })
+            Log.i(TAG, "subscribe(${LinkProtocol.TOPIC_HELLO_REQ}) -> $helloResult")
+
+            // 停止手机投屏指令：手机端按「停止投屏」时下发。
+            // PhoneMirrorActivity 设计为 socket 断开后保持前台等重连（避免重连后画面更新在
+            // 后台不可见），因此必须显式关闭，否则最后一帧画面会残留在眼镜上。
+            // 复用页面既有的 ACTION_FINISH_MIRROR 广播（与 ScreenMirrorIntentActivity 同一通道）。
+            val stopMirrorResult = bridge?.subscribe(
+                AiChannel.TOPIC_STOP_PHONE_MIRROR,
+                CXRServiceBridge.MsgCallback { _, _, _ ->
+                    markDownlink()
+                    Log.i(TAG, "Received stop_phone_mirror — closing PhoneMirrorActivity")
+                    handler.post {
+                        runCatching {
+                            sendBroadcast(
+                                Intent(PhoneMirrorActivity.ACTION_FINISH_MIRROR)
+                                    .setPackage(packageName)
+                            )
+                        }
+                    }
+                }
+            )
+            Log.i(TAG, "subscribe(${AiChannel.TOPIC_STOP_PHONE_MIRROR}) -> $stopMirrorResult")
+
+            // 图片下发：把手机端对话气泡里的图片显示到眼镜端（悬浮图片层，12s 后自动隐藏）。
+            // 与歌词/工具确认复用同一套悬浮层授权（SYSTEM_ALERT_WINDOW）。
+            val showImageResult = bridge?.subscribe(
+                AiChannel.TOPIC_SHOW_IMAGE,
+                CXRServiceBridge.MsgCallback { _, args, _ ->
+                    markDownlink()
+                    handleShowImage(args)
+                }
+            )
+            Log.i(TAG, "subscribe(${AiChannel.TOPIC_SHOW_IMAGE}) -> $showImageResult")
+
+            // 打开页面：手机端要求把某个眼镜端 Activity 拉到前台（如说「显示歌词」→ 系统音乐页）。
+            val openAppResult = bridge?.subscribe(
+                AiChannel.TOPIC_OPEN_APP,
+                CXRServiceBridge.MsgCallback { _, args, _ ->
+                    markDownlink()
+                    handleOpenApp(args)
+                }
+            )
+            Log.i(TAG, "subscribe(${AiChannel.TOPIC_OPEN_APP}) -> $openAppResult")
+
+            // 服务就绪：主动握手通告一次（手机端据此免探测获知眼镜端能力）
+            announceHello()
         } catch (e: Exception) {
             Log.e(TAG, "initCxrBridge failed", e)
         }
@@ -912,6 +1056,34 @@ class KeyButtonService : Service() {
     // ──────────────────────────────────────────────
     //  断线自愈（cxr-service 分发路由 stale 探测）
     // ──────────────────────────────────────────────
+
+    // ──────────────────────────────────────────────
+    //  协议握手（插播 B · LinkProtocol v2）
+    // ──────────────────────────────────────────────
+
+    /**
+     * 上报本端协议版本与能力位（caps = [version, capsBitmask, linkVersion]）。
+     *
+     * 手机端据此免探测获知眼镜端能力；旧版手机端会忽略未知 topic，无副作用。
+     * 服务就绪时主动调用一次，并对 [LinkProtocol.TOPIC_HELLO_REQ] 应答。
+     */
+    internal fun announceHello() {
+        val b = bridge ?: run {
+            Log.w(TAG, "announceHello skipped: no bridge")
+            return
+        }
+        runCatching {
+            val linkVersion = runCatching {
+                packageManager.getPackageInfo(packageName, 0).versionName
+            }.getOrNull() ?: "-"
+            val caps = Caps()
+            caps.write(LinkProtocol.PROTOCOL_VERSION.toString())
+            caps.write(LinkProtocol.Cap.ALL.toString())
+            caps.write(linkVersion)
+            val r = b.sendMessage(LinkProtocol.TOPIC_HELLO, caps)
+            Log.i(TAG, "hello sent: version=${LinkProtocol.PROTOCOL_VERSION} caps=0x${LinkProtocol.Cap.ALL.toString(16)} linkVersion=$linkVersion -> $r")
+        }.onFailure { Log.e(TAG, "announceHello failed", it) }
+    }
 
     /** 记录一次下行活性：任意经 CXR bridge 订阅收到的消息都证明
      *  cxr-service → 本 App 的分发路由健康（断线重连后可能 stale）。 */
@@ -986,7 +1158,9 @@ class KeyButtonService : Service() {
      *   ASR_Result（流式文字）→ 覆盖式累积
      *   ASR_End → 上行 Exit 关闭官方会话（停止乐奇显示/播报）+ 上行文字给手机 Lab 回复
      */
-    private fun handleAiChannel(args: Caps) {
+    // args 声明为可空：Caps 来自 Java 层，理论上可能被传 null，
+    // 写成非空类型时 `args == null` 恒假（编译器已指出），防御分支永远不会走到。
+    private fun handleAiChannel(args: Caps?) {
         try {
             if (args == null || args.size() < 1 || args.at(0) == null) return
             val cmd = args.at(0).getString() ?: return
@@ -995,9 +1169,13 @@ class KeyButtonService : Service() {
                     // 官方 AI 链路活跃：退让 BridgeActivity（退出 third_app 场景，防会话结束时强杀），
                     // 并刷新自动恢复计时器。下行过滤仅影响文字处理，不影响退让计时。
                     yieldBridgeActivity()
-                    // 下行过滤：Lab 回复下行序列中的 ASR_Result 视为重发，忽略
+                    // 下行过滤：Lab 回复下行序列中的 ASR_Result 不做拦截逻辑（避免自反馈），
+                    // 但必须**本机重放**给官方界面 —— 手机下行的 Ai 只到我们，官方收不到（见 relayAiToOfficial）
                     if (System.currentTimeMillis() < downlinkUntilMs) {
-                        Log.d(TAG, "AI ASR_Result ignored (downlink)")
+                        val t = args.at(1)
+                            ?.takeIf { it.type() == Caps.Value.TYPE_STRING }?.getString()
+                        if (!t.isNullOrBlank()) relayAiToOfficial("ASR_Result", t)
+                        Log.d(TAG, "AI ASR_Result (downlink) -> relayed: ${t?.take(30)}")
                         return
                     }
                     if (args.size() > 1 && args.at(1) != null &&
@@ -1012,9 +1190,10 @@ class KeyButtonService : Service() {
                     // 注意放在下行过滤与官方/自定义模式判断之前——即使放行官方模式，
                     // 官方 AI 会话结束瞬间同样会清理 third_app 强杀，退让不能省略。
                     yieldBridgeActivity()
-                    // 下行过滤：Lab 回复下行序列中的 ASR_End 视为重发，忽略
+                    // 下行过滤：Lab 回复下行序列中的 ASR_End 不做拦截逻辑，但本机重放给官方界面
                     if (System.currentTimeMillis() < downlinkUntilMs) {
-                        Log.d(TAG, "AI ASR_End ignored (downlink)")
+                        relayAiToOfficial("ASR_End")
+                        Log.d(TAG, "AI ASR_End (downlink) -> relayed")
                         return
                     }
                     // 官方模式：放行官方乐奇，不拦截不写文件
@@ -1073,8 +1252,16 @@ class KeyButtonService : Service() {
                         appendAiAsrToFile(finalText)
                     }
                 }
-                "TTS_Result", "TTS_AudioFinished", "Ai_Heartbeat" -> {
-                    // 官方乐奇回复/心跳：忽略（界面即将被 Exit 关闭）
+                "TTS_Result" -> {
+                    // Lab/AI 回复正文：本机注入回**官方对话界面**（v3.0 `c2484b2` 的既有做法）。
+                    // 手机下行的这帧只到本应用、官方 AssistServer 收不到 —— 这就是「有声音没文字」的根因。
+                    val t = args.at(1)
+                        ?.takeIf { it.type() == Caps.Value.TYPE_STRING }?.getString()
+                    if (!t.isNullOrBlank()) showAiReply(t)
+                    else Log.d(TAG, "TTS_Result without text payload")
+                }
+                "TTS_AudioFinished", "Ai_Heartbeat" -> {
+                    // 官方乐奇收尾/心跳：忽略（界面即将被 Exit 关闭）
                 }
                 "KeyDown_Client" -> {
                     // Lab 回复完整下行序列（KeyDown_Client→open→ASR_Result→ASR_End）的标志：
@@ -1083,6 +1270,8 @@ class KeyButtonService : Service() {
                     // 否则会误吞用户紧随其后的真实提问（open 后 1~2s 官方 ASR_End 到达）。
                     downlinkUntilMs = System.currentTimeMillis() + DOWNLINK_FILTER_MS
                     Log.d(TAG, "Downlink flag: $cmd, filter until ${downlinkUntilMs}")
+                    // 本机重放：官方对话界面的打开依赖本机注入（手机下行到不了官方）
+                    relayAiToOfficial("KeyDown_Client", "{\"privacy_level\":2}")
                 }
                 // 官方 AI 会话打开：手机端 interruptOfficialAi / 下行序列中的 open。
                 // 官方 AI 活跃期间必须让 BridgeActivity 退让（透明 Activity 在前台会让
@@ -1091,6 +1280,8 @@ class KeyButtonService : Service() {
                 "open" -> {
                     Log.i(TAG, "AI channel open — yielding BridgeActivity (official AI active)")
                     yieldBridgeActivity()
+                    // 本机重放 open：官方对话界面由此打开
+                    relayAiToOfficial("open")
                 }
                 // 官方 AI 会话结束（手机端下行 Exit 关闭官方会话）。
                 // 同样刷新退让计时器：Exit 只是下行序列第一步，随后 open/ASR/TTS 仍会活跃，
@@ -1205,6 +1396,115 @@ class KeyButtonService : Service() {
         }
     }
 
+    // ──────────────────────────────────────────────
+    //  眼镜 WiFi IP 上行（眼镜端 → 手机端，免手动输入）
+    // ──────────────────────────────────────────────
+
+    /** 获取当前 WiFi 的 IPv4 地址（仅限 TRANSPORT_WIFI 网络，排除蜂窝/回环/区域后缀）。
+     *  未连 WiFi 或尚在获取中返回 null；与 MainActivity.getIPAddress 思路一致但精确限定 WiFi 接口。 */
+    private fun getWiFiIpAddress(): String? {
+        return try {
+            // 复用 MainActivity.getIPAddress 的可靠思路：遍历 NetworkInterface，取首个 IPv4 非回环地址。
+            // 直接用 Collections.list 把 Enumeration 转 List，避免 Kotlin for 循环迭代器歧义；
+            // 优先取 WiFi 接口（wlan*/wifi*），否则取首个可用 IPv4（眼镜无蜂窝，唯一激活接口即 WiFi）。
+            val intfs = java.util.Collections.list(NetworkInterface.getNetworkInterfaces())
+            var fallback: String? = null
+            for (intf in intfs) {
+                if (!intf.isUp || intf.isLoopback) continue
+                for (ia in intf.interfaceAddresses) {
+                    val addr = ia.address ?: continue
+                    if (addr.isLoopbackAddress || addr !is Inet4Address) continue
+                    val ip = addr.hostAddress?.substringBefore('%') ?: continue
+                    if (intf.name?.startsWith("wlan") == true || intf.name?.contains("wifi", ignoreCase = true) == true) {
+                        return ip
+                    }
+                    if (fallback == null) fallback = ip
+                }
+            }
+            fallback
+        } catch (e: Exception) {
+            Log.e(TAG, "getWiFiIpAddress failed", e)
+            null
+        }
+    }
+
+    /** 注册 WiFi 网络回调：WiFi 可用/获得 internet 能力/链路属性变化时上行眼镜 IP */
+    private fun registerWifiIpReporter() {
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        connectivityManager = cm
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                Log.i(TAG, "WIFI available — reporting glasses IP")
+                sendGlassesIp()
+            }
+            override fun onCapabilitiesChanged(network: Network, networkCaps: NetworkCapabilities) {
+                if (networkCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                    sendGlassesIp()
+                }
+            }
+            override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) {
+                sendGlassesIp()
+            }
+            override fun onLost(network: Network) {
+                Log.i(TAG, "WIFI lost — reset last reported IP")
+                lastReportedIp = null
+            }
+        }
+        wifiIpReporter = cb
+        try {
+            cm.registerNetworkCallback(request, cb)
+            Log.i(TAG, "Wifi IP reporter registered")
+            // 注册即上报一次：若此刻已连 WiFi 可立即让手机端拿到 IP
+            sendGlassesIp()
+        } catch (e: Exception) {
+            Log.e(TAG, "registerWifiIpReporter failed", e)
+        }
+    }
+
+    /** 反注册 WiFi 网络回调（onDestroy 调用） */
+    private fun unregisterWifiIpReporter() {
+        runCatching { wifiIpReporter?.let { connectivityManager?.unregisterNetworkCallback(it) } }
+        wifiIpReporter = null
+        connectivityManager = null
+    }
+
+    /** 上行眼镜 WiFi IP：经 CXR-S 通道发往手机端。带 2s 超时保护 + IP 去重（同 IP 不重复上行）。 */
+    private fun sendGlassesIp() {
+        val ip = getWiFiIpAddress()
+        if (ip.isNullOrEmpty()) {
+            Log.d(TAG, "sendGlassesIp: no WiFi IPv4 yet, skip")
+            return
+        }
+        if (ip == lastReportedIp) {
+            Log.d(TAG, "sendGlassesIp: IP unchanged ($ip), skip")
+            return
+        }
+        val b = bridge ?: run {
+            Log.w(TAG, "sendGlassesIp: bridge not ready, will retry on connect")
+            return
+        }
+        val caps = Caps()
+        AiChannel.encodeGlassesIp(ip).forEach { caps.write(it) }
+        try {
+            val f = aiSendExecutor.submit<Int> { b.sendMessage(AiChannel.TOPIC_GLASSES_IP, caps) }
+            val r = f.get(2, TimeUnit.SECONDS)
+            if (r == 0) {
+                lastReportedIp = ip
+                Log.i(TAG, "sendGlassesIp($ip) -> ok")
+            } else {
+                Log.w(TAG, "sendGlassesIp($ip) -> $r (not cached)")
+            }
+        } catch (e: java.util.concurrent.TimeoutException) {
+            Log.w(TAG, "sendGlassesIp($ip) timeout (CXR channel blocked)")
+        } catch (e: Exception) {
+            Log.e(TAG, "sendGlassesIp($ip) error", e)
+        }
+    }
+
     /** 打开 AI 对话界面：KeyDown_Client(privacy_level=2) → open（手机端已验证该序列可打开 ai_assist 场景） */
     private fun openAiSession() {
         val r1 = sendAi("KeyDown_Client", "{\"privacy_level\":2}")
@@ -1220,6 +1520,33 @@ class KeyButtonService : Service() {
         val r1 = sendAi("ASR_Result", text)
         val r2 = sendAi("ASR_End")
         Log.i(TAG, "showAiUserText: ASR_Result=$r1 ASR_End=$r2 text=$text")
+    }
+
+    /**
+     * 在**官方聊天界面**显示 Lab 回复正文（`TTS_Result` 本机注入）。
+     *
+     * 这是 v3.0 (`c2484b2`) 的既有做法；v3.1 移除后改成"手机回 `TTS_Result`"，
+     * 但手机下行的 `Ai` 消息在眼镜上只投递到本应用（拦截订阅），官方 AssistServer 收不到，
+     * 于是退化成「有声音、没文字」。这里恢复本机注入：与 [showAiUserText] 同一机制即可显示。
+     *
+     * 注意：**不在这里播 TTS** —— 播报由手机端下发的 `tts_play` 负责，避免重复播报。
+     */
+    private fun showAiReply(reply: String) {
+        val r = sendAi("TTS_Result", reply)
+        Log.i(TAG, "showAiReply: TTS_Result=$r text=${reply.take(40)}")
+    }
+
+    /**
+     * 把手机端下行的官方协议指令**本机重放**给官方对话界面。
+     *
+     * 手机 → 眼镜的 CXR `Ai` 消息只投递到本应用（我们订阅它是为了拦截官方 ASR），
+     * 官方 AssistServer 收不到；而眼镜本机 `sendAi()` 能进官方链路（v3.0 已验证）。
+     * 所以要显示在官方界面的内容，都必须由我们本机再发一次。
+     */
+    private fun relayAiToOfficial(cmd: String, vararg values: String): Int {
+        val r = sendAi(cmd, *values)
+        Log.i(TAG, "relay($cmd) -> $r${values.firstOrNull()?.let { " (${it.take(24)})" } ?: ""}")
+        return r
     }
 
     /** 当前对话模型模式是否为自定义（Lab 拦截并回复）；official 模式放行官方乐奇 */
@@ -1242,12 +1569,14 @@ class KeyButtonService : Service() {
                 Log.w(TAG, "handleAiConfig: rejected invalid/unsupported payload (size=${args.size()})")
                 return
             }
-            getSharedPreferences(PREFS_NAME, 0).edit()
+            val prefs = getSharedPreferences(PREFS_NAME, 0)
+            prefs.edit()
                 .putString(KEY_AI_BASE_URL, cfg.baseUrl)
-                .putString(KEY_AI_API_KEY, cfg.apiKey)
                 .putString(KEY_AI_MODEL, cfg.model)
                 .putString(KEY_AI_MODE, cfg.mode)
                 .apply()
+            // API Key 走 Keystore 加密落盘（prefs 里只有密文，防止眼镜端被读取后拿到明文凭据）
+            SecretStore.put(prefs, KEY_AI_API_KEY, cfg.apiKey)
             Log.i(TAG, "AI config saved: baseUrl=${cfg.baseUrl} model=${cfg.model} " +
                 "keyLen=${cfg.apiKey.length} mode=${cfg.mode}")
         } catch (e: Exception) {
@@ -1312,6 +1641,286 @@ class KeyButtonService : Service() {
         }
     }
 
+    private var lyricView: TextView? = null
+    private var lyricWm: WindowManager? = null
+
+    /**
+     * 悬浮层可用性自检：`TYPE_APPLICATION_OVERLAY` 必须已授予 `SYSTEM_ALERT_WINDOW`，
+     * 否则 `addView` 抛异常。
+     *
+     * ⚠️ 历史教训：原实现把 `addView` 包在 `runCatching {}` 里且**不打日志**，
+     * 未授权时悬浮层静默加不上，表现为「歌词/对话文字不显示」但日志里查不到任何错误。
+     * 现在改为显式检查 + 失败高声告警（授权由手机端经 ADB appops 下发）。
+     */
+    private fun canShowOverlay(): Boolean {
+        val ok = runCatching { android.provider.Settings.canDrawOverlays(this) }.getOrDefault(false)
+        if (!ok) {
+            Log.e(TAG, "overlay NOT available: SYSTEM_ALERT_WINDOW not granted to $packageName " +
+                "(手机端应经 adb appops set $packageName android:system_alert_window allow)")
+        }
+        return ok
+    }
+
+    /** 在眼镜端显示一个半透明悬浮歌词层，文本居中偏下。重复调用仅更新文本。 */
+    private fun showLyricOverlay(text: String) {
+        val view = lyricView ?: run {
+            if (!canShowOverlay()) return
+            val wmSafe = lyricWm ?: (getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
+                .also { lyricWm = it } ?: return
+            val tv = TextView(this@KeyButtonService).apply {
+                textSize = 22f
+                setTextColor(0xFFFFFFFF.toInt())
+                setShadowLayer(4f, 2f, 2f, 0xFF000000.toInt())
+                setPadding(28, 18, 28, 18)
+                setBackgroundColor(0xCC000000.toInt())
+                gravity = Gravity.CENTER
+            }
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                y = 90
+            }
+            val added = runCatching { wmSafe.addView(tv, params) }
+            added.onFailure { Log.e(TAG, "addView(lyric overlay) failed", it) }
+            if (added.isFailure) return
+            tv.also { lyricView = it }
+        }
+        view.text = text
+        Log.i(TAG, "lyric overlay: ${text.take(40)}")
+    }
+
+    /** 移除悬浮歌词层（文本为空/停止播放时调用）。 */
+    private fun hideLyricOverlay() {
+        lyricView?.let { tv ->
+            runCatching { lyricWm?.removeView(tv) }
+            lyricView = null
+            lyricWm = null
+        }
+        Log.i(TAG, "lyric overlay hidden")
+    }
+
+    // ──────────────────────────────────────────────
+    //  图片显示层（手机端对话里的图片 → 眼镜端）
+    // ──────────────────────────────────────────────
+
+    /** 图片悬浮层自动隐藏时间 */
+    private val IMAGE_OVERLAY_MS = 12_000L
+
+    private var imageContainer: LinearLayout? = null
+    private var imageView: ImageView? = null
+    private var imageCaption: TextView? = null
+    private var imageWm: WindowManager? = null
+    private val hideImageRunnable = Runnable { hideImageOverlay() }
+
+    /**
+     * 手机端下发图片（[AiChannel.TOPIC_SHOW_IMAGE]）：Base64 JPEG → Bitmap → 居中悬浮图片层，
+     * 12s 后自动隐藏；重复下发只换图不重建视图。
+     *
+     * 复用歌词/工具确认同一套悬浮层授权（`SYSTEM_ALERT_WINDOW`，由手机端经 ADB appops 下发）。
+     */
+    private fun handleShowImage(args: Caps?) {
+        try {
+            val decoded = AiChannel.decodeShowImage(capsToStrings(args))
+            if (decoded == null) {
+                Log.w(TAG, "handleShowImage: rejected invalid payload (size=${args?.size()})")
+                return
+            }
+            val (b64, caption) = decoded
+            Log.i(TAG, "Received show_image: base64Len=${b64.length} caption='${caption.take(30)}'")
+            handler.post {
+                val bytes = runCatching { Base64.decode(b64, Base64.DEFAULT) }.getOrNull()
+                if (bytes == null) {
+                    Log.e(TAG, "handleShowImage: base64 decode failed (len=${b64.length})")
+                    return@post
+                }
+                val bmp = runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+                if (bmp == null) {
+                    Log.e(TAG, "handleShowImage: bitmap decode failed (bytes=${bytes.size})")
+                    return@post
+                }
+                showImageOverlay(bmp, caption)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "handleShowImage error", e)
+        }
+    }
+
+    /**
+     * 手机端要求打开某个眼镜端页面（[AiChannel.TOPIC_OPEN_APP]）：直接 startActivity 拉起目标
+     * Activity（须 exported=true）。典型用途：说「显示歌词」→ 拉起系统音乐页
+     * `com.rokid.os.sprite.launcher/.page.music.MusicPageActivity`（该页会随 AVRCP 元数据逐行显示歌词）。
+     *
+     * 注意：**不能复用 [launchTarget]** —— 它优先用 `getLaunchIntentForPackage(pkg)`，对 launcher
+     * 这类包会返回 HOME 意图（拉起桌面而非目标页），必须用显式 ComponentName 直启。
+     *
+     * 本服务持有 SYSTEM_ALERT_WINDOW 且常驻 KeyButtonBridgeActivity，属前台进程，
+     * 不受 Android 12+ 后台启动(BAL)限制。
+     */
+    private fun handleOpenApp(args: Caps?) {
+        try {
+            val decoded = AiChannel.decodeOpenApp(capsToStrings(args))
+            if (decoded == null) {
+                Log.w(TAG, "handleOpenApp: rejected invalid payload (size=${args?.size()})")
+                return
+            }
+            val (pkg, activity) = decoded
+            val fullAct = if (activity.startsWith(".")) "$pkg$activity" else activity
+            Log.i(TAG, "Received open_app: $pkg/$fullAct")
+            handler.post {
+                runCatching {
+                    val intent = Intent().apply {
+                        component = android.content.ComponentName(pkg, fullAct)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(intent)
+                    Log.i(TAG, "open_app launched: $pkg/$fullAct")
+                }.onFailure {
+                    Log.e(TAG, "open_app launch failed: ${it::class.simpleName}: ${it.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "handleOpenApp error", e)
+        }
+    }
+
+    /** 显示/更新悬浮图片层（同一实例复用）。 */
+    private fun showImageOverlay(bmp: Bitmap, caption: String) {
+        val container = imageContainer ?: run {
+            if (!canShowOverlay()) return
+            val wmSafe = imageWm ?: (getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
+                .also { imageWm = it } ?: return
+            val iv = ImageView(this@KeyButtonService).apply {
+                adjustViewBounds = true
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }
+            val tv = TextView(this@KeyButtonService).apply {
+                textSize = 18f
+                setTextColor(0xFFFFFFFF.toInt())
+                setShadowLayer(4f, 2f, 2f, 0xFF000000.toInt())
+                gravity = Gravity.CENTER
+                setPadding(0, 14, 0, 0)
+            }
+            val box = LinearLayout(this@KeyButtonService).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(24, 20, 24, 20)
+                setBackgroundColor(0xE6000000.toInt())
+                addView(iv)
+                addView(tv)
+            }
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply { gravity = Gravity.CENTER }
+            val added = runCatching { wmSafe.addView(box, params) }
+            added.onFailure { Log.e(TAG, "addView(image overlay) failed", it) }
+            if (added.isFailure) return
+            imageView = iv
+            imageCaption = tv
+            box.also { imageContainer = it }
+        }
+        // 限宽 520px：眼镜屏宽有限，超宽图片会被裁切
+        val maxW = 520
+        val scaled = if (bmp.width > maxW) {
+            val h = (bmp.height * (maxW.toFloat() / bmp.width)).toInt().coerceAtLeast(1)
+            runCatching { Bitmap.createScaledBitmap(bmp, maxW, h, true) }.getOrDefault(bmp)
+        } else {
+            bmp
+        }
+        imageView?.setImageBitmap(scaled)
+        imageCaption?.apply {
+            text = caption
+            visibility = if (caption.isBlank()) View.GONE else View.VISIBLE
+        }
+        container.requestLayout()
+        handler.removeCallbacks(hideImageRunnable)
+        handler.postDelayed(hideImageRunnable, IMAGE_OVERLAY_MS)
+        Log.i(TAG, "image overlay: ${scaled.width}x${scaled.height} caption='${caption.take(30)}'")
+    }
+
+    /** 移除悬浮图片层。 */
+    private fun hideImageOverlay() {
+        handler.removeCallbacks(hideImageRunnable)
+        imageContainer?.let { box ->
+            runCatching { imageWm?.removeView(box) }
+            imageContainer = null
+            imageView = null
+            imageCaption = null
+            imageWm = null
+            Log.i(TAG, "image overlay hidden")
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    //  工具确认窗口（Phase 4 确认闸门的眼镜端交互）
+    // ──────────────────────────────────────────────
+
+    /**
+     * 手机端副作用工具的确认请求：悬浮层显示操作摘要 + TTS 播报，
+     * 短按 = 允许，双击/长按 = 取消，30s 无操作超时视为取消。
+     * 结果经 [LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT] 上行回手机端。
+     */
+    private fun handleToolConfirm(args: Caps?) {
+        try {
+            val f = capsToStrings(args)
+            val id = f.getOrNull(0)?.takeIf { it.isNotBlank() } ?: return
+            val tool = f.getOrNull(1) ?: ""
+            val summary = f.getOrNull(2) ?: ""
+            handler.post {
+                clearToolConfirm()
+                pendingToolConfirmId = id
+                showLyricOverlay("⚠ $summary\n[短按]允许  [双击]取消")
+                if (summary.isNotBlank()) {
+                    runCatching { TtsPlaybackHelper.play(this, "是否$summary？短按确认，双击取消") }
+                }
+                toolConfirmTimeoutRunnable = Runnable {
+                    Log.i(TAG, "tool confirm timeout (id=$id) -> deny")
+                    respondToolConfirm(false, timeout = true)
+                }.also { handler.postDelayed(it, TOOL_CONFIRM_WINDOW_MS) }
+                Log.i(TAG, "tool confirm pending: id=$id tool=$tool")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "handleToolConfirm error", e)
+        }
+    }
+
+    /** 应答确认结果并清理窗口（confirm/deny/timeout 共用）。 */
+    private fun respondToolConfirm(allowed: Boolean, timeout: Boolean = false) {
+        val id = pendingToolConfirmId ?: return
+        clearToolConfirm()
+        // UP/CLICK 连发吞没窗口：应答后 1.5s 内的按键广播全部忽略，
+        // 避免同一次按压的第二条广播落到「启动配置目标」上
+        suppressKeyUntilMs = System.currentTimeMillis() + KEY_SUPPRESS_AFTER_CONFIRM_MS
+        val b = bridge
+        runCatching {
+            if (b != null) {
+                val caps = Caps()
+                caps.write(id)
+                caps.write(if (allowed) "yes" else "no")
+                val r = b.sendMessage(LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT, caps)
+                Log.i(TAG, "toolConfirm respond(id=$id, allowed=$allowed, timeout=$timeout) -> $r")
+            } else {
+                Log.w(TAG, "toolConfirm respond(id=$id) dropped: no bridge")
+            }
+        }.onFailure { Log.e(TAG, "toolConfirm respond error", it) }
+    }
+
+    /** 仅清理窗口状态与 UI（不清 suppress 窗口）。 */
+    private fun clearToolConfirm() {
+        toolConfirmTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        toolConfirmTimeoutRunnable = null
+        pendingToolConfirmId = null
+        hideLyricOverlay()
+    }
+
     /** 接收手机端下发的「按键答题」开关状态并持久化（AiChannel 版本化编解码） */
     private fun handleQuizConfig(args: Caps) {
         try {
@@ -1364,7 +1973,7 @@ class KeyButtonService : Service() {
             val sysCaps = Caps()
             sysCaps.write("Sys_App_Resume_Change")
             sysCaps.write("com.rokidlab.rokidlink")
-            val sysResult = b.sendMessage("Sys", sysCaps)
+            val sysResult = b.sendMessage(LinkProtocol.CXR_CHANNEL_SYS, sysCaps)
             Log.i(TAG, "sendMessage(Sys/Sys_App_Resume_Change) -> $sysResult")
         } catch (e: Exception) {
             Log.e(TAG, "sendPhotoAskToPhone error", e)
@@ -1538,136 +2147,5 @@ class KeyButtonService : Service() {
         wifiManager.reconnect()
 
         Log.i(TAG, "WiFi config applied (legacy): ssid=$ssid")
-    }
-
-    private fun connectToWifiApi29(wifiManager: WifiManager, ssid: String, password: String) {
-        val connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager ?: run {
-            Log.e(TAG, "ConnectivityManager not available")
-            return
-        }
-
-        if (!wifiManager.isWifiEnabled) {
-            Log.i(TAG, "WiFi is disabled, trying multiple methods to enable...")
-            
-            val methods = listOf(
-                { enableWifiViaCXRBridge() },
-                { enableWifiViaShellCommand() },
-                { enableWifiViaReflection(wifiManager) },
-                { enableWifiViaSettingsApi(); true }
-            )
-            
-            var success = false
-            for ((index, method) in methods.withIndex()) {
-                try {
-                    Log.i(TAG, "Trying method ${index + 1}...")
-                    success = method.invoke()
-                    if (success) {
-                        Log.i(TAG, "WiFi enabled via method ${index + 1}")
-                        break
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Method ${index + 1} failed: ${e.message}")
-                }
-            }
-            
-            if (!success) {
-                Log.e(TAG, "All methods failed to enable WiFi")
-                return
-            }
-            
-            var waitCount = 0
-            while (!wifiManager.isWifiEnabled && waitCount < 30) {
-                Thread.sleep(100)
-                waitCount++
-            }
-            if (!wifiManager.isWifiEnabled) {
-                Log.e(TAG, "WiFi enable timeout")
-                return
-            }
-        }
-
-        Log.i(TAG, "Building WiFi network specifier for $ssid, password_len=${password.length}...")
-        val specifier = WifiNetworkSpecifier.Builder()
-            .setSsid(ssid)
-            .setWpa2Passphrase(password)
-            .build()
-        Log.i(TAG, "Network specifier created: $specifier")
-
-        val networkRequest = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .setNetworkSpecifier(specifier)
-            .build()
-
-        val networkCallback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                Log.i(TAG, "WiFi connected to $ssid, network=${network.networkHandle}")
-                connectivityManager.unregisterNetworkCallback(this)
-            }
-
-            override fun onUnavailable() {
-                Log.e(TAG, "WiFi connection to $ssid via ConnectivityManager failed, trying legacy method...")
-                connectivityManager.unregisterNetworkCallback(this)
-                connectToWifiLegacy(wifiManager, ssid, password)
-            }
-
-            override fun onLost(network: Network) {
-                Log.w(TAG, "WiFi connection lost: $ssid")
-                connectivityManager.unregisterNetworkCallback(this)
-            }
-        }
-
-        Log.i(TAG, "Requesting network for $ssid via ConnectivityManager (API 29+)...")
-        connectivityManager.requestNetwork(networkRequest, networkCallback)
-
-        Log.i(TAG, "WiFi connection requested: ssid=$ssid")
-    }
-
-    private fun enableWifiViaReflection(wifiManager: WifiManager): Boolean {
-        return try {
-            val method = wifiManager.javaClass.getMethod("setWifiEnabled", Boolean::class.javaPrimitiveType)
-            method.isAccessible = true
-            method.invoke(wifiManager, true) as Boolean
-        } catch (e: Exception) {
-            Log.e(TAG, "enableWifiViaReflection failed: ${e::class.simpleName}: ${e.message}")
-            false
-        }
-    }
-
-    private fun enableWifiViaSettingsApi() {
-        try {
-            val contentResolver = contentResolver
-            val wifiOnKey = "wifi_on"
-            val result = Settings.System.putInt(contentResolver, wifiOnKey, 1)
-            Log.i(TAG, "Settings.System.putInt(wifi_on, 1) -> $result")
-        } catch (e: Exception) {
-            Log.e(TAG, "enableWifiViaSettingsApi failed: ${e::class.simpleName}: ${e.message}")
-        }
-    }
-
-    private fun enableWifiViaCXRBridge(): Boolean {
-        return try {
-            val args = Caps()
-            args.write("wifi_enable")
-            args.write(true)
-            val result = bridge?.sendMessage("system.wifi", args)
-            Log.i(TAG, "enableWifiViaCXRBridge: sendMessage(system.wifi) -> $result")
-            result == 0
-        } catch (e: Exception) {
-            Log.e(TAG, "enableWifiViaCXRBridge failed: ${e::class.simpleName}: ${e.message}")
-            false
-        }
-    }
-
-    private fun enableWifiViaShellCommand(): Boolean {
-        return try {
-            val process = Runtime.getRuntime().exec(arrayOf("svc", "wifi", "enable"))
-            val exitCode = process.waitFor()
-            Log.i(TAG, "enableWifiViaShellCommand: svc wifi enable -> exitCode=$exitCode")
-            exitCode == 0
-        } catch (e: Exception) {
-            Log.e(TAG, "enableWifiViaShellCommand failed: ${e::class.simpleName}: ${e.message}")
-            false
-        }
     }
 }

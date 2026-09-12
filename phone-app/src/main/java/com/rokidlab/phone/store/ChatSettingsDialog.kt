@@ -198,7 +198,7 @@ internal fun ChatSettingsDialog(
         } else {
             // 自定义服务 / 乐奇官方：写入在线槽位并关闭本地模式
             session.setAiConfig(
-                CxrLHiRokidSession.AiConfig(
+                com.rokidlab.phone.domain.AiConfig(
                     baseUrl = baseUrl.trim().ifBlank { "https://api.deepseek.com" },
                     apiKey = apiKey.trim(),
                     model = model.trim().ifBlank { "deepseek-chat" },

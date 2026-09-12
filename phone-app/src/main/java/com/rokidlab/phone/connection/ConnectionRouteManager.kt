@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.util.Log
+import com.rokidlab.phone.util.LogCollector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.DataInputStream
@@ -78,6 +79,14 @@ class ConnectionRouteManager(private val context: Context) {
     }
 
     private val tunnel = BtTunnelClient(context)
+
+    /**
+     * 蓝牙通道仲裁器（长连接 / 控制面 / 兜底轮询的优先级让路）。
+     *
+     * 消费方按 [ChannelPriority] 获取租约，离场 `close()`（幂等）。
+     * 取代旧的 `reserveTunnel()/releaseTunnel()` 裸计数 —— 见 [ChannelArbiter] 类注释。
+     */
+    val channelArbiter = ChannelArbiter()
 
     /** 最近一次 resolve 的线路选择（key = "ip:port"），60s 内复用 */
     private data class CachedRoute(val route: ConnectionRoute, val time: Long)
@@ -174,6 +183,13 @@ class ConnectionRouteManager(private val context: Context) {
 
     /** 隧道是否运行中 */
     val isTunnelRunning: Boolean get() = tunnel.isRunning
+
+    /**
+     * 隧道最后一次建链失败是否属于「同 SCN 通道被占用」冲突。
+     * 调用方（如 ASR 文件轮询兜底）据此决定要不要清线路缓存 —— 冲突时清缓存只会
+     * 让下一次 resolve 白等一轮 2s WiFi 探测，反而加剧隧道争抢。
+     */
+    val isTunnelChannelConflict: Boolean get() = tunnel.lastFailureWasChannelConflict
 }
 
 /**
@@ -262,6 +278,21 @@ class BtTunnelClient(private val context: Context) {
          * 大于客户端最慢操作（pullFile 30s / 心跳 8s），正常会话不会触发。
          */
         private const val TUNNEL_IDLE_TIMEOUT_MS = 60_000
+
+        /**
+         * RFCOMM 建链重试参数。
+         *
+         * 眼镜端 BtTunnelServer 只注册了一个 SCN（TUNNEL_UUID → SCN 5），而 Android 蓝牙栈
+         * 对「同一设备 + 同一 SCN」只允许**一条**客户端通道同时存在，第二条会被栈直接拒绝。
+         * 本 App 有多个 ADB 消费者（屏幕镜像 / ADB 工具 / ASR 文件轮询兜底）各自开一条隧道
+         * TCP，后到者必然被拒；但这类冲突通常在数百毫秒内自解，故短退避重试即可吃掉。
+         *
+         * 总窗口 ≈ 1.3s（120+240+450+450 退避 + 若干次快速失败），必须明显小于客户端读超时
+         * （ADB_SOCKET_TIMEOUT_MS = 3s），否则重试还没走完，调用方已先报 Connection reset。
+         */
+        private const val RFCOMM_RETRY_ATTEMPTS = 5
+        private const val RFCOMM_RETRY_BASE_MS = 120L
+        private const val RFCOMM_RETRY_MAX_MS = 450L
     }
 
     @Volatile
@@ -276,6 +307,18 @@ class BtTunnelClient(private val context: Context) {
     @Volatile
     var lastConnectFailureAt = 0L
         private set
+
+    /**
+     * 最近一次建链失败是否属于「同一 SCN 通道被占用」冲突（而非蓝牙链路断开）。
+     * 上层据此决定是否清空线路缓存：冲突说明线路本身没问题，清缓存只会让下一次
+     * resolve 白等一轮 2s WiFi 探测，反而加剧隧道争抢。
+     */
+    @Volatile
+    var lastFailureWasChannelConflict = false
+        private set
+
+    /** 串行化 RFCOMM 建链（仅建链阶段，不含数据转发），避免同时发起两次必然失败一次 */
+    private val rfcommEstablishLock = java.util.concurrent.locks.ReentrantLock()
 
     /** 每个本地端口一个 ServerSocket */
     private val servers = ConcurrentHashMap<Int, ServerSocket>()
@@ -337,8 +380,7 @@ class BtTunnelClient(private val context: Context) {
     private fun handleConnection(tcpSocket: Socket, glasses: BluetoothDevice, targetPort: Int) {
         var btSocket: BluetoothSocket? = null
         try {
-            btSocket = glasses.createRfcommSocketToServiceRecord(ConnectionRouteManager.TUNNEL_UUID)
-            connectWithTimeout(btSocket, BT_CONNECT_TIMEOUT_MS)
+            btSocket = openRfcomm(glasses)
             Log.i(TAG, "BT RFCOMM connected to ${glasses.name}")
 
             // 隧道握手：发送 4 字节目标端口号
@@ -364,9 +406,9 @@ class BtTunnelClient(private val context: Context) {
                         btOut.write(buf, 0, n)
                         btOut.flush()
                     }
-                } catch (_: IOException) {}
+                } catch (_: IOException) {} // catch-ok: 读线程正常退出路径（对端关闭/soTimeout），由 done+t2 收尾
                 done.set(true)
-                try { btSocket.close() } catch (_: Exception) {}
+                try { btSocket.close() } catch (_: Exception) {} // catch-ok: 关闭失败无补救
             }
 
             // 蓝牙 → TCP
@@ -379,23 +421,39 @@ class BtTunnelClient(private val context: Context) {
                         tcpOut.write(buf, 0, n)
                         tcpOut.flush()
                     }
-                } catch (_: IOException) {}
+                } catch (_: IOException) {} // catch-ok: 同上，反向读线程退出路径
                 done.set(true)
-                try { tcpSocket.close() } catch (_: Exception) {}
+                try { tcpSocket.close() } catch (_: Exception) {} // catch-ok: 关闭失败无补救
             }
 
             t1.start()
             t2.start()
-            // t1 受 soTimeout 兜底，最多 TUNNEL_IDLE_TIMEOUT_MS 必然退出
-            t1.join(TUNNEL_IDLE_TIMEOUT_MS + 5000L)
+            // 等转发线程自然结束 —— **绝不能**给 t1 的 join 设上限后就关 socket。
+            //
+            // 旧写法是 t1.join(TUNNEL_IDLE_TIMEOUT_MS + 5000L)（≈65s），join 超时后代码继续走到
+            // finally 把 socket 全关掉，于是「心跳维持着的健康长连接」也会在 65 秒被强制掐断：
+            // ADB 会话随之失效（客户端下一次命令报 "Connection closed / session dead"），
+            // 界面表现就是「ADB 工具/投屏用着用着就不行了，切走再回来又好了」。
+            // 实测旧行为：会话存活时长恒为 67s / 72s，全部卡在这个 join 上限上。
+            //
+            // 现在 t1 由 tcpSocket.soTimeout（TUNNEL_IDLE_TIMEOUT_MS）兜底：
+            // 客户端静默超过该时长 → read 抛 SocketTimeoutException → 退出并关闭 btSocket
+            // → t2 的 btIn.read 随之失败退出。只要客户端在正常通信（ADB 心跳每 8s 一次），
+            // 连接就会一直保持，不再被隧道自己掐断。
+            t1.join()
             t2.join(2000)
         } catch (e: Exception) {
             // 记录失败时间：路由缓存据此失效（BT 断线后不再向死隧道引流 60s）
             lastConnectFailureAt = System.currentTimeMillis()
+            // 「通道被占用」不代表蓝牙链路有问题，标记出来让上层不要误清线路缓存
+            lastFailureWasChannelConflict = e is RfcommChannelBusyException
             Log.e(TAG, "Tunnel connection failed: ${e.message}")
+            // 原日志只有 message，丢掉了堆栈与异常类型 —— 而「栈拒绝建链(RfcommChannelBusy)」
+            // 与「链路断开(SocketException)」的处置完全不同，只看 message 无法区分，故补落面板。
+            LogCollector.e(TAG, "隧道建链/转发失败: ${e.message}", e)
         } finally {
-            try { tcpSocket.close() } catch (_: Exception) {}
-            try { btSocket?.close() } catch (_: Exception) {}
+            try { tcpSocket.close() } catch (_: Exception) {} // catch-ok: 关闭失败无补救
+            try { btSocket?.close() } catch (_: Exception) {} // catch-ok: 关闭失败无补救
             Log.i(TAG, "Tunnel connection closed")
         }
     }
@@ -407,8 +465,12 @@ class BtTunnelClient(private val context: Context) {
      */
     private fun connectWithTimeout(btSocket: BluetoothSocket, timeoutMs: Long) {
         val done = AtomicBoolean(false)
+        // 不能吞掉 connect() 抛出的异常：它才是真实失败原因。
+        // 此前被 catch (_: Exception) 丢弃，日志里只剩一句笼统的 "BT RFCOMM connect failed"，
+        // 蓝牙栈的真实拒绝原因完全看不到（本次排查因此绕了大弯路）。
+        var connectError: Exception? = null
         val connectThread = Thread {
-            try { btSocket.connect() } catch (_: Exception) {} finally { done.set(true) }
+            try { btSocket.connect() } catch (e: Exception) { connectError = e } finally { done.set(true) }
         }.apply { name = "bt-tunnel-connect"; isDaemon = true; start() }
         if (!done.get()) {
             connectThread.join(timeoutMs)
@@ -420,14 +482,72 @@ class BtTunnelClient(private val context: Context) {
                 throw IOException("BT RFCOMM connect timeout")
             }
         }
-        if (!btSocket.isConnected) throw IOException("BT RFCOMM connect failed")
+        if (!btSocket.isConnected) {
+            // connect() 已返回但未连通 —— 栈拒绝建链的典型形态：
+            //   RFCOMM_CreateConnectionWithSecurity: already at opened state ... scn=5
+            //   → bta_jv_rfcomm_connect: RFCOMM_CreateConnection failed
+            // 即「同设备同 SCN 已有一条客户端通道」，属可重试的瞬时冲突。
+            throw RfcommChannelBusyException(
+                "RFCOMM create rejected (channel busy): ${connectError?.message ?: "socket not connected"}",
+            )
+        }
+    }
+
+    /** 眼镜端同一 SCN 的 RFCOMM 客户端通道已被占用（栈拒绝建链），与「蓝牙链路断开」是两回事 */
+    private class RfcommChannelBusyException(message: String) : IOException(message)
+
+    /**
+     * 建立到眼镜的 RFCOMM 通道：串行建链 + 短退避重试。
+     *
+     * 为什么要重试 —— 眼镜端 BtTunnelServer 只注册了一个 SCN（TUNNEL_UUID → SCN 5），
+     * 而 Android 蓝牙栈对「同一设备 + 同一 SCN」只允许**一条**客户端通道同时存在，第二条
+     * 会被 RFCOMM 层直接拒绝。本 App 有多个 ADB 消费者（屏幕镜像 / ADB 工具 / ASR 文件
+     * 轮询兜底）各自开一条隧道 TCP，于是后到的那条必然被拒 —— 隧道随即关闭 TCP，调用方
+     * 看到 `Connection reset`，界面即「连接失败」。
+     *
+     * 实测这类冲突是瞬时的（对方会话通常在数百毫秒内结束；上层 2–3s 后重试即成功），
+     * 所以在隧道内部吃掉重试，而不是把失败抛给上层 UI。
+     *
+     * 建链阶段用 [rfcommEstablishLock] 串行：两个 TCP 连接同时到达时并行发起 RFCOMM，
+     * 按栈语义必有一条失败（实测 21:01:01 / 21:02:14 均如此），串行后这种自伤消失。
+     * 锁只覆盖「建链」，不覆盖数据转发，否则会把并发隧道退化成单路。
+     */
+    private fun openRfcomm(glasses: BluetoothDevice): BluetoothSocket {
+        var lastError: Exception? = null
+        var backoff = RFCOMM_RETRY_BASE_MS
+        for (attempt in 1..RFCOMM_RETRY_ATTEMPTS) {
+            var socket: BluetoothSocket? = null
+            try {
+                socket = glasses.createRfcommSocketToServiceRecord(ConnectionRouteManager.TUNNEL_UUID)
+                rfcommEstablishLock.lock()
+                try {
+                    connectWithTimeout(socket, BT_CONNECT_TIMEOUT_MS)
+                } finally {
+                    rfcommEstablishLock.unlock()
+                }
+                if (attempt > 1) Log.i(TAG, "BT RFCOMM connected on attempt $attempt")
+                return socket
+            } catch (e: Exception) {
+                lastError = e
+                runCatching { socket?.close() }
+                if (attempt >= RFCOMM_RETRY_ATTEMPTS) break
+                if (attempt == 1) Log.w(TAG, "BT RFCOMM attempt 1 failed (${e.message}), retrying")
+                try { Thread.sleep(backoff) } catch (_: InterruptedException) { break }
+                backoff = (backoff * 2).coerceAtMost(RFCOMM_RETRY_MAX_MS)
+            }
+        }
+        // 保留失败类型：上层据此判断是「通道冲突（可重试、线路没问题）」还是「链路断开」
+        if (lastError is RfcommChannelBusyException) {
+            throw RfcommChannelBusyException("RFCOMM channel busy, gave up after $RFCOMM_RETRY_ATTEMPTS attempts")
+        }
+        throw IOException("BT RFCOMM connect failed after $RFCOMM_RETRY_ATTEMPTS attempts: ${lastError?.message}")
     }
 
     private fun findGlasses(): BluetoothDevice? = selectActiveGlasses(context)
 
     fun stop() {
         isRunning = false
-        servers.values.forEach { try { it.close() } catch (_: Exception) {} }
+        servers.values.forEach { try { it.close() } catch (_: Exception) {} } // catch-ok: stop() 收尾，关闭失败无补救
         servers.clear()
         acceptThreads.values.forEach { it.interrupt() }
         acceptThreads.clear()

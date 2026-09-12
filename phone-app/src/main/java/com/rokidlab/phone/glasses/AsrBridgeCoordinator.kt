@@ -1,3 +1,7 @@
+// Rokid SDK 的 sendCustomCmd 自带「注意 Caps 体积」的废弃标记，
+// 但这是当前唯一的下行通道，短期内不可能替换，故整文件抑制该告警。
+@file:Suppress("DEPRECATION")
+
 package com.rokidlab.phone.glasses
 
 import android.content.Context
@@ -5,15 +9,14 @@ import android.util.Log
 import com.rokid.cxr.Caps
 import com.rokid.cxr.link.CXRLink
 import com.rokidlab.phone.ai.MusicPlayerController
-import com.rokidlab.phone.app.LabApplication
-import com.rokidlab.phone.connection.ConnectionRoute
+import com.rokidlab.phone.util.LogCollector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import java.util.concurrent.Executors
 
 /**
  * ASR 桥接协调器（从 CxrLHiRokidSession 拆出）。
@@ -43,6 +46,14 @@ internal class AsrBridgeCoordinator(
     private val onPhotoAsk: () -> Unit,
     /** 收到 AIUI 页面工具调用（TOOL_CALL_PREFIX + JSON 载荷）：交 ToolGateway 执行并回传结果 */
     private val onToolCall: (String) -> Unit,
+    /**
+     * 全 App 共享的 ADB 会话提供者（= `app.cxrL::getAdbShellClient`）。
+     *
+     * 兜底轮询**必须**复用它，绝不能自建会话：手机侧蓝牙栈对「同一设备 + 同一 SCN」
+     * 只允许一条客户端 RFCOMM 通道，自建的第二条会把用户正在用的 ADB 工具 / 屏幕镜像 /
+     * 手机投屏会话挤断（实测：自建会话成功建链后 1.5s 内，对端 Tunnel connection closed）。
+     */
+    private val adbClientProvider: () -> com.rokidlab.phone.adb.AdbShellClient? = { null },
 ) {
     companion object {
         private const val TAG = "AsrBridgeCoordinator"
@@ -64,25 +75,25 @@ internal class AsrBridgeCoordinator(
         private const val KEY_LAST_ASR_TS = "ai_asr_last_ts"
 
         /** 眼镜端「双击退出对话窗口」时经 RFCOMM 推送通道上行到手机的音乐停止标记 */
-        private const val MUSIC_STOP_MARKER = "__LAB_MUSIC_STOP__"
+        private val MUSIC_STOP_MARKER = LinkProtocol.MARKER_MUSIC_STOP
         /**
          * 眼镜端「用户关闭助手/退出对话」时经 RFCOMM 推送通道上行到手机的中止标记：
          * 手机收到后停止音乐、下发 tts_stop 停眼镜端播报，并取消正在运行的 Lab 模型请求
          * （bump aiGenSeq 让 deepSeekThread 在检查点自弃），避免退出后模型继续生成、
          * 跑完又下行 tts_play 造成"关了助手语音还复活"。
          */
-        private const val ABORT_AI_MARKER = "__LAB_ABORT_AI__"
+        private val ABORT_AI_MARKER = LinkProtocol.MARKER_ABORT_AI
         /**
          * 眼镜端「按键拍照答题」控制指令：经 RFCOMM 推送通道（AsrPushServer）上行，
          * 独立于 AI App 网关（custom cmd 的 rokidlab_photo_ask 可能被网关过滤收不到），
          * 且与 Sys_App_Resume_Change 不同——仅按键才发送，可严格区分「拍照意图」。
          */
-        private const val PHOTO_ASK_MARKER = "__LAB_PHOTO_ASK__"
+        private val PHOTO_ASK_MARKER = LinkProtocol.MARKER_PHOTO_ASK
         /** ASR 识别完成信号（眼镜端 AsrPushServer.CTRL_ASR_READY，经 RFCOMM 通道推送） */
         /** AIUI 页面工具调用上行：本前缀 + JSON 载荷 {cbId,name,args}。
          *  与其他标记不同，它是【前缀】而非整条相等 —— 后面跟着工具参数。 */
-        private const val TOOL_CALL_PREFIX = "__LAB_TOOL__"
-        private const val ASR_READY_MARKER = "__LAB_ASR_READY__"
+        private val TOOL_CALL_PREFIX = LinkProtocol.MARKER_TOOL_CALL
+        private val ASR_READY_MARKER = LinkProtocol.MARKER_ASR_READY
 
         /**
          * 相同文字的「回声抑制」窗口（毫秒）。
@@ -114,6 +125,22 @@ internal class AsrBridgeCoordinator(
     private var lastAsrText = ""
     private var lastAsrTextAt = 0L
 
+    /**
+     * ASR 文字单消费者串行队列 + 去重判定锁。
+     *
+     * 三路入口（RFCOMM 推送 / ADB 文件补读 / CXR 全局指令）原先各自 `Thread{}.start()`
+     * 或 `appScope.launch{}` 裸投递：既无排序（后发先至），又让「检查 lastAsrText → 写入
+     * lastAsrText」的 check-then-act 在多线程下竞态（同一句话可触发两次 AI 下行）。
+     * 现在全部经 [onAsrText] 入队到本单线程，严格 FIFO 且去重判定天然串行。
+     */
+    private val asrExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "asr-text-consumer").apply { isDaemon = true }
+    }
+    private val dedupeLock = Any()
+
+    /** 是否处于可接收状态（start→true / stop→false）：stop 后丢弃队列中未处理的陈旧文字 */
+    @Volatile private var accepting = false
+
     /** 上一条 ASR 是否仍在由会话层处理（AI 下行耗时数秒）：处理中又来同文才吞 */
     @Volatile private var asrHandling = false
     @Volatile private var asrHandlingSince = 0L
@@ -130,26 +157,45 @@ internal class AsrBridgeCoordinator(
     /**
      * ASR 文字入口（三路共用：push 推送 / 文件轮询 / CXR 全局指令监听）。
      *
+     * 仅做入队（非阻塞）：三路可能来自 RFCOMM 读线程、轮询协程、SDK binder 线程，
+     * 统一投递到 [asrExecutor] 单消费者串行执行 —— 保证严格 FIFO（不再后发先至），
+     * 并让去重判定与下游触发在同一线程串行（消除 check-then-act 竞态）。
+     */
+    fun onAsrText(text: String) {
+        if (!accepting) {
+            Log.i(TAG, "onAsrText: dropped (bridge not accepting)")
+            return
+        }
+        asrExecutor.execute { processAsrText(text) }
+    }
+
+    /**
+     * 单消费者线程内执行：去重判定 + 交下游。
+     *
      * 丢弃判定（与原 3s 硬窗口语义不同）：仅当「文字与上次相同 **且** 上一条仍在处理中」
      * 才丢弃——防止同一句话被双通道（push+文件）或链路回声重复触发两次 AI 下行、加剧链路竞态。
      * 上一条已处理完（或已超时保护）时，用户连说两遍同一指令（如「停止播放」「停止播放」）
      * 应当执行两遍，不再被当成重复指令吞掉。
      */
-    fun onAsrText(text: String) {
+    private fun processAsrText(text: String) {
         try {
-            val now = System.currentTimeMillis()
-            val stillHandling = asrHandling && (now - asrHandlingSince) < ASR_HANDLING_MAX_MS
-            if (text == lastAsrText && stillHandling) {
-                Log.i(TAG, "onAsrText: same text while previous still handling, skip (last=${lastAsrTextAt})")
-                return
+            if (!accepting) return
+            synchronized(dedupeLock) {
+                val now = System.currentTimeMillis()
+                val stillHandling = asrHandling && (now - asrHandlingSince) < ASR_HANDLING_MAX_MS
+                if (text == lastAsrText && stillHandling) {
+                    Log.i(TAG, "onAsrText: same text while previous still handling, skip (last=${lastAsrTextAt})")
+                    return
+                }
+                lastAsrText = text
+                lastAsrTextAt = now
             }
-            lastAsrText = text
-            lastAsrTextAt = now
             // 交给真正的下游处理器（会话的 AI 对话分发核心）。切勿写成 onAsrText(text)——
             // 那会递归调用本方法自身导致 StackOverflow。
             asrDeliver(text)
         } catch (e: Exception) {
             Log.e(TAG, "onAsrText error", e)
+            LogCollector.e(TAG, "ASR 文字分发失败（下游异常，该条已丢弃）: ${text.take(60)}", e)
         }
     }
 
@@ -177,6 +223,7 @@ internal class AsrBridgeCoordinator(
             return
         }
         lastStartAtMs = now
+        accepting = true
         pollJob?.cancel()
         pollJob = appScope.launch(Dispatchers.IO) {
             val prefs = appContext.getSharedPreferences("adb_prefs", 0)
@@ -208,13 +255,13 @@ internal class AsrBridgeCoordinator(
                                 backoffMs = (backoffMs * 2).coerceAtMost(AI_ASR_BACKOFF_MAX_MS)
                                 Log.w(TAG, "ASR tunnel unavailable, backoff to ${backoffMs}ms")
                             }
-                            r.text?.let { (ts, text) ->
+                            r.texts.forEach { (ts, text) ->
                                 lastTs = ts
                                 prefs.edit().putLong(KEY_LAST_ASR_TS, ts).apply()
                                 Log.i(TAG, "ASR via ADB bridge (fallback${if (!pushUp) "/catch-up" else ""}): $text")
-                                // 打断已由眼镜端本地完成（KeyButtonService interruptOfficialLocally 发 Ai/Exit），
-                                // 处理链路放后台线程执行（下行 sleep + DeepSeek join 耗时数秒），避免阻塞主线程。
-                                Thread { onAsrText(text) }.start()
+                                // 入队到 ASR 单消费者串行队列（严格 FIFO）：下游含下行 sleep + DeepSeek join
+                                // 耗时数秒，放队列既避免阻塞轮询线程，又保证积压多条按序处理
+                                onAsrText(text)
                             }
                         }
                     } else {
@@ -225,6 +272,7 @@ internal class AsrBridgeCoordinator(
                     pushWasDown = !pushUp
                 } catch (e: Exception) {
                     Log.e(TAG, "aiAsrBridge poll error", e)
+                    LogCollector.e(TAG, "ASR 文件兜底轮询异常", e)
                     backoffMs = (backoffMs * 2).coerceAtMost(AI_ASR_BACKOFF_MAX_MS)
                 }
                 delayInterruptible(backoffMs)
@@ -282,9 +330,10 @@ internal class AsrBridgeCoordinator(
                 val prefs = appContext.getSharedPreferences("adb_prefs", 0)
                 prefs.edit().putLong(KEY_LAST_ASR_TS, System.currentTimeMillis()).apply()
                 Log.i(TAG, "ASR via push channel: $text")
-                Thread { onAsrText(text) }.start()
+                onAsrText(text)
             } catch (e: Exception) {
                 Log.e(TAG, "asr push handle error", e)
+                LogCollector.e(TAG, "ASR 推送通道消息处理异常", e)
             }
         }) {
             // 推送建链/重连成功：唤醒兜底轮询补读积压文字
@@ -297,6 +346,7 @@ internal class AsrBridgeCoordinator(
     }
 
     fun stop() {
+        accepting = false
         pollJob?.cancel()
         pollJob = null
         pushClient?.stop()
@@ -333,6 +383,7 @@ internal class AsrBridgeCoordinator(
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "downlink ping error", e)
+                    LogCollector.w(TAG, "下行存活 ping 失败", e)
                 }
                 delay(DOWNLINK_PING_INTERVAL_MS)
             }
@@ -349,46 +400,44 @@ internal class AsrBridgeCoordinator(
     // ──────────────────────────────────────────────
 
     /**
-     * 创建一次性 ADB 短连接（用后即断），避免后台轮询长连接独占蓝牙隧道。
-     * 必须在后台线程调用（同步阻塞连接握手）。连接失败返回 null。
+     * 取得全 App 共享的 ADB 会话（由 [adbClientProvider] 提供）。
+     *
+     * 历史教训：这里原先会 `AdbShellClient(...)` 自建一条「一次性短连接」。设计意图是
+     * "避免后台轮询长连接独占蓝牙隧道"，但实际效果相反 —— 每次自建都等于在同一条
+     * RFCOMM SCN 上抢一条客户端通道，**把用户正在用的会话挤断**，于是出现
+     * 「打开镜像正常，但 ADB 工具 / 投屏用着用着就不行了，切走再回来又好了」。
+     *
+     * 现在只复用共享会话；拿不到就返回 null，由调用方退避，等下一拍再试。
+     * 必须在后台线程调用（同步阻塞握手）。
      */
-    private fun createShortAdbClient(): com.rokidlab.phone.adb.AdbShellClient? {
-        return runCatching {
-            val app = appContext as LabApplication
-            val prefs = appContext.getSharedPreferences("adb_prefs", 0)
-            val wifiIp = prefs.getString("ip", "192.168.1.168") ?: "192.168.1.168"
-            val route = runBlocking { app.routeManager.resolve(wifiIp, 5555) }
-            val (targetIp, targetPort) = when (route) {
-                is ConnectionRoute.Wifi -> route.ip to route.port
-                is ConnectionRoute.Bluetooth -> route.ip to route.localPort
-                is ConnectionRoute.None -> return null
-            }
-            val client = com.rokidlab.phone.adb.AdbShellClient(appContext, targetIp, targetPort)
-            if (client.connect()) client else {
-                runCatching { client.disconnect() }
-                // 连接失败：清除线路缓存，下轮重新探测重建隧道（蓝牙隧道可能已断开）
-                runCatching { app.routeManager.clearRouteCache() }
-                null
-            }
-        }.getOrNull()
-    }
+    private fun sharedAdbClient(): com.rokidlab.phone.adb.AdbShellClient? =
+        // catch-ok: 拿不到共享会话属正常退避路径（轮询每拍都调），落日志会刷屏；
+        // 真因由 readAiAsrBridgeTextOnce 的 catch 落面板，此处不再重复
+        runCatching { adbClientProvider() }.getOrNull()
 
-    /** 文件通道轮询单次结果：text=读到的新文本（可能 null）；tunnelOk=隧道连接是否成功 */
-    private data class AsrBridgeRead(val text: Pair<Long, String>?, val tunnelOk: Boolean)
+    /** 文件通道轮询单次结果：texts=按时间升序的新文本（可能为空）；tunnelOk=隧道连接是否成功 */
+    private data class AsrBridgeRead(val texts: List<Pair<Long, String>>, val tunnelOk: Boolean)
 
     /**
-     * 通过 ADB 读取眼镜端 ai_asr.log 中时间戳大于 lastTs 的最新 ASR_TEXT（短连接，用后即断）。
+     * 通过 ADB 读取眼镜端 ai_asr.log 中时间戳大于 lastTs 的**全部**新 ASR_TEXT，按行序（时间升序）返回。
      * 返回 AsrBridgeRead：tunnelOk=false 表示隧道不可用（调用方应退避，避免持续打隧道），
-     * text 为 null 表示隧道正常但无新文本。
+     * texts 为空表示隧道正常但无新文本。
+     *
+     * 为什么返回全部而不是最后一条：推送断开 → 退避最长 30s，期间眼镜端写入的多条文字会积压，
+     * 若只取最后一条并把游标直推最新，前面的积压将被永久跳过（用户已提问却永远等不到回复）。
+     *
+     * 注意：共享会话由 [com.rokidlab.phone.glasses.CxrLHiRokidSession.getAdbShellClient]
+     * 统一管理生命周期，本次读取**不得** disconnect（否则会掐断其它消费者正在用的会话）。
      */
     private fun readAiAsrBridgeTextOnce(lastTs: Long): AsrBridgeRead? {
-        val client = createShortAdbClient() ?: return AsrBridgeRead(null, false)
+        val client = sharedAdbClient() ?: return AsrBridgeRead(emptyList(), false)
         return try {
             val out = runCatching {
                 client.executeShellCommand("tail -n 20 $GLASSES_ASR_FILE 2>/dev/null", 10_000)
             }.getOrNull()
-            if (out == null) return AsrBridgeRead(null, false)
-            val latest = out.lineSequence()
+            if (out == null) return AsrBridgeRead(emptyList(), false)
+            // 文件为追加写，行序即时间序；首行可能是 tail 截断的半行（正则不匹配）自然被丢弃
+            val fresh = out.lineSequence()
                 .mapNotNull { line ->
                     // 每行格式：[epochMs] text；解析失败（半行/脏数据）则忽略
                     val m = Regex("""\[(\d+)\] (.*)""").matchEntire(line.trim()) ?: return@mapNotNull null
@@ -396,11 +445,16 @@ internal class AsrBridgeCoordinator(
                     val text = m.groupValues[2].trim()
                     if (text.isEmpty()) null else ts to text
                 }
-                .lastOrNull()
-            // 隧道连接成功；latest 可能为 null（无新数据），也可能时间戳不新
-            AsrBridgeRead(if (latest != null && latest.first > lastTs) latest else null, true)
-        } finally {
-            runCatching { client.disconnect() }
+                .filter { it.first > lastTs }
+                .distinctBy { it.first }
+                .toList()
+            // 隧道连接成功；fresh 可能为空（无新数据）
+            AsrBridgeRead(fresh, true)
+        } catch (e: Exception) {
+            // 原先此处完全静默：ASR 丢字时日志里只剩上游一句「tunnel unavailable」，
+            // 看不到真因（读取超时 / 会话已死 / 命令被拒）。补落 App 内日志面板。
+            LogCollector.w(TAG, "读取眼镜端 ASR 文件失败（隧道不可用语义）", e)
+            AsrBridgeRead(emptyList(), false)
         }
     }
 }

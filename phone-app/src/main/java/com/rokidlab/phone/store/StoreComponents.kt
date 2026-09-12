@@ -40,7 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.ElectricScooter
-import androidx.compose.material.icons.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Navigation
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Psychology
@@ -353,7 +353,7 @@ internal fun SectionHeader(title: String, action: String? = null, onAction: (() 
             ) {
                 Text(action, color = BrewCoral, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.width(6.dp))
-                Icon(Icons.Outlined.KeyboardArrowRight, null, tint = BrewCoral, modifier = Modifier.size(18.dp))
+                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = BrewCoral, modifier = Modifier.size(18.dp))
             }
         }
     }

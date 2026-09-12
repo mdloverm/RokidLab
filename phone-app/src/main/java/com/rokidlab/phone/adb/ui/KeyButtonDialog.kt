@@ -61,12 +61,17 @@ fun KeyButtonDialog(
 
     // 自动连接 ADB（和其他弹窗一致）
     var isConnecting by remember { mutableStateOf(!connected || client == null) }
+    // getOrConnect 回调返回的会话必须落到本地状态：外部只传 client=null，
+    // 若不接住，连接成功也会一直显示「未连接眼镜」且应用列表为空。
+    var activeClient by remember { mutableStateOf(client) }
     LaunchedEffect(Unit) {
         if (connected && client != null) {
             isConnecting = false
+            activeClient = client
         } else {
             isConnecting = true
             getOrConnect?.invoke { c ->
+                activeClient = c
                 isConnecting = c == null
             }
         }
@@ -78,9 +83,10 @@ fun KeyButtonDialog(
     LaunchedEffect(isConnecting) {
         if (isConnecting) return@LaunchedEffect
         loading = true
-        Log.i("KeyBtn", "Loading packages, client=${client != null}")
-        if (client != null) {
-            val pkgs = withContext(Dispatchers.IO) { client.listPackages(false) }
+        val adb = activeClient
+        Log.i("KeyBtn", "Loading packages, client=${adb != null}")
+        if (adb != null) {
+            val pkgs = withContext(Dispatchers.IO) { adb.listPackages(false) }
             Log.i("KeyBtn", "Loaded ${pkgs.size} packages")
             appPackages = pkgs
         } else {
@@ -204,7 +210,7 @@ fun KeyButtonDialog(
                 }
 
                 // 连接失败提示
-                if (!isConnecting && !loading && appPackages.isEmpty() && client == null) {
+                if (!isConnecting && !loading && appPackages.isEmpty() && activeClient == null) {
                     item {
                         Text(
                             "（未连接眼镜，请先连接）",
@@ -221,6 +227,7 @@ fun KeyButtonDialog(
                     SelectablePackageList(
                         packages = appPackages,
                         selectedPkg = config.shortPressPkg,
+                        emptyLabel = "（空 / 官方默认）",
                         onSelect = { pkg ->
                             config = config.copy(shortPressPkg = pkg)
                             saveConfig(config)
@@ -255,6 +262,7 @@ fun KeyButtonDialog(
                     SelectablePackageList(
                         packages = appPackages,
                         selectedPkg = config.longPressPkg,
+                        emptyLabel = "（空 / 官方默认）",
                         onSelect = { pkg ->
                             config = config.copy(longPressPkg = pkg)
                             saveConfig(config)
@@ -284,23 +292,28 @@ fun KeyButtonDialog(
                             .fillMaxWidth()
                             .height(48.dp)
                             .clip(BrewShapeSmall)
-                            .background(if (config.isAnyValid()) PRIMARY_COLOR.copy(alpha = 0.2f) else BrewBg)
-                            .border(
-                                1.dp,
-                                if (config.isAnyValid()) PRIMARY_COLOR else BrewBorder,
-                                BrewShapeSmall,
-                            )
-                            .clickable(enabled = config.isAnyValid()) {
-                                saveAndSendToGlasses(config)
-                            }
+                            // 允许「两项都为空」时发送：等于把眼镜端配置清空，恢复官方默认按键行为
+                            .background(PRIMARY_COLOR.copy(alpha = 0.2f))
+                            .border(1.dp, PRIMARY_COLOR, BrewShapeSmall)
+                            .clickable { saveAndSendToGlasses(config) }
                             .padding(horizontal = 24.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             context.getString(R.string.key_btn_save_to_glasses),
-                            color = if (config.isAnyValid()) PRIMARY_COLOR else BrewMuted,
+                            color = PRIMARY_COLOR,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                if (!config.isAnyValid()) {
+                    item {
+                        Text(
+                            "两项都为空 → 发送后将清空眼镜端配置，恢复官方默认按键行为",
+                            color = BrewWarning,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 6.dp),
                         )
                     }
                 }
@@ -346,13 +359,16 @@ private fun SelectablePackageList(
     selectedPkg: String,
     onSelect: (String) -> Unit,
     color: Color,
+    /** 非空时在列表首项提供「空」选项（= 恢复眼镜官方默认行为），文案即此值 */
+    emptyLabel: String? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
     
+    val isOfficialDefault = selectedPkg.isBlank() && emptyLabel != null
     val displayText = selectedPkg.ifBlank {
-        if (packages.isEmpty()) "暂无第三方应用，可手动输入包名" else "请选择第三方应用"
+        emptyLabel ?: if (packages.isEmpty()) "暂无第三方应用，可手动输入包名" else "请选择第三方应用"
     }
-    val hasSelection = selectedPkg.isNotBlank()
+    val hasSelection = selectedPkg.isNotBlank() || isOfficialDefault
     val canExpand = packages.isNotEmpty()
 
     Box {
@@ -406,6 +422,29 @@ private fun SelectablePackageList(
                 .background(BrewBg)
                 .border(1.dp, color.copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
         ) {
+            if (emptyLabel != null) {
+                val isSel = selectedPkg.isBlank()
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = emptyLabel,
+                            color = if (isSel) color else BrewText,
+                            fontSize = 13.sp,
+                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    },
+                    onClick = {
+                        onSelect("")
+                        expanded = false
+                    },
+                    modifier = Modifier
+                        .background(
+                            if (isSel) color.copy(alpha = 0.12f) else Color.Transparent,
+                            RoundedCornerShape(4.dp),
+                        )
+                        .padding(vertical = 2.dp),
+                )
+            }
             packages.forEach { pkg ->
                 val isSelected = pkg == selectedPkg
                 DropdownMenuItem(

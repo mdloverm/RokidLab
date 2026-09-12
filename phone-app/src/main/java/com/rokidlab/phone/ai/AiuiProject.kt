@@ -10,6 +10,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.DataOutputStream
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -481,56 +482,81 @@ object AiuiProject {
                 if (r == DEL_NOT_FOUND) notFound++
                 lastErr = r
             }
-            if (notFound == candidates.size) "眼镜上未找到该应用的 .aix 文件"
+            // 显式返回：原写法 if/else 结果被丢弃，全未找到时回的却是原始错误码(B5)
+            return@runBlocking if (notFound == candidates.size) "眼镜上未找到该应用的 .aix 文件"
             else lastErr ?: "删除失败"
         }
     }
 
-    /** 单次删除请求；DEL_OK=成功，DEL_NOT_FOUND=文件不存在，其余为失败原因 */
+    /**
+     * 单次删除请求；DEL_OK=成功，DEL_NOT_FOUND=文件不存在，其余为失败原因
+     */
     private fun deleteOnce(app: LabApplication, path: String): String {
         return try {
             // 与 uploadOnce 同款线路探测：先试用户配置的眼镜 WiFi IP，失败回落蓝牙隧道
-            val context = app.applicationContext
-            val wifiIp = context.getSharedPreferences("adb_prefs", Context.MODE_PRIVATE)
-                .getString("ip", "192.168.1.168") ?: "192.168.1.168"
+            val wifiIp = app.glassesIp
             val route = runBlocking { app.routeManager.resolve(wifiIp, GLASSES_WEB_PORT) }
             val (ip, port) = when (route) {
                 is ConnectionRoute.Wifi -> route.ip to route.port
                 is ConnectionRoute.Bluetooth -> route.ip to route.localPort
                 is ConnectionRoute.None -> return "无法连接到眼镜（WiFi 与蓝牙隧道均不可用）"
             }
-            val url = URL("http://$ip:$port/server/deleteFile")
-            val conn = url.openConnection() as HttpURLConnection
             try {
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.connectTimeout = 10_000
-                conn.readTimeout = 20_000
-                conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-                DataOutputStream(conn.outputStream).use { out ->
-                    out.writeBytes("filePath=${URLEncoder.encode(path, "UTF-8")}")
-                }
-                val code = conn.responseCode
-                val body = if (code in 200..299) {
-                    conn.inputStream.bufferedReader().readText()
-                } else {
-                    conn.errorStream?.bufferedReader()?.readText().orEmpty()
-                }
-                if (code !in 200..299) return "眼镜删除服务响应异常（HTTP $code）：${body.take(120)}"
-                Log.i(TAG, "deleteAixOnGlasses: $path -> $body")
-                when {
-                    body.contains("delete success") -> DEL_OK
-                    body.contains("not exist") -> DEL_NOT_FOUND
-                    else -> "眼镜端删除失败：${body.take(120)}"
-                }
-            } finally {
-                conn.disconnect()
+                postAixDelete(path, ip, port)
+            } catch (e: IOException) {
+                // 同 uploadOnce：眼镜 WiFi IP 不在明文白名单（NSC 不支持 CIDR）时回落蓝牙隧道
+                if (!isCleartextBlocked(e)) throw e
+                val localPort = app.routeManager.tunnelTo(GLASSES_WEB_PORT) ?: throw e
+                Log.w(TAG, "delete cleartext blocked ($ip:$port), retry via BT tunnel :$localPort")
+                postAixDelete(path, "127.0.0.1", localPort)
             }
         } catch (e: Exception) {
             Log.e(TAG, "deleteAixOnGlasses failed: $path", e)
             "删除请求失败：${e.message ?: e.javaClass.simpleName}"
         }
     }
+
+    /** 单次 HTTP 删除请求（不换线路）；DEL_OK=成功，DEL_NOT_FOUND=文件不存在，其余为失败原因 */
+    private fun postAixDelete(path: String, ip: String, port: Int): String {
+        val url = URL("http://$ip:$port/server/deleteFile")
+        val conn = url.openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 10_000
+            conn.readTimeout = 20_000
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            DataOutputStream(conn.outputStream).use { out ->
+                out.writeBytes("filePath=${URLEncoder.encode(path, "UTF-8")}")
+            }
+            val code = conn.responseCode
+            val body = if (code in 200..299) {
+                conn.inputStream.bufferedReader().readText()
+            } else {
+                conn.errorStream?.bufferedReader()?.readText().orEmpty()
+            }
+            if (code !in 200..299) return "眼镜删除服务响应异常（HTTP $code）：${body.take(120)}"
+            Log.i(TAG, "deleteAixOnGlasses: $path -> $body")
+            return when {
+                body.contains("delete success") -> DEL_OK
+                body.contains("not exist") -> DEL_NOT_FOUND
+                else -> "眼镜端删除失败：${body.take(120)}"
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
+     * 是否为「明文被 network_security_config 拒绝」。
+     *
+     * release 只白名单回环与固定眼镜 IP，其余 http 目标由系统拦下：
+     * Android 的 HttpURLConnection 抛 `UnknownServiceException`（message 含 CLEARTEXT），
+     * 个别 ROM 只保留 message —— 两者都按此判定，用于触发蓝牙隧道回落。
+     */
+    private fun isCleartextBlocked(e: Throwable): Boolean =
+        e is java.net.UnknownServiceException ||
+            e.message?.contains("CLEARTEXT", ignoreCase = true) == true
 
     /**
      * 通过 ADB-over-蓝牙隧道在眼镜上发广播拉起开发者 WebServer（8848）。
@@ -557,56 +583,70 @@ object AiuiProject {
     private fun uploadOnce(context: Context, app: LabApplication, file: File): String? {
         return try {
             // 复用 ADB 同款线路探测：先试用户配置的眼镜 WiFi IP，失败自动回落到蓝牙隧道
-            val wifiIp = context.getSharedPreferences("adb_prefs", Context.MODE_PRIVATE)
-                .getString("ip", "192.168.1.168") ?: "192.168.1.168"
+            val wifiIp = app.glassesIp
             val route = runBlocking { app.routeManager.resolve(wifiIp, GLASSES_WEB_PORT) }
             val (ip, port) = when (route) {
                 is ConnectionRoute.Wifi -> route.ip to route.port
                 is ConnectionRoute.Bluetooth -> route.ip to route.localPort
                 is ConnectionRoute.None -> return "无法连接到眼镜（WiFi 与蓝牙隧道均不可用），请先确认手机与眼镜已连接"
             }
-            val boundary = "----RokidLabAix" + System.currentTimeMillis()
-            val url = URL("http://$ip:$port/server/upload")
-            val conn = url.openConnection() as HttpURLConnection
             try {
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.connectTimeout = 10_000
-                // .aix 可能数百 KB，蓝牙隧道吞吐约 1-2Mbps，读超时放宽到 90s
-                conn.readTimeout = 90_000
-                conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-                DataOutputStream(conn.outputStream).use { out ->
-                    out.writeBytes("--$boundary\r\n")
-                    out.writeBytes("Content-Disposition: form-data; name=\"upfile\"; filename=\"${file.name}\"\r\n")
-                    out.writeBytes("Content-Type: application/octet-stream\r\n\r\n")
-                    file.inputStream().use { ins ->
-                        val buf = ByteArray(32 * 1024)
-                        while (true) {
-                            val n = ins.read(buf)
-                            if (n < 0) break
-                            out.write(buf, 0, n)
-                        }
-                    }
-                    out.writeBytes("\r\n--$boundary--\r\n")
-                    out.flush()
-                }
-                val code = conn.responseCode
-                val body = if (code in 200..299) {
-                    conn.inputStream.bufferedReader().readText()
-                } else {
-                    conn.errorStream?.bufferedReader()?.readText().orEmpty()
-                }
-                if (code !in 200..299) return "眼镜上传服务响应异常（HTTP $code）：${body.take(200)}"
-                val ok = runCatching { JSONObject(body).optBoolean("isSuccess") }.getOrDefault(false)
-                if (!ok) return "眼镜上传服务返回异常：${body.take(200)}"
-                Log.i(TAG, "uploadAixToGlasses ok: ${file.name} (${file.length()}B) via $route")
-                null
-            } finally {
-                conn.disconnect()
+                postAixUpload(file, ip, port)
+            } catch (e: IOException) {
+                // release 的 network_security_config 只白名单回环与固定眼镜 IP，而眼镜 WiFi IP
+                // 由眼镜自报、可能是任意局域网地址（NSC 不支持 CIDR，无法枚举）→ 明文被拒时
+                // 改走蓝牙隧道（127.0.0.1 在名单内），而不是让 AIUI 安装直接失败。
+                if (!isCleartextBlocked(e)) throw e
+                val localPort = app.routeManager.tunnelTo(GLASSES_WEB_PORT) ?: throw e
+                Log.w(TAG, "upload cleartext blocked ($ip:$port), retry via BT tunnel :$localPort")
+                postAixUpload(file, "127.0.0.1", localPort)
             }
         } catch (e: Exception) {
             Log.e(TAG, "uploadAixToGlasses failed", e)
             "上传到眼镜失败：${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    /** 单次 HTTP multipart 上传（不换线路）；null = 成功，否则为失败原因 */
+    private fun postAixUpload(file: File, ip: String, port: Int): String? {
+        val boundary = "----RokidLabAix" + System.currentTimeMillis()
+        val url = URL("http://$ip:$port/server/upload")
+        val conn = url.openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 10_000
+            // .aix 可能数百 KB，蓝牙隧道吞吐约 1-2Mbps，读超时放宽到 90s
+            conn.readTimeout = 90_000
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            DataOutputStream(conn.outputStream).use { out ->
+                out.writeBytes("--$boundary\r\n")
+                out.writeBytes("Content-Disposition: form-data; name=\"upfile\"; filename=\"${file.name}\"\r\n")
+                out.writeBytes("Content-Type: application/octet-stream\r\n\r\n")
+                file.inputStream().use { ins ->
+                    val buf = ByteArray(32 * 1024)
+                    while (true) {
+                        val n = ins.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                    }
+                }
+                out.writeBytes("\r\n--$boundary--\r\n")
+                out.flush()
+            }
+            val code = conn.responseCode
+            val body = if (code in 200..299) {
+                conn.inputStream.bufferedReader().readText()
+            } else {
+                conn.errorStream?.bufferedReader()?.readText().orEmpty()
+            }
+            if (code !in 200..299) return "眼镜上传服务响应异常（HTTP $code）：${body.take(200)}"
+            val ok = runCatching { JSONObject(body).optBoolean("isSuccess") }.getOrDefault(false)
+            if (!ok) return "眼镜上传服务返回异常：${body.take(200)}"
+            Log.i(TAG, "uploadAixToGlasses ok: ${file.name} (${file.length()}B) via $ip:$port")
+            return null
+        } finally {
+            conn.disconnect()
         }
     }
 

@@ -30,7 +30,7 @@ object VelvetDarkColors : BrewColors {
     override val border: Color = Color(0xFF2C2C33)
 
     // ═══════════════════════════════════════════════════
-    // 七模块七色
+    // 八模块八色
     // ═══════════════════════════════════════════════════
     override val store: Color = Color(0xFFE85D3F)       // 商店 — 朱砂红
     override val chat: Color = Color(0xFF6EE7B7)        // 乐奇聊天 — 青翠绿

@@ -4,18 +4,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-fun String.asBuildConfigString(): String = replace("\\", "\\\\").replace("\"", "\\\"")
-
-val defaultRegistryUrl = "https://gitee.com/dlover1314/RokidBrew-Registry/raw/main/dist/apps.v1.json"
-val registryUrl = providers.gradleProperty("rokidbrewRegistryUrl")
-val debugRegistryUrl = providers.gradleProperty("rokidbrewDebugRegistryUrl")
-    .orElse(registryUrl)
-    .orElse(defaultRegistryUrl)
-    .get()
-val releaseRegistryUrl = providers.gradleProperty("rokidbrewReleaseRegistryUrl")
-    .orElse(registryUrl)
-    .orElse(defaultRegistryUrl)
-    .get()
+// ── 发布前闸门（release 洁净工作区 + release 依赖单测），双端共用同一份实现 ──
+apply(from = "../gradle/local-gates.gradle.kts")
 
 android {
     namespace = "com.rokidlab.phone"
@@ -46,16 +36,16 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField("String", "ROKIDBREW_REGISTRY_URL", "\"${debugRegistryUrl.asBuildConfigString()}\"")
             manifestPlaceholders["cleartextTrafficPermitted"] = "true"
         }
 
         release {
             signingConfig = signingConfigs.getByName("release")
-            buildConfigField("String", "ROKIDBREW_REGISTRY_URL", "\"${releaseRegistryUrl.asBuildConfigString()}\"")
             // R8 混淆压缩 dex，减小 APK 体积（so 必须未压缩以兼容 16KB 设备）
             isMinifyEnabled = true
-            manifestPlaceholders["cleartextTrafficPermitted"] = "true"
+            // P0-5：release 关闭全局明文。实际策略以 res/xml/network_security_config.xml 为准
+            // （声明该文件后本属性在 API 24+ 被忽略），此处保持同值以避免误读。
+            manifestPlaceholders["cleartextTrafficPermitted"] = "false"
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -77,6 +67,14 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    // ── JVM 单测：android.jar 桩方法返回默认值，而不是抛 "not mocked" ──
+    // 关键链路回归单测（ADB sync 协议 / HID 报表归一化）要直接驱动生产代码，而生产代码里有
+    // android.util.Log 调用；不开此项则一碰就抛 RuntimeException("Stub!")。
+    // 副作用：Log.getStackTraceString 会返回 null —— LogCollector 的堆栈拼接已做 null 兜底。
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 
     // so 库未压缩存储（16KB 页面设备要求，Android 16 强制）
@@ -135,35 +133,247 @@ val buildRokidLinkRelease by tasks.registering {
     }
 }
 
-// ── 双端 AiChannel 协议同源守护 ──
-// AiChannel.kt（配置通道协议）在 phone-app 与 RokidLink 各持一份同源副本，
-// 修改必须双端同步（否则接收端按错位偏移解析，这正是协议版本化要防的问题）。
-// 本任务在 preBuild 时校验：除 package 行与空行外必须逐字节一致，不一致直接构建失败。
-val checkAiChannelSynced by tasks.registering {
+// ── 双端协议同源守护（AiChannel.kt + LinkProtocol.kt）──
+// 两个协议文件在 phone-app 与 RokidLink 各持一份同源副本，修改必须双端同步。
+// 本任务在 preBuild 时校验：除 package 行与空行外逐字节一致，否则构建失败。
+// 同时扫描两模块 src/main，禁止在协议文件之外出现裸协议字面量
+// （CXR 频道名 "Ai"/"Sys"/"Wifi"/"Jsai"/"Ai_RenderPayload" 与 __LAB_* 控制帧标记），
+// 强制所有协议引用收敛到 LinkProtocol / AiChannel。
+val checkProtocolSynced by tasks.registering {
     group = "verification"
-    description = "校验 phone-app 与 RokidLink 的 AiChannel.kt 同源（仅允许 package 行不同）"
+    description = "校验 phone-app 与 RokidLink 的 AiChannel.kt / LinkProtocol.kt 同源，并禁止裸协议字面量"
     doLast {
         fun normalized(f: File): String = f.readText()
             .lineSequence()
             .filterNot { it.startsWith("package ") || it.isBlank() }
             .joinToString("\n")
-        val phone = file("src/main/java/com/rokidlab/phone/glasses/AiChannel.kt")
-        val glasses = rokidLinkProject.projectDir.resolve(
-            "src/main/java/com/rokidlab/rokidlink/AiChannel.kt",
+
+        val protocolFiles = listOf(
+            "AiChannel.kt" to "src/main/java/com/rokidlab/phone/glasses/AiChannel.kt",
+            "LinkProtocol.kt" to "src/main/java/com/rokidlab/phone/glasses/LinkProtocol.kt",
         )
-        val p = normalized(phone)
-        val g = normalized(glasses)
-        if (p != g) {
+        for ((name, phoneRel) in protocolFiles) {
+            val phone = file(phoneRel)
+            val glasses = rokidLinkProject.projectDir.resolve(
+                phoneRel.replace("com/rokidlab/phone/glasses", "com/rokidlab/rokidlink"),
+            )
+            if (normalized(phone) != normalized(glasses)) {
+                error(
+                    "$name 双端不同源！\n  phone-app: $phone\n  RokidLink: $glasses\n" +
+                        "修改协议必须同步修改两端文件（仅 package 行允许不同）。",
+                )
+            }
+            logger.lifecycle("checkProtocolSynced: $name 双端同源校验通过")
+        }
+
+        // 裸协议字面量扫描：禁止在协议文件之外直接写 CXR 频道名 / __LAB_* 标记
+        val forbiddenChannels = setOf("Ai", "Sys", "Wifi", "Jsai", "Ai_RenderPayload")
+        val chanArg = Regex("""(?:sendCustomCmd|sendMessage|rawSendCmd|caps\.write|pushControl|push)\s*\(\s*(?:[^,)]*,\s*)?["']([^"']+)["']""")
+        val labMarker = Regex("""__LAB_""")
+        val roots = listOf(
+            file("src/main/java"),
+            rokidLinkProject.projectDir.resolve("src/main/java"),
+        )
+        val violations = mutableListOf<String>()
+        for (root in roots) {
+            if (!root.exists()) continue
+            root.walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .forEach { f ->
+                    if (f.name == "LinkProtocol.kt" || f.name == "AiChannel.kt") return@forEach
+                    f.useLines { lines ->
+                        lines.forEachIndexed { idx, raw ->
+                            val trimmed = raw.trimStart()
+                            if (trimmed.startsWith("*") || trimmed.startsWith("//") ||
+                                trimmed.startsWith("/*") || trimmed.startsWith("*/")
+                            ) return@forEachIndexed
+                            val code = raw.substringBefore("//")
+                            if (labMarker.containsMatchIn(code)) {
+                                violations.add("${f.path}:${idx + 1}: 裸 __LAB_ 字面量")
+                            }
+                            val m = chanArg.find(code)
+                            if (m != null && m.groupValues[1] in forbiddenChannels) {
+                                violations.add("${f.path}:${idx + 1}: 裸频道字面量 \"${m.groupValues[1]}\"")
+                            }
+                        }
+                    }
+                }
+        }
+        if (violations.isNotEmpty()) {
             error(
-                "AiChannel 双端不同源！\n  phone-app: $phone\n  RokidLink: $glasses\n" +
-                    "修改协议必须同步修改两端文件（仅 package 行允许不同），并同步升 SCHEMA_VERSION。",
+                "发现裸协议字面量，请改用 LinkProtocol / AiChannel 常量引用：\n" +
+                    violations.joinToString("\n"),
             )
         }
-        logger.lifecycle("checkAiChannelSynced: AiChannel 双端同源校验通过")
+        logger.lifecycle("checkProtocolSynced: 无裸协议字面量")
     }
 }
 tasks.matching { it.name == "preBuild" }.configureEach {
-    dependsOn(checkAiChannelSynced)
+    dependsOn(checkProtocolSynced)
+}
+
+// ── 多语言 key 集合守护（values/strings.xml ↔ values-en/strings.xml）──
+// 规则（RULES「多语言同步」）：新增/修改/删除中文串必须同步英文包。历史上曾出现 5 条
+// 中文串缺英文翻译（guide_ready_title / guide_reinstall_link_btn / guide_skip_btn /
+// unknown_author / wifi_config_success），只在切英文真机时才暴露。故在 preBuild 强制
+// 两个模块的 key 集合完全相等（只比 key，不比顺序与文案）。
+val checkI18nKeysSynced by tasks.registering {
+    group = "verification"
+    description = "校验 phone-app 与 RokidLink 的 values / values-en strings.xml key 集合一致"
+    doLast {
+        val nameAttr = Regex("""<string\s+name="([^"]+)"""")
+        fun keysOf(f: File): Set<String> = nameAttr.findAll(f.readText())
+            .map { it.groupValues[1] }
+            .toSet()
+
+        val targets = listOf(
+            "phone-app" to file("src/main/res"),
+            "RokidLink" to rokidLinkProject.projectDir.resolve("src/main/res"),
+        )
+        for ((module, resDir) in targets) {
+            val zh = resDir.resolve("values/strings.xml")
+            val en = resDir.resolve("values-en/strings.xml")
+            if (!zh.exists() || !en.exists()) {
+                error("checkI18nKeysSynced: $module 缺少 strings.xml（$zh / $en）")
+            }
+            val zhKeys = keysOf(zh)
+            val enKeys = keysOf(en)
+            val missingEn = (zhKeys - enKeys).sorted()
+            val extraEn = (enKeys - zhKeys).sorted()
+            if (missingEn.isNotEmpty() || extraEn.isNotEmpty()) {
+                error(
+                    buildString {
+                        append("$module 多语言 key 不一致（values=${zhKeys.size} / values-en=${enKeys.size}）：\n")
+                        if (missingEn.isNotEmpty()) {
+                            append("  values 有 / values-en 缺（需补英文翻译）: ${missingEn.joinToString(", ")}\n")
+                        }
+                        if (extraEn.isNotEmpty()) {
+                            append("  values-en 有 / values 缺（需删除或补中文）: ${extraEn.joinToString(", ")}\n")
+                        }
+                        append("  请同步 res/values-en/strings.xml（RULES「多语言同步」）。")
+                    },
+                )
+            }
+            logger.lifecycle("checkI18nKeysSynced: $module ${zhKeys.size} 条 key 双语一致")
+        }
+    }
+}
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(checkI18nKeysSynced)
+}
+
+// ── 关键链路「空 catch」守护（RULES §12.14）──
+// 异常吞噬是 P1-8 的根因：链路出问题时 App 内日志面板（LogCollector）里什么都看不到，
+// 只能靠用户口述现象反推。规则分两层：
+//   1. 关键链路（ASR 补读 / RFCOMM 隧道 / ADB sync / AIUI 工具网关）的 catch 必须落 LogCollector；
+//   2. 确实无信息量的空 catch（关闭句柄、消费收尾包、读线程正常退出）必须带 `// catch-ok: <原因>` 标注 ——
+//      把「默默吞掉」变成「显式声明的决策」，CR 时一眼可查。
+// 全局禁止空 catch 由 RULES §12.14 作 CR 约束，并由下方 checkNoBareCatch 以「棘轮预算」机器兜底。
+val keyPathFiles = listOf(
+    "src/main/java/com/rokidlab/phone/glasses/AsrBridgeCoordinator.kt",
+    "src/main/java/com/rokidlab/phone/glasses/AsrPushClient.kt",
+    "src/main/java/com/rokidlab/phone/connection/ConnectionRouteManager.kt",
+    "src/main/java/com/rokidlab/phone/platform/AdbTransport.kt",
+    "src/main/java/com/rokidlab/phone/adb/AdbFileManagerClient.kt",
+    "src/main/java/com/rokidlab/phone/ai/ToolGateway.kt",
+)
+
+val checkKeyPathEmptyCatch by tasks.registering {
+    group = "verification"
+    description = "关键链路禁止裸空 catch：空 catch 必须带 // catch-ok: <原因> 豁免说明"
+    doLast {
+        val emptyCatch = Regex("""catch\s*\([^)]*\)\s*\{\s*\}""")
+        val violations = mutableListOf<String>()
+        var waived = 0
+        for (rel in keyPathFiles) {
+            val f = file(rel)
+            if (!f.exists()) {
+                error("checkKeyPathEmptyCatch: 关键链路文件缺失（路径已变？请同步本任务清单）: $rel")
+            }
+            f.readLines().forEachIndexed { idx, line ->
+                if (emptyCatch.containsMatchIn(line)) {
+                    if (line.contains("catch-ok:")) {
+                        waived++
+                    } else {
+                        violations.add("  $rel:${idx + 1}  ${line.trim()}")
+                    }
+                }
+            }
+        }
+        if (violations.isNotEmpty()) {
+            error(
+                "关键链路存在未标注的空 catch（异常被静默吞掉）：\n" +
+                    violations.joinToString("\n") +
+                    "\n处理方式二选一：\n" +
+                    "  a) 在 catch 内落 LogCollector（推荐，见 RULES §12.14）；\n" +
+                    "  b) 若确无信息量（关闭句柄 / 消费收尾包 / 读线程正常退出），补注释 `// catch-ok: <原因>`。",
+            )
+        }
+        logger.lifecycle("checkKeyPathEmptyCatch: ${keyPathFiles.size} 个关键链路文件，$waived 处空 catch 均已标注豁免理由")
+    }
+}
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(checkKeyPathEmptyCatch)
+}
+
+// ── 全仓「空 catch」预算守护（RULES §12.14，阶段二 #10）──
+// checkKeyPathEmptyCatch 对 6 个关键链路文件零容忍；本任务把扫描扩到双端 src/main 全量，
+// 采用「棘轮预算」：未标注的空 catch 数只允许下降、不允许上升。
+// 为什么不一次清零存量：存量 47 处多为「关句柄 / 消费收尾包 / 读线程正常退出」，逐一补
+// `// catch-ok:` 属纯注释 churn，收益低于回归风险；先把闸门立起来，新增一处即构建失败，
+// 存量在后续改动该文件时顺手收敛（预算可随之下调）。
+val bareCatchBudget = 47
+
+val checkNoBareCatch by tasks.registering {
+    group = "verification"
+    description = "全仓空 catch 预算守护：未标注的空 catch 不得超过 $bareCatchBudget 处（只降不升）"
+    doLast {
+        val emptyCatch = Regex("""catch\s*\([^)]*\)\s*\{\s*\}""")
+        val targets = listOf(
+            "phone-app" to file("src/main/java"),
+            "RokidLink" to rokidLinkProject.projectDir.resolve("src/main/java"),
+        )
+        var total = 0
+        var unannotated = 0
+        val violations = mutableListOf<String>()
+        for ((module, root) in targets) {
+            if (!root.exists()) continue
+            root.walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .forEach { f ->
+                    f.useLines { lines ->
+                        lines.forEachIndexed { idx, line ->
+                            if (emptyCatch.containsMatchIn(line)) {
+                                total++
+                                if (!line.contains("catch-ok:")) {
+                                    unannotated++
+                                    violations.add("  $module/${f.relativeTo(root).path}:${idx + 1}  ${line.trim()}")
+                                }
+                            }
+                        }
+                    }
+                }
+        }
+        if (unannotated > bareCatchBudget) {
+            error(
+                "未标注的空 catch 增至 $unannotated 处（预算 $bareCatchBudget），新增静默吞异常不允许：\n" +
+                    violations.joinToString("\n") +
+                    "\n处理方式二选一：\n" +
+                    "  a) 在 catch 内落 LogCollector（推荐，见 RULES §12.14）；\n" +
+                    "  b) 若确无信息量（关闭句柄 / 消费收尾包 / 读线程正常退出），补注释 `// catch-ok: <原因>`。\n" +
+                    "若确需调整存量基线，请同步修改 phone-app/build.gradle.kts 的 bareCatchBudget。",
+            )
+        }
+        logger.lifecycle(
+            "checkNoBareCatch: 全仓空 catch $total 处（已标注 ${total - unannotated} / 未标注 $unannotated，预算 $bareCatchBudget）",
+        )
+        if (unannotated < bareCatchBudget) {
+            logger.lifecycle("checkNoBareCatch: 未标注数已低于预算，可把 bareCatchBudget 下调为 $unannotated")
+        }
+    }
+}
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn(checkNoBareCatch)
 }
 
 // 在合并 assets 前先同步 RokidLink APK

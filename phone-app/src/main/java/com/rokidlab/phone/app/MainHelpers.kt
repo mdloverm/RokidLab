@@ -15,7 +15,11 @@ internal fun updateVersionLabel(version: String?): String {
 
 /**
  * 检查指定 Service 是否在运行。
+ *
+ * getRunningServices 自 API 26 起只能看到**自己进程**的 Service ——
+ * 这里查的本就是本 App 的 Service，语义正好吻合，故保留调用并显式抑制废弃告警。
  */
+@Suppress("DEPRECATION")
 internal fun isServiceRunning(context: Context, serviceClass: Class<*>): Boolean {
     return try {
         val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager

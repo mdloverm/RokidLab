@@ -38,7 +38,7 @@ object CoolBlueColors : BrewColors {
     override val border: Color = Color(0xFFC8D4E8)      // 浅蓝边框
 
     // ═══════════════════════════════════════════════════
-    // 七模块七色 — 浅蓝底 × 撞色
+    // 八模块八色 — 浅蓝底 × 撞色
     // ═══════════════════════════════════════════════════
     override val store: Color = Color(0xFFE85D3F)       // 商店 — 珊瑚红 (暖色撞浅蓝)
     override val chat: Color = Color(0xFF00D2D3)        // 乐奇聊天 — 蓝绿

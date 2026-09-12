@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  debug 源集专属清单：仅参与 debug variant 合并，release 包不含以下声明。
+
+  P0-1 修复：DebugAiuiReceiver 的 act="shell" 分支可经 ADB-over-蓝牙隧道在眼镜端执行
+  任意 shell；此前声明在 main 源集且 exported=true 无权限保护，release 包同样导出，
+  任何本机 App 均可投递 com.rokidlab.phone.DEBUG_CMD 触发。现隔离到 debug 源集。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- debug aix launch entry -->
+        <receiver
+            android:name=".ai.DebugAiuiReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.rokidlab.phone.DEBUG_CMD" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

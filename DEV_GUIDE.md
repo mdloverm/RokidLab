@@ -38,6 +38,13 @@
    - [CxrLHiRokidSession 拆分](#71-cxrlhirokidsession-拆分)
    - [ASR 双通道与防抖](#72-asr-双通道与防抖)
    - [会话记忆与长期记忆](#73-会话记忆与长期记忆)
+8. [手机端六层架构（v3.5 重构）](#8-手机端六层架构v35-重构)
+   - [分层与依赖方向](#81-分层与依赖方向)
+   - [工具按域拆分与风险闸门](#82-工具按域拆分与风险闸门)
+   - [通道仲裁 ChannelArbiter](#83-通道仲裁-channelarbiter)
+   - [双端协议同源与能力握手](#84-双端协议同源与能力握手)
+   - [单元测试与回归护栏](#85-单元测试与回归护栏)
+   - [聊天历史落盘与线程模型](#86-聊天历史落盘与线程模型)
 
 ---
 
@@ -76,6 +83,10 @@ enum class AppLocale(val code: String, val displayName: String) {
 2. 在 `res/` 下创建对应 values 文件夹和 `strings.xml`，如 `res/values-ja/strings.xml`，以英文版为模板翻译。
 3. 在 Crowdin 项目中添加新语言，译者可直接在平台上翻译。
 
+> **翻译缺口状态（2026-09-12）**：✅ 已清零。中文 `values/strings.xml` 1100 条 = 英文 `values-en/strings.xml` 1100 条（此前缺 5 条：`guide_ready_title`、`guide_reinstall_link_btn`、`guide_skip_btn`、`unknown_author`、`wifi_config_success`，已补齐）。
+>
+> **构建期强制**：`phone-app` 的 `preBuild` 挂着 `checkI18nKeysSynced` 任务，校验 **phone-app 与 RokidLink 两模块** `values/` ↔ `values-en/` 的 `<string name>` 集合完全相等（只比 key，不比顺序与文案）。新增/删除中文条目而不同步英文 → 构建直接失败并列出差异键名。
+
 ---
 
 ### 1.2 主题系统
@@ -110,8 +121,9 @@ interface BrewColors {
     // 边框
     val border: Color
 
-    // 七模块七色（固定用途）
+    // 模块色（固定用途）
     val store: Color       // 商店
+    val chat: Color        // 乐奇聊天
     val mirror: Color      // 屏幕镜像
     val projection: Color  // 手机投屏
     val fileManager: Color // 文件管理
@@ -142,6 +154,7 @@ object ForestGreenColors : BrewColors {
     override val dim: Color = Color(0xFF405540)
     override val border: Color = Color(0xFF2A4A30)
     override val store: Color = Color(0xFFE8914A)
+    override val chat: Color = Color(0xFF6BE86B)
     override val mirror: Color = Color(0xFF4AE8B5)
     override val projection: Color = Color(0xFFB58AFF)
     override val fileManager: Color = Color(0xFFFFB84D)
@@ -693,7 +706,7 @@ class RokidGameTemplate : Activity() {
 
 ## 6. AIUI Lab 工具桥开发指南（v3.5 新增）
 
-AIUI 页面（`.ink` 智能体）运行在眼镜端 `@yodaos-pkg/ink` 的 quickjs-wasm 沙箱里，与 WebView 主 realm 隔离。原本只能渲染不能调用外部能力。v3.5 引入 Lab 工具桥，让页面可以调用手机端全部 34 个工具（音乐 / 天气 / 搜索 / 提醒 / 设备信息 / 电话 / 日历 等）。
+AIUI 页面（`.ink` 智能体）运行在眼镜端 `@yodaos-pkg/ink` 的 quickjs-wasm 沙箱里，与 WebView 主 realm 隔离。原本只能渲染不能调用外部能力。v3.5 引入 Lab 工具桥，让页面可以调用手机端工具（`ToolRegistry` 全量 34 个中除自指递归的 `open_aiui_app` 外全部开放，即 33 个，涵盖音乐 / 天气 / 搜索 / 提醒 / 设备信息 / 电话 / 日历 等）。
 
 ### 6.1 架构与协议链路
 
@@ -738,7 +751,8 @@ ToolGateway.call(context, name, arguments)
 | `RokidLink/src/main/assets/ink/lab-page-bridge.js` | **页面 realm 桥**（关键）：在 `AiuiLinkActivity.buildBundleJson` 装配 bundle 时前置注入到 `app.js`，让 ink 沙箱页面也能用 `globalThis.Lab.callTool` |
 | `RokidLink/src/main/java/.../AiuiLinkActivity.kt` | 眼镜端宿主：`@JavascriptInterface callTool` + `__lab/*` 端点拦截 + 同步工具队列 + 启动参数下发 |
 | `RokidLink/src/main/java/.../AsrPushServer.kt` | `CTRL_TOOL_CALL = "__LAB_TOOL__"` 工具调用前缀常量 |
-| `phone-app/src/main/java/.../ai/ToolGateway.kt` | 手机端统一工具网关，单一入口调度 `ToolRegistry.execute` |
+| `phone-app/src/main/java/.../ai/ToolGateway.kt` | 手机端统一工具网关，单一入口调度 `ToolRegistry.execute`（执行前先过 `ToolPolicy.check`） |
+| `phone-app/src/main/java/.../ai/ToolPolicy.kt` | 工具策略闸门：per-source 限流 + 风险确认 + 审计（详见 §8.2） |
 | `phone-app/src/main/java/.../glasses/AsrBridgeCoordinator.kt` | `__LAB_TOOL__` 前缀分流到 `onToolCall` 回调 |
 | `phone-app/src/main/java/.../glasses/CxrLHiRokidSession.kt` | `handleAiuiToolCall(payload)` 委派 ToolGateway，结果经 `sendAiuiHostMessage` 下发 |
 
@@ -793,6 +807,7 @@ export default {
 4. **本类是同步阻塞 API**，调用方必须在非主线程调用。`AsrBridgeCoordinator` 已切到后台线程。
 5. **结果截断 8000 字符**：RFCOMM 单帧上限 64KB，且页面也渲染不下超长文本。
 6. **15s 超时后不 interrupt**：工具可能持有文件/网络资源，强中断会留下半写状态，让线程自己跑完（daemon 线程不阻塞进程退出）。
+7. **执行前先过 `ToolPolicy.check`**（v3.5 加入）：以 `SOURCE_AIUI_PAGE` 来源做 30/min 限流 + 风险闸门 + 审计；`EXTERNAL_SIDE_EFFECT` 工具在确认通道不可用/超时时按 **fail-open 放行**（工具自身只做无副作用动作），仅用户显式取消才 `Deny` —— 详见 §8.2。`isEnabled` 总开关仍是页面侧唯一的一键断能兜底。
 
 ### 6.5 调试要点
 
@@ -807,17 +822,23 @@ export default {
 
 ### 7.1 CxrLHiRokidSession 拆分
 
-`CxrLHiRokidSession` 在 v3.4 前已长到 3550 行，混了四个不相关职责。v3.5 抽出三个协调器（行为不变，纯粹提取）：
+`CxrLHiRokidSession` 曾是最大的 god class（v3.4 前 3550 行，v3.5 首轮拆分后 2780 行）。v3.5 六层重构（Phase 3~5）把它继续拆成 **L3 `domain/` 领域服务 + L2 协调器** 两组，现为 **887 行**的薄路由层：
 
 | 新类 | 职责 |
 |---|---|
+| `domain/ConnectionService` | 连接编排（connectAnd* 系列） |
+| `domain/AuthorizationService` | SDK 内部权限补齐 |
+| `domain/DeviceControlService` | 设备控制域 |
+| `domain/AiConfigService` / `domain/AiConversationService` | AI 配置 / AI 对话（含 AI 下行主链路） |
+| `domain/AiuiHostService` | AIUI 宿主域 |
+| `domain/MirrorCoordinator` | 投屏/长连接通道协调 |
+| `domain/FileTransferService` | 文件传输 |
+| `domain/PhotoQuizService` | 拍照问答（编排 `PhotoQuizFlow`） |
 | `glasses/AsrBridgeCoordinator` | 双通道 ASR（SDK + link）去重、控制标记、下行 ping |
 | `glasses/AiuiFrontendController` | 整个 AIUI 微前端 pipeline（push .aix、open/close/msg、launchParams） |
 | `glasses/PhotoQuizFlow` | 拍照 → OCR → RAG → AI 答案 |
 
-`CxrLHiRokidSession` 保留**每一个 public method 作为委派 facade**，调用方完全不动。同时把持有的 Activity 改为 app context，需要 lifecycle owner 的地方改用 `WeakReference`（leak fix）。
-
-仍然太胖、留待后续的部分：连接引擎（`connectAnd*` ~1200 行）和 `sendAiTextViaLink`（~600 行）。
+`CxrLHiRokidSession` 保留**每一个 public method 作为委派 facade**（如 `photoQuizService` / `aiConfig` / `connection` / `deviceControl` / `aiConversation` / `aiuiHost` 等字段），调用方完全不动。同时把持有的 Activity 改为 app context，需要 lifecycle owner 的地方改用 `WeakReference`（leak fix）。
 
 ### 7.2 ASR 双通道与防抖
 
@@ -881,3 +902,159 @@ pushWasDown=true  ── 推送断连 ──> 文件轮询兜底（积压文字�
   - 已发出内容后重连会导致重复，所以不重连
 - 指数退避 500ms × 2^attempt，上限 4s
 - 远程重试从 2 次升到 3 次
+
+---
+
+## 8. 手机端六层架构（v3.5 重构）
+
+### 8.1 分层与依赖方向
+
+```
+L5  app/ · feature/ · store/(UI)   UI 与入口 + 手动 DI 容器 AppContainer
+L4  ai/                            Agent：ToolRegistry + tools/ Provider + ToolPolicy / ToolRisk
+L3  domain/                        领域服务（Connection / Authorization / DeviceControl /
+                                   AiConfig / AiConversation / AiuiHost / MirrorCoordinator /
+                                   FileTransfer / PhotoQuiz）
+L2  glasses/                       会话层：状态与协议（CxrLHiRokidSession / LinkProtocol /
+                                   GlassesHandshake / AsrBridgeCoordinator /
+                                   AiuiFrontendController / PhotoQuizFlow）
+L1  connection/                     通道与仲裁（ChannelArbiter / ConnectionRouteManager）
+L0  platform/                       能力与 hook 适配（CapabilityProbe / SdkBridge / SdkFieldMap /
+                                   HidBridge / AdbTransport / ShellOps / RomAdapter / AvrcpLyricBridge）
+```
+
+约束：**每一层只依赖下一层**。UI（L5）不 import 传输层（L1），更不 import 反射（L0）；`platform/` 是全仓唯一允许出现 `getDeclaredField` / `Class.forName` / `setAccessible` 的包，SDK / ROM 升级只改这一个包。跨 feature 共享的长生命周期对象统一由 `app/AppContainer`（手动 DI，不引 Hilt）装配，feature 层禁止自建。
+
+> 包名以代码为准：会话层落在 `glasses/`、通道层落在 `connection/`，分别对应架构设计稿里的 `session/` 与 `transport/`。
+
+### 8.2 工具按域拆分与风险闸门
+
+**注册（`ToolRegistry`）**：全量 **34 个工具 / 10 个域**（info / knowledge / glasses / timer / media / display / web / files / aiui / phone）。域集合决定会话装配：
+
+| 会话 | 装配域 | 说明 |
+|---|---|---|
+| 主 Agent（在线模型） | `SESSION_AGENT_DOMAINS` = 全部域 | 眼镜语音 / 手机聊天 |
+| 本地模型 | `SESSION_LOCAL_DOMAINS` = 空集 | 本地小模型背不动数十个 schema |
+| AIUI / 代码生成 | `SESSION_AIUI_DOMAINS` = aiui + files + info | 命中技能后切到子集省 token |
+
+**执行（`ai/tools/`）**：`ToolRegistry.execute` 解析参数后按 `toolNames` 路由到 10 个域 `ToolProvider` 之一（Info / Knowledge / Glasses / Timer / Media / Display / Web / Files / Aiui / Phone；接口 `ToolProvider.kt` + schema `ToolSchemas.kt`，共 11 个文件）。**新增工具只需在 `ToolRegistry` 注册一行 `ToolMeta`，并在对应 Provider 的 `toolNames` 与分支各加一次**，网关 / 协议 / JS / skill 全不动。
+
+**风险分级（`ToolRisk` / `ToolRiskMap`）**：
+
+| 档位 | 含义 | 例子 |
+|---|---|---|
+| `READ_ONLY` | 纯读取 | `get_weather` / `search_knowledge_base` |
+| `LOCAL_SIDE_EFFECT` | 本机可控/可撤销副作用 | `set_timer` / `set_phone_volume` / `call_phone` |
+| `EXTERNAL_SIDE_EFFECT` | 触达第三方、不可撤销 | 必须过确认闸门 |
+
+未登记兜底：**真实工具漏登记** → 按 `LOCAL_SIDE_EFFECT` 放行 + 高声告警（历史事故：漏登记曾被当作最保守档，导致 AIUI 代码生成整条链路被确认闸门拦死）；**完全未知的名字**（模型幻觉/攻击构造）→ `EXTERNAL_SIDE_EFFECT`（最保守）。
+
+**策略闸门（`ToolPolicy.check`）**：每次工具执行（AIUI 页面路径 / 对话路径）都先过 check：
+
+1. per-source 滑动窗口限流：AIUI 页面 30/min（防页面死循环刷工具）、对话路径 120/min（兜底失控循环）
+2. 风险闸门：`EXTERNAL_SIDE_EFFECT` 必须经用户确认
+3. 审计：每次决策打一行日志（Allow/Deny + 原因），系统日志面板（`LogCollector`）可观测
+
+**确认通道（`GlassToolConfirmChannel`）**：下行 `LinkProtocol.TOPIC_TOOL_CONFIRM`（caps = [requestId, 工具名, 摘要]），眼镜端显示摘要 + TTS 播报，短按 = 允许 / 双击·长按 = 取消，眼镜端 30s 超时视为取消；上行 `LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT`（caps = [requestId, "yes"/"no"]）。通道**常驻**（`GlassToolConfirmChannel.global`），会话上线 `bind`、下线 `unbind`，`ToolPolicy.confirmationChannel` 指向它。
+
+> ⚠️ **降级现状（务必如实理解，勿按旧注释写成「降级为拒绝」）**：确认通道**不可用**（会话不在线，或眼镜端旧版经能力握手判定不支持）或确认**超时未响应**时，`ToolPolicy.check` 返回 **`Allow`**（fail-open，代码注释写作「降级放行」），由工具自身在未获确认时只做**无副作用动作**（如 `call_phone` 只打开拨号盘、绝不自动拨出）；只有用户**显式取消**（`wasCancelled()` 为 true）才返回 `Deny`。`ToolPolicy` / `ToolGateway` 的类注释仍写「降级为拒绝」，与实现不一致，**以 `ToolPolicy.check` 的实际分支为准**。
+
+### 8.3 通道仲裁 ChannelArbiter
+
+手机侧蓝牙栈对「同一设备 + 同一 SCN」只允许一条客户端 RFCOMM 通道。此前由各消费方手工 `reserveTunnel() / releaseTunnel()`（一个 `AtomicInteger` 计数）保证，分散在多个 Activity/Service + 兜底轮询里，漏调用 `release` 即永久泄漏且无从观测。`connection/ChannelArbiter` 把它收敛为「按优先级持有租约」：
+
+| 优先级 | 用途 | 让路接入点 |
+|---|---|---|
+| `BACKGROUND` | ASR 兜底轮询（断连期间积压文件补读）：更高优先级占用时应让路 | `CxrLHiRokidSession` 的 `adbClientProvider` 内 `shouldYield(BACKGROUND)` |
+| `NORMAL` | ADB 工具页、AI 工具查询、AIUI 工具、定时任务等常规控制面 | `CxrLHiRokidSession.getAdbShellClient()` 内 `shouldYield(NORMAL)` |
+| `LONG_LIVED` | 屏幕镜像 / 手机投屏 / 文件浏览：需长时间独占 RFCOMM SCN | 由 `domain/MirrorCoordinator` 取租约 |
+
+- `acquire(owner, priority)` **非阻塞、必成功**，返回 `ChannelLease`（`close()` 幂等，重复调用安全）
+- `shouldYield(priority)`：存在**严格更高**优先级持有者时为 true → 调用方自行退避（与 `AsrBridgeCoordinator` 的退避语义一致）；同级互不让路
+- **只有 `LONG_LIVED` 需要 `acquire()`**：`NORMAL` 各消费者（ADB 工具页 / AI 工具 / AIUI 工具 / 定时任务）共享同一条 ADB 会话（`platform/AdbTransport` 为唯一所有者），彼此互不让路，持常驻租约只会让 `BACKGROUND` 兜底轮询被误伤
+- `snapshot()` 暴露当前持有者；`LONG_LIVED` 持有超 **10 分钟**打「疑似未释放」告警
+- 设计取舍：这是**协作式闸门**而非互斥锁，避免长连接建链期被锁阻塞
+- 与 L0 `platform/AdbTransport` 的分工：`AdbTransport` 管「会话所有权 + 串行化」（谁在用 socket、何时重建/释放），`ChannelArbiter` 管「优先级让路」；长连接上场前需**同时**做两件事 —— 取 `LONG_LIVED` 租约 + `releaseAdbShellClient()` 腾出 RFCOMM
+
+### 8.4 双端协议同源与能力握手
+
+**LinkProtocol（v2）**：把散落的「裸 CXR 频道名」和 `__LAB_*` 控制帧标记收敛为常量，手机端 `phone-app/.../glasses/LinkProtocol.kt` 与眼镜端 `RokidLink/.../rokidlink/LinkProtocol.kt` 是**双端同源副本**（除 package 行与空行外逐字节一致）。
+
+- **构建期守护**：`phone-app/build.gradle.kts` 注册 `checkProtocolSynced`，校验 `LinkProtocol.kt` + `AiChannel.kt` 两端同源，并**禁止业务文件出现裸协议字面量**，挂在 `preBuild` 上（手机端构建即拦截）。眼镜端独立构建，不参与该校验 —— 改协议常量后务必手动同步两端。
+- **另一道 preBuild 门禁**：`checkI18nKeysSynced`，校验 phone-app 与 RokidLink 两模块 `values/` ↔ `values-en/` 的 `<string name>` 集合完全相等（见 §1.1 多语言）。
+- **第四道 preBuild 门禁**：`checkNoBareCatch`，扫描双端 `src/main` 全量空 catch，未带 `// catch-ok: <原因>` 标注的数量以 `bareCatchBudget = 47` 为**棘轮预算**（只降不升，新增即失败，见 `RULES.md` §12.14）。**四道门禁都挂在 `preBuild`**，本地构建即拦截；出 release 包另有两道 `packageRelease` 发布闸门（详见 §8.5 末）。
+- **常量**：频道名 `CXR_CHANNEL_AI / SYS / WIFI / JSAI / AI_RENDER`；标记 `MARKER_MUSIC_STOP` / `MARKER_ABORT_AI` / `MARKER_PHOTO_ASK` / `MARKER_TOOL_CALL`(`"__LAB_TOOL__"`) / `MARKER_ASR_READY`；握手 topic `TOPIC_HELLO` / `TOPIC_HELLO_REQ`；确认 topic `TOPIC_TOOL_CONFIRM` / `TOPIC_TOOL_CONFIRM_RESULT`
+- **能力位 `Cap`**：`TOOL_CONFIRM` / `LYRIC_OVERLAY` / `AIUI_HOST` / `SELF_HEAL_PING` / `SHOW_IMAGE` / `OPEN_APP`，`PROTOCOL_VERSION = 2`（v1 为无能力协商的旧眼镜端），`Cap.ALL` 为当前版本默认能力全集
+
+**GlassesHandshake 三态**：眼镜端服务就绪时主动上报 `TOPIC_HELLO`（caps = [version, capsBitmask, linkVersion]）；手机端连接建立后也会下发 `TOPIC_HELLO_REQ` 主动询问（覆盖「眼镜端后启动」场景）。`supports(bit)` 的返回值语义：
+
+| 返回值 | 状态 | 调用方策略 |
+|---|---|---|
+| `null` | 尚未握手，能力未知 | **乐观**：按支持处理，失败再兜底 |
+| `true` | 已握手且支持该能力 | 正常路径 |
+| `false` | 已确认不支持 | **快速降级**：立即拒绝，不再空等超时 |
+
+旧版眼镜端（v1）不应答握手：手机端发出请求后 **4s**（`LEGACY_DETECT_DELAY_MS`）仍未收到通告即 `markLegacy()` 判为旧版 —— 避免每次工具确认都空等 35s。断开 / 销毁时 `reset()` 复位，下次连接重新握手。
+
+### 8.5 单元测试与回归护栏
+
+v3.5 起测试从「只覆盖最好测的纯逻辑层」扩到**历史真出过 bug 的高危文件**，当前 **14 个测试类 / 155 个 `@Test`**（phone-app 150 + RokidLink 5）。
+
+```powershell
+# 必须在项目根 d:\rokidapp\cxrl\RokidLab 执行
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
+& D:\gradle-8.7\bin\gradle.bat :phone-app:testDebugUnitTest :RokidLink:testDebugUnitTest --offline
+```
+
+| 测试类 | 例数 | 锁住什么 |
+|---|---|---|
+| `adb/AdbSyncProtocolTest` | 8 | `AdbShellClient.pullFile` 的 `FAIL` / `CLSE` / 读流异常分支（历史 A4 事故：远端 FAIL 被当成功 → 产出 0 字节文件） |
+| `adb/AdbFileManagerSyncTest` | 6 | `AdbFileManagerClient` sync 帧编解码 + `drainStalePackets` 陈旧 CLSE 排空 + `parseDateTime` |
+| `hid/HidReportTest` | 12 | `BtHidCompat.normalize` 截断/补零/未声明返 null、`declaredLength` 全矩阵、描述符 Report ID 与 `declaredReportIds` 交叉校验 |
+| `glasses/AiChannelTest` | 21 | `AiChannel` 跨端载荷 v0/v1 矩阵 + 常量名稳定性（改名即断双端） |
+| `ai/ToolRiskMapTest` | 8 | `ToolRiskMap.unregisteredTools()` 必须为空（§12.10）+ `ToolPolicy.check()` 的 fail-open 语义 |
+| `store/ChatHistoryStoreTest` | 14 | 聊天历史 JSONL 落盘格式：同 id 后写覆盖先写、**旧版 JSON 数组迁移不丢历史**、崩溃截断半行不毁历史、`clear()` 删文件 |
+| `RokidLink/AiChannelProtocolTest` | 5 | 眼镜端能解析手机端下发的 v1 载荷（边界矩阵留在 phone-app 侧，避免重复维护） |
+
+**写测试的三条硬约束**（详见 `RULES.md` §12.15）：
+
+1. **执行位置**：必须在 `d:\rokidapp\cxrl\RokidLab` 跑；`d:\rokidapp` 是外层壳工程（任务名 `:cxrl:RokidLab:phone-app:*`，且 `libs.versions.toml` 无 okhttp），跑错会报 `Unresolved reference: okhttp`。
+2. **Android 桩**：`phone-app` 已开 `testOptions { unitTests.isReturnDefaultValues = true }`（否则 `Log` 一碰即抛 `RuntimeException("Stub!")`）；ADB 客户端用 `internal fun attachStreamsForTest(input, output)` 注入脚本化对端（`AdbTestPeer.kt`），无需真机与 socket。
+3. **改字节必改测试**：动 HID 描述符 / sync 帧格式 / 跨端载荷格式的提交必须同步更新测试；#8 实测已推翻 `buildQtiCompatibleDescriptor` 旧注释声称的「≤ 64 字节」，实为 **67（无 Mouse）/ 121（含 Mouse）** 字节。
+
+> 尚未覆盖：`KeyButtonService` / `ChatStateHolder`（本体，本次只测了抽出的 `ChatHistoryStore`）/ `CxrLHiRokidSession`；`androidTest` 为 0。
+
+**构建期门禁（四道，挂 `preBuild`，本地构建即触发）**：`checkProtocolSynced`（双端协议同源 + 禁裸协议字面量）、`checkI18nKeysSynced`（两模块 zh↔en key 集合相等）、`checkKeyPathEmptyCatch`（6 个关键链路文件空 catch 零容忍）、`checkNoBareCatch`（全仓空 catch 棘轮预算 47，只降不升）。
+
+**发布闸门（两道，挂 `packageRelease`，双端共用 `gradle/local-gates.gradle.kts`）**：`checkGitClean`（`git status --porcelain` 必须为空，否则出包即失败；临时验证可 `-PallowDirtyWorktree=true`）+ `packageRelease` 依赖 `testDebugUnitTest`（单测没绿出不了包）。
+
+> **为何不建托管 CI**（#10 结论）：四道门禁已挂在 `preBuild`，本地每次构建都会跑，托管 CI 属重复执行；且 Android CI 需复刻 SDK/NDK/16KB 校验环境、Gitee Go 免费额度有限，而本项目是单作者、唯一发布路径就是本地构建 —— 收益为负。真正缺的「出包必跑测试 / 脏工作区不许出包」用两道 Gradle 闸门即可闭合。
+
+### 8.6 聊天历史落盘与线程模型
+
+**问题**（#9 修复前）：`ChatStateHolder.add()` 在**主线程**调 `persist()`，而 `persist()` 把**整个列表**重新 JSON 序列化后 `writeText` —— 每条消息都是 O(n) 写盘（累计 O(n²)），长会话下卡顿掉帧；且 `clear()` 只写空数组、不删文件。
+
+**现状**：格式与回放逻辑抽到纯 JVM 的 `store/ChatHistoryStore.kt`（可单测），`ChatStateHolder` 只负责"何时写、在哪个线程写"。
+
+```
+调用线程（Compose 主线程）                单线程 daemon: chat-history-writer
+─────────────────────────────            ───────────────────────────────────
+add / addImage / finalizeLastAi
+   ├─ messages.add / 替换（快照列表）      
+   ├─ ChatHistoryStore.toLine(msg)   ──►  appendLine(file, line)   ← JSONL 追加一行
+   └─ writer.execute { ... }              
+                                          
+init(context)（Application.onCreate）
+   └─ writer.execute {                    
+         readHistory(file)                ← 读盘
+         rewrite(file, 每 id 一行)         ← 旧格式迁移 + 压实
+         mainHandler.post { applyLoaded } ─► messages.addAll(...)  （回主线程）
+      }
+```
+
+- **格式**：JSONL，每行一条完整消息；**同 id 后写覆盖先写**（`finalizeLastAi` 用一行"覆盖行"修正流式消息，位置不变）。
+- **迁移**：旧版"整份 JSON 数组"的 `chat_history.json`（首字符 `[`）在首启被识别并重写为 JSONL，**不丢历史**。
+- **容错**：崩溃留下的半行 / 非法行被跳过，其余历史照常恢复。
+- **不变量**：`SnapshotStateList` 只在主线程读写；后台任务只碰字符串；`clear()` 必须删文件。
+
+> 约束详见 `RULES.md` §12.16；回归测试见 `store/ChatHistoryStoreTest`（14 例）。

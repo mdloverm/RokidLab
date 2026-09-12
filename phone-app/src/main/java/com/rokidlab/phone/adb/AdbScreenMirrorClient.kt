@@ -15,6 +15,7 @@ import com.rokidlab.phone.util.AppConfig
 import com.rokidlab.phone.R
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.Log
 import java.io.ByteArrayOutputStream
@@ -124,7 +125,30 @@ class AdbScreenMirrorClient(
         }
     }
 
+    /**
+     * 建立到眼镜的 ADB 连接（含 ADB 握手）。
+     *
+     * 蓝牙隧道共用同一 RFCOMM SCN：控制面（ADB 工具 / AI 工具 / ASR 兜底轮询）刚被
+     * [com.rokidlab.phone.glasses.CxrLHiRokidSession.releaseAdbShellClient] 释放时，
+     * 通道回收有几毫秒延迟，本连接可能撞上一次「通道忙」被拒。
+     * 短退避重试即可吃掉落差，不必让用户重开页面（旧实现只连一次，撞上就「连接失败」）。
+     */
     fun connect(onStatus: (String) -> Unit): Boolean {
+        val attempts = 3
+        repeat(attempts) { i ->
+            if (connectOnce(onStatus)) return true
+            if (i < attempts - 1) {
+                try {
+                    Thread.sleep(700L * (i + 1))
+                } catch (_: InterruptedException) {
+                    return false
+                }
+            }
+        }
+        return false
+    }
+
+    private fun connectOnce(onStatus: (String) -> Unit): Boolean {
         return try {
             onStatus(context.getString(R.string.mirror_connecting_glasses, ipAddress, port))
             Log.i(TAG, "Connecting $ipAddress:$port")
@@ -581,7 +605,9 @@ class AdbScreenMirrorClient(
         }.apply { name = "scrcpy-stream" }.start()
     }
 
-    /** 低画质模式：使用 screencap 逐帧获取原始像素（约 2FPS） */
+    /** 低画质降级模式：使用 `screencap -p` 逐帧获取 PNG（约 2FPS）。
+     *  注意：必须带 `-p` 让 screencap 输出 PNG（压缩后单帧数百 KB，可塞进缓冲），
+     *  若用裸 RGBA 模式，1080×2400 单帧约 10MB，缓冲区 3MB 阈值永远攒不出整帧 -> 黑屏。 */
     fun startStreaming(
         onFrame: (Bitmap) -> Unit,
         onStatus: (String) -> Unit,
@@ -591,7 +617,7 @@ class AdbScreenMirrorClient(
         Thread {
             try {
                 continuousStreamId = localId.getAndIncrement()
-                val dest = "shell:while true; do screencap; done\u0000"
+                val dest = "shell:while true; do screencap -p; done\u0000"
                 sendPacket(CMD_OPEN, continuousStreamId, 0, dest.toByteArray(Charsets.UTF_8))
         Log.i(TAG, "Continuous stream opened, streamId=$continuousStreamId")
 
@@ -625,74 +651,59 @@ class AdbScreenMirrorClient(
                                     }
                                     sendPacket(CMD_OKAY, continuousStreamId, msg.arg0, null)
 
-                                    // 累积数据
+                                    // 累积数据（screencap -p 输出 PNG，多帧在流中首尾相接）
                                     streamBuffer.write(msg.payload)
                                     val buf = streamBuffer.toByteArray()
 
-                                    // 扫描整个缓冲区找有效帧头
-                                    var frameFound = false
-                                    var scanOff = 0
-                                    while (scanOff + 12 <= buf.size) {
-                                        val w = (buf[scanOff].toInt() and 0xFF) or
-                                            ((buf[scanOff + 1].toInt() and 0xFF) shl 8) or
-                                            ((buf[scanOff + 2].toInt() and 0xFF) shl 16) or
-                                            ((buf[scanOff + 3].toInt() and 0xFF) shl 24)
-                                        val h = (buf[scanOff + 4].toInt() and 0xFF) or
-                                            ((buf[scanOff + 5].toInt() and 0xFF) shl 8) or
-                                            ((buf[scanOff + 6].toInt() and 0xFF) shl 16) or
-                                            ((buf[scanOff + 7].toInt() and 0xFF) shl 24)
-                                        val fmt = (buf[scanOff + 8].toInt() and 0xFF) or
-                                            ((buf[scanOff + 9].toInt() and 0xFF) shl 8) or
-                                            ((buf[scanOff + 10].toInt() and 0xFF) shl 16) or
-                                            ((buf[scanOff + 11].toInt() and 0xFF) shl 24)
-
-                                        if (w == 480 && h == 640 && fmt == 1) {
-                                            val frameSize = 12 + w * h * 4
-                                            if (buf.size >= scanOff + frameSize) {
-                                                val pixelData = buf.copyOfRange(scanOff + 12, scanOff + frameSize)
-                                                streamBuffer.reset()
-                                                val remaining = buf.size - (scanOff + frameSize)
-                                                if (remaining > 0) {
-                                                    streamBuffer.write(buf, scanOff + frameSize, remaining)
-                                                }
-
-                                                val t0 = System.nanoTime()
-                                                val pixels = IntArray(w * h)
-                                                var src = 0
-                                                for (i in 0 until w * h) {
-                                                    pixels[i] = (0xFF shl 24) or
-                                                        ((pixelData[src].toInt() and 0xFF) shl 16) or
-                                                        ((pixelData[src + 1].toInt() and 0xFF) shl 8) or
-                                                        (pixelData[src + 2].toInt() and 0xFF)
-                                                    src += 4
-                                                }
-                                                if (reusableBitmap?.width != w || reusableBitmap?.height != h) {
-                                                    reusableBitmap?.recycle()
-                                                    reusableBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                                                }
-                                                reusableBitmap!!.setPixels(pixels, 0, w, 0, 0, w, h)
-                                                val elapsedMs = (System.nanoTime() - t0) / 1_000_000
-                                                onFrame(reusableBitmap!!)
-
-                                                frameCount++
-                                                totalMs += elapsedMs
-                                                if (frameCount % 5 == 0) {
-                                                    val fps = frameCount * 1000f / totalMs
-                                                    Log.i(TAG, "frame #$frameCount: 480x640 ${elapsedMs}ms ${fps.toInt()}fps")
-                                                }
-                                                frameFound = true
-                                                break  // 处理了一帧，等下一个 WRTE
-                                            } else {
-                                                break  // 等更多数据
-                                            }
+                                    // 在缓冲区中切出完整 PNG：签名 89 50 4E 47 0D 0A 1A 0A ... IEND(AE 42 60 82)
+                                    val pngSig = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+                                    val pngIend = byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE.toByte(), 0x42, 0x60, 0x82.toByte())
+                                    val findSeq: (ByteArray, ByteArray, Int) -> Int = { h, n, from ->
+                                        var res = -1
+                                        for (i in from until h.size - n.size + 1) {
+                                            var m = true
+                                            for (j in n.indices) if (h[i + j] != n[j]) { m = false; break }
+                                            if (m) { res = i; break }
                                         }
-                                        scanOff++
+                                        res
                                     }
 
-                                    // 找不到且缓冲区过大，丢弃旧数据
-                                    if (!frameFound && buf.size > 3 * 1024 * 1024) {
+                                    var consumed = 0
+                                    var frameFound = false
+                                    while (consumed + pngSig.size <= buf.size) {
+                                        val sigOff = findSeq(buf, pngSig, consumed)
+                                        if (sigOff < 0) break
+                                        val endOff = findSeq(buf, pngIend, sigOff + pngSig.size)
+                                        if (endOff < 0) break // 有签名但 PNG 尚未接收完整，等待后续数据
+                                        val pngBytes = buf.copyOfRange(sigOff, endOff)
+                                        // 解码复用：回收上一帧，避免每帧新建 Bitmap 造成泄漏/抖动
+                                        reusableBitmap?.recycle()
+                                        val bmp = BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.size)
+                                        if (bmp != null) {
+                                            reusableBitmap = bmp
+                                            val t0 = System.nanoTime()
+                                            onFrame(bmp)
+                                            val elapsedMs = (System.nanoTime() - t0) / 1_000_000
+                                            frameCount++
+                                            totalMs += elapsedMs
+                                            if (frameCount % 5 == 0) {
+                                                val fps = frameCount * 1000f / totalMs
+                                                Log.i(TAG, "frame #$frameCount: ${bmp.width}x${bmp.height} ${elapsedMs}ms ${fps.toInt()}fps")
+                                            }
+                                            frameFound = true
+                                        }
+                                        consumed = endOff
+                                    }
+
+                                    // 丢弃已处理部分，仅保留未完成的尾部
+                                    if (consumed > 0) {
                                         streamBuffer.reset()
-                                        streamBuffer.write(buf, buf.size - 2 * 1024 * 1024, 2 * 1024 * 1024)
+                                        streamBuffer.write(buf, consumed, buf.size - consumed)
+                                    } else if (buf.size > 8 * 1024 * 1024) {
+                                        // 无完整帧且缓冲区过大，丢弃前半部分，避免内存膨胀
+                                        val keep = 2 * 1024 * 1024
+                                        streamBuffer.reset()
+                                        streamBuffer.write(buf, buf.size - keep, keep)
                                     }
                                 }
                                 CMD_CLSE -> {
@@ -729,7 +740,7 @@ class AdbScreenMirrorClient(
                                 Log.i(TAG, "continuous stream socket reconnected")
                                 // reopen the screencap stream
                                 continuousStreamId = localId.getAndIncrement()
-                                val dest = "shell:while true; do screencap; done\u0000"
+                                val dest = "shell:while true; do screencap -p; done\u0000"
                                 sendPacket(CMD_OPEN, continuousStreamId, 0, dest.toByteArray(Charsets.UTF_8))
                                 streamOpened = false
                                 streamBuffer.reset()

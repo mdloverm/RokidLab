@@ -9,6 +9,11 @@ import com.rokidlab.phone.app.LabApplication
 /**
  * 调试入口：验证 Sys_AIUI_Start / Sys_AIUI_Stop 控制 cxr 目录 .aix 的渲染。
  *
+ * **仅在 `src/debug` 源集编译**：release 包既不含本类，也不含 manifest 中的 receiver
+ * 声明（见 `src/debug/AndroidManifest.xml`）。原因见 P0-1 —— 本类 `act="shell"` 分支
+ * 可经 ADB-over-蓝牙隧道在眼镜端执行任意 shell，`exported=true` 且无权限保护时
+ * 任何本机 App 都能投递广播触发。
+ *
  * 触发方式（需手机 App 已连接眼镜）：
  * ```
  * adb -s <phone> shell am broadcast -a com.rokidlab.phone.DEBUG_CMD --es act start --es pkg <packageName>

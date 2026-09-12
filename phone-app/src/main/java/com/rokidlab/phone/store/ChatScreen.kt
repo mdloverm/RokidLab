@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Send
@@ -82,6 +83,8 @@ internal data class ChatMsg(
     val content: String,
     val time: String,
     val isStatus: Boolean = false,
+    /** 非空表示这是一条图片消息：content 作 caption 渲染，imageUrl 由 [ChatBubble] 异步加载并显示 */
+    val imageUrl: String? = null,
 )
 
 /**
@@ -321,9 +324,11 @@ internal fun ChatModule(app: LabApplication) {
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 10.dp)
-                .border(1.dp, BrewBorder, RoundedCornerShape(26.dp))
-                .background(BrewPanel)
+                // 顺序很重要：clip 必须在 background/border **之前**。
+                // 旧顺序先画了方形背景再 clip，背景不被裁剪 → 圆角外露出灰色方角。
                 .clip(RoundedCornerShape(26.dp))
+                .background(BrewPanel)
+                .border(1.dp, BrewBorder, RoundedCornerShape(26.dp))
                 .padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -414,7 +419,7 @@ internal fun ChatModule(app: LabApplication) {
                     )
                 } else {
                     Icon(
-                        imageVector = Icons.Filled.Send,
+                        imageVector = Icons.AutoMirrored.Filled.Send,
                         contentDescription = null,
                         modifier = Modifier.size(15.dp),
                     )

@@ -149,13 +149,31 @@ class AiuiLinkActivity : Activity() {
         }
     }
 
+    /**
+     * .aix 路径白名单：只接受本应用 `filesDir/aiui_host/` 目录下的真实文件，
+     * 该目录的唯一写入方是 [AiuiPackageServer]（手机端推送落盘）。
+     *
+     * 为什么必须校验：路径来自手机端 `open` 命令的文件名，KeyButtonService 侧
+     * 只做了 `File(filesDir, "aiui_host/$name")` 拼接，带 `../` 的名字可以逃逸到应用
+     * 私有目录之外 —— 宿主会把任意文件当 .aix 解包渲染，等于给页面一个读任意文件的入口。
+     * canonicalFile 比对可同时挡掉 `../` 穿越与指向别处的绝对路径。
+     */
+    private fun isAllowedAixPath(path: String): Boolean = try {
+        val base = File(filesDir, AiuiPackageServer.DIR_NAME).canonicalFile
+        val target = File(path).canonicalFile
+        target.isFile && target.parentFile?.canonicalPath == base.canonicalPath
+    } catch (e: Exception) {
+        Log.w(TAG, "aix path check failed: ${e.message}")
+        false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val aixPath = intent?.getStringExtra(EXTRA_AIX_PATH)
-        if (aixPath == null || !File(aixPath).exists()) {
-            Log.e(TAG, "no aix file: $aixPath")
+        if (aixPath == null || !isAllowedAixPath(aixPath)) {
+            Log.e(TAG, "aix path rejected: $aixPath")
             finish()
             return
         }
@@ -210,7 +228,7 @@ class AiuiLinkActivity : Activity() {
         ws.setSupportZoom(false)
         ws.builtInZoomControls = false
         ws.allowFileAccess = false
-        ws.allowContentAccess = true
+        ws.allowContentAccess = false
         ws.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
 
         wv.addJavascriptInterface(bridge, "Android")
@@ -226,6 +244,29 @@ class AiuiLinkActivity : Activity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 Log.i(TAG, "page finished: $url")
                 retryBoot()
+            }
+
+            /**
+             * 只允许宿主自己的 `https://ink.local/` 顶层导航。
+             *
+             * [addJavascriptInterface] 会把 `Android` 桥注入 WebView 的**所有 frame**，
+             * 页面一旦被导航到外部站点（链接跳转 / 脚本重定向），对端 JS 即可直接调用
+             * `Android.callTool` 触达手机端工具，绕开 `exported=false` 的隔离。
+             * 子资源（图片 / 字体等）不经过本回调，仍可正常加载。
+             *
+             * 残留面（已知，暂未处理）：外部 `<iframe>` 属于子框架加载，本回调拦不到，
+             * 其脚本仍可触达桥；彻底关闭需要改成"仅向页面注入桥"而非全局注入。
+             */
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): Boolean {
+                val url = request?.url?.toString() ?: return true
+                if (!url.startsWith(BASE_URL)) {
+                    Log.w(TAG, "block external navigation: $url")
+                    return true
+                }
+                return false
             }
 
             override fun shouldInterceptRequest(

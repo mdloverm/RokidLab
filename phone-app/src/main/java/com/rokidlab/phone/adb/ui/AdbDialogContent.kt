@@ -40,16 +40,27 @@ fun AdbDialogContent(
     content: @Composable (AdbShellClient) -> Unit,
 ) {
     val ctx = LocalContext.current
-    var status by remember { mutableStateOf(if (connected && client != null) "ready" else "connecting") }
+    // 「已连接」必须看会话真实存活，不能只看外部传来的 connected 布尔：
+    // 蓝牙隧道共用同一 RFCOMM SCN，会话可能被屏幕镜像/文件管理/ASR 兜底轮询挤断，
+    // 若只信布尔，弹窗会直接进入就绪态，随后所有命令静默失效（点了没反应）。
+    val clientAlive = connected && client?.isConnected() == true
+    // 实际用于渲染内容的会话：优先用外部传入的（存活时），否则用 getOrConnect 回调拿到的。
+    // ⚠️ 不能只依赖入参 client —— 调用方（如乐奇工具页）为统一走共享会话会传 null，
+    // 若 ready 分支仍读 client 就会渲染空内容（弹窗只有标题、没有正文）。
+    var activeClient by remember {
+        mutableStateOf(if (clientAlive) client else null)
+    }
+    var status by remember { mutableStateOf(if (clientAlive) "ready" else "connecting") }
     var errorMsg by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        if (connected && client != null) {
+        if (clientAlive) {
             status = "ready"
         } else {
             status = "connecting"
             getOrConnect { c ->
                 if (c != null) {
+                    activeClient = c
                     status = "ready"
                 } else {
                     status = "error"
@@ -87,7 +98,7 @@ fun AdbDialogContent(
                         BrewCompactButton(text = ctx.getString(R.string.retry), color = color, onClick = {
                             status = "connecting"
                             getOrConnect { c ->
-                                if (c != null) { status = "ready" }
+                                if (c != null) { activeClient = c; status = "ready" }
                                 else { status = "error"; errorMsg = ctx.getString(R.string.connection_failed_adb) }
                             }
                         })
@@ -95,14 +106,19 @@ fun AdbDialogContent(
                 }
             }
             "ready" -> {
-                val c = client ?: return@BrewDialog
-                Box(
-                    modifier = modifier
-                        .fillMaxWidth()
-                        .then(height)
-                        .padding(16.dp),
-                ) {
-                    content(c)
+                val c = activeClient
+                if (c == null) {
+                    // 会话在等待期间失效（被挤断等）：回到连接中，让用户无感重连
+                    LaunchedEffect(Unit) { status = "connecting" }
+                } else {
+                    Box(
+                        modifier = modifier
+                            .fillMaxWidth()
+                            .then(height)
+                            .padding(16.dp),
+                    ) {
+                        content(c)
+                    }
                 }
             }
         }

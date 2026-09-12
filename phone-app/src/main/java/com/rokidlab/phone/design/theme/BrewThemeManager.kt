@@ -44,11 +44,13 @@ object BrewThemeManager {
      */
     fun init(context: Context) {
         prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val saved = prefs.getString(KEY_CURRENT_THEME, BrewTheme.VELVET_DARK.name)
+        // 默认主题应为冰蓝（COOL_BLUE）。字符串资源 theme_cool_blue_desc 明确标注为"浅蓝冷调默认主题"，
+        // 此前默认值误写成 VELVET_DARK，导致首次启动（无保存记录）时启动后不是冰蓝。
+        val saved = prefs.getString(KEY_CURRENT_THEME, BrewTheme.COOL_BLUE.name)
         _currentTheme = try {
-            BrewTheme.valueOf(saved ?: BrewTheme.VELVET_DARK.name)
+            BrewTheme.valueOf(saved ?: BrewTheme.COOL_BLUE.name)
         } catch (e: Exception) {
-            BrewTheme.VELVET_DARK
+            BrewTheme.COOL_BLUE
         }
         Log.d(TAG, "init: currentTheme=${_currentTheme.name}")
     }

@@ -69,15 +69,26 @@
             android:noHistory="false" />
 
         <!-- AIUI Web 宿主（官方 @yodaos-pkg/ink browser-integration + wasm）：
-             渲染 Lab 生成的 .aix，眼镜按键 / Lab 蓝牙手柄(HID→KeyEvent) 注入为 ink 输入 -->
+             渲染 Lab 生成的 .aix，眼镜按键 / Lab 蓝牙手柄(HID→KeyEvent) 注入为 ink 输入。
+             exported=false：唯一启动方是同进程的 KeyButtonService（AiuiLinkActivity.open），
+             不对外暴露 —— 否则任何第三方可带任意 aix_path 拉起本宿主，
+             借页面 JS 桥直调手机端工具（工具数量见 ToolGateway）。 -->
         <activity
             android:name=".AiuiLinkActivity"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTask"
             android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden"
             android:theme="@style/Theme.RokidLink.Transparent" />
 
+        <!-- KeyButtonService 必须保持 exported=true：手机端经 ADB 隧道用
+             `am start-foreground-service -n com.rokidlab.rokidlink/.KeyButtonService`
+             拉起常驻服务（见 phone-app ai/ToolRegistry.ensureGlassesLinkRunning）。
+             实测（眼镜 RG_glasses，非 root shell）：非导出的服务 / 非导出 Activity
+             一律被拒（"Requires permission not exported from uid <app uid>"），
+             而签名级自定义权限同样会把 shell 挡在门外 —— 二者都会静默打断
+             「服务不在跑 → 所有 CXR 自定义指令石沉大海」这条关键路径，
+             故此项保留导出，安全性由 ROM 层安装来源与用户授权承担。 -->
         <service
             android:name=".KeyButtonService"
             android:exported="true"

@@ -69,6 +69,7 @@ import com.rokidlab.phone.design.BrewWarning
 import com.rokidlab.phone.glasses.AiChannel
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -164,24 +165,41 @@ internal fun LocalModelPage(
         loadChatParams(s.localChatParams())
     }
 
-    fun checkServer() {
+    // 周期探测防重入：服务无响应时单次探测最长 8s，避免 5s 轮询不断堆叠请求
+    val probeInFlight = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
+    /**
+     * 探测服务状态。
+     * [silent] = true 用于周期轮询：不显示「检测中」，且仅在离线 → 在线的状态跃迁时
+     * 重新拉取模型列表，避免固定刷新导致列表反复重建/滚动位置跳动。
+     */
+    fun checkServer(silent: Boolean = false) {
+        if (silent && probeInFlight.get()) return
+        probeInFlight.set(true)
+        if (!silent) checking = true
         scope.launch {
-            val v = withContext(Dispatchers.IO) { LocalOllamaManager.serverVersion() }
-            checking = false
-            serverUp = v != null
-            serverVer = v ?: ""
-            if (v != null) {
-                refreshChatConfig()
-                scope.launch {
-                    loadingModels = true
-                    models = withContext(Dispatchers.IO) {
-                        runCatching { LocalOllamaManager.listModels() }.getOrDefault(emptyList())
+            try {
+                val v = withContext(Dispatchers.IO) { LocalOllamaManager.serverVersion() }
+                val wasUp = serverUp
+                val up = v != null
+                checking = false
+                serverUp = up
+                serverVer = v ?: ""
+                if (up && (!wasUp || !silent)) {
+                    refreshChatConfig()
+                    scope.launch {
+                        loadingModels = true
+                        models = withContext(Dispatchers.IO) {
+                            runCatching { LocalOllamaManager.listModels() }.getOrDefault(emptyList())
+                        }
+                        loadingModels = false
                     }
+                } else if (!up && wasUp) {
                     loadingModels = false
+                    models = emptyList()
                 }
-            } else {
-                loadingModels = false
-                models = emptyList()
+            } finally {
+                probeInFlight.set(false)
             }
         }
     }
@@ -196,6 +214,15 @@ internal fun LocalModelPage(
 
     LaunchedEffect(Unit) { refreshAll() }
 
+    // 服务状态周期轮询：Ollama 由 Termux 承载，进程可能被系统冻结 / 回收，
+    // 只在进入页面探测一次会让「运行中 / 未启动」状态长期滞留（曾出现服务在线却显示未启动）
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(5000)
+            if (!starting && !stopping && !pulling) checkServer(silent = true)
+        }
+    }
+
     // —— RUN_COMMAND 运行时权限（Termux 0.119+ 将 RUN_COMMAND 从 signature 改为
     //    dangerous，必须经系统弹窗授予；卸载/重装后失效需重新申请）——
     var grantTick by remember { mutableStateOf(0) }
@@ -209,6 +236,21 @@ internal fun LocalModelPage(
         } else {
             guidance = StartGuidance.PERMISSION
         }
+    }
+
+    /**
+     * 服务确认可用 → 打开「守护」循环。
+     *
+     * Ollama 跑在 Termux（另一个 App）里，本 App 的 WakeLock 管不到它；HyperOS/MIUI 会按
+     * 自己那套把后台 Termux 整个进程组冻结（实测 cgroup.freeze=1），冻住后端口虽在 LISTEN
+     * 却无人 accept，探测全部超时——这正是"服务掉线"的根因。
+     *
+     * 守护循环平时只做 HTTP 探测（不碰 Termux、无通知），只有连续探测失败才唤醒 Termux 恢复。
+     * 唤醒会让 Termux 重发前台通知，见页面上的「关闭 Termux 通知」入口。
+     */
+    fun enableKeepAlive() {
+        LocalOllamaManager.setKeepAliveEnabled(ctx, true)
+        LocalOllamaManager.startKeepAlive(ctx, app.appScope)
     }
 
     // 启动服务
@@ -227,10 +269,12 @@ internal fun LocalModelPage(
             starting = false
             when (r) {
                 LocalOllamaManager.StartResult.Started -> {
+                    enableKeepAlive()
                     toast(ctx.getString(R.string.local_model_started_ok))
                     checkServer()
                 }
                 LocalOllamaManager.StartResult.AlreadyRunning -> {
+                    enableKeepAlive()
                     toast(ctx.getString(R.string.local_model_started_already))
                     checkServer()
                 }
@@ -257,6 +301,8 @@ internal fun LocalModelPage(
         if (stopping) return
         scope.launch {
             stopping = true
+            // 先关保活再停服务：否则看门狗会在下一拍探测到离线，把刚停掉的服务又拉起来
+            LocalOllamaManager.setKeepAliveEnabled(ctx, false)
             withContext(Dispatchers.IO) { LocalOllamaManager.stopServer(ctx) }
             stopping = false
             toast(ctx.getString(R.string.local_model_stopped_ok))
@@ -271,6 +317,8 @@ internal fun LocalModelPage(
         runCatching {
             s.setLocalChatModel(m.name)
         }.onSuccess {
+            // 眼镜对话已指向本机模型 → 服务必须常在，直接开保活
+            enableKeepAlive()
             refreshChatConfig()
             toast(ctx.getString(R.string.local_model_set_chat_ok, m.name))
         }.onFailure { e ->
@@ -434,6 +482,32 @@ internal fun LocalModelPage(
                             color = BrewMuted,
                             fontSize = 12.sp,
                         )
+                        // 在线时说明守护已接管：Ollama 在 Termux（另一个 App）里，HyperOS 会按自己
+                        // 的策略冻结它，App 只能靠"静默探测 + 按需唤醒"把它救回来；而每次唤醒都会让
+                        // Termux 重发前台通知（MIUI 会弹横幅）→ 这里给出一键关闭 Termux 通知的入口，
+                        // 关掉后 Termux/ollama 照常运行，只是不再有横幅打扰
+                        if (serverUp) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = stringResource(R.string.local_model_keepalive_on),
+                                color = BrewSuccess,
+                                fontSize = 11.sp,
+                            )
+                            TextButton(
+                                onClick = {
+                                    val opened = LocalOllamaManager.openTermuxNotificationSettings(ctx) ||
+                                        LocalOllamaManager.openTermuxAppInfo(ctx)
+                                    if (!opened) toast(ctx.getString(R.string.local_model_silence_termux_fail))
+                                },
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.local_model_btn_silence_termux),
+                                    color = BrewChat,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                        }
                         // 停止状态（无失败引导时）提示保活要点：Ollama 由 Termux 承载，
                         // 上滑清理后台/省电策略会连带杀掉 ollama（曾因 SwipeUpClean 停服）
                         if (!serverUp && guidance == StartGuidance.NONE) {

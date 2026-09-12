@@ -12,8 +12,6 @@
     <string name="status_ready">Ready</string>
     <string name="status_enabling_adb">Enabling ADB...</string>
     <string name="status_adb_failed">ADB enable failed, please restart the App</string>
-    <!-- Toast messages -->
-    <string name="toast_enable_wifi">Please enable and connect to WiFi in Settings</string>
     <!-- Log messages (English only, developer-facing) -->
     <string name="log_network_recovered">Network recovered, rechecking status</string>
     <string name="log_wifi_disconnected">WiFi disconnected</string>

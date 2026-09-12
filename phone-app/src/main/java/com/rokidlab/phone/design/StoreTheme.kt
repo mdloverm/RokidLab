@@ -61,12 +61,10 @@ internal fun RokidLabTheme(
 
         // 根据背景明暗决定状态栏图标颜色
         val luminance = activeColors.bg.red * 0.299f + activeColors.bg.green * 0.587f + activeColors.bg.blue * 0.114f
-        val flags = window.decorView.systemUiVisibility
-        window.decorView.systemUiVisibility = if (luminance > 0.5f) {
-            flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-        } else {
-            flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
-        }
+        // systemUiVisibility 自 API 30 起废弃，等价写法走 WindowInsetsControllerCompat
+        androidx.core.view.WindowCompat
+            .getInsetsController(window, window.decorView)
+            ?.isAppearanceLightStatusBars = luminance > 0.5f
     }
 
     MaterialTheme(
@@ -140,7 +138,7 @@ val BrewDim: Color get() = BrewThemeManager.currentColors.dim
 // 边框
 val BrewBorder: Color get() = BrewThemeManager.currentColors.border
 
-// 七模块七色（固定用途）
+// 八模块八色（固定用途）
 val BrewCoral: Color get() = BrewThemeManager.currentColors.store      // 商店
 val BrewChat: Color get() = BrewThemeManager.currentColors.chat        // 乐奇聊天
 val BrewCyan: Color get() = BrewThemeManager.currentColors.mirror      // 屏幕镜像

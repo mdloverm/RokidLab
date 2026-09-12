@@ -96,85 +96,161 @@ object ManufacturerUtils {
     /**
      * 打开厂商 ROM 的自启动权限设置页
      * 引导用户授权自启动，确保广播接收器和后台服务正常工作
+     *
+     * @return true 表示成功拉起候选链里的某一支；false 表示连兜底的应用详情页都没能拉起
      */
-    fun openAutoStartSettings(context: Context): Boolean {
-        val intent = getAutoStartIntent(context) ?: return false
-        return runCatching {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-            true
-        }.onFailure { Log.w(TAG, "openAutoStartSettings failed: ${it.message}") }.getOrDefault(false)
-    }
+    fun openAutoStartSettings(context: Context): Boolean =
+        launchFirstAvailable(context, autoStartCandidates(context))
 
-    private fun getAutoStartIntent(context: Context): Intent? {
-        return when (detect()) {
-            Manufacturer.XIAOMI -> {
-                // MIUI 自启动管理
-                Intent("miui.intent.action.APP_PERM_EDITOR").apply {
-                    putExtra("extra_pkgname", context.packageName)
-                }
-            }
-            Manufacturer.HUAWEI -> {
-                // EMUI 启动管理
-                Intent().apply {
-                    action = "huawei.intent.action.HSM_PROTECTED_APPS"
-                    putExtra("pkg_name", context.packageName)
-                }
-            }
-            Manufacturer.HONOR -> {
-                Intent().apply {
-                    action = "huawei.intent.action.HSM_PROTECTED_APPS"
-                    putExtra("pkg_name", context.packageName)
-                }
-            }
-            Manufacturer.OPPO -> {
-                // ColorOS 自启动
-                Intent("com.coloros.safecenter.action.SAFECENTER")
-            }
-            Manufacturer.VIVO -> {
-                // OriginOS 自启动
-                Intent("com.iqoo.powersave.ui.PowerSaveActivity")
-            }
-            Manufacturer.MEIZU -> {
-                Intent("com.meizu.safe.action.SAFE_CENTER")
-            }
-            else -> null
+    /**
+     * 自启动管理页候选链，按「越贴近当前 ROM 越靠前」排序，末尾固定兜底到应用详情页。
+     *
+     * 为什么必须是链而不是单支：厂商 Action / 组件名在 ROM 版本之间**不是稳定契约** ——
+     * 同一个 Action 可能在新版本被改名或裁掉，同一个页面可能换包名（ColorOS 的
+     * `com.coloros.safecenter` 与 realme 上的 `com.oppo.safe`）。原实现「一个厂商一支
+     * Intent」一旦不匹配，抛出的 ActivityNotFoundException 被静默吞掉，用户看到的就是
+     * 「点了没反应、以为已经开好了」，而服务实际仍在被后台清理。
+     */
+    private fun autoStartCandidates(context: Context): List<Intent> {
+        val pkg = context.packageName
+        val vendor: List<Intent> = when (detect()) {
+            Manufacturer.XIAOMI -> listOf(
+                // MIUI 自启动管理（extra key 在不同版本间不一致，逐个试）
+                Intent("miui.intent.action.APP_PERM_EDITOR").putExtra("extra_pkgname", pkg),
+                Intent("miui.intent.action.APP_PERM_EDITOR_2").putExtra("extra_pkgname", pkg),
+                Intent("miui.intent.action.OP_AUTO_START").putExtra("extra_package_name", pkg),
+                Intent().setClassName(
+                    "com.miui.securitycenter",
+                    "com.miui.permcenter.autostart.AutoStartManagementActivity",
+                ),
+            )
+            Manufacturer.HUAWEI, Manufacturer.HONOR -> listOf(
+                // EMUI / MagicOS 启动管理
+                Intent("huawei.intent.action.HSM_PROTECTED_APPS").putExtra("pkg_name", pkg),
+                Intent("huawei.intent.action.HSM_PROTECTED_APPS"),
+                Intent().setClassName(
+                    "com.huawei.systemmanager",
+                    "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+                ),
+                Intent().setClassName(
+                    "com.hihonor.systemmanager",
+                    "com.hihonor.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+                ),
+                Intent().setClassName(
+                    "com.huawei.systemmanager",
+                    "com.huawei.systemmanager.optimize.process.ProtectActivity",
+                ),
+            )
+            Manufacturer.OPPO -> listOf(
+                // ColorOS / realme 自启动
+                Intent("com.coloros.safecenter.action.SAFECENTER"),
+                Intent().setClassName(
+                    "com.coloros.safecenter",
+                    "com.coloros.safecenter.permission.startup.StartupAppListActivity",
+                ),
+                Intent().setClassName(
+                    "com.coloros.safecenter",
+                    "com.coloros.safecenter.startupapp.StartupAppListActivity",
+                ),
+                Intent().setClassName(
+                    "com.oppo.safe",
+                    "com.oppo.safe.permission.startup.StartupAppListActivity",
+                ),
+            )
+            Manufacturer.VIVO -> listOf(
+                // OriginOS / Funtouch 自启动
+                Intent("com.iqoo.powersave.ui.PowerSaveActivity"),
+                Intent().setClassName(
+                    "com.vivo.permissionmanager",
+                    "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+                ),
+                Intent().setClassName(
+                    "com.iqoo.secure",
+                    "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager",
+                ),
+            )
+            Manufacturer.MEIZU -> listOf(
+                Intent("com.meizu.safe.action.SAFE_CENTER"),
+                Intent().setClassName(
+                    "com.meizu.safe",
+                    "com.meizu.safe.security.SafeMainActivity",
+                ),
+            )
+            Manufacturer.SAMSUNG -> listOf(
+                Intent().setClassName(
+                    "com.samsung.android.lool",
+                    "com.samsung.android.sm.ui.battery.BatteryActivity",
+                ),
+            )
+            else -> emptyList()
         }
+        return vendor + appDetailsIntent(context)
     }
 
     /**
      * 打开厂商 ROM 的省电策略/后台高耗电设置页
      * 解决华为/小米等后台服务被强杀问题
+     *
+     * @return true 表示成功拉起候选链里的某一支；false 表示连兜底的应用详情页都没能拉起
      */
-    fun openPowerSavingSettings(context: Context): Boolean {
-        val intent = getPowerSavingIntent(context) ?: return false
-        return runCatching {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-            true
-        }.onFailure { Log.w(TAG, "openPowerSavingSettings failed: ${it.message}") }.getOrDefault(false)
-    }
+    fun openPowerSavingSettings(context: Context): Boolean =
+        launchFirstAvailable(context, powerSavingCandidates(context))
 
-    private fun getPowerSavingIntent(context: Context): Intent? {
-        return when (detect()) {
-            Manufacturer.XIAOMI -> {
-                Intent("miui.intent.action.APP_PERM_EDITOR").apply {
-                    putExtra("extra_pkgname", context.packageName)
-                }
-            }
-            Manufacturer.HUAWEI -> {
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS.let {
-                    Intent(it).apply { data = Uri.parse("package:${context.packageName}") }
-                }
-            }
-            Manufacturer.OPPO -> {
-                Intent("com.coloros.safecenter.action.SAFECENTER")
-            }
-            Manufacturer.VIVO -> {
-                Intent("com.iqoo.powersave.ui.PowerSaveActivity")
-            }
-            else -> null
+    /** 省电/后台策略页候选链，末尾固定兜底到应用详情页（见 [autoStartCandidates] 的说明） */
+    private fun powerSavingCandidates(context: Context): List<Intent> {
+        val pkg = context.packageName
+        val vendor: List<Intent> = when (detect()) {
+            Manufacturer.XIAOMI -> listOf(
+                Intent("miui.intent.action.APP_PERM_EDITOR").putExtra("extra_pkgname", pkg),
+                Intent("miui.intent.action.POWER_HIDE_MODE_APP_LIST").putExtra("extra_pkgname", pkg),
+                Intent().setClassName(
+                    "com.miui.powerkeeper",
+                    "com.miui.powerkeeper.ui.HiddenAppsContainerManagementActivity",
+                ),
+            )
+            Manufacturer.HUAWEI, Manufacturer.HONOR -> listOf(
+                Intent().setClassName(
+                    "com.huawei.systemmanager",
+                    "com.huawei.systemmanager.power.ui.HwPowerManagerActivity",
+                ),
+                Intent().setClassName(
+                    "com.huawei.systemmanager",
+                    "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity",
+                ),
+                Intent().setClassName(
+                    "com.hihonor.systemmanager",
+                    "com.hihonor.systemmanager.power.ui.HwPowerManagerActivity",
+                ),
+            )
+            Manufacturer.OPPO -> listOf(
+                Intent("com.coloros.safecenter.action.SAFECENTER"),
+                Intent().setClassName(
+                    "com.coloros.oppoguardelf",
+                    "com.coloros.powermanager.fuelgaue.PowerUsageModelActivity",
+                ),
+                Intent().setClassName(
+                    "com.coloros.safecenter",
+                    "com.coloros.safecenter.permission.startup.StartupAppListActivity",
+                ),
+            )
+            Manufacturer.VIVO -> listOf(
+                // vivo/iQOO 的 10 分钟后台硬限制需要在「后台高耗电」白名单里放行
+                Intent("com.iqoo.powersave.ui.PowerSaveActivity"),
+                Intent().setClassName(
+                    "com.iqoo.secure",
+                    "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity",
+                ),
+                Intent().setClassName(
+                    "com.vivo.permissionmanager",
+                    "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+                ),
+            )
+            Manufacturer.MEIZU -> listOf(
+                Intent("com.meizu.safe.action.SAFE_CENTER"),
+            )
+            else -> emptyList()
         }
+        return vendor + appDetailsIntent(context)
     }
 
     // ── 悬浮窗权限 ──
@@ -186,49 +262,53 @@ object ManufacturerUtils {
         } else true
     }
 
-    /** 打开悬浮窗权限设置页 */
+    /** 打开悬浮窗权限设置页（候选链：系统标准页 → 厂商私有页 → 应用详情页） */
     fun openOverlaySettings(context: Context) {
-        val intent = getOverlaySettingsIntent(context) ?: Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
-            data = Uri.parse("package:${context.packageName}")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        runCatching { context.startActivity(intent) }
-            .onFailure {
-                Log.w(TAG, "Cannot open overlay settings: ${it.message}")
-                // fallback to standard intent
-                val fallback = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
-                    data = Uri.parse("package:${context.packageName}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                runCatching { context.startActivity(fallback) }
-            }
+        launchFirstAvailable(context, overlaySettingsCandidates(context))
     }
 
-    /** 获取厂商特定的悬浮窗权限设置页 Intent */
-    fun getOverlaySettingsIntent(context: Context): Intent? {
-        return when (detect()) {
-            Manufacturer.OPPO -> {
-                // ColorOS 悬浮窗管理列表页
-                Intent("com.coloros.safecenter.action.SAFECENTER").apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-            }
-            Manufacturer.VIVO -> {
-                // OriginOS 悬浮窗管理
-                Intent("com.iqoo.powersave.ui.PowerSaveActivity").apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-            }
-            Manufacturer.XIAOMI -> {
-                // MIUI 应用权限管理
-                Intent("miui.intent.action.APP_PERM_EDITOR").apply {
-                    putExtra("extra_pkgname", context.packageName)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-            }
-            else -> null
+    /**
+     * 悬浮窗权限页候选链。
+     *
+     * 顺序与自启动相反 —— **系统标准页排第一**：`ACTION_MANAGE_OVERLAY_PERMISSION`
+     * 是 AOSP 契约，所有 ROM 都必须实现，且带 `package:` 时能直接定位到本应用那一行开关；
+     * 厂商私有页（如 ColorOS 的 SAFECENTER）往往只是权限总表，用户还得自己找。
+     * 所以先走能精确落位的标准页，私有页只作为标准页缺失时的备选。
+     */
+    private fun overlaySettingsCandidates(context: Context): List<Intent> {
+        val pkg = context.packageName
+        val standard = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+            data = Uri.parse("package:$pkg")
         }
+        val vendor: List<Intent> = when (detect()) {
+            Manufacturer.OPPO -> listOf(
+                Intent().setClassName(
+                    "com.coloros.safecenter",
+                    "com.coloros.safecenter.permission.floatwindow.FloatWindowListActivity",
+                ),
+                Intent("com.coloros.safecenter.action.SAFECENTER"),
+            )
+            Manufacturer.VIVO -> listOf(
+                Intent().setClassName(
+                    "com.vivo.permissionmanager",
+                    "com.vivo.permissionmanager.activity.FloatWindowManagerActivity",
+                ),
+                Intent("com.iqoo.powersave.ui.PowerSaveActivity"),
+            )
+            Manufacturer.XIAOMI -> listOf(
+                Intent("miui.intent.action.APP_PERM_EDITOR").putExtra("extra_pkgname", pkg),
+            )
+            else -> emptyList()
+        }
+        return listOf(standard) + vendor + appDetailsIntent(context)
     }
+
+    /**
+     * 获取单支悬浮窗权限页 Intent（供 `ActivityResultLauncher` 等无法逐支降级的调用方使用）。
+     * 取候选链首支，即系统标准页。
+     */
+    fun getOverlaySettingsIntent(context: Context): Intent? =
+        overlaySettingsCandidates(context).firstOrNull()
 
     // ── 通知权限（厂商特殊处理） ──
 
@@ -237,29 +317,58 @@ object ManufacturerUtils {
      * 部分 ROM（如 MIUI）中标准 POST_NOTIFICATIONS 弹窗可能被静默拒绝
      */
     fun openNotificationSettings(context: Context) {
-        when (detect()) {
-            Manufacturer.XIAOMI -> {
-                // MIUI: 跳转应用详情 → 通知管理
-                val intent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
-                    putExtra("extra_pkgname", context.packageName)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                runCatching { context.startActivity(intent) }
-                    .onFailure { fallbackAppSettings(context) }
-            }
-            else -> {
-                // 其他 ROM: 跳转系统设置 → 通知
-                fallbackAppSettings(context)
-            }
-        }
+        launchFirstAvailable(context, notificationCandidates(context))
     }
 
-    private fun fallbackAppSettings(context: Context) {
-        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.parse("package:${context.packageName}")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    /** 通知权限页候选链：厂商权限总表 → 系统通知页 → 应用详情页 */
+    private fun notificationCandidates(context: Context): List<Intent> {
+        val pkg = context.packageName
+        val vendor: List<Intent> = when (detect()) {
+            Manufacturer.XIAOMI -> listOf(
+                // MIUI: 跳转应用详情 → 通知管理
+                Intent("miui.intent.action.APP_PERM_EDITOR").putExtra("extra_pkgname", pkg),
+            )
+            else -> emptyList()
         }
-        runCatching { context.startActivity(intent) }
+        val systemNotification = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, pkg)
+        }
+        return vendor + systemNotification + appDetailsIntent(context)
+    }
+
+    // ── 跳转执行器 ──
+
+    /** 应用系统详情页（AOSP 必有），候选链的最后一档兜底 */
+    private fun appDetailsIntent(context: Context): Intent =
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:${context.packageName}")
+        }
+
+    /**
+     * 按顺序逐支尝试拉起设置页，第一支成功即停；全失败返回 false。
+     *
+     * 为什么**不做 resolveActivity 预检**：Android 11+ 的软件包可见性（`<queries>` 声明）
+     * 会让 `resolveActivity` 对未声明的系统组件返回 null，但 `startActivity` 本身不受该限制 ——
+     * 拿预检结果决定跳不跳，会把本来能用的厂商入口误杀成「无入口」。所以以真的启动一次为准，
+     * 把 ActivityNotFoundException / SecurityException 当作「这支在当前 ROM 上不可用」的信号。
+     *
+     * 失败只记日志、不抛给调用方：用户点「去设置」时最差也应落到应用详情页手动改，
+     * 不该因为厂商页缺失就整条引导链路崩掉。
+     */
+    private fun launchFirstAvailable(context: Context, candidates: List<Intent>): Boolean {
+        for ((idx, intent) in candidates.withIndex()) {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val label = intent.action ?: intent.component?.flattenToShortString() ?: "?"
+            try {
+                context.startActivity(intent)
+                Log.i(TAG, "settings jump ok (#$idx, $label)")
+                return true
+            } catch (e: Exception) {
+                Log.i(TAG, "settings jump #$idx ($label) unavailable: ${e.javaClass.simpleName}")
+            }
+        }
+        Log.w(TAG, "all settings jump candidates failed")
+        return false
     }
 
     /** 获取厂商显示名称（用于 UI 展示） */
@@ -304,15 +413,8 @@ object ManufacturerUtils {
         return isQtiBluetoothStack()
     }
 
-    private fun getSystemProperty(name: String): String? {
-        return try {
-            val clazz = Class.forName("android.os.SystemProperties")
-            val method = clazz.getMethod("get", String::class.java)
-            method.invoke(null, name) as? String
-        } catch (e: Exception) {
-            null
-        }
-    }
+    private fun getSystemProperty(name: String): String? =
+        com.rokidlab.phone.platform.RomAdapter.systemProperty(name)
 
     // ── MediaProjection 投屏兼容性检测 ──
 

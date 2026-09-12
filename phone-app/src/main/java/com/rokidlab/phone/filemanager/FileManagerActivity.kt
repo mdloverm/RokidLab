@@ -38,6 +38,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
+import androidx.compose.material.icons.automirrored.outlined.Sort
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Android
 import androidx.compose.material.icons.outlined.*
@@ -371,7 +373,7 @@ internal fun FileManagerScreen(
             
             Box {
                 IconButton(onClick = { showSortMenu = true }) {
-                    Icon(Icons.Outlined.Sort, contentDescription = ctx.getString(R.string.sort))
+                    Icon(Icons.AutoMirrored.Outlined.Sort, contentDescription = ctx.getString(R.string.sort))
                 }
                 DropdownMenu(
                     expanded = showSortMenu,
@@ -529,83 +531,76 @@ class FileManagerActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "FileManager"
-        private const val EXTRA_USE_REAL_INSTALL = "use_real_install"
+        internal const val EXTRA_USE_REAL_INSTALL = "use_real_install"
 
         fun createIntent(context: android.content.Context, useRealInstall: Boolean = false) = Intent(context, FileManagerActivity::class.java).apply {
             putExtra(EXTRA_USE_REAL_INSTALL, useRealInstall)
         }
     }
 
-    private var ipAddress = "192.168.1.168"
-    private var isConnected by mutableStateOf(false)
-    private var isConnecting by mutableStateOf(false)
-    private var connectionError: String? by mutableStateOf(null)
-    private var useRealInstall: Boolean = false
 
-    private var currentPath = "/sdcard/"
-    private var files: List<FileItem> by mutableStateOf(emptyList())
-    private var isLoading by mutableStateOf(false)
-    private var statusMessage by mutableStateOf("")
+    internal var ipAddress = "192.168.1.168"
+    internal var isConnected by mutableStateOf(false)
+    internal var isConnecting by mutableStateOf(false)
+    internal var connectionError: String? by mutableStateOf(null)
+    internal var useRealInstall: Boolean = false
 
-    private var selectedFiles: Set<String> by mutableStateOf(emptySet())
-    private var clipboard: Pair<ClipboardAction, Set<String>>? by mutableStateOf(null)
+    internal var currentPath = "/sdcard/"
+    internal var files: List<FileItem> by mutableStateOf(emptyList())
+    internal var isLoading by mutableStateOf(false)
+    internal var statusMessage by mutableStateOf("")
 
-    private var showNewFolderDialog by mutableStateOf(false)
-    private var showRenameDialog by mutableStateOf(false)
-    private var showDeleteDialog by mutableStateOf(false)
-    private var showDetailsDialog by mutableStateOf(false)
-    private var showPreviewDialog by mutableStateOf(false)
-    private var previewContent: String? by mutableStateOf(null)
-    private var previewLoading by mutableStateOf(false)
-    private var targetFile: FileItem? by mutableStateOf(null)
-    private var renameText by mutableStateOf("")
-    private var newFolderName by mutableStateOf("")
+    internal var selectedFiles: Set<String> by mutableStateOf(emptySet())
+    internal var clipboard: Pair<ClipboardAction, Set<String>>? by mutableStateOf(null)
 
-    private var searchQuery by mutableStateOf("")
-    private var sortOrder by mutableStateOf(SortOrder.NAME_ASC)
-    private var showHiddenFiles by mutableStateOf(false)
-    private var storageInfo: AdbFileManagerClient.StorageInfo? by mutableStateOf(null)
+    internal var showNewFolderDialog by mutableStateOf(false)
+    internal var showRenameDialog by mutableStateOf(false)
+    internal var showDeleteDialog by mutableStateOf(false)
+    internal var showDetailsDialog by mutableStateOf(false)
+    internal var showPreviewDialog by mutableStateOf(false)
+    internal var previewContent: String? by mutableStateOf(null)
+    internal var previewLoading by mutableStateOf(false)
+    internal var targetFile: FileItem? by mutableStateOf(null)
+    internal var renameText by mutableStateOf("")
+    internal var newFolderName by mutableStateOf("")
+
+    internal var searchQuery by mutableStateOf("")
+    internal var sortOrder by mutableStateOf(SortOrder.NAME_ASC)
+    internal var showHiddenFiles by mutableStateOf(false)
+    internal var storageInfo: AdbFileManagerClient.StorageInfo? by mutableStateOf(null)
 
     // APK安装状态跟踪
-    private var installingApkPath: String? by mutableStateOf(null)
-    private var apkInstallProgress: Int by mutableStateOf(0)
-    private var apkInstallStatus: String? by mutableStateOf(null)
-    private var apkInstallSuccess: Boolean by mutableStateOf(false)
+    internal var installingApkPath: String? by mutableStateOf(null)
+    internal var apkInstallProgress: Int by mutableStateOf(0)
+    internal var apkInstallStatus: String? by mutableStateOf(null)
+    internal var apkInstallSuccess: Boolean by mutableStateOf(false)
 
-    enum class SortOrder {
+    internal enum class SortOrder {
         NAME_ASC, NAME_DESC, SIZE_ASC, SIZE_DESC, DATE_ASC, DATE_DESC, TYPE_ASC, TYPE_DESC
     }
 
-    private var adbClient: AdbFileManagerClient? = null
-    private lateinit var prefs: SharedPreferences
-    private val ioExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "fm-io").also { it.isDaemon = true } }
+    /**
+     * L5 文件管理状态机（Phase 5：连接生命周期 + 文件 IO 全链路迁至 feature/FileManagerStateHolder）。
+     * UI 状态留在本 Activity（Compose 直接读），业务逻辑经下列一行门面委派。
+     */
+    internal val fm by lazy { com.rokidlab.phone.feature.FileManagerStateHolder(this) }
 
+    // ActivityResult 启动器必须留在 Activity（需在 STARTED 前注册），回调转交状态机
     private val filePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { uploadFile(it) }
+        uri?.let { fm.uploadFile(it) }
     }
 
     private var pendingDownloadFile: FileItem? = null
     private val saveFileLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
         uri?.let { downloadUri ->
-            pendingDownloadFile?.let { file ->
-                downloadFileToUri(file, downloadUri)
-            }
+            pendingDownloadFile?.let { file -> fm.downloadFileToUri(file, downloadUri) }
         }
         pendingDownloadFile = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = getSharedPreferences("rokidlab", MODE_PRIVATE)
-        
-        // 读取是否使用真正的安装功能
-        useRealInstall = intent.getBooleanExtra(EXTRA_USE_REAL_INSTALL, false)
-        
-        val app = application as LabApplication
-        ipAddress = app.fileManagerIp
-        
-        isConnecting = true
-        connect()
+        fm.init()
 
         setContent {
             val ctx = LocalContext.current
@@ -735,647 +730,44 @@ class FileManagerActivity : ComponentActivity() {
                 }
             }
         }
-    }
-
-    private fun disconnect() {
-        adbClient?.disconnect()
-        adbClient = null
-        isConnected = false
-        isConnecting = false
-        connectionError = null
-        currentPath = "/sdcard/"
-        files = emptyList()
-        selectedFiles = emptySet()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        ioExecutor.shutdownNow()
-        adbClient?.disconnect()
-    }
-
-    private fun connect() {
-        // 先清理旧连接
-        adbClient?.disconnect()
-        adbClient = null
-        isConnected = false
-        isConnecting = true
-        connectionError = null
-        Log.i(TAG, "Starting connection: $ipAddress:${AppConfig.DEFAULT_ADB_PORT}")
-
-        Thread {
-            try {
-                val app = application as LabApplication
-                val route = kotlinx.coroutines.runBlocking {
-                    app.routeManager.resolve(ipAddress, AppConfig.DEFAULT_ADB_PORT)
-                }
-                val (targetIp, targetPort) = when (route) {
-                    is ConnectionRoute.Wifi -> route.ip to route.port
-                    is ConnectionRoute.Bluetooth -> route.ip to route.localPort
-                    is ConnectionRoute.None -> {
-                        runOnUiThread {
-                            isConnecting = false
-                            connectionError = "No route to glasses (WiFi and BT both unavailable)"
-                        }
-                        return@Thread
-                    }
-                }
-                Log.i(TAG, "Route: $route, connecting to $targetIp:$targetPort")
-                val client = AdbFileManagerClient(this@FileManagerActivity, targetIp, targetPort)
-                Log.i(TAG, "Calling connect method")
-                val success = client.connect { status ->
-                    Log.i(TAG, "Connection status: $status")
-                    runOnUiThread { statusMessage = status }
-                }
-                
-                Log.i(TAG, "Connection result: $success")
-                runOnUiThread {
-                    isConnecting = false
-                    if (success) {
-                        isConnected = true
-                        adbClient = client
-                        try {
-                            loadFiles()
-                        } catch (e: java.util.concurrent.RejectedExecutionException) {
-                            Log.w(TAG, "Executor shut down, skipping loadFiles")
-                        }
-                    } else {
-                        connectionError = getString(R.string.connection_failed_check_ip)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Connection error: ${e.message}", e)
-                runOnUiThread {
-                    isConnecting = false
-                    connectionError = getString(R.string.connection_error_format, e.message)
-                }
-            }
-        }.start()
-    }
-
-    private var loadFilesCounter = 0
-    
-    private fun loadFiles() {
-        isLoading = true
-        statusMessage = ""
-        val targetPath = currentPath
-        val loadId = ++loadFilesCounter
-        
-        ioExecutor.execute {
-            try {
-                val client = adbClient
-                if (client?.isConnected() != true) {
-                    runOnUiThread {
-                        if (loadId == loadFilesCounter) {
-                            isLoading = false
-                            isConnected = false
-                            connectionError = getString(R.string.connection_lost_reconnect)
-                        }
-                    }
-                    return@execute
-                }
-                
-                val result = client.listFiles(targetPath)
-                
-                runOnUiThread {
-                    if (loadId == loadFilesCounter) {
-                        files = result
-                        isLoading = false
-                        // 同步加载存储信息（不额外开线程）
-                        loadStorageInfoSync()
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "loadFiles error: ${e.message}", e)
-                runOnUiThread {
-                    if (loadId == loadFilesCounter) {
-                        isLoading = false
-                        isConnected = false
-                        connectionError = getString(R.string.connection_lost_reconnect)
-                    }
-                }
-            }
         }
-    }
 
-    private fun loadStorageInfoSync() {
-        ioExecutor.execute {
-            try {
-                val client = adbClient
-                if (client?.isConnected() != true) return@execute
-                val info = client.getStorageInfo(currentPath)
-                runOnUiThread { storageInfo = info }
-            } catch (e: Exception) {
-                Log.e(TAG, "loadStorageInfo error: ${e.message}", e)
-            }
-        }
-    }
 
-    private fun navigateUp() {
-        Log.i(TAG, "navigateUp called, current path: $currentPath")
-        
-        // 移除末尾的斜杠进行处理
-        val normalizedPath = currentPath.trimEnd('/')
-        Log.i(TAG, "Normalized path: $normalizedPath")
-        
-        val parentPath = if (normalizedPath == "/sdcard") {
-            "/sdcard/"
-        } else {
-            val lastSlashIndex = normalizedPath.lastIndexOf('/')
-            if (lastSlashIndex <= 1) {
-                "/sdcard/"
-            } else {
-                normalizedPath.substring(0, lastSlashIndex) + "/"
-            }
-        }
-        
-        Log.i(TAG, "Parent path: $parentPath")
-        
-        if (parentPath != currentPath) {
-            currentPath = parentPath
-            loadFiles()
-        }
-    }
+    // ── 一行门面（Phase 5：调用点零改动） ──
+    private fun connect() = fm.connect()
+    private fun disconnect() = fm.disconnect()
+    private fun loadFiles() = fm.loadFiles()
+    private fun loadStorageInfoSync() = fm.loadStorageInfoSync()
+    private fun navigateUp() = fm.navigateUp()
+    private fun onFileClick(file: FileItem) = fm.onFileClick(file)
+    private fun toggleSelection(file: FileItem) = fm.toggleSelection(file)
+    private fun selectAll() = fm.selectAll()
+    private fun clearSelection() = fm.clearSelection()
+    private fun clearClipboard() = fm.clearClipboard()
+    private fun openFile(file: FileItem) = fm.openFile(file)
+    private fun previewFile(file: FileItem) = fm.previewFile(file)
+    private fun uploadFile(uri: Uri) = fm.uploadFile(uri)
+    private fun createNewFolder(name: String) = fm.createNewFolder(name)
+    private fun renameSelected() = fm.renameSelected()
+    private fun renameFile(newName: String) = fm.renameFile(newName)
+    private fun copySelected() = fm.copySelected()
+    private fun cutSelected() = fm.cutSelected()
+    private fun pasteFiles() = fm.pasteFiles()
+    private fun deleteSelected() = fm.deleteSelected()
+    private fun deleteSelectedFiles() = fm.deleteSelectedFiles()
+    private fun installApk(file: FileItem) = fm.installApk(file)
+    private fun showFileDetails(file: FileItem) = fm.showFileDetails(file)
+    private fun getFilteredAndSortedFiles(): List<FileItem> = fm.getFilteredAndSortedFiles()
 
-    private fun onFileClick(file: FileItem) {
-        if (selectedFiles.isNotEmpty()) {
-            toggleSelection(file)
-            return
-        }
-        
-        if (file.isDirectory) {
-            currentPath = file.path
-            loadFiles()
-        } else {
-            openFile(file)
-        }
-    }
-
-    private fun toggleSelection(file: FileItem) {
-        selectedFiles = if (selectedFiles.contains(file.path)) {
-            selectedFiles - file.path
-        } else {
-            selectedFiles + file.path
-        }
-    }
-
-    private fun selectAll() {
-        selectedFiles = files.map { it.path }.toSet()
-    }
-
-    private fun clearSelection() {
-        selectedFiles = emptySet()
-    }
-
-    private fun clearClipboard() {
-        clipboard = null
-        statusMessage = getString(R.string.clipboard_cleared)
-    }
-
-    private fun openFile(file: FileItem) {
-        val ext = file.name.substringAfterLast('.', "").lowercase()
-        if (ext in listOf("txt", "md", "json", "xml", "log")) {
-            previewFile(file)
-        } else {
-            downloadFile(file)
-        }
-    }
-
-    private fun previewFile(file: FileItem) {
-        targetFile = file
-        showPreviewDialog = true
-        previewLoading = true
-        Log.i(TAG, "Previewing file: ${file.path}")
-        
-        Thread {
-            try {
-                // 通过文件扩展名判断文件类型
-                val textExtensions = setOf("txt", "log", "md", "json", "xml", "html", "js", "css", "java", "kt", "py", "cpp", "h", "c", "sh", "bat")
-                val imageExtensions = setOf("jpg", "jpeg", "png", "gif", "bmp", "webp")
-                
-                val extension = file.name.substringAfterLast('.', "").lowercase()
-                Log.i(TAG, "File extension: $extension")
-                
-                if (imageExtensions.contains(extension)) {
-                    // 图片文件 - 下载到本地后预览
-                    Log.i(TAG, "Image file, starting download")
-                    val localPath = cacheDir.absolutePath + "/" + file.name
-                    val success = adbClient?.downloadFile(file.path, localPath) ?: false
-                    
-                    runOnUiThread {
-                        previewLoading = false
-                        if (success) {
-                            previewContent = localPath // 存储本地路径用于图片预览
-                            Log.i(TAG, "Image download successful: $localPath")
-                        } else {
-                            previewContent = getString(R.string.image_download_failed)
-                            Log.e(TAG, "Image download failed")
-                        }
-                    }
-                } else if (textExtensions.contains(extension)) {
-                    // 文本文件可以预览 - 使用 shell cat 命令读取（sync 协议不支持此设备）
-                    Log.i(TAG, "Text file, reading content")
-                    val content = if (adbClient != null) {
-                        try {
-                            adbClient!!.executeShellCommand("cat \"${file.path}\"")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "shell cat failed: ${e.message}")
-                            null
-                        }
-                    } else null
-                    Log.i(TAG, "Text content preview result: ${if (content != null && content.isNotEmpty()) "success, length: ${content.length}" else "failed"}")
-                    
-                    runOnUiThread {
-                        previewLoading = false
-                        previewContent = content ?: getString(R.string.cannot_read_content)
-                    }
-                } else {
-                    // 其他文件
-                    runOnUiThread {
-                        previewLoading = false
-                        previewContent = getString(R.string.preview_not_supported) + "\n\n" + getString(R.string.name_label) + ": ${file.name}\n" + getString(R.string.size_label) + ": ${formatSize(file.size)}"
-                    }
-                    Log.i(TAG, "Unsupported file type")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Preview failed: ${e.message}", e)
-                runOnUiThread {
-                    previewLoading = false
-                    previewContent = getString(R.string.preview_failed_format, e.message)
-                }
-            }
-        }.start()
-    }
-
-    private fun downloadFile(file: FileItem) {
+    /** 下载入口：弹系统保存对话框（启动器必须留在 Activity），落盘由状态机执行 */
+    internal fun downloadFile(file: FileItem) {
         pendingDownloadFile = file
         saveFileLauncher.launch(file.name)
     }
 
-    private fun downloadFileToUri(file: FileItem, uri: Uri) {
-        isLoading = true
-        statusMessage = getString(R.string.download_status)
-        
-        ioExecutor.execute {
-            val client = adbClient
-            if (client?.isConnected() != true) {
-                runOnUiThread { isLoading = false; isConnected = false }
-                return@execute
-            }
-            val localPath = cacheDir.absolutePath + "/" + file.name
-            val success = client.downloadFile(file.path, localPath)
-            
-            if (!success) {
-                LogCollector.e(TAG, "Download failed: ${file.path}")
-            }
-            
-            if (success) {
-                try {
-                    contentResolver.openOutputStream(uri)?.use { outputStream ->
-                        File(localPath).inputStream().use { inputStream ->
-                            inputStream.copyTo(outputStream)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Copy file failed: ${e.message}")
-                }
-                File(localPath).delete()
-            }
-            
-            runOnUiThread {
-                isLoading = false
-                statusMessage = if (success) getString(R.string.download_success) else getString(R.string.download_failed)
-            }
-        }
-    }
-
-    private fun uploadFile(uri: Uri) {
-        isLoading = true
-        statusMessage = getString(R.string.upload_status)
-        
-        ioExecutor.execute {
-            val fileName = uri.getFileName() ?: "unknown"
-            val targetPath = buildPath(currentPath, fileName)
-            
-            val client = adbClient
-            if (client?.isConnected() != true) {
-                runOnUiThread {
-                    isLoading = false
-                    statusMessage = getString(R.string.connection_lost_reconnect)
-                    isConnected = false
-                }
-                return@execute
-            }
-            
-            val localPath = cacheDir.absolutePath + "/" + fileName
-            try {
-                contentResolver.openInputStream(uri)?.use { inputStream ->
-                    File(localPath).outputStream().use { outputStream ->
-                        inputStream.copyTo(outputStream)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Copy file failed: ${e.message}", e)
-            }
-            
-            val success = client.uploadFile(localPath, targetPath)
-            File(localPath).delete()
-            
-            if (!success) {
-                LogCollector.e(TAG, "Upload failed: $fileName -> $targetPath")
-            }
-            
-            runOnUiThread {
-                isLoading = false
-                if (success) {
-                    statusMessage = getString(R.string.file_upload_success)
-                    loadFiles()
-                } else {
-                    statusMessage = getString(R.string.file_upload_failed)
-                }
-            }
-        }
-    }
-
-    private fun createNewFolder(name: String) {
-        showNewFolderDialog = false
-        isLoading = true
-        
-        ioExecutor.execute {
-            val client = adbClient
-            if (client?.isConnected() != true) {
-                runOnUiThread { isLoading = false; isConnected = false }
-                return@execute
-            }
-            val newPath = buildPath(currentPath, name)
-            val success = client.createFolder(newPath)
-            
-            if (!success) {
-                LogCollector.e(TAG, "Create folder failed: $newPath")
-            }
-            
-            runOnUiThread {
-                isLoading = false
-                statusMessage = if (success) getString(R.string.folder_create_success) else getString(R.string.folder_create_failed)
-                if (success) loadFiles()
-            }
-        }
-    }
-
-    private fun renameSelected() {
-        val filePath = selectedFiles.firstOrNull() ?: return
-        files.find { it.path == filePath }?.let {
-            targetFile = it
-            renameText = it.name
-            showRenameDialog = true
-        }
-    }
-
-    private fun renameFile(newName: String) {
-        if (newName.isBlank() || targetFile == null) {
-            statusMessage = getString(R.string.filename_empty)
-            return
-        }
-        
-        showRenameDialog = false
-        isLoading = true
-        
-        ioExecutor.execute {
-            val client = adbClient
-            if (client?.isConnected() != true) {
-                runOnUiThread { isLoading = false; isConnected = false }
-                return@execute
-            }
-            val newPath = buildPath(currentPath, newName)
-            val success = client.renameFile(targetFile!!.path, newPath)
-            
-            if (!success) {
-                LogCollector.e(TAG, "Rename failed: ${targetFile!!.path} -> $newPath")
-            }
-            
-            runOnUiThread {
-                isLoading = false
-                statusMessage = if (success) getString(R.string.rename_success) else getString(R.string.rename_failed)
-                targetFile = null
-                renameText = ""
-                if (success) loadFiles()
-            }
-        }
-    }
-
-    private fun copySelected() {
-        if (selectedFiles.isEmpty()) return
-        clipboard = Pair(ClipboardAction.COPY, selectedFiles)
-        statusMessage = getString(R.string.copied_items, selectedFiles.size)
-        selectedFiles = emptySet()
-    }
-
-    private fun cutSelected() {
-        if (selectedFiles.isEmpty()) return
-        clipboard = Pair(ClipboardAction.CUT, selectedFiles)
-        statusMessage = getString(R.string.cut_items, selectedFiles.size)
-        selectedFiles = emptySet()
-    }
-
-    private fun pasteFiles() {
-        clipboard?.let { (action, paths) ->
-            isLoading = true
-            statusMessage = getString(R.string.pasting_status)
-            
-            ioExecutor.execute {
-                val client = adbClient
-                if (client?.isConnected() != true) {
-                    runOnUiThread { isLoading = false; isConnected = false }
-                    return@execute
-                }
-                var successCount = 0
-                val failedPaths = mutableListOf<String>()
-                paths.forEach { path ->
-                    val fileName = path.substringAfterLast('/')
-                    val newPath = buildPath(currentPath, fileName)
-                    if (action == ClipboardAction.COPY) {
-                        if (client.copyFile(path, newPath)) successCount++
-                        else failedPaths.add(path)
-                    } else {
-                        // Move = copy + delete（仅 copy 确认成功后才删源，防数据丢失）
-                        if (client.copyFile(path, newPath)) {
-                            if (client.deleteFile(path)) {
-                                successCount++
-                            } else {
-                                // copy 成功但删源失败：目标已就位，只提示源未清理
-                                successCount++
-                                LogCollector.w(TAG, "Move: copied but failed to remove source: $path")
-                            }
-                        } else {
-                            failedPaths.add(path)
-                        }
-                    }
-                }
-                
-                if (failedPaths.isNotEmpty()) {
-                    LogCollector.e(TAG, "Paste failed for ${failedPaths.size}/${paths.size} items: ${failedPaths.take(3)}")
-                }
-                
-                runOnUiThread {
-                    isLoading = false
-                    statusMessage = if (successCount == paths.size) {
-                        getString(R.string.pasted_items, successCount)
-                    } else {
-                        getString(R.string.pasted_items, successCount) + "/${paths.size}"
-                    }
-                    if (action == ClipboardAction.CUT) {
-                        clipboard = null
-                    }
-                    loadFiles()
-                }
-            }
-        }
-    }
-
-    private fun deleteSelected() {
-        if (selectedFiles.isEmpty()) return
-        showDeleteDialog = true
-    }
-
-    private fun deleteSelectedFiles() {
-        showDeleteDialog = false
-        isLoading = true
-        statusMessage = getString(R.string.deleting_status)
-        
-        ioExecutor.execute {
-            val client = adbClient
-            if (client?.isConnected() != true) {
-                runOnUiThread { isLoading = false; isConnected = false }
-                return@execute
-            }
-            var successCount = 0
-            val failedPaths = mutableListOf<String>()
-            selectedFiles.forEach { path ->
-                if (client.deleteFile(path)) successCount++
-                else failedPaths.add(path)
-            }
-            
-            if (failedPaths.isNotEmpty()) {
-                LogCollector.e(TAG, "Delete failed for ${failedPaths.size}/${selectedFiles.size} items: ${failedPaths.take(3)}")
-            }
-            
-            runOnUiThread {
-                isLoading = false
-                statusMessage = if (successCount == selectedFiles.size) {
-                        getString(R.string.deleted_items, successCount)
-                    } else {
-                        getString(R.string.deleted_items, successCount) + "/${selectedFiles.size}"
-                    }
-                selectedFiles = emptySet()
-                loadFiles()
-            }
-        }
-    }
-
-    private fun installApk(file: FileItem) {
-        if (!file.name.lowercase().endsWith(".apk")) {
-            statusMessage = getString(R.string.not_apk_file)
-            return
-        }
-        
-        installingApkPath = file.path
-        apkInstallProgress = 0
-        apkInstallStatus = getString(R.string.preparing_install)
-        
-        Thread {
-            try {
-                apkInstallStatus = getString(R.string.installing_apk)
-                apkInstallProgress = 50
-                
-                // 直接在眼镜端通过 ADB shell 执行 pm install，无需下载到手机再上传
-                val result = adbClient?.executeShellCommand("pm install -r \"${file.path}\"") ?: ""
-                val isSuccess = !result.contains("Failure", ignoreCase = true) &&
-                    (result.contains("Success", ignoreCase = true) || result.isBlank())
-                
-                runOnUiThread {
-                    if (isSuccess) {
-                        apkInstallSuccess = true
-                        apkInstallStatus = getString(R.string.install_completed)
-                        apkInstallProgress = 100
-                        statusMessage = getString(R.string.apk_install_completed, file.name)
-                    } else {
-                        apkInstallSuccess = false
-                        val errorLine = result.lines().firstOrNull { it.isNotBlank() } ?: getString(R.string.unknown_error)
-                        LogCollector.e(TAG, "APK install failed: ${file.path} — $errorLine")
-                        apkInstallStatus = getString(R.string.apk_install_failed, errorLine)
-                    }
-                    
-                    // 3秒后清除状态
-                    Thread {
-                        Thread.sleep(3000)
-                        runOnUiThread {
-                            installingApkPath = null
-                            apkInstallProgress = 0
-                            apkInstallStatus = null
-                            apkInstallSuccess = false
-                        }
-                    }.start()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "APK安装失败: ${e.message}", e)
-                runOnUiThread {
-                    apkInstallSuccess = false
-                    apkInstallStatus = getString(R.string.apk_install_failed, e.message ?: "Unknown")
-                    installingApkPath = null
-                }
-            }
-        }.start()
-    }
-
-    private fun showFileDetails(file: FileItem) {
-        targetFile = file
-        showDetailsDialog = true
-    }
-
-    private fun buildPath(parent: String, name: String): String {
-        return if (parent == "/") "/$name" else "$parent/$name"
-    }
-
-    private fun Uri.getFileName(): String? {
-        return contentResolver.query(this, null, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
-            } else {
-                null
-            }
-        }
-    }
-
-    private fun getFilteredAndSortedFiles(): List<FileItem> {
-        var result = files
-        
-        if (searchQuery.isNotBlank()) {
-            result = result.filter { it.name.contains(searchQuery, ignoreCase = true) }
-        }
-        
-        if (!showHiddenFiles) {
-            result = result.filter { !it.name.startsWith('.') }
-        }
-        
-        result = result.sortedWith(Comparator<FileItem> { a, b ->
-            when {
-                a.isDirectory != b.isDirectory -> if (a.isDirectory) -1 else 1
-                else -> when (sortOrder) {
-                    SortOrder.NAME_ASC -> a.name.lowercase().compareTo(b.name.lowercase())
-                    SortOrder.NAME_DESC -> b.name.lowercase().compareTo(a.name.lowercase())
-                    SortOrder.SIZE_ASC -> a.size.compareTo(b.size)
-                    SortOrder.SIZE_DESC -> b.size.compareTo(a.size)
-                    SortOrder.DATE_ASC -> a.lastModified.compareTo(b.lastModified)
-                    SortOrder.DATE_DESC -> b.lastModified.compareTo(a.lastModified)
-                    SortOrder.TYPE_ASC -> a.name.substringAfterLast('.', "").lowercase()
-                        .compareTo(b.name.substringAfterLast('.', "").lowercase())
-                    SortOrder.TYPE_DESC -> b.name.substringAfterLast('.', "").lowercase()
-                        .compareTo(a.name.substringAfterLast('.', "").lowercase())
-                }
-            }
-        })
-        
-        return result
+    override fun onDestroy() {
+        fm.onDestroy()
+        super.onDestroy()
     }
 }
 
@@ -1481,7 +873,7 @@ fun FileItemRow(
         }
         
         Icon(
-            imageVector = if (file.isDirectory) Icons.Outlined.Folder else Icons.Outlined.InsertDriveFile,
+            imageVector = if (file.isDirectory) Icons.Outlined.Folder else Icons.AutoMirrored.Outlined.InsertDriveFile,
             contentDescription = if (file.isDirectory) "Folder" else "File",
             tint = if (file.isDirectory) BrewCyan else BrewMuted,
             modifier = Modifier.size(24.dp)
@@ -1507,13 +899,10 @@ fun FileItemRow(
                             Text("$apkInstallProgress%", color = BrewCoral, fontSize = 10.sp)
                         }
                     } else if (apkInstallStatus != null) {
+                        // 外层已保证 apkInstallStatus != null，此处该分支不可达（编译器已指出）
                         Text(
                             " [$apkInstallStatus]",
-                            color = when {
-                                apkInstallSuccess -> BrewSuccess
-                                apkInstallStatus != null -> BrewRed
-                                else -> BrewCoral
-                            },
+                            color = if (apkInstallSuccess) BrewSuccess else BrewRed,
                             fontSize = 10.sp
                         )
                     }

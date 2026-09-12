@@ -1,8 +1,9 @@
 package com.rokidlab.phone.mirror
 
 import com.rokidlab.phone.R
+import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.util.AppConfig
-import com.rokidlab.phone.util.ManufacturerUtils
+import com.rokidlab.phone.util.RomFingerprint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -26,6 +27,7 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.OrientationEventListener
 import android.view.Surface
+import android.view.WindowManager
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -58,22 +60,78 @@ class PhoneMirrorService : Service() {
         }
     }
 
+    // ── 兼容性降级阶梯状态 ──────────────────────────────────────
+    //
+    // 旧实现在此处调用 ManufacturerUtils.getHwcDisableProps()，通过
+    // `Runtime.exec("setprop debug.sf.enable_hwc_vds 0")` 禁用 HWC 来解决黑屏。
+    // 该方案在第三方 App 上必定无效：这两个属性属于 SurfaceFlinger 系统属性，
+    // 非 root/system 签名进程写入会被 SELinux 静默拒绝（退出码仍是 0，看起来像成功了）；
+    // 即使侥幸写成功，也要等 SurfaceFlinger 重启才生效，对本次已建立的虚拟屏毫无影响。
+    // 现改为 MirrorCompat 的运行时探测 + 逐档降级，纯应用层，无需任何系统属性。
+
+    /** 当前尝试的兼容档位 */
+    private var compatTier: MirrorCompat.Tier = MirrorCompat.Tier.BASELINE
+
+    /** 黑帧连续性探测器 */
+    private var blackProbe: MirrorCompat.BlackFrameProbe? = null
+
+    /** 是否已确认出画面（锁定后不再降档，避免来回抖动） */
+    @Volatile
+    private var frameHealthy = false
+
     /**
-     * 尝试应用 HWC 禁用属性以解决国产 ROM 投屏黑屏问题。
-     * 仅在 debuggable 或 root 设备上生效，非侵入式。
+     * 收到持续黑帧时升档重建虚拟屏。
+     * 由 ImageHandlerThread 回调，重建涉及 IO 与同步锁，放到独立线程避免阻塞帧回调。
      */
-    private fun tryApplyHwcFix() {
-        val props = ManufacturerUtils.getHwcDisableProps()
-        if (props.isEmpty()) return
-        for ((key, value) in props) {
-            try {
-                val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", "setprop $key $value"))
-                process.waitFor()
-                Log.i(TAG, "Applied HWC fix: $key=$value (exit=${process.exitValue()})")
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to apply HWC fix $key=$value: ${e.message}")
+    private fun escalateCompatTier(blackFrames: Int) {
+        if (frameHealthy) return
+        val next = compatTier.next()
+        if (next == null) {
+            Log.e(TAG, "All ${MirrorCompat.Tier.entries.size} compat tiers exhausted, staying at ${compatTier.name}")
+            if (MirrorCompat.markExhausted(this)) {
+                Log.w(TAG, "Mirror never produced content on this device. " +
+                    "Ask user to export diagnostics: ${RomFingerprint.signature()}")
             }
+            return
         }
+        compatTier = next
+        Log.i(TAG, "Escalating compat tier ${next.name} after $blackFrames black frames (${next.note})")
+        Thread {
+            try {
+                rebuildMirrorSession()
+            } catch (e: Exception) {
+                Log.e(TAG, "Rebuild after tier escalation failed: ${e.message}", e)
+            }
+        }.start()
+    }
+
+    /**
+     * 关闭现有 ImageReader/VirtualDisplay 并按当前档位参数重建。
+     * warmupMs 用于兼容首帧晚到的机型（华为 EMUI 12+、部分 MTK）。
+     */
+    private fun rebuildMirrorSession() {
+        synchronized(mirrorLock) {
+            runCatching {
+                imageReader?.setOnImageAvailableListener(null, null)
+                imageHandler?.removeCallbacksAndMessages(null)
+                imageReader?.close()
+                surface?.release()
+                virtualDisplay?.release()
+            }
+            imageReader = null
+            surface = null
+            virtualDisplay = null
+        }
+        val params = MirrorCompat.paramsFor(compatTier, mirrorBaseWidth, mirrorBaseHeight)
+        mirrorWidth = params.width
+        mirrorHeight = params.height
+        // 解冻灰度/发送缓冲区：尺寸变了，旧缓冲区长度不再匹配
+        reusableGrayData = null
+        reusableSendBuffer = null
+        Log.i(TAG, "Waiting ${params.warmupMs}ms warmup before recreating virtual display")
+        Thread.sleep(params.warmupMs)
+        blackProbe?.reset()
+        createMirrorSession()
     }
 
     private var socket: Socket? = null
@@ -88,6 +146,9 @@ class PhoneMirrorService : Service() {
     private var projectionData: Intent? = null
     /** 是否蓝牙通道（影响投屏分辨率/帧率参数） */
     private var isBluetoothRoute: Boolean = false
+
+    /** L3 通道协调器（Phase 3：蓝牙租约上收到 domain/MirrorCoordinator） */
+    private val mirrorCoordinator by lazy { com.rokidlab.phone.domain.MirrorCoordinator(application as LabApplication) }
     @Volatile
     private var isMirrorRunning = false
     private var orientationListener: OrientationEventListener? = null
@@ -97,6 +158,12 @@ class PhoneMirrorService : Service() {
     /** 当前虚拟显示器宽高（初始方向，不因方向变化重建） */
     private var mirrorWidth = 480
     private var mirrorHeight = 640
+    /**
+     * 兼容性降级所依据的**基准**分辨率（按连接类型选定后即固定）。
+     * 降档是在它的基础上缩放，而不是反复对 mirrorWidth 做乘法累积缩小。
+     */
+    private var mirrorBaseWidth = 480
+    private var mirrorBaseHeight = 640
     /** 当前屏幕物理尺寸和 DPI（用于计算缩放比例） */
     private var screenWidth = 0
     private var screenHeight = 0
@@ -147,7 +214,11 @@ class PhoneMirrorService : Service() {
         glassesIp = intent.getStringExtra("glassesIp") ?: ""
         port = intent.getIntExtra("port", AppConfig.DEFAULT_MIRROR_PORT)
         resultCode = intent.getIntExtra("resultCode", -1)
-        projectionData = intent.getParcelableExtra("data")
+        projectionData = if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra("data", Intent::class.java)
+        } else {
+            intentLegacyParcelableExtra(intent)
+        }
         isBluetoothRoute = intent.getBooleanExtra("isBluetooth", false)
 
         Log.i(TAG, "Received params: glassesIp=$glassesIp, port=$port, resultCode=$resultCode, BT=$isBluetoothRoute, data=${projectionData != null}")
@@ -233,42 +304,61 @@ class PhoneMirrorService : Service() {
                     val metrics = DisplayMetrics()
                     val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
                     val display = displayManager.displays[0]
-                    display?.getRealMetrics(metrics) ?: metrics.setToDefaults()
-                    screenWidth = metrics.widthPixels
-                    screenHeight = metrics.heightPixels
-                    screenDensity = metrics.densityDpi
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        // getRealMetrics 自 API 30 起废弃，等价替换为 currentWindowMetrics
+                        // （两者都含系统装饰区域，含义一致）
+                        val bounds = (getSystemService(Context.WINDOW_SERVICE) as WindowManager)
+                            .currentWindowMetrics.bounds
+                        screenWidth = bounds.width()
+                        screenHeight = bounds.height()
+                        screenDensity = resources.configuration.densityDpi
+                        metrics.widthPixels = bounds.width()
+                        metrics.heightPixels = bounds.height()
+                        metrics.densityDpi = screenDensity
+                    } else {
+                        @Suppress("DEPRECATION") display?.getRealMetrics(metrics) ?: metrics.setToDefaults()
+                        screenWidth = metrics.widthPixels
+                        screenHeight = metrics.heightPixels
+                        screenDensity = metrics.densityDpi
+                    }
 
                     // ── 根据连接类型选择投屏参数（WiFi vs 蓝牙） ──
                     if (isBluetoothRoute) {
-                        mirrorWidth = AppConfig.MIRROR_BT_WIDTH
-                        mirrorHeight = AppConfig.MIRROR_BT_HEIGHT
+                        mirrorBaseWidth = AppConfig.MIRROR_BT_WIDTH
+                        mirrorBaseHeight = AppConfig.MIRROR_BT_HEIGHT
                         TARGET_FPS_RUNTIME = AppConfig.MIRROR_BT_FPS
-                        Log.i(TAG, "BT route: mirror=${mirrorWidth}x${mirrorHeight} @ ${TARGET_FPS_RUNTIME}fps")
+                        Log.i(TAG, "BT route base: ${mirrorBaseWidth}x${mirrorBaseHeight} @ ${TARGET_FPS_RUNTIME}fps")
                     } else {
-                        mirrorWidth = AppConfig.MIRROR_WIFI_WIDTH
-                        mirrorHeight = AppConfig.MIRROR_WIFI_HEIGHT
+                        mirrorBaseWidth = AppConfig.MIRROR_WIFI_WIDTH
+                        mirrorBaseHeight = AppConfig.MIRROR_WIFI_HEIGHT
                         TARGET_FPS_RUNTIME = AppConfig.MIRROR_WIFI_FPS
-                        Log.i(TAG, "WiFi route: mirror=${mirrorWidth}x${mirrorHeight} @ ${TARGET_FPS_RUNTIME}fps")
+                        Log.i(TAG, "WiFi route base: ${mirrorBaseWidth}x${mirrorBaseHeight} @ ${TARGET_FPS_RUNTIME}fps")
                     }
 
-                    // ── 兼容性适配：检测设备并应用修复 ──
-                    if (ManufacturerUtils.isMediaProjectionBlacklisted()) {
-                        Log.w(TAG, "Device is in MediaProjection blacklist, applying compatibility fixes")
-                        // 尝试通过 ADB setprop 禁用 HWC（仅当有 root 或 debuggable 时生效）
-                        tryApplyHwcFix()
-                    }
-                    if (ManufacturerUtils.needsReducedMirrorResolution()) {
-                        // 低端/联发科设备降低投屏分辨率，减少黑屏概率
-                        mirrorWidth = 320
-                        mirrorHeight = 426
-                        Log.w(TAG, "Reducing mirror resolution to ${mirrorWidth}x${mirrorHeight} for compatibility")
-                    }
+                    // ── 兼容性：从上次学成功的档位开始，否则从最低档逐步探测 ──
+                    compatTier = MirrorCompat.learnedTier(this@PhoneMirrorService)
+                        ?: MirrorCompat.Tier.BASELINE
+                    frameHealthy = false
+                    val compatParams = MirrorCompat.paramsFor(compatTier, mirrorBaseWidth, mirrorBaseHeight)
+                    mirrorWidth = compatParams.width
+                    mirrorHeight = compatParams.height
+                    Log.i(TAG, "Start tier=${compatTier.name} (${compatTier.note}) -> ${mirrorWidth}x${mirrorHeight}, " +
+                        "flags=${compatParams.flags}, buffers=${compatParams.buffers}")
                     Log.i(TAG, "Screen size: ${screenWidth}x${screenHeight}, Mirror size: ${mirrorWidth}x${mirrorHeight}")
 
                     // 2. 连接眼镜（使用配置的超时时间）
                     // 首连失败不致命：CXR-L 启动眼镜端 Activity 是异步的，Server 可能尚未监听。
                     // 失败后置空 socket，继续创建 MediaProjection/VirtualDisplay，
                     // 由 sendFrame 触发 reconnectSocket 在眼镜端就绪后自动恢复。
+                    // 蓝牙线路：本服务要长期占用隧道，先让共享 ADB 会话腾出通道，再按
+                    // LONG_LIVED 优先级占用蓝牙通道。手机侧蓝牙栈对「同一设备 + 同一 SCN」
+                    // 只允许一条客户端 RFCOMM 通道，共享会话还占着的话建链会被栈直接拒绝
+                    // （表现为投屏连不上）。占租约后 BACKGROUND 兜底轮询会按优先级让路。
+                    if (isBluetoothRoute) {
+                        runCatching {
+                            mirrorCoordinator.acquireBluetoothLease("phone-mirror")
+                        }
+                    }
                     Log.i(TAG, "Connecting to glasses: $glassesIp:$port")
                     try {
                         socket = Socket()
@@ -360,18 +450,44 @@ class PhoneMirrorService : Service() {
     private fun createMirrorSession() {
         synchronized(mirrorLock) {
             try {
+                imageReader?.setOnImageAvailableListener(null, null)
                 imageReader?.close()
                 surface?.release()
                 virtualDisplay?.release()
             } catch (_: Exception) {}
 
-            imageReader = ImageReader.newInstance(mirrorWidth, mirrorHeight, PixelFormat.RGBA_8888, 2)
+            // 重建路径可能发生在 stopMirror 之后，兜底保证 Handler 可用
+            if (imageHandler == null) {
+                imageHandlerThread = HandlerThread("ImageHandlerThread")
+                imageHandlerThread?.start()
+                imageHandler = Handler(imageHandlerThread!!.looper)
+            }
+
+            val params = MirrorCompat.paramsFor(compatTier, mirrorBaseWidth, mirrorBaseHeight)
+            mirrorWidth = params.width
+            mirrorHeight = params.height
+
+            imageReader = ImageReader.newInstance(
+                mirrorWidth, mirrorHeight, PixelFormat.RGBA_8888, params.buffers
+            )
             surface = imageReader?.surface
             virtualDisplay = mediaProjection?.createVirtualDisplay(
                 "PhoneMirror", mirrorWidth, mirrorHeight, screenDensity,
-                0, surface, null, null
+                params.flags, surface, null, null
             )
-            Log.i(TAG, "VirtualDisplay created: ${mirrorWidth}x${mirrorHeight} @ ${screenDensity}dpi")
+            Log.i(TAG, "VirtualDisplay created: ${mirrorWidth}x${mirrorHeight} @ ${screenDensity}dpi, " +
+                "tier=${compatTier.name}, flags=${params.flags}, buffers=${params.buffers}")
+
+            // 每个新会话重置计数，否则会把上一档的黑帧数累计进来
+            blackProbe = MirrorCompat.BlackFrameProbe(
+                onPersistentBlack = ::escalateCompatTier,
+                onHealthy = {
+                    frameHealthy = true
+                    MirrorCompat.rememberSuccess(this@PhoneMirrorService, compatTier)
+                    Log.i(TAG, "Mirror healthy at tier ${compatTier.name}")
+                },
+            ).also { it.reset() }
+
             registerImageListener()
         }
     }
@@ -439,6 +555,11 @@ class PhoneMirrorService : Service() {
                 grayData[dataIndex++] = gray
             }
         }
+
+        // 兼容性探测：把这一帧是否为「无内容黑帧」喂给探测器，
+        // 连续发黑即触发降档。开销极小（每 8 像素采样一次）。
+        runCatching { blackProbe?.submit(MirrorCompat.isBlackFrame(grayData, w, h)) }
+
         sendFrame(grayData, w, h)
     }
 
@@ -620,6 +741,16 @@ class PhoneMirrorService : Service() {
             socket = null
             reconnectExecutor.shutdownNow()
         }
+        // 离场：释放蓝牙通道租约（幂等），让共享 ADB 会话/兜底轮询恢复使用通道
+        mirrorCoordinator.releaseLease()
         stopSelf()
     }
+
+    /**
+     * API 33 以下取 Intent 类型 extra 的老写法。
+     * 单独抽成方法才能在**声明**上挂 @Suppress —— 行内 @Suppress 对表达式不生效。
+     */
+    @Suppress("DEPRECATION")
+    private fun intentLegacyParcelableExtra(intent: Intent): Intent? =
+        intent.getParcelableExtra("data") as? Intent
 }

@@ -59,6 +59,9 @@ import java.io.File
 
 class PhoneMirrorActivity : ComponentActivity() {
     companion object {
+        /** 等待眼镜 IP 上报的上限：首启路由解析前先等 IP 就绪，避免误判 WiFi 不可达 */
+        private const val IP_WAIT_MS = 2_000L
+
         private const val TAG = "PhoneMirrorActivity"
         private const val DEFAULT_PORT = 7654
         private const val DEFAULT_WIDTH = 480
@@ -145,9 +148,10 @@ class PhoneMirrorActivity : ComponentActivity() {
         isConnecting = true
         connectionStatus = getString(R.string.connecting_glasses)
         val app = application as LabApplication
-        val wifiIp = app.phoneMirrorIp
         val wifiPort = (app.phoneMirrorPort.toIntOrNull() ?: DEFAULT_PORT)
         Thread {
+            // 首启时眼镜端 IP 上行常晚于本页创建：等就绪再探测，否则必然回落到蓝牙隧道
+            val wifiIp = app.awaitGlassesIp(IP_WAIT_MS)
             val route = kotlinx.coroutines.runBlocking {
                 app.routeManager.resolve(wifiIp, wifiPort)
             }

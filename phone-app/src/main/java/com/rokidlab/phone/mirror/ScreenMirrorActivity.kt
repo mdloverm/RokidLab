@@ -66,243 +66,59 @@ import androidx.compose.ui.viewinterop.AndroidView
 
 class ScreenMirrorActivity : ComponentActivity() {
     companion object {
-        private const val TAG = "ScreenMirror"
-        private const val GLASSES_ADB_PORT = 5555
-
         fun createIntent(context: android.content.Context): android.content.Intent =
             android.content.Intent(context, ScreenMirrorActivity::class.java)
     }
 
-    private var ipAddress by mutableStateOf("192.168.1.168")
-    private var isStreaming by mutableStateOf(false)
-    private var connectionStatus by mutableStateOf("")
-    private var connectionFailed by mutableStateOf(false)
-    private var scale by mutableStateOf(1f)
-    private var offsetX by mutableStateOf(0f)
-    private var offsetY by mutableStateOf(0f)
-    private var adbClient by mutableStateOf<AdbScreenMirrorClient?>(null)
-    private var streamDecoder: ScreenStreamDecoder? = null
-    private var surface: Surface? = null
-    // screencap 降级模式的显示兜底：最新一帧 + 可用 Surface（surface 晚于连接就绪时也能出画面）
-    @Volatile private var fallbackFrame: android.graphics.Bitmap? = null
-    @Volatile private var fallbackSurface: Surface? = null
-    private var glassesWidth by mutableIntStateOf(480)
-    private var glassesHeight by mutableIntStateOf(640)
-    /** 当前连接是否蓝牙隧道线路 */
-    private var isBluetoothRoute = false
-    @Volatile
-    private var isDestroyed = false
+    /**
+     * L5 镜像会话状态（Phase 5：连接/串流状态机、Surface 兜底与生命周期从本 Activity 迁出）。
+     * Compose 直接读其快照状态，本 Activity 只保留页面编排。
+     */
+    internal val mirrorSession by lazy { com.rokidlab.phone.feature.ScreenMirrorStateHolder(this) }
+
+    /** L3 通道协调器（Phase 3：路由解析 + 蓝牙租约上收到 domain/MirrorCoordinator），供状态机使用 */
+    internal val mirrorCoordinator by lazy { com.rokidlab.phone.domain.MirrorCoordinator(application as LabApplication) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val app = application as LabApplication
-        ipAddress = app.screenMirrorIp
-
-        isStreaming = true
-        connectionStatus = getString(R.string.mirror_starting)
+        // 不在此处一次性读取眼镜 IP：可能晚于本 Activity 创建到达，
+        // 在 onCreate 缓存会拿到默认值导致首次连接必败（改在真正连接时读最新值）。
+        mirrorSession.init()
 
         setContent {
             RokidLabTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    if (connectionFailed) {
+                    if (mirrorSession.connectionFailed) {
                         ConnectionFailedUI(
-                            status = connectionStatus,
-                            onRetry = {
-                                // Just reset flags and reconnect directly
-                                connectionFailed = false
-                                connectionStatus = getString(R.string.mirror_starting)
-                                isStreaming = true
-                                connectToGlasses()
-                            },
-                            onBack = { disconnectAndFinish() }
+                            status = mirrorSession.connectionStatus,
+                            onRetry = { mirrorSession.retry() },
+                            onBack = { mirrorSession.disconnectAndFinish() }
                         )
                     } else {
                         ScreenMirrorUI(
-                            status = connectionStatus,
-                            isStreaming = isStreaming,
-                            scale = scale,
-                            offsetX = offsetX,
-                            offsetY = offsetY,
-                            adbClient = adbClient,
-                            glassesWidth = glassesWidth,
-                            glassesHeight = glassesHeight,
-                            onBack = { disconnectAndFinish() },
-                            onScaleChange = { s, x, y ->
-                                scale = s.coerceIn(0.5f, 4f)
-                                offsetX = x
-                                offsetY = y
-                            },
-                            onSurfaceReady = { s ->
-                                surface = s
-                                // screencap 降级模式：surface 就绪后立即补画最新帧
-                                fallbackSurface = s
-                                drawFallbackFrame()
-                                connectToGlasses(s)
-                            }
+                            status = mirrorSession.connectionStatus,
+                            isStreaming = mirrorSession.isStreaming,
+                            startupPhase = mirrorSession.startupPhase,
+                            scale = mirrorSession.scale,
+                            offsetX = mirrorSession.offsetX,
+                            offsetY = mirrorSession.offsetY,
+                            adbClient = mirrorSession.adbClient,
+                            glassesWidth = mirrorSession.glassesWidth,
+                            glassesHeight = mirrorSession.glassesHeight,
+                            onBack = { mirrorSession.disconnectAndFinish() },
+                            onScaleChange = { s, x, y -> mirrorSession.applyScale(s, x, y) },
+                            onSurfaceReady = { s -> mirrorSession.onSurfaceReady(s) }
                         )
                     }
                 }
             }
-        }
-    }
-
-    private var isConnecting = false
-
-    /** 把 screencap 降级模式的最新一帧绘制到可用 Surface（无解码器路径的显示兜底） */
-    private fun drawFallbackFrame() {
-        val bmp = fallbackFrame ?: return
-        val s = fallbackSurface ?: return
-        runCatching {
-            val canvas = s.lockCanvas(null)
-            try {
-                canvas.drawBitmap(bmp, null, android.graphics.RectF(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat()), null)
-            } finally {
-                s.unlockCanvasAndPost(canvas)
-            }
-        }
-    }
-
-    private fun connectToGlasses(surfaceOverride: Surface? = null) {
-        if (isConnecting) return
-        isConnecting = true
-        val useSurface = surfaceOverride ?: surface
-        connectionStatus = getString(R.string.mirror_starting)
-        isStreaming = true
-
-        Thread {
-            val app = application as LabApplication
-            val route = kotlinx.coroutines.runBlocking {
-                app.routeManager.resolve(ipAddress, GLASSES_ADB_PORT)
-            }
-            val (targetIp, targetPort) = when (route) {
-                is ConnectionRoute.Wifi -> {
-                    isBluetoothRoute = false
-                    route.ip to route.port
-                }
-                is ConnectionRoute.Bluetooth -> {
-                    isBluetoothRoute = true
-                    route.ip to route.localPort
-                }
-                is ConnectionRoute.None -> {
-                    runOnUiThread {
-                        connectionStatus = getString(R.string.mirror_connection_failed)
-                        connectionFailed = true
-                        isStreaming = false
-                    }
-                    isConnecting = false
-                    return@Thread
-                }
-            }
-            val client = AdbScreenMirrorClient(this, targetIp, targetPort)
-            // H264 解码器不可用时的降级帧也走统一的 screencap 显示兜底
-            client.onFallbackFrame = { bitmap ->
-                fallbackFrame = bitmap
-                runOnUiThread {
-                    if (glassesWidth != bitmap.width || glassesHeight != bitmap.height) {
-                        glassesWidth = bitmap.width
-                        glassesHeight = bitmap.height
-                    }
-                }
-                drawFallbackFrame()
-            }
-            adbClient = client
-            if (isDestroyed) { isConnecting = false; return@Thread }
-
-            val connected = client.connect { status ->
-                runOnUiThread { connectionStatus = status }
-            }
-            if (isDestroyed || !connected) {
-                if (!connected) {
-                    runOnUiThread {
-                        connectionStatus = getString(R.string.mirror_connection_failed)
-                        connectionFailed = true
-                        isStreaming = false
-                    }
-                }
-                isConnecting = false
-                return@Thread
-            }
-
-            runOnUiThread { connectionStatus = getString(R.string.mirror_connected) }
-
-            if (useSurface != null) {
-                // H.264 硬件解码模式 - 使用 scrcpy-server
-                val decoder = ScreenStreamDecoder(useSurface).also {
-                    it.onVideoSizeChanged = { w, h ->
-                        runOnUiThread {
-                            glassesWidth = w
-                            glassesHeight = h
-                            Log.i(TAG, "video size: ${w}x${h}")
-                        }
-                    }
-                }
-                streamDecoder = decoder
-                decoder.start()
-                Log.i(TAG, "H.264 decoder created")
-
-                // 连接后的 ADB 端 shell 命令错误等重置
-                connectionStatus = getString(R.string.mirror_waiting_stream)
-
-                client.startH264Streaming(decoder, onStatus = { status ->
-                    runOnUiThread {
-                        connectionStatus = status
-                        if (status.contains("fail") || status.contains("interrupt")) {
-                            connectionFailed = true
-                            isStreaming = false
-                        }
-                    }
-                }, isBluetooth = isBluetoothRoute)
-            } else {
-                // 降级：screencap 原始像素模式
-                client.startStreaming(
-                    onFrame = { bitmap ->
-                        // screencap 帧直接绘制到 TextureView 的 Surface（连接早于 surface 就绪时，
-                        // 待 surface 到位后由 onSurfaceReady 补画最新帧）
-                        fallbackFrame = bitmap
-                        runOnUiThread {
-                            if (glassesWidth != bitmap.width || glassesHeight != bitmap.height) {
-                                glassesWidth = bitmap.width
-                                glassesHeight = bitmap.height
-                            }
-                        }
-                        drawFallbackFrame()
-                    },
-                    onStatus = { status ->
-                        runOnUiThread {
-                            connectionStatus = status
-                            if (status.contains("fail") || status.contains("interrupt")) {
-                                connectionFailed = true
-                                isStreaming = false
-                            }
-                        }
-                    }
-                )
-            }
-            isConnecting = false
-        }.apply {
-            name = "mirror-connector"
-            start()
         }
     }
 
     override fun onDestroy() {
-        isDestroyed = true
-        isStreaming = false
-        streamDecoder?.stop()
-        streamDecoder = null
-        adbClient?.disconnect()
-        adbClient = null
+        mirrorSession.onActivityDestroy()
         super.onDestroy()
-    }
-
-    private fun disconnectAndFinish() {
-        isStreaming = false
-        streamDecoder?.stop()
-        streamDecoder = null
-        adbClient?.disconnect()
-        adbClient = null
-        finish()
     }
 }
 
@@ -359,6 +175,7 @@ private fun ConnectionFailedUI(status: String, onRetry: () -> Unit, onBack: () -
 private fun ScreenMirrorUI(
     status: String,
     isStreaming: Boolean,
+    startupPhase: Boolean,
     scale: Float,
     offsetX: Float,
     offsetY: Float,
@@ -444,8 +261,10 @@ private fun ScreenMirrorUI(
                 )
         )
 
-        // 加载中或画面未就绪时显示状态文字
-        if (!surfaceReady || status.contains("Connecting") || status.contains("scrcpy") || status.contains("tunnel")) {
+        // 加载中或画面未就绪时显示状态文字。
+        // startupPhase 覆盖「页面已打开但还没连上」的整段（启动宽限 / 路由解析 / 建链），
+        // 这段时间 surface 其实已就绪，若不显式包含就会黑屏。
+        if (startupPhase || !surfaceReady || status.contains("Connecting") || status.contains("scrcpy") || status.contains("tunnel")) {
             Text(
                 text = status,
                 color = BrewTextBright,

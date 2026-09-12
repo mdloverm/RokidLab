@@ -222,33 +222,57 @@ class BtTunnelService : Service() {
         }
     }
 
+    /**
+     * 释放当前隧道服务端实例（幂等）。
+     * 必须先 stop 再置空：BtTunnelServer 的 keep-alive accept 线程与 serverSocket 只有
+     * stop() 才会关闭，直接丢弃引用会让旧实例变成孤儿，永久占住 RFCOMM SCN。
+     */
+    private fun releaseTunnelServer() {
+        runCatching { tunnelServer?.stop() }
+        tunnelServer = null
+    }
+
+    /** 延迟重试启动隧道：先清掉已排队的重试，避免多个重试叠加各建一个实例 */
+    private fun scheduleTunnelRetry() {
+        mainHandler.removeCallbacks(tunnelRetryRunnable)
+        mainHandler.postDelayed(tunnelRetryRunnable, BT_RETRY_INTERVAL_MS)
+    }
+
     private fun startTunnel() {
         try {
             val adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
             if (adapter?.isEnabled != true) {
-                // 蓝牙未开启时不自杀：延迟重试，蓝牙开启广播到达时也会立即重试
+                // 蓝牙未开启时不自杀：先释放旧监听（否则旧 serverSocket 占着 SCN 成为孤儿），延迟重试；
+                // 蓝牙开启广播到达时也会立即重试
+                releaseTunnelServer()
                 Log.w(TAG, "Bluetooth disabled, will retry tunnel")
-                mainHandler.removeCallbacks(tunnelRetryRunnable)
-                mainHandler.postDelayed(tunnelRetryRunnable, BT_RETRY_INTERVAL_MS)
+                scheduleTunnelRetry()
                 return
             }
-            tunnelServer = BtTunnelServer()
-            val ok = tunnelServer?.start(adapter) == true
+            // 先停旧实例再建新：蓝牙关闭/启动失败等场景下旧 serverSocket 可能仍注册着 SCN，
+            // 直接 new 会把旧实例（含其 accept 线程与 socket）变成永远不释放的孤儿，
+            // 新实例 listen 失败或与孤儿在同一 SCN 上双监听
+            releaseTunnelServer()
+            val server = BtTunnelServer()
+            tunnelServer = server
+            val ok = server.start(adapter)
             Log.i(TAG, "BtTunnelServer started: $ok")
             if (!ok) {
                 Log.e(TAG, "Failed to start BtTunnelServer, will retry")
-                mainHandler.removeCallbacks(tunnelRetryRunnable)
-                mainHandler.postDelayed(tunnelRetryRunnable, BT_RETRY_INTERVAL_MS)
+                releaseTunnelServer()
+                scheduleTunnelRetry()
                 return
             }
+            // 启动成功：清掉排队中的重试，否则稍后重试会再建一个实例（孤儿 + 双监听）
+            mainHandler.removeCallbacks(tunnelRetryRunnable)
             // 第二 RFCOMM 通道：ASR 文字实时推送（长连接，独立于 ADB 隧道）。
             // 失败不影响 ADB 隧道（推送通道降级为手机端文件轮询兜底）。
             val pushOk = AsrPushServer.start(adapter)
             Log.i(TAG, "AsrPushServer started: $pushOk")
         } catch (e: Exception) {
             Log.e(TAG, "startTunnel failed, will retry", e)
-            mainHandler.removeCallbacks(tunnelRetryRunnable)
-            mainHandler.postDelayed(tunnelRetryRunnable, BT_RETRY_INTERVAL_MS)
+            releaseTunnelServer()
+            scheduleTunnelRetry()
         }
     }
 

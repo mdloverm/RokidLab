@@ -30,8 +30,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -354,7 +354,7 @@ internal fun SourceLine(app: BrewApp, modifier: Modifier = Modifier) {
                 modifier = Modifier.weight(0.66f),
             )
             Spacer(Modifier.width(8.dp))
-            Icon(Icons.Outlined.KeyboardArrowRight, null, tint = BrewMuted, modifier = Modifier.size(21.dp))
+            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = BrewMuted, modifier = Modifier.size(21.dp))
         }
     }
 }

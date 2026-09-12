@@ -1,14 +1,17 @@
 package com.rokidlab.phone.keepalive
 
 import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.LocalOllamaManager
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.app.MainActivity
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
@@ -30,15 +33,28 @@ class LabKeepAliveService : Service() {
         private const val CHANNEL_ID = "keep_alive_fgs"
     }
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        acquireWakeLock()
         startAsForeground()
         // 服务启动/自愈重建后，恢复之前运行中的定时任务（调度挂 appScope，进程活着即可触发）
         runCatching {
             (application as LabApplication).timerScheduler.resumeRunningTasks()
         }
+        // 本地模型守护：Termux 与 Lab 是两个 App，本服务的 WakeLock 管不到它（实测 Termux 自身
+        // 持锁也照样被冻结），只能由 App 侧"静默探测 + 按需唤醒"来修复。
+        // 注意：每次唤醒 Termux 都会让它重发前台通知（MIUI 会弹横幅），所以只在服务真掉线时才唤醒，
+        // 平时不触碰 Termux；详见 LocalOllamaManager.startKeepAlive
+        runCatching {
+            LocalOllamaManager.startKeepAlive(
+                this,
+                (application as LabApplication).appScope,
+            )
+        }.onFailure { Log.w(TAG, "startKeepAlive failed: ${it.message}") }
         Log.i(TAG, "LabKeepAliveService created (keep-alive active)")
     }
 
@@ -49,7 +65,40 @@ class LabKeepAliveService : Service() {
 
     override fun onDestroy() {
         Log.i(TAG, "LabKeepAliveService destroyed")
+        LocalOllamaManager.stopKeepAlive()
+        releaseWakeLock()
         super.onDestroy()
+    }
+
+    /**
+     * 持有 PARTIAL_WAKE_LOCK：阻止 CPU 挂起。
+     *
+     * 这是防 HyperOS / MIUI cgroup v2 冻结的关键手段——前台服务（FGS）只防"被杀"，
+     * 不防"被冻结"；而冻结的进程无法处理任何 Binder 调用、网络请求或传感器事件，
+     * 表现为蓝牙断连、ASR 丢字、ollama 探测超时。
+     *
+     * 持有 WakeLock 的进程不会被冻结：冻结 WakeLock 持有者会导致系统无法休眠，
+     * ROM 省电策略不会做这种自相矛盾的操作。
+     */
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "RokidLab:keepalive",
+        ).apply {
+            setReferenceCounted(false)
+            acquire() // 永久持有，直到服务销毁时释放
+        }
+        Log.i(TAG, "WakeLock acquired (PARTIAL_WAKE_LOCK)")
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+            Log.i(TAG, "WakeLock released")
+        }
+        wakeLock = null
     }
 
     private fun startAsForeground() {

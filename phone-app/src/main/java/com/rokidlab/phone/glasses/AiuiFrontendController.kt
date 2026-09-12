@@ -1,8 +1,13 @@
+// Rokid SDK 的 sendCustomCmd 自带「注意 Caps 体积」的废弃标记，
+// 但这是当前唯一的下行通道，短期内不可能替换，故整文件抑制该告警。
+@file:Suppress("DEPRECATION")
+
 package com.rokidlab.phone.glasses
 
 import android.content.Context
 import android.util.Log
 import com.rokid.cxr.Caps
+import com.rokidlab.phone.adb.AdbShellClient
 import com.rokid.cxr.link.CXRLink
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.connection.ConnectionRouteManager
@@ -44,6 +49,8 @@ internal class AiuiFrontendController(
 
         /** 宿主控制通道名（双端同源，勿改） */
         private const val AIUI_HOST_TOPIC = "rokidlab_aiui_host"
+        /** 眼镜端 App 包名（宿主 Activity 与其私有目录都挂在它下面） */
+        private const val GLASSES_PKG = "com.rokidlab.rokidlink"
     }
 
     @Volatile
@@ -83,10 +90,10 @@ internal class AiuiFrontendController(
                 .put("jsui", inner.toString())
 
             val caps = Caps()
-            caps.write("Ai_RenderPayload")
+            caps.write(LinkProtocol.CXR_CHANNEL_AI_RENDER)
             caps.write(payload.toString())
             val result = synchronized(cmdLock) {
-                link.sendCustomCmd("Ai", caps)
+                link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, caps)
             }
             Log.i(TAG, "openAiuiAgent(agentId=$agentId) sendCustomCmd(Ai/Ai_RenderPayload) -> $result")
             result ?: -3
@@ -116,7 +123,7 @@ internal class AiuiFrontendController(
             val caps = Caps()
             caps.write("Sys_AIUI_Start")
             caps.write(packageName)
-            val result = synchronized(cmdLock) { rawSendCmd(link, "Sys", caps) }
+            val result = synchronized(cmdLock) { rawSendCmd(link, LinkProtocol.CXR_CHANNEL_SYS, caps) }
             Log.i(TAG, "startAiuiPackage(packageName=$packageName) rawSendCustomCmd(Sys/Sys_AIUI_Start) -> $result")
             result
         } catch (e: Exception) {
@@ -141,7 +148,7 @@ internal class AiuiFrontendController(
             val caps = Caps()
             caps.write("Sys_AIUI_Stop")
             caps.write(packageName)
-            val result = synchronized(cmdLock) { rawSendCmd(link, "Sys", caps) }
+            val result = synchronized(cmdLock) { rawSendCmd(link, LinkProtocol.CXR_CHANNEL_SYS, caps) }
             Log.i(TAG, "stopAiuiPackage(packageName=$packageName) rawSendCustomCmd(Sys/Sys_AIUI_Stop) -> $result")
             result
         } catch (e: Exception) {
@@ -170,6 +177,59 @@ internal class AiuiFrontendController(
 
     /** 以 onMessage 协议向宿主页面注入消息（伪交互补充通道） */
     fun sendAiuiHostMessage(json: String): Int = sendAiuiHostCmd("msg", json)
+
+    /**
+     * 打开宿主，按「后台启动是否被允许」二选一（避免双开）：
+     *  - [balExempt]=true：RokidLink 有 SYSTEM_ALERT_WINDOW，走常规 bridge 指令；
+     *  - 否则：改用 ADB `am start` 直启 [HOST_ACTIVITY]（shell UID 不受 BAL 限制），
+     *    这是「眼镜没权限 / 点了没反应」的根治路径。
+     *
+     * @return true = 至少有一条路径成功发起
+     */
+    private fun openHostBestEffort(
+        client: AdbShellClient?,
+        fileName: String,
+        launchParams: String?,
+        balExempt: Boolean,
+    ): Boolean {
+        if (balExempt) {
+            val r = openAiuiHost(fileName, launchParams)
+            if (r == 0) return true
+            Log.w(TAG, "bridge openAiuiHost returned $r, fallback to ADB am start")
+        }
+        val c = client ?: return false
+        return launchHostViaAdb(c, glassesHostPath(fileName), launchParams)
+    }
+
+    /** 眼镜端宿主缓存目录里的绝对路径（KeyButtonService 用 filesDir/aiui_host/<name> 解析） */
+    private fun glassesHostPath(fileName: String): String =
+        "/data/user/0/$GLASSES_PKG/files/aiui_host/$fileName"
+
+    /** 经 ADB `am start` 直启宿主 Activity（AiuiLinkActivity 为 exported=true，shell 可拉起） */
+    private fun launchHostViaAdb(
+        client: AdbShellClient,
+        glassesPath: String,
+        launchParams: String?,
+    ): Boolean = runCatching {
+        // 单引号包裹参数：JSON 用双引号，去掉极端情况下的单引号即可安全塞进 shell
+        val safePath = glassesPath.replace("'", "")
+        val cmd = buildString {
+            append("am start -n $GLASSES_PKG/.AiuiLinkActivity")
+            append(" --es aix_path '").append(safePath).append("'")
+            if (!launchParams.isNullOrBlank()) {
+                append(" --es launch_params '").append(launchParams.replace("'", "")).append("'")
+            }
+        }
+        val out = client.executeShellCommand(cmd, 10_000)
+        val ok = out?.contains("Error", ignoreCase = true) != true &&
+            out?.contains("Exception", ignoreCase = true) != true &&
+            out?.contains("does not exist", ignoreCase = true) != true
+        Log.i(TAG, "launchHostViaAdb(ok=$ok): ${out?.trim()?.take(160)}")
+        ok
+    }.getOrElse {
+        Log.e(TAG, "launchHostViaAdb failed", it)
+        false
+    }
 
     private fun sendAiuiHostCmd(cmd: String, arg: String?, arg2: String? = null): Int {
         val link = linkProvider() ?: return -2
@@ -225,64 +285,25 @@ internal class AiuiFrontendController(
         val body = aixFile.readBytes()
 
         if (client != null) {
-            try {
-                // Android 12+ 后台启动限制(BAL)：需先确保 RokidLink 拥有 SYSTEM_ALERT_WINDOW
-                // 授权，否则纯后台服务拉起 AiuiLinkActivity 会被系统静默拒绝。
-                runCatching {
-                    val r = client.executeShellCommand(
-                        "appops set com.rokidlab.rokidlink android:system_alert_window allow 2>&1",
-                        10_000,
-                    )
-                    if (r.isNotBlank() && !r.contains("Unknown", ignoreCase = true)) {
-                        Log.i(TAG, "grant system_alert_window on glasses: $r")
-                    }
-                }.onFailure { Log.w(TAG, "grant system_alert_window failed: ${it.message}") }
-                // 通道 1（主）：run-as 分块 base64 落盘（覆盖 AIUI 包常见大小，块 60K base64≈45KB）。
-                // 注意：整个 shell 逻辑必须包进 run-as 的 sh -c —— run-as 只作用于其后第一个
-                // 可执行程序；`run-as pkg A && rm …`/`wc -c < file` 的 rm/重定向若放在外层，
-                // 会由 adbd 的 shell 用户执行，无权操作 app 私有目录（实测 rm 静默失败导致
-                // 文件残留叠加、wc 输出为空）。
-                val pkgDir = "com.rokidlab.rokidlink"
-                client.executeShellCommand(
-                    "run-as $pkgDir sh -c 'mkdir -p files/aiui_host && rm -f files/aiui_host/$name'",
-                    10_000,
-                )
-                val b64 = android.util.Base64.encodeToString(body, android.util.Base64.NO_WRAP)
-                var off = 0
-                var wroteOk = true
-                // 命令本身无 stdout（echo|base64 -d 静默写盘），不能以输出判成败，
-                // 统一靠最后 wc -c 校验字节数兜底。
-                val step = 60000
-                while (off < b64.length) {
-                    val end = minOf(off + step, b64.length)
-                    val chunk = b64.substring(off, end)
-                    off = end
-                    try {
-                        client.executeShellCommand(
-                            "run-as $pkgDir sh -c 'echo $chunk | base64 -d >> files/aiui_host/$name'",
-                            30_000,
-                        )
-                    } catch (e: Exception) {
-                        wroteOk = false
-                        Log.w(TAG, "pushAixToRokidLinkHost($name): chunk write failed at $off: ${e.message}")
-                        break
-                    }
+            // Android 12+ 后台启动限制(BAL)：RokidLink 常驻前台服务，拉起 AiuiLinkActivity 会被系统
+            // 以 allowBackgroundActivityStart=false 静默拒绝（用户侧=「眼镜没权限 / 没反应」）。
+            // 先授权并**复核**；复核不通过就改用 ADB 直启宿主（shell UID 不受 BAL 限制）。
+            com.rokidlab.phone.platform.ShellOps.grantSystemAlertWindow(client, GLASSES_PKG)
+            val balExempt =
+                (com.rokidlab.phone.platform.ShellOps.isSystemAlertWindowAllowed(client, GLASSES_PKG)
+                    as? com.rokidlab.phone.platform.Capability.Available)?.value == true
+            if (!balExempt) {
+                Log.w(TAG, "glasses BAL exemption NOT confirmed -> host will be launched via ADB am start")
+            }
+            // 通道 1（主）：run-as 分块 base64 落盘（统一收口到 L0 ShellOps）。
+            when (val push = com.rokidlab.phone.platform.ShellOps.pushFileRunAs(
+                client, GLASSES_PKG, "files/aiui_host", name, body)) {
+                is com.rokidlab.phone.platform.Capability.Available -> {
+                    if (openAfter) openHostBestEffort(client, name, launchParams, balExempt)
+                    return "OK"
                 }
-                if (wroteOk) {
-                    val wc = client.executeShellCommand(
-                        "run-as $pkgDir sh -c 'wc -c < files/aiui_host/$name'",
-                        10_000,
-                    )
-                    val written = wc?.trim()?.toLongOrNull()
-                    Log.i(TAG, "pushAixToRokidLinkHost($name) written=$written expect=${body.size}")
-                    if (written == body.size.toLong()) {
-                        if (openAfter) openAiuiHost(name, launchParams)
-                        return "OK"
-                    }
-                }
-                Log.w(TAG, "pushAixToRokidLinkHost($name): run-as write failed, fallback socket push...")
-            } catch (e: Exception) {
-                Log.e(TAG, "pushAixToRokidLinkHost run-as failed: ${e.message}")
+                is com.rokidlab.phone.platform.Capability.Unavailable ->
+                    Log.w(TAG, "pushAixToRokidLinkHost($name): run-as write failed (${push.reason}), fallback socket push...")
             }
         }
         // 通道 2（兜底）：7658 socket —— 蓝牙隧道直连 AiuiPackageServer 或 adb smart socket。
@@ -326,7 +347,13 @@ internal class AiuiFrontendController(
         }
         Log.i(TAG, "pushAixToRokidLinkHost($name) fallback ack=${ack?.take(16)}")
         if (ack?.trim() == "OK" && openAfter) {
-            openAiuiHost(name, launchParams)
+            // 先走常规 bridge 指令；被系统拦下（BAL）时再用 ADB 直启兜底
+            if (openAiuiHost(name, launchParams) != 0) {
+                client?.let {
+                    Log.w(TAG, "bridge openAiuiHost failed after socket push, fallback to ADB am start")
+                    launchHostViaAdb(it, glassesHostPath(name), launchParams)
+                }
+            }
         }
         return ack
     }
@@ -370,7 +397,7 @@ internal class AiuiFrontendController(
             caps.write("Jsai_AddNativeAgent")
             caps.write(payload.toString())
             val result = synchronized(cmdLock) {
-                link.sendCustomCmd("Jsai", caps)
+                link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_JSAI, caps)
             }
             Log.i(TAG, "installAiuiAgent(agentId=$agentId url=$url md5=$fileMd5) -> $result")
             result ?: -3
@@ -469,7 +496,7 @@ internal class AiuiFrontendController(
             caps.write("Jsai_GetRequestInfo")
             caps.write(payload.toString())
             val result = synchronized(cmdLock) {
-                link.sendCustomCmd("Jsai", caps)
+                link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_JSAI, caps)
             }
             Log.i(TAG, "pushAiuiAgentListUrl(url=$agentListUrl) -> $result")
             result ?: -3
@@ -527,7 +554,7 @@ internal class AiuiFrontendController(
             val caps = Caps()
             caps.write("Jsai_NotifyGlassGetList")
             val result = synchronized(cmdLock) {
-                link.sendCustomCmd("Jsai", caps)
+                link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_JSAI, caps)
             }
             Log.i(TAG, "notifyGlassGetAgentList() -> $result")
             result ?: -3

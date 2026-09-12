@@ -10,6 +10,14 @@
     <string name="screen_mirror_subtitle">Glasses screen mirrored to phone</string>
     <string name="phone_mirror_title">Phone Cast</string>
     <string name="phone_mirror_subtitle">Cast phone screen to glasses</string>
+    <string name="leqi_tools_title">Leqi Tools</string>
+    <string name="leqi_tools_subtitle">Cast · Files · ADB in one place</string>
+    <string name="section_mirror">Cast</string>
+    <string name="section_file">Files</string>
+    <string name="section_adb">ADB Tools</string>
+    <string name="mirror_pair_title">Two-way Cast</string>
+    <string name="mirror_pair_subtitle">Glasses ⇄ Phone, switch freely</string>
+    <string name="stop_screen_mirror">Stop Mirror</string>
     <string name="file_manager_title">File Manager</string>
     <string name="file_manager_subtitle">Manage files on glasses</string>
     <string name="adb_tools_title">ADB Tools</string>
@@ -41,6 +49,8 @@
     <string name="extract_copy_failed">Copy to device failed</string>
     <string name="extract_downloaded">Downloaded to Download/%s.apk</string>
     <string name="extract_pull_failed">Pull to phone failed</string>
+    <string name="extract_no_dir">No directory selected</string>
+    <string name="extract_saved">Saved to selected directory: %s</string>
     <string name="install_to_phone">Install to Phone</string>
     <string name="install_to_glasses">Install to Glasses</string>
     <string name="more">More</string>
@@ -134,12 +144,8 @@
     <!-- ADB Dialog -->
     <string name="connecting_adb">Connecting to ADB…</string>
     <string name="connecting_adb_hint">Make sure glasses have ADB over TCP enabled</string>
-    <string name="usage_mirror_step2">Enter glasses IP address</string>
-    <string name="usage_mirror_step3">Tap Start Mirror button</string>
-    <string name="usage_mirror_step4">Wait for connection</string>
-    <string name="usage_filemanager_step2">Install RokidLink to glasses</string>
-    <string name="usage_adb_step2">Tap Connect to establish connection</string>
-    <string name="usage_adb_step3">Select a function to use</string>
+    <!-- usage_*/usage_instructions strings removed (2026-09-10 simplification) -->
+
     <string name="connection_failed_adb">Connection failed</string>
     <string name="fetching_sysinfo">Fetching system info…</string>
     <string name="search_apps">Search apps…</string>
@@ -160,7 +166,7 @@
     <string name="start_timer_launch">▶ Start Scheduled Launch</string>
 
     <!-- Usage Instructions -->
-    <string name="usage_instructions">Usage Instructions</string>
+    <!-- usage_instructions removed (2026-09-10 simplification) -->
 
     <!-- Timer -->
     <string name="timer_title">Timer Message</string>
@@ -205,12 +211,14 @@
     <string name="guide_install_link_desc">Install the glasses companion app to enable Rokid Link features</string>
     <string name="guide_install_link_hint">Ensure the glasses are connected via Bluetooth</string>
     <string name="guide_install_link_btn">Install on Glasses</string>
+    <string name="guide_reinstall_link_btn">Reinstall on Glasses</string>
     <string name="guide_install_link_progress">Installing, please wait…</string>
     <string name="guide_install_link_success">RokidLink installed successfully</string>
     <string name="guide_install_link_continue_hint">Installation successful, proceeding to next step</string>
     <string name="guide_install_link_fail">Installation Failed</string>
     <string name="guide_install_link_fail_hint">Ensure the glasses are connected via Bluetooth, then retry</string>
     <string name="guide_retry_btn">Retry Installation</string>
+    <string name="guide_ready_title">All Set</string>
     <string name="guide_step1_title_local">Step 1: Select Rokid AI Version</string>
     <string name="guide_step1_desc">Please select your Rokid glasses model</string>
     <string name="guide_step2_title_local">Step 2: Select Mirror Source</string>
@@ -225,6 +233,7 @@
     <string name="show_password">Show Password</string>
     <string name="hide_password">Hide Password</string>
     <string name="wifi_send_to_glasses">Connect Glasses to WiFi</string>
+    <string name="guide_skip_btn">Skip</string>
     <string name="wifi_sending">Sending…</string>
     <string name="wifi_configured_success">WiFi Config Sent</string>
     <string name="wifi_disabled_prompt">WiFi is disabled. Please turn it on.</string>
@@ -253,6 +262,8 @@
     <string name="nav_chat">LeQi Chat</string>
     <string name="nav_screen_mirror">Screen Mirror</string>
     <string name="nav_phone_mirror">Phone Cast</string>
+    <string name="nav_leqi_tools">Leqi Tools</string>
+    <string name="nav_mirror_pair">Two-way Cast</string>
     <string name="nav_file_manager">File Manager</string>
     <string name="nav_adb_tools">ADB Tools</string>
     <string name="nav_hid_gamepad">Gamepad</string>
@@ -436,6 +447,8 @@
     <string name="reset">Reset</string>
     <string name="reinstall_glasses">Reinstall on Glasses</string>
     <string name="reinstall_glasses_desc">Reinstall RokidLink on glasses</string>
+    <string name="view_glasses_status">View Glasses Status</string>
+    <string name="view_glasses_status_desc">Show glasses IP and ADB status (troubleshooting)</string>
     <string name="ready">Ready</string>
     <string name="system_log">System Log</string>
     <string name="registry_unavailable">Registry unavailable: %s, pull down to retry</string>
@@ -489,7 +502,9 @@
     <string name="ai_tool_stop_music_name">Stop Music</string>
     <string name="ai_tool_stop_music_desc">Stop currently playing music, answer \"stop playing\", \"turn it off\", \"enough music\"</string>
     <string name="ai_tool_show_lyrics_name">Show Lyrics</string>
-    <string name="ai_tool_show_lyrics_desc">Display the lyrics of the current song line by line on the Rokid glasses, answer \"show lyrics\", \"open lyrics\"</string>
+    <string name="ai_tool_show_lyrics_desc">Bring up the lyric page on Rokid glasses. Lyrics are pushed automatically via Bluetooth AVRCP during playback; this tool only opens / re-triggers the lyric page. Triggered by \"show lyrics\", \"open lyrics\"</string>
+    <string name="ai_tool_show_image_name">Show Image</string>
+    <string name="ai_tool_show_image_desc">Show an image: rendered in the phone-side chat bubble by default; if the glasses are connected it is also mirrored to a glasses overlay (~12s, auto-dismiss). Pass a public image URL (http/https) and optional caption; if the user just asks to show the current song cover, the URL can be omitted. Triggered by \"show image\", \"show cover\", etc.</string>
     <string name="ai_tool_search_web_name">Web Search</string>
     <string name="ai_tool_search_web_desc">Search the web for information, answer \"search for XXX\", \"find the latest info about XXX\"</string>
     <string name="ai_tool_fetch_webpage_name">Read Webpage</string>
@@ -526,6 +541,8 @@
     <string name="ai_tool_open_phone_app_desc">Open an installed app on the phone, answer "open WeChat on my phone" etc.</string>
     <string name="ai_tool_get_phone_status_name">Phone Status</string>
     <string name="ai_tool_get_phone_status_desc">Query phone battery/charging/volume/brightness, answer "how much battery" etc.</string>
+    <string name="ai_tool_get_location_name">My Location</string>
+    <string name="ai_tool_get_location_desc">Get the current phone location (city/street/landmark), answer "where am I" etc.</string>
     <string name="ai_tool_set_phone_volume_name">Phone Volume</string>
     <string name="ai_tool_set_phone_volume_desc">Set phone media volume by percentage, answer "set volume to 50" etc.</string>
     <string name="ai_tool_query_calendar_name">Query Calendar</string>
@@ -576,7 +593,10 @@
     <string name="local_model_btn_stop">Stop service</string>
     <string name="local_model_running_hint">Server: http://127.0.0.1:11434. All inference runs locally on this phone</string>
     <string name="local_model_stopped_hint">Tap Start to launch Ollama in the background inside Termux (a few seconds)</string>
-    <string name="local_model_keep_alive_tip">Tip: Ollama runs inside Termux. Do not swipe Termux away from Recents; allow it to run in the background in system settings so it is not stopped.</string>
+    <string name="local_model_keep_alive_tip">Tip: Ollama runs inside Termux — do not swipe Termux away from Recents (that kills Ollama). Lab wakes Termux automatically only when the service drops. If Termux notifications bother you, tap "Turn off Termux notifications" below once the service is running (the service keeps working).</string>
+    <string name="local_model_keepalive_on">Guard active: silent probing, no interruptions; Termux is woken only when the service drops</string>
+    <string name="local_model_btn_silence_termux">Turn off Termux notifications</string>
+    <string name="local_model_silence_termux_fail">Cannot open notification settings. Go to Settings - Apps - Termux - Notifications</string>
     <string name="local_model_termux_missing">Termux not detected</string>
     <string name="local_model_termux_missing_hint">Install Termux (F-Droid build), run pkg install ollama, then come back to start</string>
     <string name="local_model_btn_install_termux">Get Termux on F-Droid</string>
@@ -687,6 +707,7 @@
     <string name="refresh_check_update">Refresh registry to check for updates</string>
     <string name="not_checked">Not Checked</string>
     <string name="unknown">Unknown</string>
+    <string name="unknown_author">Unknown author</string>
     <string name="downloading_progress">Downloading %s (%d%%)</string>
     <string name="rokidlab_update">RokidLab Update</string>
     <string name="update_available_info">RokidLab %s is ready to install.</string>
@@ -987,6 +1008,7 @@
     <string name="wifi_config_timeout">WiFi config send timeout</string>
     <string name="wifi_config_failed">WiFi config send failed</string>
     <string name="wifi_config_sent">WiFi config sent to glasses: %1$s, result=%2$d</string>
+    <string name="wifi_config_success">WiFi configured, glasses connected to %1$s</string>
 
     <!-- System Info -->
     <string name="section_device_info">Device Info</string>
@@ -1085,6 +1107,10 @@
     <string name="save_log">Save Log</string>
     <string name="save_log_done">Log saved</string>
     <string name="save_log_failed">Failed to save log</string>
+    <string name="export_compat_diag">Export Compatibility Diagnostics</string>
+    <string name="export_compat_diag_desc">Export device / ROM / Bluetooth stack / screen-mirror tier, for compatibility issue reports</string>
+    <string name="save_compat_done">Compatibility diagnostics exported</string>
+    <string name="save_compat_failed">Failed to export compatibility diagnostics</string>
     <string name="error_log_title">Error Report</string>
     <string name="error_log_hint">An error was detected. Exporting logs can help analyze the issue</string>
     <string name="developer_open">Developer Tools</string>

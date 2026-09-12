@@ -3,18 +3,21 @@ package com.rokidlab.phone.adb.ui
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.R
 import com.rokidlab.phone.adb.AdbShellClient
-import com.rokidlab.phone.store.ModuleHeader
-import com.rokidlab.phone.store.RokidLinkStatusCard
-import com.rokidlab.phone.store.IpAddressInputCard
 import com.rokidlab.phone.store.BrutalButton
-import com.rokidlab.phone.store.UsageInstructionsCard
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
+/**
+ * ADB 工具按钮组（供「乐奇工具」页内嵌）。
+ *
+ * 已移除 ModuleHeader 与 IP 输入框：
+ *  - 页面标题由外层 LeqiToolsModule 统一提供，避免重复；
+ *  - 眼镜 IP 由 Lab 自动获取（RokidLink 经 CXR 上报到单一数据源），无需手动输入。
+ * 各工具弹窗内部通过 getOrConnect 自动建立 ADB 连接。
+ */
 @Composable
 fun AdbToolsScreen(
     client: AdbShellClient?,
@@ -22,21 +25,12 @@ fun AdbToolsScreen(
     scope: kotlinx.coroutines.CoroutineScope,
     getOrConnect: ((AdbShellClient?) -> Unit) -> Unit,
     onDisconnect: () -> Unit = {},
-    // RokidLink 状态（与 FileManagerModule 完全一致）
-    rokidLinkInstalled: Boolean,
-    rokidLinkInstalling: Boolean,
-    rokidLinkRunning: Boolean,
-    onInstallRokidLink: () -> Unit,
-    onOpenRokidLink: () -> Unit,
-    onStopRokidLink: () -> Unit,
     // 通过 CXR-L SDK 启动眼镜端应用（替代 ADB shell）
     onLaunchAppViaSdk: ((String, String) -> Unit)? = null,
     // 通过 SDK 发送按键配置到眼镜端
     onSendKeyButtonConfig: ((String, String, String, String, (Boolean) -> Unit) -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
-    val prefs = ctx.getSharedPreferences("adb_prefs", 0)
-    var ip by remember { mutableStateOf(prefs.getString("ip", "192.168.1.168") ?: "192.168.1.168") }
 
     var showSysInfo by remember { mutableStateOf(false) }
     var showAppMgr by remember { mutableStateOf(false) }
@@ -44,45 +38,7 @@ fun AdbToolsScreen(
     var showKeyBtn by remember { mutableStateOf(false) }
     var showShell by remember { mutableStateOf(false) }
 
-    // ADB 工具模块，颜色使用导航栏 ADB 主题色 BrewTeal
-    Column(modifier = Modifier.padding(16.dp)) {
-        // 1. ModuleHeader
-        ModuleHeader(
-            title = ctx.getString(R.string.adb_tools_title),
-            subtitle = ctx.getString(R.string.adb_tools_subtitle),
-            color = BrewTeal,
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // 2. RokidLinkStatusCard — 与 FileManagerModule 完全一致
-        RokidLinkStatusCard(
-            installed = rokidLinkInstalled,
-            installing = rokidLinkInstalling,
-            running = rokidLinkRunning,
-            onInstall = onInstallRokidLink,
-            onOpen = onOpenRokidLink,
-            onStop = onStopRokidLink,
-            moduleColor = BrewTeal,
-            ctx = ctx,
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 3. IpAddressInputCard — 与 FileManagerModule 完全一致
-        IpAddressInputCard(
-            label = ctx.getString(R.string.ip_address_label),
-            value = ip,
-            onValueChange = { newVal ->
-                ip = newVal
-                prefs.edit().putString("ip", newVal).apply()
-            },
-            color = BrewTeal,
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 4. 四个工具按钮 — 使用其他导航栏颜色（排除当前 ADB 的 BrewTeal）
+    Column(modifier = Modifier.fillMaxWidth()) {
         BrutalButton(
             label = ctx.getString(R.string.system_info),
             color = BrewCoral,
@@ -116,22 +72,6 @@ fun AdbToolsScreen(
             color = BrewAmber,
             onClick = { showShell = true },
         )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // 5. UsageInstructionsCard — 与 FileManagerModule 完全一致
-        UsageInstructionsCard(
-            color = BrewTeal,
-            instructions = listOf(
-                "1. ${ctx.getString(R.string.connecting_adb_hint)}（5555）",
-                "2. ${ctx.getString(R.string.ip_address_label)}（${ip}）",
-                "3. ${ctx.getString(R.string.usage_adb_step2)}",
-                "4. ${ctx.getString(R.string.usage_adb_step3)}",
-            ),
-            ctx = ctx,
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
     }
 
     // 工具弹窗 — 各 dialog 内部通过 AdbDialogContent 自动处理连接

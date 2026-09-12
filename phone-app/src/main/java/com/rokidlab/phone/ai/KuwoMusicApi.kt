@@ -26,8 +26,14 @@ object KuwoMusicApi {
         val name: String,
         val artist: String,
         val playUrl: String,
+        /** 专辑名（接口 `album`；缺失时为空串）—— 眼镜端音乐页需要它才渲染完整信息 */
+        val album: String = "",
+        /** 歌曲时长毫秒（接口 `duration` 形如 "04:59"；解析失败为 0） */
+        val durationMs: Long = 0,
         /** 带时间戳的逐行歌词（接口未返回时为 [emptyList]） */
         val lyrics: List<LyricLine> = emptyList(),
+        /** 专辑封面图直链（接口 `cover`；缺失时为空串）—— 经 AVRCP `METADATA_KEY_ART` 发给眼镜端音乐页 */
+        val cover: String = "",
     )
 
     /**
@@ -71,8 +77,22 @@ object KuwoMusicApi {
         val name = matched.optString("name")
         val art = matched.optString("artist")
         val playUrl = pickMp3Url(matched.optJSONArray("all_bitrates")) ?: return null
-        Log.i(TAG, "search hit: $name - $art ($playUrl)")
-        return Song(name, art, playUrl, parseLyrics(matched))
+        // album / duration 接口本来就返回（如 album=七里香、duration=04:59），此前没取 →
+        // 眼镜端 AVRCP 属性里 ARTIST/ALBUM 全是 Unavailable，音乐页信息不完整（实测 21:52:55）
+        val album = matched.optString("album").trim()
+        val durationMs = parseDuration(matched.optString("duration"))
+        val cover = matched.optString("cover").trim()
+        Log.i(TAG, "search hit: $name - $art / $album (${durationMs}ms) cover=$cover ($playUrl)")
+        return Song(name, art, playUrl, album, durationMs, parseLyrics(matched), cover)
+    }
+
+    /** 接口 duration 形如 "04:59"（也兼容 "1:02:03"）→ 毫秒；解析失败返回 0 */
+    private fun parseDuration(raw: String): Long {
+        val parts = raw.trim().split(":").mapNotNull { it.trim().toLongOrNull() }
+        if (parts.isEmpty()) return 0L
+        var sec = 0L
+        parts.forEach { sec = sec * 60 + it }
+        return sec * 1000
     }
 
     /**

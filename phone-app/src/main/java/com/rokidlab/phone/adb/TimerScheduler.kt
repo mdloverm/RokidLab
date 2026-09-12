@@ -18,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
@@ -215,13 +216,33 @@ class TimerScheduler(private val appContext: Context) {
         }
     }
 
-    /** 按需建立短连接 ADB 会话执行操作，完成后立即断开。
-     *  与 ToolRegistry 一致：通过 RouteManager 解析线路（WiFi 直连或蓝牙隧道），
-     *  蓝牙连接场景下不再直连 IP+5555（隧道关闭时直连必然失败）。 */
+    /** 按需执行 ADB 操作。
+     *
+     *  优先复用全 App 共享 ADB 会话（[com.rokidlab.phone.glasses.CxrLHiRokidSession.getAdbShellClient]）：
+     *  手机侧蓝牙栈对「同一设备 + 同一 SCN」只允许一条客户端 RFCOMM 通道，
+     *  定时任务自建第二条会话会把用户正在用的 ADB 工具 / 屏幕镜像 / 投屏会话挤断；
+     *  且共享会话闲置时本就常驻，复用无额外开销。
+     *
+     *  仅当共享会话不可用时，才退回「按需短连接」老路径（WiFi 直连或蓝牙隧道，
+     *  蓝牙场景下不再直连 IP+5555，隧道关闭时直连必然失败）。
+     */
     private suspend fun withAdbClient(block: (AdbShellClient) -> Unit) {
         val app = appContext as? LabApplication ?: return
-        val ip = appContext.getSharedPreferences(PREFS_ADB, Context.MODE_PRIVATE)
-            .getString(KEY_ADB_IP, "") ?: ""
+
+        // ① 共享会话
+        if (app.hasCxrL()) {
+            val shared = withContext(Dispatchers.IO) {
+                runCatching { app.cxrL.getAdbShellClient() }.getOrNull()
+            }
+            if (shared != null) {
+                runCatching { block(shared) }
+                    .onFailure { Log.w(TAG, "withAdbClient(shared) failed: ${it.message}") }
+                return
+            }
+        }
+
+        // ② 兜底：短连接
+        val ip = app.glassesIp
         if (ip.isBlank()) {
             Log.w(TAG, "withAdbClient: no ADB IP configured")
             return

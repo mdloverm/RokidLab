@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  debug 变体覆盖（P0-5）：开发期放开全部明文，便于联调自建服务、任意 IP 的眼镜、
+  以及抓包。release 走 src/main/res/xml/network_security_config.xml 的严格白名单。
+  两份同名资源按 variant 覆盖合并，debug 包只含这一份。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <!-- 仅 debug：信任用户安装的 CA，便于 mitmproxy / Charles 抓包 -->
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

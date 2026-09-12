@@ -155,4 +155,82 @@ object AiChannel {
             else -> null
         }
     }
+
+    // ── 眼镜 WiFi IP 上行通道（眼镜端 → 手机端）──
+    // 眼镜连上 WiFi 后自动上报自身 IP，手机端据此免手动输入，
+    // 自动填充到投屏 / 手机镜像 / 文件管理 / ADB 工具共用的单一数据源。
+    const val TOPIC_GLASSES_IP = "rokidlab_glasses_ip"
+    const val CMD_GLASSES_IP = "glasses_ip"
+
+    /** 编码 glasses_ip 载荷：[cmd, version, ip] */
+    fun encodeGlassesIp(ip: String): List<String> =
+        listOf(CMD_GLASSES_IP, SCHEMA_VERSION.toString(), ip)
+
+    /**
+     * 解析 glasses_ip 载荷。
+     * @return null = 载荷非法/版本不支持；否则返回眼镜 WiFi IPv4 地址。
+     */
+    fun decodeGlassesIp(fields: List<String?>): String? {
+        if (fields.size < 2 || fields[0] != CMD_GLASSES_IP) return null
+        return when (val v = fields[1]?.toIntOrNull()) {
+            SCHEMA_VERSION -> if (fields.size >= 3 && !fields[2].isNullOrBlank()) fields[2] else null
+            else -> null
+        }
+    }
+
+    // ── 停止手机投屏指令（手机端 → 眼镜端）──
+    // 手机端按「停止投屏」时下发，眼镜端据此关闭 PhoneMirrorActivity：
+    // 该页面设计为 socket 断开后保持前台等待重连（避免重连后画面更新在后台不可见），
+    // 故停止投屏必须显式下发关闭指令，否则最后一帧画面会残留在眼镜上。
+    // 历史实现靠 stopApp 整包杀 RokidLink，会与前台自动保活冲突（被立刻重新拉起），已废弃。
+    // 无载荷：收到即关。
+    const val TOPIC_STOP_PHONE_MIRROR = "rokidlab_stop_phone_mirror"
+    const val CMD_STOP_PHONE_MIRROR = "stop_phone_mirror"
+
+    // ── 图片下发（手机端 → 眼镜端）──
+    // 手机端对话气泡里的图片（show_image 工具展示的图 / 当前播放歌曲封面）同步显示到眼镜端
+    // 悬浮图片层。载荷直接带 Base64 JPEG，不依赖眼镜端自身上网去下载 URL
+    // （眼镜端网络能力不保证，投屏/ASR 等都是手机端供数据）。
+    // 体积：手机端已压到长边 ≤480px / JPEG q80，Base64 后约 50~150KB，远低于 Binder 单事务上限。
+    const val TOPIC_SHOW_IMAGE = "rokidlab_show_image"
+    const val CMD_SHOW_IMAGE = "show_image"
+
+    /** 编码 show_image：[cmd, version, base64Jpeg, caption] */
+    fun encodeShowImage(base64Jpeg: String, caption: String): List<String> =
+        listOf(CMD_SHOW_IMAGE, SCHEMA_VERSION.toString(), base64Jpeg, caption)
+
+    /**
+     * 解析 show_image 载荷。
+     * @return (base64Jpeg, caption)；null = cmd 不符 / 版本不受支持 / 图片数据缺失（接收端整体丢弃）
+     */
+    fun decodeShowImage(fields: List<String?>): Pair<String, String>? {
+        if (fields.size < 3 || fields[0] != CMD_SHOW_IMAGE) return null
+        if (fields[1]?.toIntOrNull() != SCHEMA_VERSION) return null
+        val b64 = fields[2]?.takeIf { it.isNotBlank() } ?: return null
+        return b64 to fields.getOrNull(3).orEmpty()
+    }
+
+    // ── 打开页面指令（手机端 → 眼镜端）──
+    // 手机端需要把眼镜上某个 Activity 拉到前台时下发（典型：说「显示歌词」→ 拉起系统音乐页
+    // com.rokid.os.sprite.launcher/.page.music.MusicPageActivity）。
+    // 眼镜端收到后直接 startActivity(ComponentName(pkg, activity))；目标 Activity 必须 exported=true。
+    // 纯信令、无状态：收到即拉起，不做去重（重复拉起由目标 Activity 的 launchMode 兜底）。
+    const val TOPIC_OPEN_APP = "rokidlab_open_app"
+    const val CMD_OPEN_APP = "open_app"
+
+    /** 编码 open_app：[cmd, version, pkg, activity]（activity 为全限定类名） */
+    fun encodeOpenApp(pkg: String, activity: String): List<String> =
+        listOf(CMD_OPEN_APP, SCHEMA_VERSION.toString(), pkg, activity)
+
+    /**
+     * 解析 open_app 载荷。
+     * @return (pkg, activity)；null = cmd 不符 / 版本不受支持 / 包名或 Activity 缺失（接收端整体丢弃）
+     */
+    fun decodeOpenApp(fields: List<String?>): Pair<String, String>? {
+        if (fields.size < 4 || fields[0] != CMD_OPEN_APP) return null
+        if (fields[1]?.toIntOrNull() != SCHEMA_VERSION) return null
+        val pkg = fields[2]?.takeIf { it.isNotBlank() } ?: return null
+        val activity = fields[3]?.takeIf { it.isNotBlank() } ?: return null
+        return pkg to activity
+    }
 }

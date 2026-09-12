@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  明文流量策略（P0-5）。
+
+  默认禁止明文，只对本机回环与眼镜局域网通道开口子。此前 release 与 debug 同为
+  `usesCleartextTraffic=true`（全局放开），商店拉取、AI 请求（携带 API Key 与用户对话）、
+  用户自定义 baseUrl 全部可被中间人降级劫持。
+
+  注意：一旦声明 android:networkSecurityConfig，manifest 的 usesCleartextTraffic 即被忽略，
+  本文件是明文的唯一事实源（debug 变体由 src/debug/res/xml/ 同名文件整体覆盖）。
+
+  必须开口子的三处（真实需求，非历史包袱）：
+  - localhost / 127.0.0.1 / ::1：本地模型 Ollama（127.0.0.1:11434）、蓝牙隧道手机侧
+    本地转发端口（5556 + targetPort - 5555，如 8849 → 眼镜 8848）。
+  - 192.168.1.168：眼镜 WiFi 直连默认 IP（`LabApplication.glassesIp` 缺省值）；
+    192.168.49.1：眼镜热点模式下的网关（`workspace_rules` 记录的 adb connect 目标）。
+  - ip-api.com：定位工具用的免费接口**仅提供 http**（https 为付费档）。
+
+  已知局限：眼镜 WiFi IP 由眼镜经 `TOPIC_GLASSES_IP` 自报，可能是任意局域网地址，
+  而 NSC 不支持 CIDR / 通配，无法枚举。故 `AiuiProject` 的眼镜 WebServer 调用在明文被拒时
+  自动回落蓝牙隧道（127.0.0.1，已白名单），不会因此让 AIUI 安装/删除直接失败。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">::1</domain>
+        <!-- 眼镜局域网：WiFi 直连默认 IP 与热点网关 -->
+        <domain includeSubdomains="false">192.168.1.168</domain>
+        <domain includeSubdomains="false">192.168.49.1</domain>
+        <!-- 定位工具：免费接口仅 http -->
+        <domain includeSubdomains="false">ip-api.com</domain>
+    </domain-config>
+</network-security-config>

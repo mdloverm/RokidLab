@@ -126,7 +126,9 @@ class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
     override fun onDisconnected() {
         // 断连时不退后台：手机端 PhoneMirrorService 会自动重连，
         // 若退后台则重连成功后画面更新在后台不可见（"投屏中但眼镜无画面"）。
-        // 保持前台等待重连恢复；正常停止投屏由手机端 stopApp 关闭本页面。
+        // 保持前台等待重连恢复；但当手机端主动「停止投屏」时，会经 CXR 下发
+        // rokidlab_stop_phone_mirror → KeyButtonService 广播 ACTION_FINISH_MIRROR
+        // 关闭本页面（不再用 stopApp 整包杀 RokidLink），避免最后一帧画面残留。
         Log.i(TAG, "Phone disconnected, staying foreground to await reconnect")
     }
 

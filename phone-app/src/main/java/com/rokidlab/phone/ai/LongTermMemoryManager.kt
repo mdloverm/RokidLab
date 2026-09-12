@@ -199,8 +199,9 @@ object LongTermMemoryManager {
                 }
                 return@synchronized false
             }
-            // 按内容片段：包含匹配（双向）
-            val removed = d.delete("memories", "content LIKE ?", arrayOf("%$q%"))
+            // 按内容片段：包含匹配（双向）。转义 LIKE 通配符，避免误删/漏删(B4)
+            val escaped = q.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+            val removed = d.delete("memories", "content LIKE ? ESCAPE '!'", arrayOf("%$escaped%"))
             if (removed == 0) {
                 // 兜底：q 是某条记忆的子串以外的方向（记忆含 q 全文）——忽略，
                 // 旧版双向 contains 语义在 SQL 层近似为 LIKE

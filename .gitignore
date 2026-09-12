@@ -28,3 +28,9 @@ gradle_error.txt
 test-kotlin-string.kt
 sembleDebug
 *debug.apk
+
+# Local work artifacts (must not be committed)
+.workbuddy/
+adb_dev.txt
+adb_install.txt
+apk_find.txt

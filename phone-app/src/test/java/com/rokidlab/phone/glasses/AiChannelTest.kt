@@ -169,6 +169,75 @@ class AiChannelTest {
         assertNull(AiChannel.decodeTtsPlay(emptyList()))
     }
 
+    // ── glasses_ip / show_image / open_app（v1 新增通道）──
+
+    @Test
+    fun `glasses_ip v1 roundtrip 与非法载荷拒绝`() {
+        val encoded = AiChannel.encodeGlassesIp("192.168.1.23")
+        assertEquals(listOf(AiChannel.CMD_GLASSES_IP, "1", "192.168.1.23"), encoded)
+        assertEquals("192.168.1.23", AiChannel.decodeGlassesIp(encoded))
+
+        // 未知未来版本：整体丢弃（旧端不得按错位偏移解析出 IP）
+        assertNull(AiChannel.decodeGlassesIp(listOf(AiChannel.CMD_GLASSES_IP, "2", "10.0.0.1")))
+        // 缺字段 / 空串 / 空白 IP 一律丢弃（空 IP 会让上层把 ADB 指向 0.0.0.0）
+        assertNull(AiChannel.decodeGlassesIp(listOf(AiChannel.CMD_GLASSES_IP, "1")))
+        assertNull(AiChannel.decodeGlassesIp(listOf(AiChannel.CMD_GLASSES_IP, "1", "")))
+        assertNull(AiChannel.decodeGlassesIp(listOf(AiChannel.CMD_GLASSES_IP, "1", "   ")))
+        assertNull(AiChannel.decodeGlassesIp(listOf(AiChannel.CMD_GLASSES_IP, "1", null)))
+        // v0（无版本字段）从未存在过该通道，不得被误解析
+        assertNull(AiChannel.decodeGlassesIp(listOf(AiChannel.CMD_GLASSES_IP, "192.168.1.23")))
+        assertNull(AiChannel.decodeGlassesIp(listOf("wrong", "1", "192.168.1.23")))
+    }
+
+    @Test
+    fun `show_image v1 roundtrip 且图片缺失时整体丢弃`() {
+        val encoded = AiChannel.encodeShowImage("BASE64JPEG", "一只猫")
+        assertEquals(listOf(AiChannel.CMD_SHOW_IMAGE, "1", "BASE64JPEG", "一只猫"), encoded)
+        assertEquals("BASE64JPEG" to "一只猫", AiChannel.decodeShowImage(encoded))
+
+        // caption 允许缺省（悬浮层只显示图片）
+        assertEquals("BASE64JPEG" to "", AiChannel.decodeShowImage(listOf(AiChannel.CMD_SHOW_IMAGE, "1", "BASE64JPEG")))
+
+        assertNull("版本不符必须整体丢弃", AiChannel.decodeShowImage(listOf(AiChannel.CMD_SHOW_IMAGE, "2", "x", "c")))
+        assertNull("图片数据缺失不得下发空图片", AiChannel.decodeShowImage(listOf(AiChannel.CMD_SHOW_IMAGE, "1", "", "c")))
+        assertNull(AiChannel.decodeShowImage(listOf(AiChannel.CMD_SHOW_IMAGE, "1", null, "c")))
+        assertNull("长度不足（无图片字段）", AiChannel.decodeShowImage(listOf(AiChannel.CMD_SHOW_IMAGE, "1")))
+        assertNull(AiChannel.decodeShowImage(emptyList()))
+    }
+
+    @Test
+    fun `open_app v1 roundtrip 且包名或 Activity 缺失时整体丢弃`() {
+        val encoded = AiChannel.encodeOpenApp("com.rokid.os.sprite.launcher", ".page.music.MusicPageActivity")
+        assertEquals(
+            listOf(AiChannel.CMD_OPEN_APP, "1", "com.rokid.os.sprite.launcher", ".page.music.MusicPageActivity"),
+            encoded,
+        )
+        assertEquals(
+            "com.rokid.os.sprite.launcher" to ".page.music.MusicPageActivity",
+            AiChannel.decodeOpenApp(encoded),
+        )
+
+        assertNull("版本不符必须整体丢弃", AiChannel.decodeOpenApp(listOf(AiChannel.CMD_OPEN_APP, "2", "p", "a")))
+        assertNull("包名缺失", AiChannel.decodeOpenApp(listOf(AiChannel.CMD_OPEN_APP, "1", "", "a")))
+        assertNull("Activity 缺失", AiChannel.decodeOpenApp(listOf(AiChannel.CMD_OPEN_APP, "1", "p", "")))
+        assertNull(AiChannel.decodeOpenApp(listOf(AiChannel.CMD_OPEN_APP, "1", "p", null)))
+        assertNull("长度不足", AiChannel.decodeOpenApp(listOf(AiChannel.CMD_OPEN_APP, "1", "p")))
+        assertNull(AiChannel.decodeOpenApp(listOf("wrong", "1", "p", "a")))
+    }
+
+    @Test
+    fun `跨端 topic 与 cmd 常量稳定（改名即断双端）`() {
+        assertEquals("rokidlab_glasses_ip", AiChannel.TOPIC_GLASSES_IP)
+        assertEquals("rokidlab_show_image", AiChannel.TOPIC_SHOW_IMAGE)
+        assertEquals("rokidlab_open_app", AiChannel.TOPIC_OPEN_APP)
+        assertEquals("rokidlab_stop_phone_mirror", AiChannel.TOPIC_STOP_PHONE_MIRROR)
+        assertEquals("show_image", AiChannel.CMD_SHOW_IMAGE)
+        assertEquals("open_app", AiChannel.CMD_OPEN_APP)
+        assertEquals("glasses_ip", AiChannel.CMD_GLASSES_IP)
+        assertEquals("stop_phone_mirror", AiChannel.CMD_STOP_PHONE_MIRROR)
+        assertEquals("tts_stop", AiChannel.CMD_TTS_STOP)
+    }
+
     // ── 版本契约总检 ──
 
     @Test

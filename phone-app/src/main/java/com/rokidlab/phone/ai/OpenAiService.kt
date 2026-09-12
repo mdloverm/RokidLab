@@ -441,6 +441,11 @@ data class ChatMessage(
     val toolTrace: List<String> = emptyList(),
 )
 
+/** 工具调用 id 兜底：国产/本地模型常缺 id 字段，回填 tool_call_id 时空串会让部分服务端返回 400，
+ *  故缺失时生成 call_<uuid> 兜底，保证每次调用都有稳定非空 id（B3）。 */
+private fun resolveToolId(raw: String): String =
+    raw.ifBlank { "call_" + java.util.UUID.randomUUID().toString() }
+
 /** 模型请求的一次工具调用 */
 data class ToolCallInfo(
     val id: String,          // 工具调用 id（回填 tool 消息时使用）
@@ -554,7 +559,7 @@ internal class SseStreamAccumulator(
     fun build(): ChatTurn {
         val toolCalls = toolNameParts.entries.sortedBy { it.key }.map { (idx, _) ->
             ToolCallInfo(
-                id = toolIds[idx] ?: "",
+                id = resolveToolId(toolIds[idx] ?: ""),
                 name = toolNameParts[idx]!!.toString(),
                 arguments = toolArgParts[idx]?.toString() ?: "",
             )

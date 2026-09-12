@@ -23,10 +23,27 @@ import java.util.*
 import java.util.concurrent.locks.ReentrantLock
 
 class AdbFileManagerClient(
-    private val context: Context,
+    /**
+     * 应用 Context。**生产路径必传**；仅 JVM 单测驱动纯流协议（sync 帧编解码 / `downloadFile`
+     * 分支）时允许为 null —— 这条路径完全不触 Context。使用处一律经 [requireContext] 取值。
+     */
+    private val context: Context?,
     private val ipAddress: String,
     private val port: Int = 5555,
 ) {
+    /**
+     * 仅供单测：注入内存流直接驱动 ADB 流协议（不建链、不握手，`socket` 保持 null）。
+     * 用于把 `drainStalePackets`（历史「陈旧 CLSE 被误读成本次响应」）与 `downloadFile`
+     * 的 FAIL 分支写成回归测试。
+     */
+    internal fun attachStreamsForTest(input: InputStream, output: OutputStream) {
+        inputStream = input
+        outputStream = output
+    }
+
+    private fun requireContext(): Context =
+        context ?: error("AdbFileManagerClient 该路径需要 Context（单测构造为 null 时不可调用）")
+
     private var socket: Socket? = null
     private var inputStream: InputStream? = null
     private var outputStream: OutputStream? = null
@@ -95,8 +112,11 @@ class AdbFileManagerClient(
     }
 
     fun connect(onStatus: (String) -> Unit): Boolean {
+        // 取 Context 放在 try 之外：单测构造（context=null）误调 connect 时立刻显式失败，
+        // 而不是被 catch 吞成一句「连接失败」。
+        val ctx = requireContext()
         return try {
-            onStatus(context.getString(R.string.file_manager_connecting, ipAddress, port))
+            onStatus(ctx.getString(R.string.file_manager_connecting, ipAddress, port))
             Log.i(TAG, "Connecting to $ipAddress:$port")
 
             socket = Socket()
@@ -109,21 +129,21 @@ class AdbFileManagerClient(
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
             Log.i(TAG, "TCP connection established")
-            onStatus(context.getString(R.string.file_manager_auth))
+            onStatus(ctx.getString(R.string.file_manager_auth))
 
-            keyPair = AdbKeyManager.getOrCreateKeyPair(context.filesDir.absolutePath)
+            keyPair = AdbKeyManager.getOrCreateKeyPair(ctx.filesDir.absolutePath)
             localId.set(1)
             doHandshake()
             // 握手完成：恢复命令期读超时
             socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
             adbSessionAlive = true
             Log.i(TAG, "ADB connection successful")
-            onStatus(context.getString(R.string.file_manager_connected))
+            onStatus(ctx.getString(R.string.file_manager_connected))
             true
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed: ${e.message}", e)
             LogCollector.e(TAG, "ADB connection failed to $ipAddress:$port: ${e.message}", e)
-            onStatus(context.getString(R.string.file_manager_connection_failed, e.message))
+            onStatus(ctx.getString(R.string.file_manager_connection_failed, e.message))
             disconnect()
             false
         }
@@ -186,7 +206,7 @@ class AdbFileManagerClient(
                     sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null)
                 }
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {} // catch-ok: 排空陈旧包，读超时即结束（正常退出），无信息量
         socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
     }
 
@@ -207,8 +227,8 @@ class AdbFileManagerClient(
 
                 val inputPath = path.replace("//", "/").trimEnd('/').ifEmpty { "/" }
 
-                // 使用 ls -la 列出目录内容
-                val sh = """ls -la "$inputPath/" """
+                // 使用 ls -la 列出目录内容；路径经 shellEscape 转义，避免空格/引号/$(...) 导致命令断裂（C5）
+                val sh = "ls -la ${shellEscape(inputPath + "/")}"
                 val cmd = "shell:$sh\u0000"
 
                 val sid = localId.getAndIncrement()
@@ -366,7 +386,7 @@ class AdbFileManagerClient(
                             return downloadFileShell(remotePath, localPath)
                         }
                         // 其他流的 CLSE，发送 CLSE 完全关闭流
-                        try { sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null) } catch (_: Exception) {}
+                        try { sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null) } catch (_: Exception) {} // catch-ok: 清理其它流的收尾包，失败无补救
                         retryCount++
                     }
                     else -> {
@@ -457,7 +477,7 @@ class AdbFileManagerClient(
                                                 if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) {
                                                     Log.d(TAG, "Download CLSE acknowledged")
                                                 }
-                                            } catch (_: Exception) {}
+                                            } catch (_: Exception) {} // catch-ok: 消费收尾 CLSE 包，读不到即继续，非失败
                                             socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
                                             downloadSuccess = true
                                             break
@@ -478,7 +498,7 @@ class AdbFileManagerClient(
                 Log.e(TAG, "Download failed: ${e.message}", e)
                 LogCollector.e(TAG, "Download failed: ${e.message}", e)
                 // 关闭 sync 流，防止泄漏
-                try { sendPacket(CMD_CLSE, sid, remoteId, ByteArray(0)) } catch (_: Exception) {}
+                try { sendPacket(CMD_CLSE, sid, remoteId, ByteArray(0)) } catch (_: Exception) {} // catch-ok: 善后清理，失败无补救
                 false
             }
         } finally {
@@ -507,6 +527,8 @@ class AdbFileManagerClient(
             true
         } catch (e: Exception) {
             Log.e(TAG, "Shell download failed: ${e.message}", e)
+            // sync 流被拒后的 shell 降级路径：此前失败在 App 内日志面板完全不可见
+            LogCollector.e(TAG, "Shell 降级下载失败: $remotePath", e)
             false
         }
     }
@@ -888,6 +910,7 @@ class AdbFileManagerClient(
                     Thread.sleep(300)
                     if (!connect { }) {
                         Log.e(TAG, "Reconnect failed")
+                        LogCollector.w(TAG, "上传前重连失败，本次上传放弃")
                         return false
                     }
                 } finally {
@@ -1048,7 +1071,7 @@ class AdbFileManagerClient(
                                     if (closeAck.command == CMD_OKAY) {
                                         Log.d(TAG, "CLSE acknowledged")
                                     }
-                                } catch (_: Exception) {}
+                                } catch (_: Exception) {} // catch-ok: 消费收尾 CLSE 包，读不到即继续，非失败
                                 socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
                                 return true
                             } else if (cmdStr == "FAIL") {
@@ -1067,7 +1090,7 @@ class AdbFileManagerClient(
                                     if (closeAck.command == CMD_OKAY) {
                                         Log.d(TAG, "CLSE acknowledged after FAIL")
                                     }
-                                } catch (_: Exception) {}
+                                } catch (_: Exception) {} // catch-ok: 消费收尾 CLSE 包，读不到即继续，非失败
                                 socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
                                 return false
                             }
@@ -1100,7 +1123,7 @@ class AdbFileManagerClient(
                 if (closeAck.command == CMD_CLSE && closeAck.arg1 == sid) {
                     Log.d(TAG, "CLSE from daemon after fallthrough")
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {} // catch-ok: 消费收尾 CLSE 包，读不到即继续，非失败
             socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
 
             uploadOk
@@ -1116,7 +1139,9 @@ class AdbFileManagerClient(
                         Log.i(TAG, "Reconnected, retrying upload (attempt ${retryCount + 1})...")
                         return uploadFile(localPath, remotePath, retryCount + 1)
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    LogCollector.w(TAG, "上传重连链路异常，重试放弃", e)
+                }
             }
             false
         } finally {
@@ -1194,7 +1219,7 @@ class AdbFileManagerClient(
                 adbSessionAlive = false
                 if (retryOnFail && (e is java.net.SocketException || e is java.io.IOException)) {
                     Log.i(TAG, "Connection lost in shell cmd, reconnecting...")
-                    try { socket?.close() } catch (_: Exception) {}
+                    try { socket?.close() } catch (_: Exception) {} // catch-ok: 重连前主动断开，关闭失败无补救
                     socket = null; inputStream = null; outputStream = null
                     Thread.sleep(500)
                     if (connect { }) {
@@ -1234,7 +1259,7 @@ class AdbFileManagerClient(
                                 if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) {
                                     Log.d(TAG, "executeShellCommandInternal: CLSE acknowledged")
                                 }
-                            } catch (_: Exception) {}
+                            } catch (_: Exception) {} // catch-ok: 消费收尾 CLSE 包，读不到即继续，非失败
                             socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
                             break
                         } else {
@@ -1370,6 +1395,8 @@ class AdbFileManagerClient(
         msg.checksum = buf.getInt()
         msg.magic = buf.getInt()
 
+        if (msg.payloadLength < 0) throw java.io.IOException("bad payload length: ${msg.payloadLength}")
+        if (msg.payloadLength > AppConfig.ADB_MAX_PAYLOAD) throw java.io.IOException("payload too large: ${msg.payloadLength}")
         if (msg.payloadLength > 0) {
             msg.payload = ByteArray(msg.payloadLength)
             readFully(msg.payload)
@@ -1404,7 +1431,7 @@ class AdbFileManagerClient(
 
     fun disconnect() {
         adbSessionAlive = false
-        try { socket?.close() } catch (_: Exception) {}
+        try { socket?.close() } catch (_: Exception) {} // catch-ok: disconnect 收尾，关闭失败无补救
         socket = null
         inputStream = null
         outputStream = null
@@ -1500,7 +1527,7 @@ class AdbFileManagerClient(
                                         val clseMsg = readPacket()
                                         if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) break
                                     }
-                                } catch (_: Exception) {}
+                                } catch (_: Exception) {} // catch-ok: 消费收尾 CLSE 包，读不到即继续，非失败
                                 return output.toString(Charsets.UTF_8.name())
                             }
                             "FAIL" -> {

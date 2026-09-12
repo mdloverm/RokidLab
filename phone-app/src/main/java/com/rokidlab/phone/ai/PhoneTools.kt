@@ -24,7 +24,8 @@ import java.util.Locale
  * 手机状态 / 音量 / 日历日程。
  *
  * 设计约束：
- * - 拨号用 ACTION_DIAL（只打开拨号盘，无需 CALL_PHONE 敏感权限，用户确认后拨出）
+ * - 拨号：ACTION_CALL 直接拨出（需 CALL_PHONE，启动时申请；语音指令即授权），
+ *   未授权/被 ROM 限制时退回 ACTION_DIAL 打开拨号盘
  * - 通讯录/日历需要运行时权限，缺失时返回带引导的说明文本（模型如实转告用户去授权）
  * - 所有方法同步阻塞（Agent 工具循环已在后台线程执行），返回给模型的中文结果文本
  */
@@ -75,7 +76,8 @@ object PhoneTools {
 
     /**
      * 拨打电话：参数是手机号直接拨；是姓名则查通讯录（唯一命中拨出，多个命中返回候选）。
-     * ACTION_DIAL 只打开拨号盘由用户按确认键拨出，无需敏感权限。
+     * 已授予 CALL_PHONE → ACTION_CALL **直接拨出**（用户说「给 X 打电话」即授权，无需任何确认层）；
+     * 未授权/被 ROM 限制 → 退回 ACTION_DIAL 打开拨号盘。
      */
     fun dialPhone(context: Context, nameOrNumber: String): String {
         val input = nameOrNumber.trim()
@@ -98,14 +100,30 @@ object PhoneTools {
     }
 
     private fun launchDialer(context: Context, number: String, label: String): String {
+        val tel = Uri.parse("tel:${number.replace(" ", "")}")
+        val newTask = Intent.FLAG_ACTIVITY_NEW_TASK
+        // 语音指令即授权（call_phone 已降为 LOCAL_SIDE_EFFECT，不再走眼镜确认闸门）：
+        // 只要已授 CALL_PHONE 就 ACTION_CALL 直接拨出；未授权或被 ROM 限制才退回拨号盘。
+        val canCall = has(context, Manifest.permission.CALL_PHONE)
         return try {
-            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${number.replace(" ", "")}")).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(Intent(if (canCall) Intent.ACTION_CALL else Intent.ACTION_DIAL, tel).apply {
+                addFlags(newTask)
+            })
+            if (canCall) {
+                "正在拨打：$number（$label）"
+            } else {
+                "已打开拨号盘，号码：$number（$label），请按一下拨出（授予「电话」权限后我可直接拨出去）"
             }
-            context.startActivity(intent)
-            "已打开拨号盘，号码：$number（$label），请在手机上确认拨出"
         } catch (e: Exception) {
-            "打开拨号盘失败：${e.message}"
+            // 部分国产 ROM 对 ACTION_CALL 有额外限制（要求默认拨号器等）→ 兜底退回拨号盘
+            val fallbackOk = runCatching {
+                context.startActivity(Intent(Intent.ACTION_DIAL, tel).apply { addFlags(newTask) })
+            }.isSuccess
+            if (fallbackOk) {
+                "已打开拨号盘，号码：$number（$label），请在手机上确认拨出"
+            } else {
+                "拨号失败：${e.message}"
+            }
         }
     }
 

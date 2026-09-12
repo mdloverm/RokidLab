@@ -66,13 +66,33 @@ object LogCollector {
     /** 快速记录 warn 级日志 */
     fun w(tag: String, message: String) = record("W", tag, message)
 
+    /**
+     * 记录 warn 级异常（含完整堆栈）。
+     *
+     * 与 [e] 的区别只在级别：链路断开、退避重连这类「预期内的高频失败」用 W，
+     * 不会污染「仅错误日志」导出；但堆栈同样要留 —— 只有 message 时无法区分
+     * 「对端未启动」和「RFCOMM 被栈拒绝」。
+     */
+    fun w(tag: String, message: String, throwable: Throwable?) =
+        record("W", tag, withStack(message, throwable))
+
     /** 快速记录 error 级日志 */
     fun e(tag: String, message: String) = record("E", tag, message)
 
     /** 记录异常（含完整堆栈） */
-    fun e(tag: String, message: String, throwable: Throwable?) {
-        val stack = if (throwable != null) Log.getStackTraceString(throwable) else ""
-        record("E", tag, if (stack.isNotBlank()) "$message\n$stack" else message)
+    fun e(tag: String, message: String, throwable: Throwable?) =
+        record("E", tag, withStack(message, throwable))
+
+    /**
+     * 拼接异常堆栈。
+     *
+     * 必须对 `Log.getStackTraceString` 的返回值做兜底：JVM 单测下 android.jar 是桩实现
+     * （`unitTests.isReturnDefaultValues = true`）会返回 null，直接 `isNotBlank()` 就是 NPE ——
+     * 那等于让「落日志」本身成为新的故障点（ADB sync 单测会走 catch 分支触发它）。
+     */
+    private fun withStack(message: String, throwable: Throwable?): String {
+        val stack = throwable?.let { runCatching { Log.getStackTraceString(it) }.getOrNull() }.orEmpty()
+        return if (stack.isBlank()) message else "$message\n$stack"
     }
 
     /** 获取当前所有日志文本 */
@@ -130,6 +150,29 @@ object LogCollector {
     /** 创建分享 Intent（把日志文件发出去，如保存到 TXT） */
     fun createShareIntent(context: Context, errorsOnly: Boolean = false): Intent? {
         val file = saveToFile(context, errorsOnly) ?: return null
+        return shareIntentFor(context, file)
+    }
+
+    /**
+     * 把任意诊断文本落成文件并返回分享 Intent。
+     *
+     * 与日志共用同一条 FileProvider 导出通道，让「兼容性诊断报告」这类非日志内容
+     * 也能一键发给开发者，不必为每种导出各写一套落盘 + 分享。
+     */
+    fun createTextShareIntent(context: Context, filePrefix: String, content: String): Intent? {
+        val file = try {
+            val time = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.CHINA).format(Date())
+            val dir = File(context.cacheDir, "logs")
+            dir.mkdirs()
+            File(dir, "${filePrefix}_$time.txt").also { FileWriter(it).use { w -> w.write(content) } }
+        } catch (e: Exception) {
+            Log.e(TAG, "createTextShareIntent failed", e)
+            return null
+        }
+        return shareIntentFor(context, file)
+    }
+
+    private fun shareIntentFor(context: Context, file: File): Intent {
         val uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",

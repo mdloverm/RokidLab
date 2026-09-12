@@ -141,6 +141,7 @@ export default {
 | set_timer / list_timers | 见清单 | 定时提醒 |
 | search_web | {query} | 联网搜索 |
 | get_glasses_battery | {} | 眼镜电量 |
+| get_location | {} | 手机当前所在位置 |
 
 上表只是常用项，**完整清单用 `Lab.listTools()` 获取**。手机端新增工具后本文件不需要改动。
 - 用户要求「修改/微调/对之前的不满意」时：先 `read_code_file` 读现网源码（文件清单或单文件全文）再动手，只重写受影响的文件，禁止凭印象整页重编；改完同样用同一 project 名重存，回复仍 ≤ 3 句。

@@ -4,6 +4,7 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.util.Log
 import com.rokidlab.phone.connection.selectActiveGlasses
+import com.rokidlab.phone.util.LogCollector
 import java.io.DataInputStream
 import java.util.UUID
 
@@ -72,7 +73,9 @@ class AsrPushClient(
                     established = true
                     connectFailures = 0
                     Log.i(TAG, "ASR push connected")
+                    // 回调失败会直接废掉「推送恢复 → 补读积压」这条兜底链，不能静默
                     runCatching { onConnected?.invoke() }
+                        .onFailure { LogCollector.w(TAG, "onConnected 回调异常（补读可能不触发）", it) }
                     val input = DataInputStream(s.inputStream)
                     while (running) {
                         val len = input.readInt()
@@ -93,7 +96,7 @@ class AsrPushClient(
                 } catch (e: Exception) {
                     if (running) logError(e)
                 } finally {
-                    try { socket?.close() } catch (_: Exception) {}
+                    try { socket?.close() } catch (_: Exception) {} // catch-ok: 关闭失败无补救，且置空后由重连兜底
                     socket = null
                 }
                 if (!running) break
@@ -114,7 +117,7 @@ class AsrPushClient(
     fun stop() {
         running = false
         // 关闭 socket 解除读线程阻塞，避免占住眼镜端单客户端串行 accept
-        try { socket?.close() } catch (_: Exception) {}
+        try { socket?.close() } catch (_: Exception) {} // catch-ok: 同上，关闭失败无补救
         socket = null
         thread?.interrupt()
         thread?.join(2000)
@@ -125,6 +128,7 @@ class AsrPushClient(
         val now = System.currentTimeMillis()
         if (now - lastErrorLogAt > 5000) {
             Log.e(TAG, "ASR push error: ${e.message}")
+            LogCollector.w(TAG, "ASR 推送通道断开，将按退避重连", e)
             lastErrorLogAt = now
         }
     }

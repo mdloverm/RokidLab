@@ -118,10 +118,15 @@ internal data class StoreActions(
     val onCancelDownload: (String) -> Unit,
     // 设置页 — 眼镜端服务
     val onSettingsReinstallRokidLink: () -> Unit,
+    // 设置页 — 打开眼镜端状态页（WiFi IP / ADB 状态），仅排障用；
+    // 常规流程不再主动弹出（IP 已由 RokidLink 自动上报到手机端）。
+    val onSettingsOpenGlassesStatus: () -> Unit = {},
     // 设置页 — 语言切换
     val onSwitchLanguage: (String) -> Unit,
     // 设置页 — 导出日志
     val onExportLog: () -> Unit,
+    // 设置页 — 导出兼容性诊断（ROM 指纹 / 蓝牙栈 / 投屏降级档位）
+    val onExportCompatDiagnostics: () -> Unit = {},
     // 设置页 — 后台保活开关
     val onToggleKeepAlive: () -> Unit = {},
     // ADB 工具 — 通过 SDK 启动眼镜端应用（替代 ADB shell）
@@ -338,22 +343,7 @@ private fun MainInterface(
                     onUpdateOpen = { onUpdateSheetVisibleChange(true) },
                 )
                     NavPage.CHAT -> ChatModule(app = app)
-                    NavPage.SCREEN_MIRROR -> ScreenMirrorModule(
-                        state = state,
-                        actions = actions,
-                        app = app,
-                    )
-                    NavPage.PHONE_MIRROR -> PhoneMirrorModule(
-                        state = state,
-                        actions = actions,
-                        app = app,
-                    )
-                    NavPage.FILE_MANAGER -> FileManagerModule(
-                        state = state,
-                        actions = actions,
-                        app = app,
-                    )
-                    NavPage.ADB_TOOLS -> AdbToolsModule(
+                    NavPage.LEQI_TOOLS -> LeqiToolsModule(
                         state = state,
                         actions = actions,
                         app = app,
@@ -435,23 +425,17 @@ private fun BottomNavigationBar(
             val navItems = listOf(
                 NavPage.STORE to stringResource(R.string.nav_store),
                 NavPage.CHAT to stringResource(R.string.nav_chat),
-                NavPage.SCREEN_MIRROR to stringResource(R.string.nav_screen_mirror),
-                NavPage.PHONE_MIRROR to stringResource(R.string.nav_phone_mirror),
-                NavPage.FILE_MANAGER to stringResource(R.string.nav_file_manager),
-                NavPage.ADB_TOOLS to stringResource(R.string.nav_adb_tools),
+                NavPage.LEQI_TOOLS to stringResource(R.string.nav_leqi_tools),
                 NavPage.HID_GAMEPAD to stringResource(R.string.nav_hid_gamepad),
                 NavPage.SETTINGS to stringResource(R.string.nav_settings),
             )
-            
+
             navItems.forEach { (page, label) ->
                 val isSelected = currentPage == page
                 val color = when (page) {
                     NavPage.STORE -> BrewCoral
                     NavPage.CHAT -> BrewChat
-                    NavPage.SCREEN_MIRROR -> BrewCyan
-                    NavPage.PHONE_MIRROR -> BrewPurple
-                    NavPage.FILE_MANAGER -> BrewAmber
-                    NavPage.ADB_TOOLS -> BrewTeal
+                    NavPage.LEQI_TOOLS -> BrewTeal
                     NavPage.HID_GAMEPAD -> BrewPink
                     NavPage.SETTINGS -> BrewMagenta
                 }

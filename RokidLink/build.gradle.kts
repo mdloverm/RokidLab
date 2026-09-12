@@ -3,6 +3,9 @@ plugins {
     kotlin("android")
 }
 
+// ── 发布前闸门（release 洁净工作区 + release 依赖单测），与 phone-app 共用同一份实现 ──
+apply(from = "../gradle/local-gates.gradle.kts")
+
 android {
     namespace = "com.rokidlab.rokidlink"
     compileSdk = 34

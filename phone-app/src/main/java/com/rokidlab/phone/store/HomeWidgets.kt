@@ -17,7 +17,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -29,38 +28,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-
-@Composable
-private fun ActionButton(label: String, color: Color, onClick: () -> Unit) {
-    Box(
-        Modifier.height(36.dp).clip(RoundedCornerShape(8.dp))
-            .background(color.copy(alpha = 0.18f))
-            .border(1.dp, color.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 16.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, color = color, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-// ===== 小工具函数 =====
-@Composable
-private fun MiniButton(label: String, color: Color, onClick: () -> Unit) {
-    Box(
-        Modifier.clip(RoundedCornerShape(4.dp))
-            .background(color.copy(alpha = 0.15f))
-            .clickable { onClick() }
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    ) {
-        Text(label, color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-    }
-}
 
 // ===== 模块通用组件 =====
 @Composable
@@ -80,6 +51,11 @@ internal fun IpAddressInputCard(
     color: Color = BrewCyan,
 ) {
     var text by remember { mutableStateOf(value) }
+    // 外部 value 变化（如眼镜端自动推送的新 IP）时同步到本地 text，
+    // 否则 remember 只缓存初始值，导致眼镜推送的 IP 填不进已打开的输入框。
+    LaunchedEffect(value) {
+        if (text != value) text = value
+    }
 
     Box(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -103,28 +79,6 @@ internal fun IpAddressInputCard(
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = color, unfocusedBorderColor = BrewBorder),
             )
-        }
-    }
-}
-
-@Composable
-internal fun UsageInstructionsCard(
-    color: Color = BrewAmber,
-    instructions: List<String>,
-    ctx: android.content.Context,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(BrewPanel, BrewShapeStandard)
-            .border(width = 1.dp, color = BrewBorder, shape = RoundedCornerShape(12.dp))
-            .padding(16.dp),
-    ) {
-        Column {
-            Text(text = ctx.getString(R.string.usage_instructions), color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.padding(bottom = 12.dp))
-            instructions.forEach { instruction ->
-                Text(text = instruction, color = BrewMuted, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(bottom = 4.dp))
-            }
         }
     }
 }
@@ -313,31 +267,3 @@ internal fun BrutalButton(
     }
 }
 
-@Composable
-private fun BrutalTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    placeholder: String = "",
-    color: Color = BrewInfo,
-    enabled: Boolean = true,
-    singleLine: Boolean = false,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier.heightIn(min = if (singleLine) 48.dp else 56.dp),
-        placeholder = { Text(placeholder, color = color.copy(alpha = 0.4f), fontSize = 13.sp) },
-        textStyle = TextStyle(color = color, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
-        singleLine = singleLine,
-        enabled = enabled,
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = color.copy(alpha = 0.6f),
-            unfocusedBorderColor = color.copy(alpha = 0.2f),
-            disabledBorderColor = BrewBorder,
-            disabledTextColor = BrewMuted,
-            cursorColor = color,
-        ),
-        shape = RoundedCornerShape(8.dp),
-    )
-}

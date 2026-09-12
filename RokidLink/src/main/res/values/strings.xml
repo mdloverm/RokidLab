@@ -12,8 +12,6 @@
     <string name="status_ready">已就绪</string>
     <string name="status_enabling_adb">正在开启 ADB...</string>
     <string name="status_adb_failed">ADB 开启失败，请重启 App</string>
-    <!-- Toast messages -->
-    <string name="toast_enable_wifi">请在设置中开启并连接 WiFi</string>
     <!-- Log messages (English only, developer-facing) -->
     <string name="log_network_recovered">Network recovered, rechecking status</string>
     <string name="log_wifi_disconnected">WiFi disconnected</string>

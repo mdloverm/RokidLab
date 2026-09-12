@@ -12,4 +12,4 @@
 - 发布 vX.Y 严格按照 RULES.md 第 10 节 7 步执行
 
 ## Gitee Token
-- `f79578621ec9da315fa31a80b6c8da8c`（更新于 2026-06-25）
+- `${GITEE_TOKEN}`（**禁止明文入库**；从环境变量 / 不入库的 `local.properties` 注入。2026-09-12 移除了此前明文写入的旧 token，旧 token 需到 Gitee 后台撤销轮换）
