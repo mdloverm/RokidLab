@@ -533,6 +533,13 @@ class KeyButtonService : Service() {
         serviceStartMs = System.currentTimeMillis()
         Log.i(TAG, "Service creating")
         startForegroundService()
+        // 拉起蓝牙隧道服务（ADB / 文件 / 投屏的服务端宿主）。两者互不依赖，只有 MainActivity 会同时启动，
+        // 而眼镜端被官方 AssistServer 以 ThirdAppScene 强杀后，手机端的自愈路径是
+        // `am start-foreground-service KeyButtonService`（phone-app ToolRegistry.ensureGlassesLinkRunning），
+        // 此处若不补拉起，BtTunnelServer 的 RFCOMM SCN 无人注册，隧道就再也回不来——表现为
+        // 提取/ADB 工具全部卡在「建链」（2026-09-13 真机坐实）。BtTunnelService.start 幂等。
+        runCatching { BtTunnelService.start(this) }
+            .onFailure { Log.e(TAG, "Failed to start BtTunnelService", it) }
         // 同时启动常驻透明 Activity 和 Service 接收器（双重保障）
         startBridgeActivity()
         registerKeyReceiver()

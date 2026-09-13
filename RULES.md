@@ -319,11 +319,11 @@ adb/
 
 ### 9.6 构建验证流程
 
-修改代码后按以下顺序验证（**必须在项目根 `d:\rokidapp\cxrl\RokidLab` 执行**，勿在外层壳工程 `d:\rokidapp` 执行）：
+修改代码后按以下顺序验证（**必须在仓库根 `d:\rokidapp` 执行**，所有任务名带 `:cxrl:RokidLab:` 前缀）：
 
 1. **代码审查**：对照 9.1~9.5、9.7 检查清单逐项确认
-2. **编译验证**：`D:\gradle-8.7\bin\gradle.bat :phone-app:compileDebugKotlin :RokidLink:compileDebugKotlin --offline` 检查编译
-3. **单测验证**：涉及 ADB sync / HID 描述符 / 跨端协议 / 工具风险表的改动，必须跑 `:phone-app:testDebugUnitTest :RokidLink:testDebugUnitTest --offline` 且 EXIT=0（详见 §12.15）
+2. **编译验证**：`D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:compileDebugKotlin :cxrl:RokidLab:RokidLink:compileDebugKotlin --offline` 检查编译
+3. **单测验证**：涉及 ADB sync / HID 描述符 / 跨端协议 / 工具风险表的改动，必须跑 `:cxrl:RokidLab:phone-app:testDebugUnitTest :cxrl:RokidLab:RokidLink:testDebugUnitTest --offline` 且 EXIT=0（详见 §12.15）
 4. **日志检查**：确认 build 输出无 `ERROR`，warning 可接受
 5. **功能验证**：在有条件的情况下连接真机测试 ADB 功能
 6. **出 release 包**：`packageRelease` 已挂两道发布闸门（`checkGitClean` 工作区必须干净 + `testDebugUnitTest` 必须先绿），脏工作区直接构建失败；本地临时验证可用 `-PallowDirtyWorktree=true` 跳过，**禁止用于正式出包**（§12.13）
@@ -362,7 +362,7 @@ adb/
 3. **打包带签名的正式版 APK**
    Gradle 会自动使用 `release.keystore` 签名（配置在 `signingConfigs.release`）：
    ```bash
-   ./gradlew :cxrl:RokidLab:phone-app:assembleRelease
+   D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:assembleRelease   # 在仓库根 d:\rokidapp 执行
    ```
    APK 位置：`phone-app/build/outputs/apk/release/RokidLab-v{version}-release.apk`
 
@@ -544,7 +544,7 @@ adb/
 
 - 所有跨端 topic / marker / 能力位必须定义在 `LinkProtocol.kt`（手机端 `glasses/LinkProtocol.kt` 与 RokidLink 端 `LinkProtocol.kt`），**禁止在业务代码里另写跨端字面量**
 - 两份 `LinkProtocol.kt` 除 `package` 行与空行外必须逐字节一致，由 `phone-app/build.gradle.kts` 的 `checkProtocolSynced` 任务在 preBuild 校验
-- ⚠️ 当前该任务只挂在 `:phone-app:preBuild`，单独执行 `:RokidLink:assembleRelease` 不会校验；且 `forbiddenChannels` 仅覆盖 5 个通道名，`const val X = "rokidlab_xxx"` 赋值形式可绕过正则
+- ⚠️ 当前该任务只挂在 `:cxrl:RokidLab:phone-app:preBuild`，单独执行 `:cxrl:RokidLab:RokidLink:assembleRelease` 不会校验；且 `forbiddenChannels` 仅覆盖 5 个通道名，`const val X = "rokidlab_xxx"` 赋值形式可绕过正则
 - 能力协商：眼镜端不得无条件上报 `Cap.ALL`；未接线位必须移出 ALL。`GlassesHandshake` 三态语义 —— `null`=未握手（乐观放行）/ `false`=确认不支持（快速降级）/ legacy=4s 超时（判为旧版）
 
 ### 12.13 发布工程约束
@@ -554,7 +554,7 @@ adb/
   - `checkGitClean` —— 挂 `packageRelease`，`git status --porcelain` 非空即**构建失败**（上线报告 B1「发布的不是仓库里的东西」的兜底）。本地临时验证可用 `-PallowDirtyWorktree=true` 跳过，**禁止用于正式出包**
   - `packageRelease` 依赖 `testDebugUnitTest` —— 单测未跑绿则**出不了包**
   - 闸门挂 `packageRelease` 而非 `preReleaseBuild`：只堵「把脏工作区打成包」，不连带堵死 `compileReleaseKotlin` 这类纯编译校验
-  - ⚠️ 该脚本由两个模块各自 `apply`，因此 `:RokidLink:assembleRelease` 单跑同样受约束（不同于 §12.12 里 `checkProtocolSynced` 只挂 phone-app 的历史局限）
+  - ⚠️ 该脚本由两个模块各自 `apply`，因此 `:cxrl:RokidLab:RokidLink:assembleRelease` 单跑同样受约束（不同于 §12.12 里 `checkProtocolSynced` 只挂 phone-app 的历史局限）
 - 密钥（Gitee token、签名口令、API Key）**禁止明文入库**，一律走环境变量或不入库的 `local.properties`
 - `phone-app/src/main/assets/RokidLink.apk` 必须是 RokidLink **release** 产物，不得内嵌 debug 包
 - 新增/修改/删除 `values/strings.xml`（中文）时必须同步 `values-en/strings.xml`，**两模块（phone-app / RokidLink）的 key 集合必须完全相等**（当前 phone-app 1100=1100、RokidLink 22=22）—— 由构建期任务 `checkI18nKeysSynced` 挂在 `preBuild` 强制，不一致直接构建失败并列出差异键名（历史欠账 5 条已于 2026-09-12 补齐）
@@ -574,16 +574,15 @@ adb/
 
 历史教训：测试全部集中在「最好测的」纯逻辑层，而 `AdbFileManagerClient` / `BluetoothHidManager` / `AdbShellClient.pullFile` / `ToolRiskMap` 这些**历史真出过 bug 的文件一个测试都没有** —— 同类问题（远端 FAIL 被当成功、陈旧 CLSE 被误读、描述符字节漂移）只能靠真机复现才发现。#8（2026-09-12）已补第一批，约定如下：
 
-- **执行位置与命令**：单测必须在**项目根** `d:\rokidapp\cxrl\RokidLab` 下跑（该目录才是含 `:phone-app` / `:RokidLink` 的 Gradle 根）
+- **执行位置与命令**：单测必须在**仓库根** `d:\rokidapp` 下跑（`RenewCXRLSample`；`cxrl\RokidLab` 只是模块目录、已不再是独立 Gradle 根）
   ```powershell
   $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
-  & D:\gradle-8.7\bin\gradle.bat :phone-app:testDebugUnitTest :RokidLink:testDebugUnitTest --offline
+  & D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:testDebugUnitTest :cxrl:RokidLab:RokidLink:testDebugUnitTest --offline
   ```
-  ⚠️ 在外层壳工程 `d:\rokidapp`（`RenewCXRLSample`）执行会报 `Unresolved reference: okhttp`（其 `gradle/libs.versions.toml` 无 okhttp 条目、AGP 版本也不同），**报这个错先检查 cwd**。
 - **Android 依赖桩**：`phone-app` 已设 `testOptions { unitTests.isReturnDefaultValues = true }` —— 否则 `android.util.Log` 一碰就抛 `RuntimeException("Stub!")`。JSON 用真实实现（`org.json:json:20231013`），不要依赖 android.jar 桩
 - **高价值目标（必须锁）**：ADB sync 帧编解码与 `FAIL`/`CLSE` 分支、HID 描述符字节与 `normalize` 语义、`AiChannel` 跨端载荷 v0/v1 矩阵与常量名、`ToolRiskMap` 完整性（`unregisteredTools()` 必须为空，见 §12.10）、聊天历史落盘格式与迁移（`ChatHistoryStore`）
 - **改字节必须改测试**：任何改动 HID 描述符字节 / sync 帧格式 / 跨端载荷格式 / 聊天历史落盘格式的提交，**必须同步更新对应测试并真机回归**；不得只按注释里的长度或格式假设行事（#8 实测推翻了 `buildQtiCompatibleDescriptor` 注释声称的「≤64 字节」，实为 67 / 121 字节）
-- **行为记录 ≠ 契约**：测试发现生产代码语义不一致时（如 `pullFile` 遇 CLSE 返回 true 而 `downloadFile` 返回 false），先以注释登记现象并指向评估文档待办，**不得为了让测试变绿而修改生产行为**
+- **行为记录 ≠ 契约**：测试发现生产代码语义不一致时，先以注释登记现象并指向评估文档待办，**不得为了让测试变绿而修改生产行为**。确需变更语义时必须拿到明确授权，并把锁行为的测试一并翻面（先例：`pullFile` 遇 CLSE 返回 true 与 `downloadFile` 返回 false 的分歧，已于 2026-09-13 按用户要求收敛为「按远端字节数对账」，测试同步改为断言 false；见 `CODE_AUDIT.md` C7 与 `ENGINEERING_ASSESSMENT_2026-09-12.md` §[P1-11]）
 - **状态复位**：测试必须复位被测单例的全局状态（`@After` 中 `BtHidCompat.setManualMode(null)` / `ToolPolicy.confirmationChannel = null` 等），避免用例间污染
 - ⚠️ 仍无 `androidTest`；**不建托管 CI**（#10 评估结论：门禁已挂 `preBuild`、本地构建即触发，托管 CI 属重复执行且需复刻 SDK/NDK 环境）；`KeyButtonService` / `ChatStateHolder`（本体）/ `CxrLHiRokidSession` 仍无测试
 

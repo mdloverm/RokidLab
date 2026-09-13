@@ -69,9 +69,9 @@ class AdbSyncProtocolTest {
         )
         val target = File(newTarget())
 
-        val ok = clientFor(script).pullFile("/sdcard/a.txt", target.absolutePath)
+        val ok = clientFor(script).pullFile("/sdcard/a.txt", target.absolutePath, 11L)
 
-        assertTrue("DONE 收尾应判定成功", ok)
+        assertTrue("DONE 收尾且字节数对得上应判定成功", ok)
         assertEquals("hello world", target.readText())
 
         val msgs = sent()
@@ -85,6 +85,98 @@ class AdbSyncProtocolTest {
         // 2 个 DATA + 1 个 DONE，逐帧回 OKAY
         assertEquals("每个数据帧都必须回 OKAY 流控", 3, msgs.count { it.command == AdbTestProto.CMD_OKAY })
         assertEquals("收尾必须发 CLSE", AdbTestProto.CMD_CLSE, msgs.last().command)
+    }
+
+    @Test
+    fun `pullFile 大文件多分片：逐片写入直到 DONE`() {
+        // 真实形态：adbd 每片 64KB，靠 DONE 收尾。防「只写了第一片就退出」这类回归
+        val chunk = ByteArray(64 * 1024) { (it % 251).toByte() }
+        val script = syncOpen(
+            deviceFrame("DATA", chunk),
+            deviceFrame("DATA", chunk),
+            deviceFrame("DONE"),
+        )
+        val target = File(newTarget())
+
+        val ok = clientFor(script).pullFile("/sdcard/big.apk", target.absolutePath, chunk.size * 2L)
+
+        assertTrue(ok)
+        assertEquals(chunk.size * 2L, target.length())
+    }
+
+    @Test
+    fun `pullFile 收满预期字节后对端直接收流（无 DONE）：按字节数对账判成功`() {
+        // 分片拉取的常态：adbd 送完这一片就 CLSE，不再发 DONE（见 pullFileSharded 注释）。
+        // 只要收到的字节数正好等于该片应有字节数，就必须判成功，否则分片拉取永远无法通过。
+        val chunk = ByteArray(64 * 1024) { (it % 251).toByte() }
+        val script = syncOpen(
+            deviceFrame("DATA", chunk),
+            packet(AdbTestProto.CMD_CLSE, REMOTE_ID, LOCAL_ID),
+        )
+        val target = File(newTarget())
+
+        val ok = clientFor(script).pullFile("/sdcard/shard_aa", target.absolutePath, chunk.size.toLong())
+
+        assertTrue("字节数对得上就该判成功（对端可能省掉 DONE）", ok)
+        assertTrue("内容必须逐字节完整", target.readBytes().contentEquals(chunk))
+    }
+
+    @Test
+    fun `pullFileSharded 小文件（不超过单片）直接走普通 RECV`() {
+        val script = syncOpen(deviceFrame("DATA", "small".toByteArray()), deviceFrame("DONE"))
+        val target = File(newTarget())
+
+        assertTrue(clientFor(script).pullFileSharded("/sdcard/a.txt", target.absolutePath, 5L))
+        assertEquals("small", target.readText())
+    }
+
+    @Test
+    fun `pullFileSharded 远端大小未知：直接判失败，不做无对账的拉取`() {
+        val target = File(newTarget())
+
+        assertFalse(clientFor(ByteArray(0)).pullFileSharded("/sdcard/a.txt", target.absolutePath, -1L))
+        assertFalse("不得产出任何文件", target.exists())
+    }
+
+    // ── 残包回归锁（2026-09-13：提取功能产出 64KB 残包却报成功）──
+
+    @Test
+    fun `pullFile 未收到 DONE 就断流：判失败并删除残包`() {
+        // 对端送回一个 64KB 分片后直接 CLSE —— 蓝牙隧道下的真实形态
+        val chunk = ByteArray(64 * 1024)
+        val script = syncOpen(
+            deviceFrame("DATA", chunk),
+            packet(AdbTestProto.CMD_CLSE, REMOTE_ID, LOCAL_ID),
+        )
+        val target = File(newTarget())
+
+        val ok = clientFor(script).pullFile("/sdcard/big.apk", target.absolutePath, 8_753_886L)
+
+        assertFalse("没有 DONE 就结束了，绝不能当成功", ok)
+        assertFalse("半成品必须删除，否则下游会当成有效产物", target.exists())
+    }
+
+    @Test
+    fun `pullFile 收到 DONE 但字节数少于远端：判失败并删除残包`() {
+        val script = syncOpen(deviceFrame("DATA", "only-64kb".toByteArray()), deviceFrame("DONE"))
+        val target = File(newTarget())
+
+        val ok = clientFor(script).pullFile("/sdcard/big.apk", target.absolutePath, 8_753_886L)
+
+        assertFalse("字节数对不上必须判失败（DONE 也可能是对端提前放弃）", ok)
+        assertFalse(target.exists())
+    }
+
+    @Test
+    fun `pullFile 收到畸形帧：判失败并删除残包`() {
+        val script = syncOpen(
+            deviceFrame("DATA", "abc".toByteArray()),
+            packet(AdbTestProto.CMD_WRTE, REMOTE_ID, LOCAL_ID, ByteArray(3)),
+        )
+        val target = File(newTarget())
+
+        assertFalse(clientFor(script).pullFile("/sdcard/a.txt", target.absolutePath, 3L))
+        assertFalse("畸形帧同样不能留下半成品", target.exists())
     }
 
     // ── FAIL 分支（A4 事故回归锁）──
@@ -152,15 +244,15 @@ class AdbSyncProtocolTest {
     }
 
     @Test
-    fun `pullFile 数据循环中收到 CLSE 提前结束`() {
-        // 行为记录（非契约）：对端不发 DONE / FAIL 直接 CLSE 时，当前按「正常结束」返回 true，
-        // 字节数为已到达的部分。与 AdbFileManagerClient.downloadFile 的「CLSE → false」不一致，
-        // 已登记为待评估项（见 ENGINEERING_ASSESSMENT §P1-11）。
+    fun `pullFile 数据循环中零字节就收到 CLSE：判失败且不留 0 字节文件`() {
+        // 契约（2026-09-13 起）：对端不送 DONE / FAIL 直接 CLSE 一律视为失败。
+        // 旧行为是「按正常结束返回 true」，与 AdbFileManagerClient.downloadFile 的 false 不一致，
+        // 且正是提取功能产出 64KB 残包还报成功的根源（原登记待评估项，现已按 false 收敛）。
         val script = syncOpen(packet(AdbTestProto.CMD_CLSE, REMOTE_ID, LOCAL_ID))
         val targetPath = newTarget()
 
-        assertTrue(clientFor(script).pullFile("/sdcard/a.txt", targetPath))
-        assertEquals(0L, File(targetPath).length())
+        assertFalse(clientFor(script).pullFile("/sdcard/a.txt", targetPath))
+        assertFalse("半成品（此处为 0 字节文件）必须删除", File(targetPath).exists())
     }
 
     // ── 异常链路：必须落 LogCollector（RULES §12.14）──

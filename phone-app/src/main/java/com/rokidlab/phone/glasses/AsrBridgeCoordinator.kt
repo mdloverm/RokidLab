@@ -9,6 +9,7 @@ import android.util.Log
 import com.rokid.cxr.Caps
 import com.rokid.cxr.link.CXRLink
 import com.rokidlab.phone.ai.MusicPlayerController
+import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.util.LogCollector
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -278,7 +279,7 @@ internal class AsrBridgeCoordinator(
                 delayInterruptible(backoffMs)
             }
         }
-        // 推送通道：第二 RFCOMM 长连接，毫秒级实时接收眼镜端推送（正常主通道）。
+        // 推送通道：WiFi 直连优先、第二 RFCOMM 兜底的长连接，毫秒级实时接收眼镜端推送（正常主通道）。
         // 眼镜端推送成功时不会写文件，轮询自然无新数据；推送失败才写文件由轮询兜底。
         // onConnected 在每次建链/重连成功时回调：置 catchUpRequested 让兜底轮询立刻补读
         // 断连期间积压的文件文字（替代旧实现「推送恢复就放心不再读文件」导致的丢字）。
@@ -335,10 +336,14 @@ internal class AsrBridgeCoordinator(
                 Log.e(TAG, "asr push handle error", e)
                 LogCollector.e(TAG, "ASR 推送通道消息处理异常", e)
             }
-        }) {
-            // 推送建链/重连成功：唤醒兜底轮询补读积压文字
-            catchUpRequested = true
-        }
+        },
+        // WiFi 直连所需的眼镜 IP：每次重连都重新取（眼镜 IP 是上线后才上报的）。
+        // 取不到（空串）时 AsrPushClient 直接走 RFCOMM，行为与旧版一致。
+        wifiIpProvider = { (appContext as? LabApplication)?.glassesIp.orEmpty() },
+    ) {
+        // 推送建链/重连成功：唤醒兜底轮询补读积压文字
+        catchUpRequested = true
+    }
         pushClient?.start()
         Log.i(TAG, "start: started (push + file fallback)")
         // 连接期启动下行存活探测（链接断开/清理时随 stop() 一起停止）

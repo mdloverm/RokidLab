@@ -72,14 +72,34 @@ internal object ChatImageCache {
                         return@use null
                     }
                     val body = resp.body?.bytes() ?: return@use null
-                    val raw = BitmapFactory.decodeByteArray(body, 0, body.size) ?: return@use null
-                    scale(raw, maxSize)
+                    decodeSampled(body, maxSize)
                 }
             }.onFailure { Log.w(TAG, "load $url failed: ${it.message}") }.getOrNull()
             if (bmp != null) memCache[url] = bmp
             inflight.remove(url)
             mainHandler.post { onResult(bmp) }
         }.start()
+    }
+
+    /**
+     * 按 [maxSize] 采样解码：**先读尺寸算 inSampleSize 再解码**，而不是解码原图再缩放。
+     *
+     * 背景：聊天历史里的图片消息持久化后，每次进聊天界面 [ChatBubble] 都会重新解码所有历史图。
+     * 旧实现 `decodeByteArray(body)` 直接按原图尺寸分配（4000×3000 ≈ 48MB/张），
+     * 华为 P20 这类 4GB 老机型上多张并发解码即 OOM，进程被 LMK 直接杀掉 →「进聊天界面过几秒闪退」
+     * （runCatching 只能接住 Java 异常，救不了进程被杀）。采样后单张峰值内存降到 ~2×maxSize 级别。
+     */
+    private fun decodeSampled(body: ByteArray, maxSize: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(body, 0, body.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= maxSize || bounds.outHeight / (sample * 2) >= maxSize) {
+            sample *= 2
+        }
+        val raw = BitmapFactory.decodeByteArray(body, 0, body.size, BitmapFactory.Options().apply { inSampleSize = sample })
+            ?: return null
+        return scale(raw, maxSize)
     }
 
     private fun scale(bmp: Bitmap, maxSize: Int): Bitmap {
@@ -89,6 +109,9 @@ internal object ChatImageCache {
         val ratio = maxSize.toDouble() / maxOf(w, h)
         val nw = (w * ratio).toInt().coerceAtLeast(1)
         val nh = (h * ratio).toInt().coerceAtLeast(1)
-        return Bitmap.createScaledBitmap(bmp, nw, nh, true)
+        val scaled = Bitmap.createScaledBitmap(bmp, nw, nh, true)
+        // 释放中间大图：否则原图对象滞留到 GC，多张历史图累积同样拖垮老设备
+        if (scaled !== bmp) bmp.recycle()
+        return scaled
     }
 }

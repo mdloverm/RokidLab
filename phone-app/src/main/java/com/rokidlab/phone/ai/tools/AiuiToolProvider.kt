@@ -17,6 +17,7 @@ import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.adb.ui.TimerAction
 import com.rokidlab.phone.adb.ui.TimerSchedule
 import com.rokidlab.phone.adb.ui.TimerTask
+import com.rokidlab.phone.glasses.AiuiFrontendController
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -59,10 +60,15 @@ internal object AiuiToolProvider : ToolProvider {
                         Log.i(TAG, "open_aiui_app(${agent.name}) with launch params: $launchParams")
                     }
                     val ack = app.cxrL.pushAixToRokidLinkHost(localAix, launchParams = launchParams)
-                    return if (ack?.trim() == "OK") {
-                        "好的，正在眼镜上演示「${agent.name}」（手柄可控宿主），可用 Lab 蓝牙手柄操作"
-                    } else {
-                        "打开「${agent.name}」失败：.aix 推送到眼镜失败${ack?.let { "（$it）" } ?: ""}。请确认眼镜已连接（蓝牙或同一 WiFi）后重试"
+                    return when (ack?.trim()) {
+                        "OK" ->
+                            "好的，正在眼镜上演示「${agent.name}」（手柄可控宿主），可用 Lab 蓝牙手柄操作"
+                        AiuiFrontendController.PUSHED_OPEN_FAILED ->
+                            "「${agent.name}」已推送到眼镜，但宿主未能拉起（可能被系统后台启动限制拦截）。" +
+                                "请在眼镜上重试，或检查 RokidLink 的悬浮窗权限"
+                        else ->
+                            "打开「${agent.name}」失败：.aix 推送到眼镜失败${ack?.let { "（$it）" } ?: ""}。" +
+                                "请确认眼镜已连接（蓝牙或同一 WiFi）后重试"
                     }
                 }
                 // 无本地包（内置/官方智能体）：旧官方链路（直传过 cxr 目录的走 Sys_AIUI_Start，其余走 Ai_RenderPayload）

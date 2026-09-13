@@ -496,19 +496,22 @@ object AiuiProject {
             // 与 uploadOnce 同款线路探测：先试用户配置的眼镜 WiFi IP，失败回落蓝牙隧道
             val wifiIp = app.glassesIp
             val route = runBlocking { app.routeManager.resolve(wifiIp, GLASSES_WEB_PORT) }
-            val (ip, port) = when (route) {
-                is ConnectionRoute.Wifi -> route.ip to route.port
-                is ConnectionRoute.Bluetooth -> route.ip to route.localPort
+            when (route) {
+                is ConnectionRoute.Wifi -> try {
+                    postAixDelete(path, route.ip, route.port)
+                } catch (e: IOException) {
+                    // 同 uploadOnce：WiFi 首选失败（含明文被 NSC 拒、8848 未监听 ECONNREFUSED）一律降级
+                    Log.w(
+                        TAG,
+                        "delete via WiFi ${route.ip}:${route.port} failed " +
+                            "(${e.javaClass.simpleName}: ${e.message}), 降级蓝牙隧道重试",
+                    )
+                    app.routeManager.noteWifiFailure()
+                    val localPort = app.routeManager.tunnelTo(GLASSES_WEB_PORT) ?: throw e
+                    postAixDelete(path, "127.0.0.1", localPort)
+                }
+                is ConnectionRoute.Bluetooth -> postAixDelete(path, route.ip, route.localPort)
                 is ConnectionRoute.None -> return "无法连接到眼镜（WiFi 与蓝牙隧道均不可用）"
-            }
-            try {
-                postAixDelete(path, ip, port)
-            } catch (e: IOException) {
-                // 同 uploadOnce：眼镜 WiFi IP 不在明文白名单（NSC 不支持 CIDR）时回落蓝牙隧道
-                if (!isCleartextBlocked(e)) throw e
-                val localPort = app.routeManager.tunnelTo(GLASSES_WEB_PORT) ?: throw e
-                Log.w(TAG, "delete cleartext blocked ($ip:$port), retry via BT tunnel :$localPort")
-                postAixDelete(path, "127.0.0.1", localPort)
             }
         } catch (e: Exception) {
             Log.e(TAG, "deleteAixOnGlasses failed: $path", e)
@@ -548,17 +551,6 @@ object AiuiProject {
     }
 
     /**
-     * 是否为「明文被 network_security_config 拒绝」。
-     *
-     * release 只白名单回环与固定眼镜 IP，其余 http 目标由系统拦下：
-     * Android 的 HttpURLConnection 抛 `UnknownServiceException`（message 含 CLEARTEXT），
-     * 个别 ROM 只保留 message —— 两者都按此判定，用于触发蓝牙隧道回落。
-     */
-    private fun isCleartextBlocked(e: Throwable): Boolean =
-        e is java.net.UnknownServiceException ||
-            e.message?.contains("CLEARTEXT", ignoreCase = true) == true
-
-    /**
      * 通过 ADB-over-蓝牙隧道在眼镜上发广播拉起开发者 WebServer（8848）。
      * 广播 action/cmd 与眼镜端 AssistServer 的 WebServerService 约定一致
      * （com.rokid.glass.er.webserver.command / running_start）；
@@ -585,21 +577,29 @@ object AiuiProject {
             // 复用 ADB 同款线路探测：先试用户配置的眼镜 WiFi IP，失败自动回落到蓝牙隧道
             val wifiIp = app.glassesIp
             val route = runBlocking { app.routeManager.resolve(wifiIp, GLASSES_WEB_PORT) }
-            val (ip, port) = when (route) {
-                is ConnectionRoute.Wifi -> route.ip to route.port
-                is ConnectionRoute.Bluetooth -> route.ip to route.localPort
-                is ConnectionRoute.None -> return "无法连接到眼镜（WiFi 与蓝牙隧道均不可用），请先确认手机与眼镜已连接"
-            }
-            try {
-                postAixUpload(file, ip, port)
-            } catch (e: IOException) {
-                // release 的 network_security_config 只白名单回环与固定眼镜 IP，而眼镜 WiFi IP
-                // 由眼镜自报、可能是任意局域网地址（NSC 不支持 CIDR，无法枚举）→ 明文被拒时
-                // 改走蓝牙隧道（127.0.0.1 在名单内），而不是让 AIUI 安装直接失败。
-                if (!isCleartextBlocked(e)) throw e
-                val localPort = app.routeManager.tunnelTo(GLASSES_WEB_PORT) ?: throw e
-                Log.w(TAG, "upload cleartext blocked ($ip:$port), retry via BT tunnel :$localPort")
-                postAixUpload(file, "127.0.0.1", localPort)
+            when (route) {
+                is ConnectionRoute.Wifi -> try {
+                    postAixUpload(file, route.ip, route.port)
+                } catch (e: IOException) {
+                    // WiFi 首选但用不了 → 降级蓝牙隧道重试一次。
+                    //
+                    // 降级条件必须是「任何 IOException」，不能只认明文被拒（CLEARTEXT）：
+                    // 修正 WiFi 判据后 resolve 会**乐观**选中 WiFi（adbd 可达即认 WiFi 可用），
+                    // 而 8848 WebServer 是按需启动 / 空闲 90s 自毁的，WiFi 上极可能 ECONNREFUSED；
+                    // 若只认 CLEARTEXT，这类失败会直接抛给用户 —— 表现就是「切了 WiFi 反而装不上」，
+                    // 比不切更糟。故此处一律降级重试，蓝牙隧道是稳定的兜底。
+                    Log.w(
+                        TAG,
+                        "upload via WiFi ${route.ip}:${route.port} failed " +
+                            "(${e.javaClass.simpleName}: ${e.message}), 降级蓝牙隧道重试",
+                    )
+                    app.routeManager.noteWifiFailure()
+                    val localPort = app.routeManager.tunnelTo(GLASSES_WEB_PORT) ?: throw e
+                    postAixUpload(file, "127.0.0.1", localPort)
+                }
+                is ConnectionRoute.Bluetooth -> postAixUpload(file, route.ip, route.localPort)
+                is ConnectionRoute.None ->
+                    return "无法连接到眼镜（WiFi 与蓝牙隧道均不可用），请先确认手机与眼镜已连接"
             }
         } catch (e: Exception) {
             Log.e(TAG, "uploadAixToGlasses failed", e)

@@ -26,6 +26,22 @@ object LinkProtocol {
     const val MARKER_TOOL_CALL = "__LAB_TOOL__"
     const val MARKER_ASR_READY = "__LAB_ASR_READY__"
 
+    // ── ASR 推送通道 WiFi 握手（防同网段主机挤占）──
+    /**
+     * ASR 推送通道（眼镜端 [AsrPushServer] 的 7660 TCP 监听）WiFi 建链握手令牌。
+     *
+     * 为什么需要：眼镜端该监听绑 `0.0.0.0`，且接入语义是「替换式单客户端」——同网段任意
+     * 主机连上 7660 就能挤掉真手机的推送连接（表现为眼镜上 AI 回答文字停更），
+     * 并可读取本通道下发的 ASR 文本。手机端建链后立即写入本令牌，眼镜端校验通过才接入；
+     * 超时或内容不符则直接关闭连接，不再成为「当前客户端」。
+     *
+     * RFCOMM 通道不做校验：蓝牙 SPP 建链本身已由配对链路鉴权，无同网段暴露面。
+     *
+     * 兼容性：旧版眼镜端会把这几个字节当「上行垃圾数据」丢弃（本通道原本就只下行），
+     * 因此「新手机端 + 旧眼镜端」不受影响；反向组合需两端同步升级（双端版本本就要求一致）。
+     */
+    val ASR_PUSH_HANDSHAKE: ByteArray = "ROKIDPUSH1".toByteArray(Charsets.UTF_8)
+
     // ── 工具确认通道（Phase 4：call_phone 等副作用工具执行前的眼镜端用户确认）──
     /** 确认请求下行（手机端 → 眼镜端）：caps = [requestId, 工具名, 摘要文案] */
     const val TOPIC_TOOL_CONFIRM = "rokidlab_tool_confirm"

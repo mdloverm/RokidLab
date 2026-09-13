@@ -1001,14 +1001,14 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 v3.5 起测试从「只覆盖最好测的纯逻辑层」扩到**历史真出过 bug 的高危文件**，当前 **14 个测试类 / 155 个 `@Test`**（phone-app 150 + RokidLink 5）。
 
 ```powershell
-# 必须在项目根 d:\rokidapp\cxrl\RokidLab 执行
+# 在仓库根 d:\rokidapp 执行
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
-& D:\gradle-8.7\bin\gradle.bat :phone-app:testDebugUnitTest :RokidLink:testDebugUnitTest --offline
+& D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:testDebugUnitTest :cxrl:RokidLab:RokidLink:testDebugUnitTest --offline
 ```
 
 | 测试类 | 例数 | 锁住什么 |
 |---|---|---|
-| `adb/AdbSyncProtocolTest` | 8 | `AdbShellClient.pullFile` 的 `FAIL` / `CLSE` / 读流异常分支（历史 A4 事故：远端 FAIL 被当成功 → 产出 0 字节文件） |
+| `adb/AdbSyncProtocolTest` | 15 | `AdbShellClient.pullFile` 的 `FAIL` / `CLSE` / 读流异常分支（历史 A4 事故：远端 FAIL 被当成功 → 产出 0 字节文件）+ 提取残包回归锁（未 `DONE` 断流 / 字节数不符 / 畸形帧）与分片收尾语义（`pullFileSharded`） |
 | `adb/AdbFileManagerSyncTest` | 6 | `AdbFileManagerClient` sync 帧编解码 + `drainStalePackets` 陈旧 CLSE 排空 + `parseDateTime` |
 | `hid/HidReportTest` | 12 | `BtHidCompat.normalize` 截断/补零/未声明返 null、`declaredLength` 全矩阵、描述符 Report ID 与 `declaredReportIds` 交叉校验 |
 | `glasses/AiChannelTest` | 21 | `AiChannel` 跨端载荷 v0/v1 矩阵 + 常量名稳定性（改名即断双端） |
@@ -1018,7 +1018,7 @@ $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
 
 **写测试的三条硬约束**（详见 `RULES.md` §12.15）：
 
-1. **执行位置**：必须在 `d:\rokidapp\cxrl\RokidLab` 跑；`d:\rokidapp` 是外层壳工程（任务名 `:cxrl:RokidLab:phone-app:*`，且 `libs.versions.toml` 无 okhttp），跑错会报 `Unresolved reference: okhttp`。
+1. **执行位置**：必须在仓库根 `d:\rokidapp` 跑（`RenewCXRLSample`，任务名 `:cxrl:RokidLab:phone-app:*`）。`cxrl\RokidLab` 不再是独立 Gradle 根（其 `settings.gradle.kts` / `gradle/libs.versions.toml` 已删除），在该目录执行会沿目录树上溯命中根构建，任务名必须带 `:cxrl:RokidLab:` 前缀。
 2. **Android 桩**：`phone-app` 已开 `testOptions { unitTests.isReturnDefaultValues = true }`（否则 `Log` 一碰即抛 `RuntimeException("Stub!")`）；ADB 客户端用 `internal fun attachStreamsForTest(input, output)` 注入脚本化对端（`AdbTestPeer.kt`），无需真机与 socket。
 3. **改字节必改测试**：动 HID 描述符 / sync 帧格式 / 跨端载荷格式的提交必须同步更新测试；#8 实测已推翻 `buildQtiCompatibleDescriptor` 旧注释声称的「≤ 64 字节」，实为 **67（无 Mouse）/ 121（含 Mouse）** 字节。
 

@@ -175,32 +175,63 @@ internal class RokidLinkController(private val activity: MainActivity) {
         }
     }
 
-    /** 引导流程中安装 RokidLink 到眼镜（先停止并卸载旧版，再安装，带结果回调） */
+    /**
+     * 引导流程中安装 RokidLink 到眼镜。
+     *
+     * 先查安装状态：未安装直接装；已安装才先停后卸，**卸载失败必须中止**——
+     * v3.6 起内置包已换成 release 签名（v3.5 及更早内置的是 debug 签名），若卸载失败仍强行
+     * installApk，眼镜端 pm install 会因签名不一致报 INSTALL_FAILED_UPDATE_INCOMPATIBLE（"系统报错"）。
+     */
     internal fun installRokidLinkForGuide(onResult: (Boolean) -> Unit) {
         activity.lifecycleScope.launch {
             activity.updateBusy(true)
-            android.util.Log.i("RokidLinkInstall", "=== 开始安装 RokidLink 到眼镜（先卸载旧版）===")
+            android.util.Log.i("RokidLinkInstall", "=== 开始安装 RokidLink 到眼镜（先探测是否已安装）===")
             activity.log(activity.getString(R.string.log_closing_rokidlink))
-            // 先停止运行中的 RokidLink
-            activity.cxrL.stopApp(
-                packageName = "com.rokidlab.rokidlink",
-                onStopResult = { success ->
-                    activity.log(if (success) activity.getString(R.string.log_rokidlink_closed) else activity.getString(R.string.log_rokidlink_close_failed))
-                },
-            )
-            // 无论 stop 成功与否，都先卸载旧版本再重新安装
-            delay(300)
-            activity.log(activity.getString(R.string.log_uninstalling_rokidlink))
-            activity.cxrL.uninstallApp(
-                packageName = "com.rokidlab.rokidlink",
-                onUninstallResult = { uninstalled ->
-                    activity.log(if (uninstalled) activity.getString(R.string.log_rokidlink_uninstalled) else activity.getString(R.string.log_rokidlink_uninstall_failed))
-                    // 卸载完成后再执行安装（无论卸载成功与否都尝试安装）
-                    activity.lifecycleScope.launch {
-                        delay(500)
+            var installed: Boolean? = null
+            activity.cxrL.queryInstalledApps(
+                packageNames = listOf("com.rokidlab.rokidlink"),
+                onResult = { _, isInstalled -> installed = isInstalled },
+                onComplete = {
+                    if (installed == false) {
+                        // 确认未安装：跳过 stop/uninstall，直接安装（对未安装应用卸载必然"失败"，
+                        // 反而会误导中断流程）
+                        android.util.Log.i("RokidLinkInstall", "RokidLink 未安装，直接上传安装")
                         installRokidLinkForGuideCore(onResult)
+                    } else {
+                        // 已安装（或查询失败无法确定）：先停止再卸载，卸载成功才允许安装
+                        android.util.Log.i("RokidLinkInstall", "RokidLink 已存在，先停止再卸载旧版")
+                        activity.cxrL.stopApp(
+                            packageName = "com.rokidlab.rokidlink",
+                            onStopResult = { success ->
+                                activity.log(if (success) activity.getString(R.string.log_rokidlink_closed) else activity.getString(R.string.log_rokidlink_close_failed))
+                            },
+                        )
+                        // 无论 stop 成功与否，都先卸载旧版本再重新安装
+                        activity.lifecycleScope.launch {
+                            delay(300)
+                            activity.log(activity.getString(R.string.log_uninstalling_rokidlink))
+                            activity.cxrL.uninstallApp(
+                                packageName = "com.rokidlab.rokidlink",
+                                onUninstallResult = { uninstalled ->
+                                    if (uninstalled) {
+                                        activity.log(activity.getString(R.string.log_rokidlink_uninstalled))
+                                        activity.lifecycleScope.launch {
+                                            delay(500)
+                                            installRokidLinkForGuideCore(onResult)
+                                        }
+                                    } else {
+                                        // 卸载失败：必须中止，不能强行覆盖安装——
+                                        // 旧版 debug 签名与新版 release 签名冲突时眼镜端系统会直接报安装错误
+                                        android.util.Log.w("RokidLinkInstall", "=== 卸载失败，中止安装（防止签名冲突系统报错）===")
+                                        activity.log(activity.getString(R.string.log_rokidlink_uninstall_failed))
+                                        activity.updateBusy(false)
+                                        onResult(false)
+                                    }
+                                },
+                            )
+                        }
                     }
-                },
+                }
             )
         }
     }
@@ -347,6 +378,13 @@ internal class RokidLinkController(private val activity: MainActivity) {
                                         activity.screenMirrorState = activity.screenMirrorState.copy(rokidLinkRunning = false)
                                         activity.phoneMirrorState = activity.phoneMirrorState.copy(rokidLinkRunning = false)
                                         activity.fileManagerState = activity.fileManagerState.copy(rokidLinkRunning = false)
+                                        if (!uninstalled) {
+                                            // 卸载失败必须中止：旧版 debug 签名与新版 release 签名冲突时，
+                                            // 强行覆盖安装会让眼镜端系统报 INSTALL_FAILED_UPDATE_INCOMPATIBLE
+                                            activity.settingsReinstallError = activity.getString(R.string.log_rokidlink_uninstall_failed)
+                                            onDone?.invoke(false)
+                                            return@uninstallApp
+                                        }
                                         activity.lifecycleScope.launch {
                                             delay(500)
                                             installRokidLinkToGlasses(onResult = onDone)

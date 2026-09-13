@@ -33,6 +33,8 @@ import com.rokid.cxr.link.callbacks.IGlassAppCbk
 import com.rokid.cxr.link.callbacks.IImageStreamCbk
 import com.rokid.cxr.link.utils.CxrDefs
 import com.rokid.cxr.Caps
+import com.rokid.cxr.session.CxrSessionManager
+import com.rokid.cxr.session.RokidAppStatus
 import com.rokid.sprite.aiapp.externalapp.auth.AuthResult
 import com.rokid.sprite.aiapp.externalapp.auth.AuthorizationHelper
 import com.rokid.sprite.aiapp.externalapp.auth.GlassPermission
@@ -364,13 +366,29 @@ class CxrLHiRokidSession(
                 val route = runBlocking { app.routeManager.resolve(app.glassesIp, 5555) }
                 when (route) {
                     is ConnectionRoute.Wifi -> com.rokidlab.phone.platform.AdbEndpoint(route.ip, route.port)
-                    is ConnectionRoute.Bluetooth -> com.rokidlab.phone.platform.AdbEndpoint(route.ip, route.localPort)
+                    is ConnectionRoute.Bluetooth ->
+                        com.rokidlab.phone.platform.AdbEndpoint(route.ip, route.localPort, viaBluetooth = true)
                     is ConnectionRoute.None -> null
                 }
             }.getOrNull()
         },
         onRouteFailure = {
             runCatching { (appContext as LabApplication).routeManager.clearRouteCache() }
+        },
+        // 后台线路升级：只读探测 WiFi 直连是否就绪，就绪则把共享会话从蓝牙隧道拆掉重建成 WiFi。
+        // 只探 adbd(5555)，不调 resolve() —— resolve 会顺带建蓝牙隧道，与此处「只判可达」的语义不符。
+        preferredEndpointProvider = {
+            runCatching {
+                val app = appContext as LabApplication
+                val ip = app.glassesIp
+                if (ip.isNotBlank() && app.routeManager.isWifiReachable(ip)) {
+                    com.rokidlab.phone.platform.AdbEndpoint(ip, 5555)
+                } else null
+            }.getOrNull()
+        },
+        // WiFi 端点建链失败 → 记账（清缓存 + 记录断线信号），使下一次 resolve 优先落到蓝牙隧道
+        onWifiFailure = {
+            runCatching { (appContext as LabApplication).routeManager.noteWifiFailure() }
         },
     )
 
@@ -560,6 +578,14 @@ class CxrLHiRokidSession(
      */
     fun releaseAdbShellClient() = adbTransport.release()
 
+    /**
+     * 手机侧 WiFi 重新接入时通知共享 ADB 会话立刻重探首选（WiFi）线路。
+     *
+     * 见 [com.rokidlab.phone.platform.AdbTransport.onPreferredRouteMaybeAvailable]：
+     * 共享会话可能一直挂在蓝牙隧道上，不主动重探就要等满探测节流、且期间恰好有取用才会切换。
+     */
+    fun onWifiMaybeAvailable() = adbTransport.onPreferredRouteMaybeAvailable()
+
     /** 当前「按键答题」开关状态（手机端本地持久化） */
     fun isKeyQuizEnabled(): Boolean {
         return runCatching {
@@ -641,10 +667,28 @@ class CxrLHiRokidSession(
         }.isSuccess
     }
 
+    /**
+     * 查询 Rokid AI App 的兼容状态（官方接入前置）。
+     *
+     * 以 SDK `checkRokidAppCompatibility` 返回为准，不写死版本串（阈值随 SDK 演进）；
+     * 检测异常返回 null，调用方按"放行"处理，避免 SDK 查询失败反而阻断正常授权。
+     */
+    private fun rokidAppStatus(targetHostApp: RokidHostApp): RokidAppStatus? {
+        return runCatching {
+            CxrSessionManager.getInstance(appContext).checkRokidAppCompatibility(appContext)
+        }.getOrNull()
+    }
+
     fun requestAuthorization() {
         val targetHostApp = hostApp
         if (!isHostAppInstalled(targetHostApp)) {
             onStatus(appContext.getString(R.string.install_glasses_host_first, targetHostApp.displayName))
+            return
+        }
+        // 官方接入前置：Rokid AI App 兼容版本（checkRokidAppCompatibility 阈值随 SDK 演进，
+        // 代码不写死版本串，以 SDK 返回为准）。版本过低时授权页/建链都会莫名失败，须先拦截提示。
+        if (rokidAppStatus(targetHostApp) is RokidAppStatus.VersionTooLow) {
+            onStatus(appContext.getString(R.string.auth_host_version_too_low, targetHostApp.displayName))
             return
         }
 
@@ -1009,6 +1053,11 @@ class CxrLHiRokidSession(
     ): Boolean {
         if (!isHostAppInstalled(targetHostApp)) {
             onStatus(appContext.getString(R.string.install_host_first, targetHostApp.displayName))
+            return false
+        }
+        // 建链兜底：Rokid AI App 版本过低时授权/建链都会失败，提前拦截
+        if (rokidAppStatus(targetHostApp) is RokidAppStatus.VersionTooLow) {
+            onStatus(appContext.getString(R.string.auth_host_version_too_low, targetHostApp.displayName))
             return false
         }
         if (token.isNullOrBlank()) {

@@ -222,6 +222,7 @@
 **[P1-10] 依赖可复现性：时间戳 SNAPSHOT + 多仓混用**
 - 证据：`phone-app/build.gradle.kts:239-244` 显式锁定 `com.rokid.cxr:cxr-service-bridge:1.0-20260715.121510-107`，注释自陈"Nexus 清理该 SNAPSHOT 会构建失败"；且同 artifact 的 release `1.0` 与 SNAPSHOT 内容不等（注释 L240-243）。`settings.gradle.kts:18-21` 混用 `maven.rokid.com` + `jitpack.io`(dadb) + `google`/`mavenCentral`。
 - 修复方向：将 bridge 私有镜像到自控仓库或 `libs/` 固化；锁定 release 版本并做真机回归。
+- **复核更新（2026-09-13）**：`jitpack.io`(dadb) 随嵌套 `settings.gradle.kts` 在「构建入口唯一化」中一并移除 —— 全仓 `*.gradle.kts` / `*.toml` 实测**无** `dadb` / `jitpack` / `com.github.*` 依赖（唯一命中是 `AsrBridgeCoordinator.sharedAdbClient` 的字符串误匹配），即该仓库从未被实际使用；移除后从仓库根构建（`assembleDebug` + 双端单测）通过。**多仓混用**一项随之收敛为根 `settings.gradle.kts` 的 `google` / `mavenCentral` / `maven.rokid.com` 三仓。
 
 **[P1-11] 测试盲区：覆盖了"最好测的"，回避了"最易坏的"** —— ✅ **第一批回归单测已补（2026-09-12）**
 - 原证据：`phone-app/src/test` 8 个类全部集中在 `ai/`（AgentSessionHistory / Calculator / GoldenAgentEval 23 例 / SkillFetcher / SkillMarkdown / SseStreamAccumulator / TruncateToolOutput）+ `glasses/AiChannelTest`；`RokidLink/src/test/AiChannelProtocolTest`。**androidTest 0、CI 0**。§2 中所有高风险文件**无一有测试**。
@@ -230,11 +231,12 @@
   - ② `hid/HidReportTest.kt`（**12 例**）—— `BtHidCompat.normalize` 截断/补零/未声明返 null、`declaredLength` 全矩阵、`modeOrder` 默认与人工强制、**描述符声明的 Report ID 与 `declaredReportIds` 交叉校验**（5 种描述符，扫描 `0x85,<id>` 字节）。
   - ③ `glasses/AiChannelTest.kt`（17 → **21 例**）—— 补 `glasses_ip` / `show_image` / `open_app` 三类 v1 载荷 roundtrip + 非法载荷整体拒绝（未来版本/缺字段/空串/空白/null/v0 形态），并新增「跨端 topic 与 cmd 常量稳定（改名即断双端）」。
   - ④ `ai/ToolRiskMapTest.kt`（**8 例**）—— 把 `LabApplication.kt:134-141` 的运行时自检提为单测（`ToolRegistry.toolList ≥ 30` 且 `unregisteredTools()` 必须为空，对应 `RULES.md` §12.10）+ `ToolPolicy.check()` 的 fail-open 语义（无通道放行 / 显式取消拒绝 / 超时降级 / 确认放行 / 只读不触发闸门 / AIUI 页面 30 次上限）。
-  - ⑤ `adb/AdbSyncProtocolTest.kt`（**8 例**）—— `AdbShellClient.pullFile` 的 FAIL 分支回归锁（远端 `FAIL` 必须返 false 且清掉半成品文件，锁死历史 A4 事故「远端 FAIL 被当成功 → 产出 0 字节文件」）；含 OPEN 被 CLSE 拒、RECV 无 OKAY、读流异常等边界。
+  - ⑤ `adb/AdbSyncProtocolTest.kt`（**8 → 15 例**，2026-09-13 复核）—— `AdbShellClient.pullFile` 的 FAIL 分支回归锁（远端 `FAIL` 必须返 false 且清掉半成品文件，锁死历史 A4 事故「远端 FAIL 被当成功 → 产出 0 字节文件」）；含 OPEN 被 CLSE 拒、RECV 无 OKAY、读流异常等边界。2026-09-13 追加「提取残包」回归锁：未收到 `DONE` 就断流、收到 `DONE` 但字节数不足、畸形帧、零字节 CLSE 一律判失败并删残包；并新增「收满预期字节后对端直接收流（无 `DONE`）应按字节数对账判成功」锁住分片拉取的收尾语义。
   - `RokidLink/AiChannelProtocolTest.kt`（4 → **5 例**）—— 眼镜端只需能解析手机端下发的 v1 三类通道（边界矩阵留在 phone-app 侧避免重复维护）。
 - **测试基础设施补强**：新增 `testOptions { unitTests.isReturnDefaultValues = true }`（否则 `android.util.Log` 一碰就抛 `RuntimeException("Stub!")`）；引入 `org.json:json:20231013`（真实 JSON 实现替代 android.jar 桩）；ADB 客户端新增 `internal fun attachStreamsForTest(input, output)`，使 sync 协议可在 JVM 用脚本化对端（`AdbTestPeer.kt`）驱动。
 - **顺带纠正一处失实注释**：`BluetoothHidManager.buildQtiCompatibleDescriptor` javadoc 原声称「总长度 ≤ 64 字节（QTI 的 HID_DEV_MTU_SIZE）」，实测为**无 Mouse 67 字节 / 含 Mouse 121 字节**（脚本统计，`HidReportTest` 已锁定精确值）。真机容错实际来自「注册被拒 → 回退无 Mouse 版」重试链而非长度硬约束，注释已按实测改写。
 - **登记待评估（非契约，勿静默漂移）**：`AdbShellClient.pullFile` 在数据循环中收到 CLSE 时返回 **true（0 字节）**，而 `AdbFileManagerClient.downloadFile` 同场景返回 **false** —— 语义不一致，已在 `AdbSyncProtocolTest` 注释中钉住行为并指向本条待评估。
+  - **✅ 已收敛（2026-09-13）**：`pullFile` 的 CLSE 语义已按「字节数是唯一可信的收尾凭证」重写 —— 传了 `expectedSize`（远端 `stat`）时按字节数对账（齐即成功，对端可省 `DONE`；不齐判失败），未传时必须见到 `DONE`。`downloadFile` 本就是 `false`，两边语义现已一致。起因见 `CODE_AUDIT.md` C7「修复进度（2026-09-13）」。
 - **第二批（#9，2026-09-12）**：`store/ChatHistoryStoreTest.kt`（**14 例**）—— JSONL 单条往返 / 同 id 后写覆盖先写且位置不变 / 无 id 条目不去重 / 非法行与空行跳过 / 崩溃截断半行不影响已落盘历史 / 上限裁剪 / **旧版 JSON 数组格式识别与迁移不丢历史** / 迁移后可变 JSONL 追加 / `rewrite(空)` 删文件（clear 后重启不复活）/ `readHistory` 缺文件返空 / 自动建父目录。
 - **残留**：`KeyButtonService` / `ChatStateHolder`（本体，本次只测了抽出的 `ChatHistoryStore`）/ `CxrLHiRokidSession` 三个最高风险文件仍无测试；`androidTest` 仍为 0；不建托管 CI（阶段二 #10 已改为本地闸门，见 §[P1-4]）。
 

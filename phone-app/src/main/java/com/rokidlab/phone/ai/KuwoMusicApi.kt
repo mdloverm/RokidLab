@@ -76,15 +76,24 @@ object KuwoMusicApi {
         }
         val name = matched.optString("name")
         val art = matched.optString("artist")
-        val playUrl = pickMp3Url(matched.optJSONArray("all_bitrates")) ?: return null
+        val playUrl = pickMp3Url(matched.optJSONArray("all_bitrates"))?.let(::toHttps) ?: return null
         // album / duration 接口本来就返回（如 album=七里香、duration=04:59），此前没取 →
         // 眼镜端 AVRCP 属性里 ARTIST/ALBUM 全是 Unavailable，音乐页信息不完整（实测 21:52:55）
         val album = matched.optString("album").trim()
         val durationMs = parseDuration(matched.optString("duration"))
-        val cover = matched.optString("cover").trim()
+        val cover = toHttps(matched.optString("cover").trim())
         Log.i(TAG, "search hit: $name - $art / $album (${durationMs}ms) cover=$cover ($playUrl)")
         return Song(name, art, playUrl, album, durationMs, parseLyrics(matched), cover)
     }
+
+    /**
+     * 酷我 CDN 直链只给 http，但 v3.6 起 release 全局禁明文（network_security_config，
+     * 白名单仅回环/眼镜 IP/ip-api.com），MediaPlayer 加载 http 直链会被系统直接拒绝
+     * →「API 有搜索请求、但放不了歌」。实测同 URL 换 https 证书有效、返回一致（200/audio/mpeg），
+     * 故统一升级为 https，不动明文白名单。
+     */
+    private fun toHttps(url: String): String =
+        if (url.startsWith("http://")) "https://" + url.removePrefix("http://") else url
 
     /** 接口 duration 形如 "04:59"（也兼容 "1:02:03"）→ 毫秒；解析失败返回 0 */
     private fun parseDuration(raw: String): Long {

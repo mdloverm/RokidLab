@@ -74,6 +74,9 @@ class ConnectionRouteManager(private val context: Context) {
         /** 蓝牙隧道本地端口起始号（每个目标端口分配一个本地端口） */
         private const val BT_LOCAL_PORT_BASE = 5556
 
+        /** 眼镜 adbd 端口：全局唯一的「主机是否在线」探针（见 [probeWifiHost]） */
+        private const val GLASSES_ADB_PORT = 5555
+
         /** 线路缓存有效期：命中缓存直接复用上次线路，避免每轮重复 WiFi 探测（2s 超时） */
         private const val ROUTE_CACHE_TTL_MS = 60_000L
     }
@@ -111,22 +114,38 @@ class ConnectionRouteManager(private val context: Context) {
             // 1. 缓存命中：直接复用上次线路（隧道持续运行，start 幂等）。
             //    BT 线路额外校验：缓存生效期间隧道发生过 RFCOMM 建连失败（蓝牙断开），
             //    缓存立即失效强制重新探测，避免向死隧道继续引流最长 60s。
+            //    WiFi 线路同理（wifiDiedAfterCache）：缓存生效期间观测到 WiFi 侧连接失败
+            //    （手机 WiFi 掉线 / 眼镜离开 WiFi / 路由重启），缓存必须立即失效。
             routeCache[key]?.let { cached ->
                 val btDiedAfterCache = cached.route is ConnectionRoute.Bluetooth &&
                         tunnel.lastConnectFailureAt > cached.time
-                if (now - cached.time < ROUTE_CACHE_TTL_MS && !btDiedAfterCache) {
+                val wifiDiedAfterCache = cached.route is ConnectionRoute.Wifi &&
+                        lastWifiFailureAt > cached.time
+                if (now - cached.time < ROUTE_CACHE_TTL_MS && !btDiedAfterCache && !wifiDiedAfterCache) {
                     Log.i(TAG, "Route cache hit: ${cached.route}")
                     return@withContext cached.route
                 }
-                Log.i(TAG, "Route cache invalidated (expired=${now - cached.time >= ROUTE_CACHE_TTL_MS}, btFailed=$btDiedAfterCache)")
+                Log.i(
+                    TAG,
+                    "Route cache invalidated (expired=${now - cached.time >= ROUTE_CACHE_TTL_MS}, " +
+                        "btFailed=$btDiedAfterCache, wifiFailed=$wifiDiedAfterCache)",
+                )
                 routeCache.remove(key)
             }
 
             // 2. WiFi 探测
-            if (wifiIp.isNotBlank() && probeTcp(wifiIp, wifiPort)) {
+            //    判据是「主机可达」，不是「目标端口在监听」——这是 2026-09-13 实测纠正的核心错误：
+            //    眼镜上的服务除 adbd 外都是按需启动/空闲自毁的（WebServer 8848 空闲 90s 自毁、
+            //    投屏 7654/文本 7656 要用才起），实测从同网段 PC 探 192.168.1.2 时
+            //    5555=True 而 8848/7654/7656 全 False。旧逻辑拿目标端口探测当「WiFi 是否可用」，
+            //    于是这些功能 100% 被判「WiFi 不可达」→ 永远回落蓝牙隧道（"切到 WiFi 也走不了 WiFi"）。
+            //    现在：目标端口通 → 直接用；目标端口没通但 adbd 通 → 仍选 WiFi（乐观），
+            //    真实连接失败由调用方降级到蓝牙隧道重试一次（见 AiuiProject / PhoneMirrorService）。
+            if (wifiIp.isNotBlank() && (probeTcp(wifiIp, wifiPort) || probeWifiHost(wifiIp))) {
                 Log.i(TAG, "Route: WiFi $wifiIp:$wifiPort")
                 val route = ConnectionRoute.Wifi(wifiIp, wifiPort)
                 routeCache[key] = CachedRoute(route, now)
+                noteRoute(route)
                 return@withContext route
             }
             Log.i(TAG, "WiFi unreachable ($wifiIp:$wifiPort), trying BT...")
@@ -137,6 +156,7 @@ class ConnectionRouteManager(private val context: Context) {
                 Log.i(TAG, "Route: BT tunnel :$localPort → :$wifiPort")
                 val route = ConnectionRoute.Bluetooth(localPort, wifiPort)
                 routeCache[key] = CachedRoute(route, now)
+                noteRoute(route)
                 return@withContext route
             }
 
@@ -147,6 +167,51 @@ class ConnectionRouteManager(private val context: Context) {
 
     /** 清除线路缓存（隧道断线等异常后调用，强制重新探测） */
     fun clearRouteCache() = routeCache.clear()
+
+    /**
+     * 最近一次「WiFi 线路连接失败」的时间戳（WiFi 断线信号）。
+     *
+     * 与 [BtTunnelClient.lastConnectFailureAt] 对称：命中缓存的 WiFi 线路据此立即失效，
+     * 避免手机/眼镜 WiFi 断线后仍把新操作导向死地址最长 60s
+     * （用户报障「断网后要等一会儿才好」的根因）。
+     */
+    @Volatile
+    private var lastWifiFailureAt = 0L
+
+    /**
+     * 上报一次 WiFi 线路连接失败 —— 由「WiFi 首选失败」的调用方调用：
+     * 8848 上传/删除、7658 推送、7656 键盘、投屏 WiFi 降级、共享 ADB 会话 WiFi 建链失败。
+     *
+     * 语义 = 清缓存 + 记账：下一次 [resolve] 必须重新探测，并优先落到蓝牙隧道。
+     */
+    fun noteWifiFailure() {
+        lastWifiFailureAt = System.currentTimeMillis()
+        routeCache.clear()
+    }
+
+    /** 最近一次实际选中的线路（供设置页「当前线路」展示；null = 尚未解析过） */
+    @Volatile
+    var lastRoute: ConnectionRoute? = null
+        private set
+
+    /** 上一次已落日志的线路描述：只在**线路变化**时落面板，避免高频 resolve 刷屏 */
+    @Volatile
+    private var lastLoggedRoute: String? = null
+
+    /**
+     * 线路变化时落日志面板。
+     *
+     * 用户报障「切了 WiFi 还是慢 / 还是走蓝牙」时，App 内日志面板必须能直接看到当前线路 ——
+     * 旧实现只有 `Log.i`，面板里看不到，只能靠抓 logcat 猜。
+     */
+    private fun noteRoute(route: ConnectionRoute) {
+        lastRoute = route
+        val desc = route.toString()
+        if (desc != lastLoggedRoute) {
+            lastLoggedRoute = desc
+            LogCollector.i(TAG, "线路已选中：$desc")
+        }
+    }
 
     /**
      * 建立/复用到眼镜端指定端口（targetPort）的蓝牙隧道，返回手机侧本地端口。
@@ -174,6 +239,30 @@ class ConnectionRouteManager(private val context: Context) {
     } catch (_: Exception) {
         false
     }
+
+    /**
+     * 「眼镜在 WiFi 上在线吗」的唯一判据：探测 adbd（5555）。
+     *
+     * 用 adbd 而不是目标服务端口，是因为 adbd 是眼镜上唯一**常驻**监听的服务；
+     * 其余服务（8848 / 7654 / 7656 / 7658）都按需启动或空闲自毁，用它们探测
+     * 会把「WiFi 正常」误判成「WiFi 不可达」（2026-09-13 实测坐实，见 [resolve] 注释）。
+     *
+     * 前提已实测：`service.adb.tcp.port=5555` 下眼镜 adbd 实绑 `0.0.0.0`
+     * （同网段 PC 探 192.168.1.2:5555 = True），因此该探针在眼镜未连 WiFi 时为 False，
+     * 在已连 WiFi 且 adbd 开启时为 True，正好等价于「WiFi 路线可用」。
+     */
+    private fun probeWifiHost(wifiIp: String): Boolean {
+        if (wifiIp.isBlank()) return false
+        return probeTcp(wifiIp, GLASSES_ADB_PORT)
+    }
+
+    /**
+     * 「眼镜 adbd 现在能否走 WiFi 直连」的**只读探测**（不建蓝牙隧道、不写线路缓存、无副作用）。
+     *
+     * 供共享 ADB 会话做后台线路升级判定：会话一旦建在蓝牙隧道上就会一直复用，
+     * 只有拿到「WiFi 此刻确实可用」的结论才值得主动拆掉重建成 WiFi。
+     */
+    fun isWifiReachable(wifiIp: String): Boolean = probeWifiHost(wifiIp)
 
     /** 是否有已配对的眼镜设备（优先当前 A2DP 活跃连接的眼镜） */
     fun findBondedGlasses(): BluetoothDevice? = selectActiveGlasses(context)

@@ -6,6 +6,7 @@ import com.rokidlab.phone.adb.TimerScheduler
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import com.rokidlab.phone.hid.BluetoothHidManager
 import com.rokidlab.phone.util.LocalizationManager
+import com.rokidlab.phone.util.LogCollector
 import com.rokidlab.phone.R
 import android.app.Application
 import android.app.NotificationChannel
@@ -13,6 +14,10 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -150,6 +155,10 @@ class LabApplication : Application() {
 
         routeManager = ConnectionRouteManager(this)
 
+        // WiFi 接入/断开即时失效线路缓存：接入时清掉仍指向蓝牙的旧线路，断开时改走蓝牙隧道。
+        // （眼镜侧「离开 WiFi」不影响手机侧网络，此回调不触发，由 noteWifiFailure 失败驱动兜底。）
+        registerWifiRouteCacheInvalidator()
+
         timerScheduler = TimerScheduler(this)
 
         prefs = getSharedPreferences("rokidbrew", MODE_PRIVATE)
@@ -176,6 +185,49 @@ class LabApplication : Application() {
 
         // 创建通知渠道（必须提前创建，否则手机系统设置中通知开关不可用）
         createNotificationChannels()
+    }
+
+    /**
+     * 监听 WiFi 接入/断开，即时清除线路缓存。
+     *
+     * **断开**与 [ConnectionRouteManager.noteWifiFailure] 互补：本回调覆盖「手机侧」WiFi 断开（即时），
+     * 失败驱动失效覆盖「眼镜侧」离网（下一次操作时）。两者都失败时最多退化到 60s 缓存 TTL。
+     *
+     * **接入**此前漏了 —— 于是 WiFi 刚连上时缓存里仍是蓝牙线路（最长 60s 有效），
+     * 窗口期内的操作会全部继续走蓝牙隧道（「WiFi 都连上了为什么还是走蓝牙」正是这个缺口）。
+     * 这里对称处理：WiFi 一接入就清缓存，并让共享 ADB 会话立刻重探首选线路。
+     */
+    private fun registerWifiRouteCacheInvalidator() {
+        runCatching {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            // 按 WiFi 传输类型匹配，而不是只看「默认网络」：眼镜所在的 WiFi 常常是无外网的
+            // 局域网（手机热点 / 眼镜直连），此时手机可能仍把蜂窝当默认网络，
+            // 只盯默认网络会漏掉「眼镜 WiFi 接入 / 断开」这两个关键事件。
+            val wifiRequest = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .build()
+            cm.registerNetworkCallback(wifiRequest, object : ConnectivityManager.NetworkCallback() {
+                override fun onLost(network: Network) {
+                    routeManager.clearRouteCache()
+                    LogCollector.i(TAG, "WiFi 已断开，已清除线路缓存（下次操作重新探测线路）")
+                }
+
+                override fun onUnavailable() {
+                    routeManager.clearRouteCache()
+                    LogCollector.i(TAG, "WiFi 不可用，已清除线路缓存（下次操作重新探测线路）")
+                }
+
+                override fun onAvailable(network: Network) {
+                    routeManager.clearRouteCache()
+                    LogCollector.i(TAG, "WiFi 已接入，已清除线路缓存（下次操作优先走 WiFi）")
+                    // 共享 ADB 会话可能正挂在蓝牙隧道上，且可能已跑了很多轮轮询而不会被重新 resolve：
+                    // 立刻重探一次首选线路，探通后下一次取用即切换到 WiFi。
+                    if (::cxrL.isInitialized) cxrL.onWifiMaybeAvailable()
+                }
+            })
+        }.onFailure {
+            Log.w(TAG, "注册网络回调失败（WiFi 断线将退化为失败驱动失效）: ${it.message}")
+        }
     }
 
     private fun createNotificationChannels() {

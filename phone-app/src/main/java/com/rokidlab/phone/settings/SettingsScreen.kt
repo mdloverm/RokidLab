@@ -178,6 +178,32 @@ internal fun SettingsScreen(
             color = BrewTeal,
             onClick = actions.onSettingsOpenGlassesStatus,
         )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // ── 当前线路（WiFi / 蓝牙隧道）──
+        // 用户报障「切了 WiFi 还是走蓝牙」时，这里直接给出实际选中的线路，点击可强制重探。
+        val routeScope = rememberCoroutineScope()
+        var routeText by remember {
+            mutableStateOf(labApp.routeManager.lastRoute?.toString() ?: ctx.getString(R.string.route_unknown))
+        }
+        var routeProbing by remember { mutableStateOf(false) }
+        SettingsCard(
+            title = ctx.getString(R.string.route_current),
+            content = if (routeProbing) ctx.getString(R.string.route_probing) else routeText,
+            color = if (routeText.startsWith("WiFi")) BrewSuccess else BrewTeal,
+            enabled = !routeProbing,
+            onClick = {
+                routeProbing = true
+                routeScope.launch {
+                    val r = withContext(Dispatchers.IO) {
+                        labApp.routeManager.clearRouteCache()
+                        labApp.routeManager.resolve(labApp.glassesIp, 5555)
+                    }
+                    routeText = r.toString()
+                    routeProbing = false
+                }
+            },
+        )
         Spacer(modifier = Modifier.height(24.dp))
 
         // ── 更多 ──

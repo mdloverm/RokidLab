@@ -44,13 +44,13 @@
 - 不要在 Composable 函数内部定义类
 
 ### 6. Gradle 项目配置规范
-- `settings.gradle.kts` 中项目路径必须与实际目录结构一致
-- phone-app 依赖 RokidLink 模块，需在 `settings.gradle.kts` 中正确配置：
+- `settings.gradle.kts` 中项目路径必须与实际目录结构一致（仓库根为 `d:\rokidapp`）
+- phone-app 依赖 RokidLink 模块，需在根 `settings.gradle.kts` 中正确配置：
   ```kotlin
   include(":cxrl:RokidLab:phone-app")
-  include(":RokidLink")  // phone-app 的 build.gradle.kts 中引用 :RokidLink
+  include(":cxrl:RokidLab:RokidLink")  // phone-app 的 build.gradle.kts 中引用 :cxrl:RokidLab:RokidLink
   ```
-- 构建命令：`.\gradlew.bat :cxrl:RokidLab:phone-app:assembleDebug`
+- 构建命令（在仓库根 `d:\rokidapp` 执行）：`D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:assembleDebug`
 
 ### 7. ADB 设备规则
 - **安装 phone-app 到手机**：`adb -s 9fc033b0 install -r <apk>`

@@ -287,6 +287,14 @@ AI 下行链路里插入了一串固定等待：300+600+400+300+500+500 ≈ **2.
 
 ### C7. 传输无完整性校验
 
+> **复核（2026-09-13）：【`AdbShellClient` 侧已修，`AdbFileManagerClient` 侧仍在】。**
+> `pullFile` 新增 `expectedSize` 入参（由 `getRemoteFileSize` 的 `stat -c %s` 取得）并强制对账
+> 「收到字节数 == 远端大小」，不符即删除半成品、落 `LogCollector` 后 `return false`；
+> 同时新增 `pullFileSharded`：蓝牙隧道下单次 sync RECV 只能送出 1~2 个 64KB 分片，整文件拉取必然
+> 截断（实测 8,753,886 字节的 APK 只落 65536 / 131072），故改为眼镜侧 `split -b 65536` 切片、
+> 逐片对账后本机按序拼接，任一片拿不全即整体判失败。`AdbFileManagerClient.downloadFile` /
+> `downloadFileShell` 仍只写不校验。
+
 > **复核（2026-09-12）：【仍在】。** `AdbFileManagerClient.downloadFile`（332-487 行）虽累计 `totalReceived`（411 声明、444 累加），但仅用于进度日志（446-451 行），未与远端文件大小比对；shell 兜底 `downloadFileShell`（489-512 行）解码 base64 后直接落盘，亦无长度校验；`AdbShellClient.pullFile`（445-538 行）同样只写不校验（A4 修复只保证失败时删空文件，不校验完整性）。**对照上传侧已有校验**：`AdbFileManagerClient.kt:1173-1183` 用 `wc -c < path` 取 `remoteSize` 并比对 `remoteSize == file.length()`——下载侧确实缺失。
 
 `downloadFile` / `pullFile` 都没校验"收到字节数 == 远端文件大小"，静默截断不易察觉。
@@ -340,10 +348,19 @@ AI 下行链路里插入了一串固定等待：300+600+400+300+500+500 ≈ **2.
 
 > ⚠️ A2 根因更正：原审计写" screencap 输出 PNG 不是裸 RGBA"仅对带 `-p` 成立；原命令没带 `-p`，实际是裸 RGBA + 12 字节头，格式假设本没错，**真 bug 是硬编码 480×640 + 裸流缓冲装不下整帧**。最终仍选 PNG 方案（更稳）。
 
+### 修复进度（2026-09-13，v3.6「提取」功能残包）
+
+| 项 | 文件 | 状态 |
+|---|---|---|
+| **A4/C7** 提取产出 64KB 残包却报「已保存」 | `phone-app/.../adb/AdbShellClient.kt`（`pullFile` / `pullFileSharded`） | ✅ 已修：`pullFile` 按 `expectedSize`（远端 `stat -c %s`）对账，不符即删半成品 + 落 `LogCollector` 并 `return false`；新增 `pullFileSharded`（眼镜侧 `split -b 65536` → 逐片 RECV 对账 → 本机拼接），设备侧实测 134 片重组 md5 与源 APK 完全一致 |
+| **C7** `AdbFileManagerClient` 下载侧完整性校验 | `phone-app/.../adb/AdbFileManagerClient.kt:332-487` | ⏳ 仍在 |
+
+> 缺陷现象（2026-09-13 实测）：8,753,886 字节的 `com.rokidlab.rokidlink` APK 反复只落盘 65536 / 131072 字节（恒为 64KB 整数倍，且恰是源文件前缀，md5 对得上），UI 一律提示「已保存」。根因是这条蓝牙隧道下单条 sync 流送完 1~2 个 64KB 分片后就不再送数据、也不发 `DONE`/`FAIL`，而旧 `pullFile` 把「收到 CLSE」当成正常收尾返回 `true`。
+
 ### 待修（2026-09-12 复核确认【仍在】，需单独评审）
 
 - **C1** **63 处** sleep 编排协议时序（每次对话固定 ~2.6s）——属协议握手重排，需改为等眼镜端确认回执，改动面大，建议单独一轮。
 - **C2** 同一 JSON 解析 2~3 遍（`RokidLink/.../AiuiLinkActivity.kt:433-441`）——纯性能优化，低风险可后续做。
 - **C3** 主线程读 assets（`RokidLink/.../AiuiLinkActivity.kt:333-334`）——可移到后台线程，低风险。
-- **C7** 传输无完整性校验（`AdbFileManagerClient.downloadFile`:332-487 / `AdbShellClient.pullFile`:445-538 均未比对"收到字节数 == 远端大小"）——需加长度/CRC 校验，建议与 C8 一并做。
-- **C8** `pullFile`/`downloadFile` 双实现（`AdbShellClient.kt:445-538` 与 `AdbFileManagerClient.kt:332-487` 并存）——建议统一为一份，消除不一致温床。
+- **C7** 传输无完整性校验 —— **`AdbShellClient` 侧已修（2026-09-13）**：`pullFile` 按 `expectedSize` 对账、`pullFileSharded` 分片拉取；**`AdbFileManagerClient.downloadFile`:332-487 / `downloadFileShell`:489-512 仍未比对**，需补长度校验。
+- **C8** `pullFile`/`downloadFile` 双实现（`AdbShellClient.kt` 与 `AdbFileManagerClient.kt:332-487` 并存）——建议统一为一份，消除不一致温床。

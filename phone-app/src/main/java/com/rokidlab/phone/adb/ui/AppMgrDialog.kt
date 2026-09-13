@@ -64,6 +64,9 @@ fun AppMgrDialog(
         var selectedPkg by remember { mutableStateOf("") }
         var extractPkg by remember { mutableStateOf("") }
         var statusMsg by remember { mutableStateOf("") }
+        // 提取进度（0f~1f）与进行中标志：从眼镜拉 APK 是秒级到分钟级的长操作，必须有可见反馈
+        var extractProgress by remember { mutableStateOf(0f) }
+        var extracting by remember { mutableStateOf(false) }
 
         val filtered = if (search.isBlank()) packages else packages.filter { it.contains(search, ignoreCase = true) }
         val isSelectedFrozen = selectedPkg.isNotEmpty() && (selectedPkg in disabledPkgs)
@@ -130,7 +133,12 @@ fun AppMgrDialog(
                 )
             }
             scope.launch(Dispatchers.IO) {
-                val tmp = c?.pullApkToCache(pkg)
+                withContext(Dispatchers.Main) { extracting = true; extractProgress = 0f }
+                val tmp = c?.pullApkToCache(pkg) { done, total ->
+                    // 回调在 IO 线程，Compose 状态只能在主线程写
+                    if (total > 0) scope.launch(Dispatchers.Main) { extractProgress = done.toFloat() / total }
+                }
+                withContext(Dispatchers.Main) { extracting = false }
                 if (tmp == null) {
                     withContext(Dispatchers.Main) { statusMsg = ctx.getString(R.string.extract_pull_failed) }
                     return@launch
@@ -231,6 +239,25 @@ fun AppMgrDialog(
 
             // ── 状态消息 ──
             if (statusMsg.isNotEmpty()) { Spacer(Modifier.height(4.dp)); Text("  $statusMsg", color = if (statusMsg.startsWith(ctx.getString(R.string.error_label))) BrewRed else BrewCoral, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+
+            // ── 提取进度：拉取期间显示百分比与进度条 ──
+            if (extracting) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "  " + String.format(ctx.getString(R.string.extract_progress_fmt), (extractProgress * 100).toInt()),
+                    color = BrewCoral, fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+                Box(
+                    Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp))
+                        .background(BrewCoral.copy(alpha = 0.15f)),
+                ) {
+                    Box(
+                        Modifier.fillMaxWidth(extractProgress.coerceIn(0f, 1f)).height(4.dp)
+                            .background(BrewCoral),
+                    )
+                }
+            }
 
             // ── 计数 ──
             Spacer(Modifier.height(6.dp))

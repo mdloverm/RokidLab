@@ -3,6 +3,7 @@ package com.rokidlab.phone.mirror
 import com.rokidlab.phone.R
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.util.AppConfig
+import com.rokidlab.phone.util.LogCollector
 import com.rokidlab.phone.util.RomFingerprint
 import android.app.Notification
 import android.app.NotificationChannel
@@ -43,6 +44,26 @@ class PhoneMirrorService : Service() {
         private const val TAG = "PhoneMirrorService"
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "PhoneMirror"
+
+        /**
+         * WiFi 线路连续重连失败多少次后降级蓝牙隧道。
+         * 取 3：单次失败可能只是眼镜端投屏服务尚未监听（首连窗口），
+         * 连续 3 次（约 1s）基本可判定 WiFi 线路真的不可用了。
+         */
+        private const val BT_DOWNGRADE_AFTER_FAILURES = 3
+
+        /**
+         * 蓝牙线路转入后、允许尝试回切 WiFi 的静默时长（迟滞防抖）。
+         * 取 60s：刚降级就试探会在 WiFi 抖动时造成「降级→回切→再降级」的来回切，
+         * 每次切换都要重建虚拟屏，画面反复卡顿，比不切更糟。
+         */
+        private const val BT_DWELL_BEFORE_WIFI_UPGRADE_MS = 60_000L
+
+        /** 回切探测间隔（探测是 2s 超时的 TCP connect，不能太密） */
+        private const val WIFI_UPGRADE_PROBE_INTERVAL_MS = 20_000L
+
+        /** 连续多少次探测成功才真正回切（要求 2 次，滤掉单次抖动） */
+        private const val WIFI_UPGRADE_PROBE_SUCCESSES = 2
 
         fun startService(context: Context, glassesIp: String, port: Int, resultCode: Int, data: Intent, isBluetooth: Boolean = false) {
             val intent = Intent(context, PhoneMirrorService::class.java).apply {
@@ -147,6 +168,30 @@ class PhoneMirrorService : Service() {
     /** 是否蓝牙通道（影响投屏分辨率/帧率参数） */
     private var isBluetoothRoute: Boolean = false
 
+    /** 是否已从 WiFi 降级到蓝牙隧道（一次性，避免反复降级/重建虚拟屏） */
+    @Volatile
+    private var routeDowngraded: Boolean = false
+
+    /** WiFi 线路目标（眼镜 WiFi IP + 投屏端口）—— 降级/蓝牙启动后回切用；降级时会把 [glassesIp]/[port] 改写为本地隧道地址 */
+    private var wifiTargetIp: String = ""
+    private var wifiTargetPort: Int = AppConfig.DEFAULT_MIRROR_PORT
+
+    /** 当前蓝牙线路的起始时刻（回切迟滞基准；0 = 非蓝牙线路） */
+    @Volatile
+    private var btRouteSinceAt: Long = 0L
+
+    /** WiFi 回切探测的连续成功次数 */
+    @Volatile
+    private var wifiUpgradeProbeStreak: Int = 0
+
+    /** 上次 WiFi 回切探测时间戳 */
+    @Volatile
+    private var lastWifiUpgradeProbeAt: Long = 0L
+
+    /** 回切流程进行中标志（防探测/重建叠加） */
+    @Volatile
+    private var upgradingToWifi: Boolean = false
+
     /** L3 通道协调器（Phase 3：蓝牙租约上收到 domain/MirrorCoordinator） */
     private val mirrorCoordinator by lazy { com.rokidlab.phone.domain.MirrorCoordinator(application as LabApplication) }
     @Volatile
@@ -220,6 +265,18 @@ class PhoneMirrorService : Service() {
             intentLegacyParcelableExtra(intent)
         }
         isBluetoothRoute = intent.getBooleanExtra("isBluetooth", false)
+
+        // 记住 WiFi 目标（回切用）：蓝牙启动时 intent 里是隧道地址，真正的眼镜 WiFi IP 从全局配置取
+        val labApp = application as? LabApplication
+        if (isBluetoothRoute) {
+            wifiTargetIp = labApp?.glassesIp.orEmpty()
+            wifiTargetPort = labApp?.phoneMirrorPort?.toIntOrNull() ?: AppConfig.DEFAULT_MIRROR_PORT
+            btRouteSinceAt = System.currentTimeMillis()
+        } else {
+            wifiTargetIp = glassesIp
+            wifiTargetPort = port
+            btRouteSinceAt = 0L
+        }
 
         Log.i(TAG, "Received params: glassesIp=$glassesIp, port=$port, resultCode=$resultCode, BT=$isBluetoothRoute, data=${projectionData != null}")
 
@@ -638,7 +695,118 @@ class PhoneMirrorService : Service() {
             } catch (e: Exception) {
                 Log.w(TAG, "Socket reconnect failed ($reconnectAttempts): ${e.message}")
                 isReconnecting = false
+                // WiFi 线路中途失效（手机走出覆盖 / 路由重启）时，重连同一个 WiFi 地址永远不会成功；
+                // 连续失败 3 次后一次性降级到蓝牙隧道，否则投屏会一直卡在「已连接但没画面」直到用户手动重开。
+                if (reconnectAttempts >= BT_DOWNGRADE_AFTER_FAILURES && !isBluetoothRoute && !routeDowngraded) {
+                    downgradeToBluetoothTunnel()
+                }
             }
+        }
+    }
+
+    /**
+     * 线路降级：WiFi 直连失败后改走蓝牙隧道（一次性，不回头）。
+     *
+     * 降级时必须**同步切换投屏档位**（分辨率/帧率）：蓝牙带宽只有 WiFi 的零头，
+     * 沿用 WiFi 档位会导致每帧都塞不进隧道、发送缓冲区永远排满，界面表现是
+     * 「显示已连接，但画面一帧都不动」—— 比直接报连接失败更难排查。
+     */
+    private fun downgradeToBluetoothTunnel() {
+        val app = application as? LabApplication ?: return
+        // 定性为 WiFi 断线：清线路缓存并记账，避免其他消费者（AI 工具/上传）继续命中已死的 WiFi
+        app.routeManager.noteWifiFailure()
+        // 非蓝牙线路时 `port` 即眼镜侧目标端口（见 onStartCommand 的线路映射）
+        val targetPort = port
+        val localPort = app.routeManager.tunnelTo(targetPort) ?: run {
+            Log.w(TAG, "BT 隧道降级失败：无可用隧道")
+            return
+        }
+        routeDowngraded = true
+        isBluetoothRoute = true
+        btRouteSinceAt = System.currentTimeMillis()
+        wifiUpgradeProbeStreak = 0
+        lastWifiUpgradeProbeAt = 0L
+        glassesIp = "127.0.0.1"
+        port = localPort
+        mirrorBaseWidth = AppConfig.MIRROR_BT_WIDTH
+        mirrorBaseHeight = AppConfig.MIRROR_BT_HEIGHT
+        TARGET_FPS_RUNTIME = AppConfig.MIRROR_BT_FPS
+        Log.w(TAG, "WiFi 线路不可用，降级蓝牙隧道 127.0.0.1:$localPort → :$targetPort @ ${TARGET_FPS_RUNTIME}fps")
+        LogCollector.w(TAG, "投屏线路已从 WiFi 降级为蓝牙隧道（WiFi 重连连续失败）", null)
+        // 蓝牙线路要长期独占通道：先让共享 ADB 会话腾出 RFCOMM，再按 LONG_LIVED 占租约
+        runCatching { mirrorCoordinator.acquireBluetoothLease("phone-mirror") }
+        // 档位变了必须重建虚拟屏（ImageReader/发送缓冲区尺寸都要跟着变）
+        Thread {
+            runCatching { rebuildMirrorSession() }
+                .onFailure { Log.e(TAG, "Rebuild after BT downgrade failed: ${it.message}", it) }
+            reconnectSocket()
+        }.apply { name = "mirror-bt-downgrade"; isDaemon = true }.start()
+    }
+
+    /**
+     * 蓝牙线路 → WiFi 自动回切（带迟滞防抖）。
+     *
+     * 降级是「WiFi 断了」的被动结果；若 WiFi 恢复（走回覆盖范围 / 路由重启完成）后不回切，
+     * 整场投屏就只能停留在低码率蓝牙档位。回切条件刻意保守，避免来回切：
+     *   ① 转入蓝牙线路后静默 ≥ [BT_DWELL_BEFORE_WIFI_UPGRADE_MS]
+     *   ② 每 [WIFI_UPGRADE_PROBE_INTERVAL_MS] 才探测一次 adbd(5555)
+     *   ③ 连续 [WIFI_UPGRADE_PROBE_SUCCESSES] 次探测成功才真正回切
+     *
+     * 探测放独立线程：单次 TCP connect 最长 2s 超时，不能阻塞 5s 周期的看门狗。
+     */
+    private fun maybeUpgradeToWifi() {
+        if (!isMirrorRunning || !isBluetoothRoute || upgradingToWifi) return
+        val app = application as? LabApplication ?: return
+        val ip = wifiTargetIp.ifBlank { app.glassesIp }
+        if (ip.isBlank() || ip == "127.0.0.1") return
+        val now = System.currentTimeMillis()
+        if (btRouteSinceAt > 0 && now - btRouteSinceAt < BT_DWELL_BEFORE_WIFI_UPGRADE_MS) return
+        if (now - lastWifiUpgradeProbeAt < WIFI_UPGRADE_PROBE_INTERVAL_MS) return
+        lastWifiUpgradeProbeAt = now
+        Thread {
+            val reachable = runCatching { app.routeManager.isWifiReachable(ip) }.getOrDefault(false)
+            if (!reachable) {
+                wifiUpgradeProbeStreak = 0
+                return@Thread
+            }
+            wifiUpgradeProbeStreak += 1
+            Log.i(TAG, "WiFi 回切探测成功 $wifiUpgradeProbeStreak/$WIFI_UPGRADE_PROBE_SUCCESSES ($ip)")
+            if (wifiUpgradeProbeStreak >= WIFI_UPGRADE_PROBE_SUCCESSES) upgradeToWifiRoute(ip)
+        }.apply { name = "mirror-wifi-upgrade-probe"; isDaemon = true }.start()
+    }
+
+    /** 实际执行回切：恢复 WiFi 档位、释放蓝牙租约、重建虚拟屏并重连 */
+    private fun upgradeToWifiRoute(ip: String) {
+        if (upgradingToWifi) return
+        upgradingToWifi = true
+        try {
+            val app = application as? LabApplication
+            val targetPort = wifiTargetPort
+            LogCollector.i(TAG, "投屏线路已从蓝牙隧道回切为 WiFi 直连（连续 $WIFI_UPGRADE_PROBE_SUCCESSES 次探测成功）")
+            // 1. 释放蓝牙独占租约：RFCOMM 交还，共享 ADB 会话恢复可用
+            runCatching { mirrorCoordinator.releaseLease() }
+            // 2. 清线路缓存：降级期间缓存里是蓝牙条目，WiFi 已恢复，其他消费者也应重新决策
+            runCatching { app?.routeManager?.clearRouteCache() }
+            // 3. 切回 WiFi 档位（分辨率/帧率/缓冲随 isBluetoothRoute 在重建时生效）
+            isBluetoothRoute = false
+            routeDowngraded = false
+            wifiUpgradeProbeStreak = 0
+            btRouteSinceAt = 0L
+            reconnectAttempts = 0
+            glassesIp = ip
+            port = targetPort
+            mirrorBaseWidth = AppConfig.MIRROR_WIFI_WIDTH
+            mirrorBaseHeight = AppConfig.MIRROR_WIFI_HEIGHT
+            TARGET_FPS_RUNTIME = AppConfig.MIRROR_WIFI_FPS
+            Log.i(TAG, "WiFi 回切目标 $ip:$targetPort @ ${TARGET_FPS_RUNTIME}fps")
+            // 4. 档位变了必须重建虚拟屏，再重连
+            Thread {
+                runCatching { rebuildMirrorSession() }
+                    .onFailure { Log.e(TAG, "Rebuild after WiFi upgrade failed: ${it.message}", it) }
+                reconnectSocket()
+            }.apply { name = "mirror-wifi-upgrade"; isDaemon = true }.start()
+        } finally {
+            upgradingToWifi = false
         }
     }
 
@@ -659,6 +827,8 @@ class PhoneMirrorService : Service() {
                     break
                 }
                 if (!isMirrorRunning) break
+                // 蓝牙线路上周期性探测 WiFi 是否恢复（回切，带迟滞防抖，见 maybeUpgradeToWifi）
+                maybeUpgradeToWifi()
                 val sinceLastFrame = System.currentTimeMillis() - lastImageTime
                 if (sinceLastFrame > 30000) {
                     Log.w(TAG, "No frames for ${sinceLastFrame}ms, attempting recovery")

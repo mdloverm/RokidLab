@@ -7,7 +7,6 @@ package com.rokidlab.phone.glasses
 import android.content.Context
 import android.util.Log
 import com.rokid.cxr.Caps
-import com.rokidlab.phone.adb.AdbShellClient
 import com.rokid.cxr.link.CXRLink
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.connection.ConnectionRouteManager
@@ -51,6 +50,12 @@ internal class AiuiFrontendController(
         private const val AIUI_HOST_TOPIC = "rokidlab_aiui_host"
         /** 眼镜端 App 包名（宿主 Activity 与其私有目录都挂在它下面） */
         private const val GLASSES_PKG = "com.rokidlab.rokidlink"
+
+        /**
+         * 「.aix 已落盘、但宿主没能拉起」的返回串（区别于 null=推送失败、OK=已落盘且拉起指令已下发）。
+         * 上层消费方只认 "OK"，故任何其它取值都会如实显示为失败。
+         */
+        const val PUSHED_OPEN_FAILED = "PUSHED_OPEN_FAILED"
     }
 
     @Volatile
@@ -179,56 +184,29 @@ internal class AiuiFrontendController(
     fun sendAiuiHostMessage(json: String): Int = sendAiuiHostCmd("msg", json)
 
     /**
-     * 打开宿主，按「后台启动是否被允许」二选一（避免双开）：
-     *  - [balExempt]=true：RokidLink 有 SYSTEM_ALERT_WINDOW，走常规 bridge 指令；
-     *  - 否则：改用 ADB `am start` 直启 [HOST_ACTIVITY]（shell UID 不受 BAL 限制），
-     *    这是「眼镜没权限 / 点了没反应」的根治路径。
+     * 拉起宿主。
      *
-     * @return true = 至少有一条路径成功发起
+     * 宿主 Activity 是 exported=false，**只有同进程的 KeyButtonService 能拉起它** ——
+     * ADB `am start` 以 shell(uid 2000) 身份启非导出 Activity，会被 AMS 以
+     * `Permission Denial: ... not exported from uid` 拒绝。故唯一有效通道是
+     * [AIUI_HOST_TOPIC]：由眼镜端 KeyButtonService 在进程内 startActivity。
+     * 旧实现的 `am start` 兜底自 exported=false 起已必然失败，已移除。
+     *
+     * [balExempt] 仅用于诊断日志：后台启动限制(BAL)会拦「后台进程启动 Activity」，
+     * 授权 SYSTEM_ALERT_WINDOW 可豁免；但 KeyButtonBridgeActivity 常驻保持进程可见时
+     * 通常不受限，所以这里不再据此跳过通道，而是统一走 topic 试一次。
+     *
+     * @return true = 拉起指令已成功下发（链路在、CXR send 成功）；**不代表宿主一定已渲染**
      */
     private fun openHostBestEffort(
-        client: AdbShellClient?,
         fileName: String,
         launchParams: String?,
         balExempt: Boolean,
     ): Boolean {
-        if (balExempt) {
-            val r = openAiuiHost(fileName, launchParams)
-            if (r == 0) return true
-            Log.w(TAG, "bridge openAiuiHost returned $r, fallback to ADB am start")
-        }
-        val c = client ?: return false
-        return launchHostViaAdb(c, glassesHostPath(fileName), launchParams)
-    }
-
-    /** 眼镜端宿主缓存目录里的绝对路径（KeyButtonService 用 filesDir/aiui_host/<name> 解析） */
-    private fun glassesHostPath(fileName: String): String =
-        "/data/user/0/$GLASSES_PKG/files/aiui_host/$fileName"
-
-    /** 经 ADB `am start` 直启宿主 Activity（AiuiLinkActivity 为 exported=true，shell 可拉起） */
-    private fun launchHostViaAdb(
-        client: AdbShellClient,
-        glassesPath: String,
-        launchParams: String?,
-    ): Boolean = runCatching {
-        // 单引号包裹参数：JSON 用双引号，去掉极端情况下的单引号即可安全塞进 shell
-        val safePath = glassesPath.replace("'", "")
-        val cmd = buildString {
-            append("am start -n $GLASSES_PKG/.AiuiLinkActivity")
-            append(" --es aix_path '").append(safePath).append("'")
-            if (!launchParams.isNullOrBlank()) {
-                append(" --es launch_params '").append(launchParams.replace("'", "")).append("'")
-            }
-        }
-        val out = client.executeShellCommand(cmd, 10_000)
-        val ok = out?.contains("Error", ignoreCase = true) != true &&
-            out?.contains("Exception", ignoreCase = true) != true &&
-            out?.contains("does not exist", ignoreCase = true) != true
-        Log.i(TAG, "launchHostViaAdb(ok=$ok): ${out?.trim()?.take(160)}")
-        ok
-    }.getOrElse {
-        Log.e(TAG, "launchHostViaAdb failed", it)
-        false
+        val r = openAiuiHost(fileName, launchParams)
+        if (r == 0) return true
+        Log.w(TAG, "openHostBestEffort: openAiuiHost returned $r (balExempt=$balExempt) -> 宿主未能拉起")
+        return false
     }
 
     private fun sendAiuiHostCmd(cmd: String, arg: String?, arg2: String? = null): Int {
@@ -258,7 +236,7 @@ internal class AiuiFrontendController(
      * （RokidLink 为 debug 构建，run-as 可写私有目录；AiuiPackageServer 目录同名，
      * handleAiuiHost open 直接命中）。BT/adb socket 仅作兜底。
      *
-     * @return null=失败；"OK"=已落盘（openAfter=true 会自动拉起宿主渲染）
+     * @return null=推送失败；[PUSHED_OPEN_FAILED]=已落盘但宿主没能拉起；"OK"=已落盘且拉起指令已下发
      */
     fun pushAixToRokidLinkHost(
         aixFile: File,
@@ -284,31 +262,36 @@ internal class AiuiFrontendController(
         val name = aixFile.name
         val body = aixFile.readBytes()
 
+        // Android 12+ 后台启动限制(BAL)：RokidLink 常驻前台服务，拉起 AiuiLinkActivity 会被系统
+        // 以 allowBackgroundActivityStart=false 静默拒绝（用户侧=「眼镜没权限 / 没反应」）。
+        // 先授权并**复核**，仅用于诊断日志 —— 宿主唯一可用的拉起通道是同进程 topic
+        // （见 openHostBestEffort），AM 直启路径已随 exported=false 失效。
+        var balExempt = false
         if (client != null) {
-            // Android 12+ 后台启动限制(BAL)：RokidLink 常驻前台服务，拉起 AiuiLinkActivity 会被系统
-            // 以 allowBackgroundActivityStart=false 静默拒绝（用户侧=「眼镜没权限 / 没反应」）。
-            // 先授权并**复核**；复核不通过就改用 ADB 直启宿主（shell UID 不受 BAL 限制）。
             com.rokidlab.phone.platform.ShellOps.grantSystemAlertWindow(client, GLASSES_PKG)
-            val balExempt =
+            balExempt =
                 (com.rokidlab.phone.platform.ShellOps.isSystemAlertWindowAllowed(client, GLASSES_PKG)
                     as? com.rokidlab.phone.platform.Capability.Available)?.value == true
             if (!balExempt) {
-                Log.w(TAG, "glasses BAL exemption NOT confirmed -> host will be launched via ADB am start")
+                Log.w(TAG, "glasses BAL exemption NOT confirmed (host launch may be blocked by BAL)")
             }
             // 通道 1（主）：run-as 分块 base64 落盘（统一收口到 L0 ShellOps）。
             when (val push = com.rokidlab.phone.platform.ShellOps.pushFileRunAs(
                 client, GLASSES_PKG, "files/aiui_host", name, body)) {
                 is com.rokidlab.phone.platform.Capability.Available -> {
-                    if (openAfter) openHostBestEffort(client, name, launchParams, balExempt)
-                    return "OK"
+                    // 落盘成功 ≠ 拉起成功：拉起失败必须如实上报，避免上层把「点了没反应」
+                    // 显示成「打开成功」（旧实现无条件 return "OK"）。
+                    val opened = !openAfter || openHostBestEffort(name, launchParams, balExempt)
+                    return if (opened) "OK" else PUSHED_OPEN_FAILED
                 }
                 is com.rokidlab.phone.platform.Capability.Unavailable ->
                     Log.w(TAG, "pushAixToRokidLinkHost($name): run-as write failed (${push.reason}), fallback socket push...")
             }
         }
-        // 通道 2（兜底）：7658 socket —— 蓝牙隧道直连 AiuiPackageServer 或 adb smart socket。
-        // 前者要求 adb 未占用唯一 RFCOMM，后者要求 adbd 放行 tcp 转发，多数环境不可用，
-        // 仅保底（如 Wi-Fi 直连 adb 且隧道空闲）。
+        // 通道 2（兜底）：7658 socket —— **WiFi 直连优先，失败降级蓝牙隧道**，最后再试 adb smart socket。
+        // 说明：WiFi 直连是否可用由 routeManager 判定（adbd 可达即认 WiFi 可用，见 ConnectionRouteManager）；
+        // 由于 AiuiPackageServer(7658) 在 RokidLink 内按需启动，WiFi 上可能 ECONNREFUSED，故任何
+        // 连接异常都必须降级到蓝牙隧道重试，而不是直接判定失败（否则表现就是「切了 WiFi 反而推不进去」）。
         val nameB = name.toByteArray(Charsets.UTF_8)
         val frame = java.io.ByteArrayOutputStream(body.size + nameB.size + 6).apply {
             write((nameB.size shr 8) and 0xFF); write(nameB.size and 0xFF)
@@ -318,26 +301,22 @@ internal class AiuiFrontendController(
             write(body)
         }.toByteArray()
         var ack: String? = null
-        routeManager.tunnelTo(7658)?.let { localPort ->
-            Log.i(TAG, "pushAixToRokidLinkHost: BT tunnel 127.0.0.1:$localPort → :7658")
-            ack = try {
-                java.net.Socket().apply {
-                    connect(java.net.InetSocketAddress("127.0.0.1", localPort), 5_000)
-                    tcpNoDelay = true
-                    soTimeout = 20_000
-                }.use { sock ->
-                    val out = sock.getOutputStream()
-                    out.write(frame)
-                    out.flush()
-                    val resp = ByteArray(64)
-                    val n = sock.getInputStream().read(resp)
-                    if (n <= 0) null else String(resp, 0, n, Charsets.UTF_8).trim()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "pushAixToRokidLinkHost: BT push failed: ${e.message}")
-                null
+        // 2a. WiFi 直连
+        val wifiIp = app.glassesIp
+        if (wifiIp.isNotBlank() && routeManager.isWifiReachable(wifiIp)) {
+            Log.i(TAG, "pushAixToRokidLinkHost: WiFi direct $wifiIp:7658")
+            ack = pushFrameOverTcp(wifiIp, 7658, frame)
+            // WiFi 首选失败 → 记账，使后续 resolve 不再把新操作导向已死的 WiFi
+            if (ack == null) routeManager.noteWifiFailure()
+        }
+        // 2b. 蓝牙隧道兜底（WiFi 不可达 / WiFi 连接失败）
+        if (ack == null) {
+            routeManager.tunnelTo(7658)?.let { localPort ->
+                Log.i(TAG, "pushAixToRokidLinkHost: BT tunnel 127.0.0.1:$localPort → :7658")
+                ack = pushFrameOverTcp("127.0.0.1", localPort, frame)
             }
         }
+        // 2c. adb smart socket（最末兜底：要求 adbd 放行 tcp 转发，多数环境不可用）
         if (ack == null) {
             try {
                 client?.let { ack = it.sendTcpStream(7658, frame) }
@@ -346,16 +325,36 @@ internal class AiuiFrontendController(
             }
         }
         Log.i(TAG, "pushAixToRokidLinkHost($name) fallback ack=${ack?.take(16)}")
-        if (ack?.trim() == "OK" && openAfter) {
-            // 先走常规 bridge 指令；被系统拦下（BAL）时再用 ADB 直启兜底
-            if (openAiuiHost(name, launchParams) != 0) {
-                client?.let {
-                    Log.w(TAG, "bridge openAiuiHost failed after socket push, fallback to ADB am start")
-                    launchHostViaAdb(it, glassesHostPath(name), launchParams)
-                }
-            }
+        if (ack?.trim() == "OK" && openAfter && !openHostBestEffort(name, launchParams, balExempt)) {
+            // 推送成功但宿主没能拉起：如实返回「已推送未打开」，不再让上层显示「打开成功」
+            return PUSHED_OPEN_FAILED
         }
         return ack
+    }
+
+    /**
+     * 将 .aix 帧（名字长度+名字+体长+体）写入指定 TCP 端点并读回 ACK。
+     *
+     * WiFi 直连与蓝牙隧道共用同一帧格式，仅目标地址不同，故抽出复用。
+     *
+     * @return 服务端 ACK 文本（trim 后）；连接/读失败返回 null
+     */
+    private fun pushFrameOverTcp(host: String, port: Int, frame: ByteArray): String? = try {
+        java.net.Socket().apply {
+            connect(java.net.InetSocketAddress(host, port), 5_000)
+            tcpNoDelay = true
+            soTimeout = 20_000
+        }.use { sock ->
+            val out = sock.getOutputStream()
+            out.write(frame)
+            out.flush()
+            val resp = ByteArray(64)
+            val n = sock.getInputStream().read(resp)
+            if (n <= 0) null else String(resp, 0, n, Charsets.UTF_8).trim()
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "pushAixToRokidLinkHost: tcp push $host:$port failed: ${e.message}")
+        null
     }
 
     /**

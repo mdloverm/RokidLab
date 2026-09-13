@@ -8,8 +8,12 @@ import com.rokidlab.phone.util.LogCollector
 /**
  * ADB 端点（IP + 端口）。用简单数据类而非 L1 的 ConnectionRoute，
  * 让 L0 不反向依赖连接层——路由决策由调用方在 provider lambda 里完成。
+ *
+ * @param viaBluetooth 该端点是否经蓝牙隧道（`127.0.0.1:本地端口` → RFCOMM → 眼镜）。
+ *   显式标注而非靠 `ip == "127.0.0.1"` 猜 —— 线路升级判定需要区分「已在 WiFi 上」与
+ *   「还挂在蓝牙隧道上」，这是升级逻辑的唯一依据。
  */
-data class AdbEndpoint(val ip: String, val port: Int)
+data class AdbEndpoint(val ip: String, val port: Int, val viaBluetooth: Boolean = false)
 
 /**
  * L0 platform/AdbTransport —— 全 App 共享 ADB shell 会话的**唯一所有者**（Phase 2 收尾）。
@@ -33,19 +37,77 @@ data class AdbEndpoint(val ip: String, val port: Int)
  * @param contextProvider 应用 Context（传 Application，勿持 Activity）
  * @param endpointProvider 解析当前可用 ADB 端点（WiFi 直连优先，失败回落蓝牙隧道）；
  *   返回 null 表示当前无可用路径。由调用方注入（内部可含路由缓存/阻塞解析）。
- * @param onRouteFailure 建链失败时的回调（调用方据此清理线路缓存，下次强制重新探测）
+ * @param onRouteFailure 线路缓存失效回调（建链失败、或后台线路升级成功后调用，
+ *   由调用方清理缓存使下一次探测重新决策）。默认空实现。
+ * @param preferredEndpointProvider 首选（WiFi 直连）端点的**只读**探测，用于后台线路升级；
+ *   必须无副作用、不建蓝牙隧道、可快速失败；返回 null 表示首选线路当前不可用。
+ *   为 null 表示不做升级（会话一旦建立就固定在该端点上，即旧行为）。
+ * @param onWifiFailure WiFi 端点建链失败回调（记录 WiFi 断线信号，使线路缓存中的 WiFi 立即失效）。
+ *   仅当失败端点**未经蓝牙隧道**（即 WiFi 直连）时触发。
  */
 class AdbTransport(
     private val contextProvider: () -> Context,
     private val endpointProvider: () -> AdbEndpoint?,
     private val onRouteFailure: () -> Unit = {},
+    private val preferredEndpointProvider: (() -> AdbEndpoint?)? = null,
+    private val onWifiFailure: () -> Unit = {},
 ) {
     private companion object {
         const val TAG = "AdbTransport"
+
+        /**
+         * 后台线路升级的探测间隔。
+         *
+         * 会话一旦建在蓝牙隧道上就会被无限复用（`isConnected()` 为真直接返回），
+         * 于是「先连蓝牙、后连 WiFi」时永远享受不到 WiFi 带宽。这里每 30s 探一次 WiFi，
+         * 就绪即拆掉重建。间隔不能太短：每次探测是 2s 超时的 TCP connect，
+         * 而 `get()` 是 AI 工具的高频入口。
+         */
+        const val UPGRADE_PROBE_INTERVAL_MS = 30_000L
+
+        /**
+         * 会话空闲超过该时长后，取用前对 WiFi 端点做一次快速存活校验。
+         *
+         * 取 5s：高频连续调用（<5s 间隔）不应为每次取会话都付一次 TCP 往返；
+         * 而「刚断网后用户再发指令」这类场景，间隔基本都大于 5s，正好被拦下。
+         */
+        const val WIFI_LIVENESS_IDLE_MS = 5_000L
+
+        /**
+         * 存活校验的 TCP 超时。必须远小于命令期超时（10~15s）：
+         * 校验的意义就是「宁可花 2s 提前发现线路死了改走蓝牙，也不要让调用方等 10s 后失败」。
+         */
+        const val WIFI_LIVENESS_TIMEOUT_MS = 2_000
     }
 
     @Volatile
     private var client: AdbShellClient? = null
+
+    /** 当前会话实际建在哪个端点上（供升级判定；null = 无常驻会话） */
+    @Volatile
+    private var currentEndpoint: AdbEndpoint? = null
+
+    /** 上次后台升级探测时间戳（节流用） */
+    @Volatile
+    private var lastUpgradeProbeAt = 0L
+
+    /** 升级探测进行中标志：防止探测/重建叠加 */
+    @Volatile
+    private var upgrading = false
+
+    /**
+     * 首选（WiFi）线路已探测可用，等待切换到它的标志。
+     *
+     * 探测线程**只置位、不释放会话**：真正的拆建发生在 [get] 里、且必须确认会话空闲
+     * （见 [AdbShellClient.isBusy]）。旧实现由探测线程直接 `release()`，会在调用方
+     * 正在传输时把会话掐断（8.7MB 提取撞上过）。
+     */
+    @Volatile
+    private var upgradeReady = false
+
+    /** 上次取用会话的时刻（WiFi 存活校验的空闲判据） */
+    @Volatile
+    private var lastUsedAt = 0L
 
     /** 当前共享客户端（可能为 null）；仅用于诊断/日志。 */
     val currentOrNull: AdbShellClient? get() = client
@@ -53,35 +115,174 @@ class AdbTransport(
     /**
      * 取共享 ADB shell 会话：已连接则直接复用；断开/缺失则按当前端点重建。
      * @return null = 无可用路径或建链失败（调用方应降级，**不要**自行新建会话）
+     *
+     * **锁的边界**（[AdbShellClient.isBusy] 之外的关键约束）：类锁只保护状态读写与建链，
+     * 两类阻塞操作被刻意留在锁外 —— ① [cachedWifiRouteIfDead] 的 TCP 存活探测（最长 2s）；
+     * ② `endpointProvider()` 内部的 `runBlocking { resolve }`。旧实现把整个方法 `@Synchronized`，
+     * 于是「空闲 >5s 后的取用」会持锁等满一次 TCP 往返，并发 `get()` / `release()` 全被堵在锁外
+     * （AI 工具取会话变慢；长连接消费者上场前的 `release()` 也被拖住）。
      */
-    @Synchronized
     fun get(): AdbShellClient? {
-        client?.let {
-            if (it.isConnected()) return it
-            runCatching { it.disconnect() }
-            client = null
+        // ── 锁外①：WiFi 缓存会话的空闲存活校验（只读 volatile 快照 + 一次 TCP 探测）──
+        val deadEndpoint = cachedWifiRouteIfDead()
+        if (deadEndpoint != null) {
+            synchronized(this) {
+                // 复核：探测期间会话可能已被其它线程重建，仅在端点未被替换时释放
+                if (currentEndpoint == deadEndpoint) {
+                    Log.i(TAG, "WiFi 缓存线路已死，释放共享 ADB 会话等待重建")
+                    release()
+                }
+            }
         }
+
+        // ── 锁内①：快路径，命中可用会话直接返回（无阻塞 IO）──
+        synchronized(this) {
+            client?.let { cached ->
+                if (cached.isConnected()) {
+                    lastUsedAt = System.currentTimeMillis()
+                    // 会话挂在蓝牙隧道、首选（WiFi）线路已探测就绪、且当前没有命令/传输在跑：
+                    // 「本次」就拆掉重建成 WiFi，而不是先交出蓝牙会话、后台再升级 ——
+                    // 后者会让 WiFi 刚通后的第一次操作（往往就是用户那次提取）仍旧跑在蓝牙上。
+                    if (currentEndpoint?.viaBluetooth == true && upgradeReady && !cached.isBusy()) {
+                        Log.i(TAG, "WiFi 已就绪且会话空闲，本次直接重建共享 ADB 会话到 WiFi")
+                        upgradeReady = false
+                        // 顺序要紧：先清线路缓存再释放会话（否则重建会命中缓存里仍是蓝牙的旧线路）
+                        onRouteFailure()
+                        release()
+                    } else {
+                        // 命中缓存会话时才值得考虑升级：会话断开本就会走下面的重新解析。
+                        maybeUpgradeRoute()
+                        return cached
+                    }
+                } else {
+                    runCatching { cached.disconnect() }
+                    client = null
+                    currentEndpoint = null
+                }
+            }
+        }
+
+        // ── 锁外②：解析端点（内部 runBlocking resolve，同样可能阻塞）──
+        // 并发解析最多造成重复探测，不会重复建链 —— 由下面的二次确认兜住。
         val endpoint = endpointProvider() ?: return null
-        return try {
-            val c = AdbShellClient(contextProvider(), endpoint.ip, endpoint.port)
-            if (c.connect()) {
-                client = c
-                Log.i(TAG, "shared adb session established -> ${endpoint.ip}:${endpoint.port}")
-                c
-            } else {
-                runCatching { c.disconnect() }
-                // 连接失败（含蓝牙隧道 RFCOMM 卡顿/半开）时通知调用方清理线路缓存
-                onRouteFailure()
-                Log.w(TAG, "shared adb session connect failed -> ${endpoint.ip}:${endpoint.port}")
+
+        // ── 锁内②：建链。二次确认避免并发重复建链（第二条 RFCOMM 会话会把第一条挤断）──
+        synchronized(this) {
+            client?.let { cached -> if (cached.isConnected()) return cached }
+            return try {
+                val c = AdbShellClient(contextProvider(), endpoint.ip, endpoint.port)
+                if (c.connect()) {
+                    client = c
+                    currentEndpoint = endpoint
+                    upgradeReady = false
+                    lastUsedAt = System.currentTimeMillis()
+                    Log.i(TAG, "shared adb session established -> ${endpoint.ip}:${endpoint.port}")
+                    c
+                } else {
+                    runCatching { c.disconnect() }
+                    // 连接失败（含蓝牙隧道 RFCOMM 卡顿/半开）时通知调用方清理线路缓存
+                    onRouteFailure()
+                    // WiFi 端点失败额外记账：让线路缓存里的 WiFi 线路立即失效，
+                    // 下一次 resolve 重新探测并优先落到蓝牙隧道
+                    if (!endpoint.viaBluetooth) onWifiFailure()
+                    Log.w(TAG, "shared adb session connect failed -> ${endpoint.ip}:${endpoint.port}")
+                    null
+                }
+            } catch (e: Exception) {
+                // 原先 runCatching{...}.getOrNull() 把异常整个吞掉：connect() 抛出的真实原因
+                // （RFCOMM 被栈拒绝 / 握手超时 / 协议不匹配）在 App 内日志里完全看不到，
+                // 上层只看到「无可用路径」。此处补落面板。
+                LogCollector.e(TAG, "shared adb session 建链异常 -> ${endpoint.ip}:${endpoint.port}", e)
+                // WiFi 端点抛异常同样记账，否则下次仍会命中已死的 WiFi 线路
+                if (!endpoint.viaBluetooth) onWifiFailure()
                 null
             }
-        } catch (e: Exception) {
-            // 原先 runCatching{...}.getOrNull() 把异常整个吞掉：connect() 抛出的真实原因
-            // （RFCOMM 被栈拒绝 / 握手超时 / 协议不匹配）在 App 内日志里完全看不到，
-            // 上层只看到「无可用路径」。此处补落面板；行为不变（仍返回 null，不额外清路由缓存）。
-            LogCollector.e(TAG, "shared adb session 建链异常 -> ${endpoint.ip}:${endpoint.port}", e)
-            null
         }
+    }
+
+    /**
+     * 缓存会话的线路存活快速校验（仅 WiFi 直连线路）。
+     *
+     * @return 被判死的端点（仅 WiFi 直连线路，且空闲超过阈值后探测失败）；无需校验或线路存活时返回 null。
+     *
+     * 背景：WiFi 骤断时那条已建立的 TCP socket 在本机侧**仍被标记为 connected**
+     * （要等一次写失败或心跳才发现），于是 [get] 会把这条「看起来健康」的死会话交出去，
+     * 调用方的第一个命令必然超时失败。这里在会话空闲超过 [WIFI_LIVENESS_IDLE_MS] 时，
+     * 先用一次 [WIFI_LIVENESS_TIMEOUT_MS] 超时的 TCP 探测提前拦掉：失败即上报 WiFi 失败
+     * （清线路缓存）并由 [get] 释放会话 —— 下一次建链自然落到蓝牙隧道。
+     *
+     * 蓝牙线路不做此校验：那是 RFCOMM，无 TCP 语义；且已有心跳/RFCOMM 失败驱动。
+     *
+     * **本方法在类锁外调用**，返回端点而非直接释放会话，是为了把「释放」的裁决权交回
+     * 持锁方，并允许其在端点已被替换时放弃释放（见 [get]）。
+     */
+    private fun cachedWifiRouteIfDead(): AdbEndpoint? {
+        val ep = currentEndpoint ?: return null
+        if (ep.viaBluetooth) return null
+        val idle = System.currentTimeMillis() - lastUsedAt
+        if (lastUsedAt > 0 && idle < WIFI_LIVENESS_IDLE_MS) return null
+        if (probeTcp(ep.ip, ep.port, WIFI_LIVENESS_TIMEOUT_MS)) return null
+        Log.w(TAG, "WiFi 会话存活校验失败（空闲 ${idle}ms），判定线路已死 -> ${ep.ip}:${ep.port}")
+        LogCollector.w(TAG, "WiFi 线路失联，共享 ADB 会话将改走蓝牙隧道", null)
+        onWifiFailure()
+        return ep
+    }
+
+    /** 单次可达性探测（不建链、无副作用） */
+    private fun probeTcp(ip: String, port: Int, timeoutMs: Int): Boolean = try {
+        java.net.Socket().use { s ->
+            s.connect(java.net.InetSocketAddress(ip, port), timeoutMs)
+            true
+        }
+    } catch (_: Exception) {
+        false // catch-ok: 探测失败即视为不可达
+    }
+
+    /**
+     * 后台线路升级探测：会话建在蓝牙隧道上时，探测 WiFi 直连是否已就绪，就绪则置
+     * [upgradeReady]，由下一次 [get] 在会话空闲时完成切换。
+     *
+     * 为什么必须这么做 —— 蓝牙隧道单条 RFCOMM 实测吞吐只有 WiFi 直连的零头，
+     * 而「先连蓝牙、眼镜随后接入同一 WiFi」是最常见的现场：不升级的话，
+     * 用户即使把设置里的 IP 填对了、WiFi 确实通了，这条共享 ADB 会话（AI 工具主通道）
+     * 仍然一辈子跑在蓝牙上（`get()` 见 `isConnected()` 即返回，永不重新 resolve）。
+     *
+     * 探测放在独立线程：`get()` 是 AI 工具高频入口，TCP 探测最长要等 2s 超时，不能阻塞它。
+     * **本方法自身绝不释放会话** —— 释放交给 [get]，那里能确认会话空闲，不会掐断进行中的传输。
+     */
+    private fun maybeUpgradeRoute() {
+        val probe = preferredEndpointProvider ?: return
+        val current = currentEndpoint ?: return
+        if (!current.viaBluetooth) return // 已在 WiFi 直连上，无需升级
+        val now = System.currentTimeMillis()
+        if (upgrading || now - lastUpgradeProbeAt < UPGRADE_PROBE_INTERVAL_MS) return
+        lastUpgradeProbeAt = now
+        upgrading = true
+        Thread {
+            try {
+                val better = runCatching { probe() }.getOrNull() ?: return@Thread
+                if (better == current) return@Thread
+                upgradeReady = true
+                Log.i(TAG, "WiFi 就绪，共享 ADB 会话将在下次空闲取用时切换到 ${better.ip}:${better.port}")
+                LogCollector.i(TAG, "检测到 WiFi 直连可用，ADB 会话将在下次空闲取用时从蓝牙升级")
+            } finally {
+                upgrading = false
+            }
+        }.apply { name = "adb-route-upgrade"; isDaemon = true }.start()
+    }
+
+    /**
+     * 首选（WiFi）线路可能刚刚可用 —— 由网络回调（手机侧 WiFi 重新接入）触发。
+     *
+     * 立即重探一次（跳过 30s 节流），探通则置 [upgradeReady]，下一次 [get] 即可切换。
+     * 没有这个入口时，「WiFi 刚连上」要等满一个节流窗口、且期间必须恰好有 `get()` 调用
+     * 才会被探测到 —— 这正是「WiFi 已经连了却还在走蓝牙」的现场。
+     *
+     * 非阻塞：探测在独立线程；不在蓝牙会话上时直接返回。
+     */
+    fun onPreferredRouteMaybeAvailable() {
+        lastUpgradeProbeAt = 0L
+        maybeUpgradeRoute()
     }
 
     /** 主动释放共享会话（长连接消费者上场前调用），下次 [get] 自动重建。 */
@@ -89,6 +290,8 @@ class AdbTransport(
     fun release() {
         client?.let { runCatching { it.disconnect() } }
         client = null
+        currentEndpoint = null
+        upgradeReady = false
         Log.i(TAG, "shared adb session released")
     }
 
@@ -97,5 +300,7 @@ class AdbTransport(
     fun shutdown() {
         client?.let { runCatching { it.disconnect() } }
         client = null
+        currentEndpoint = null
+        upgradeReady = false
     }
 }

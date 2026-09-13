@@ -20,7 +20,9 @@ internal fun MainActivity.buildStoreActions(): StoreActions = StoreActions(
         onRefresh = { refreshStoreIndex(manual = true) },
         onHostAppSelected = ::selectRokidHostApp,
         onGoToGuideStep1 = { goToGuideStep1() },
-        onAuthorize = { runWithPrerequisites { cxrL.requestAuthorization() } },
+        // 授权按钮必须直接调 requestAuthorization()，不可用 runWithPrerequisites 包装：
+        // 包装会导致授权成功后死循环拉起授权页（主页已按此修复，此处为引导入口同规收敛）
+        onAuthorize = { cxrL.requestAuthorization() },
         onInstall = { app, target ->
             if (target == "glasses") {
                 runWithPrerequisites { installArtifact(app, target) }

@@ -507,32 +507,35 @@ RokidLab/
 
 - **多语种规则**: 所有用户可见文本必须使用 `R.string.xxx` 引用语言包，禁止硬编码（例外：品牌名、技术术语、作者信息）
 - **弹窗样式规范**: 所有弹窗统一使用 `BrewDialog`，传入模块色 `color` 参数，自动应用彩色标题栏 + 装饰线 + 彩色边框
-- **Gradle 配置**: `settings.gradle.kts` 中模块路径为 `include(":phone-app")` 和 `include(":RokidLink")`
+- **Gradle 配置**: 仓库根 `d:\rokidapp\settings.gradle.kts` 中模块路径为 `include(":cxrl:RokidLab:phone-app")` 和 `include(":cxrl:RokidLab:RokidLink")`
 - **资源管理**: 定期清理未使用的资源文件，避免打包冗余
 
 ## 构建
 
 ```powershell
+# 全部命令在仓库根 d:\rokidapp 执行
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
+
 # 构建手机应用（自动同步最新 RokidLink APK 到 assets）
-.\gradlew :phone-app:assembleDebug
+D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:assembleDebug
 
 # 仅构建眼镜端服务
-.\gradlew :RokidLink:assembleDebug
+D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:RokidLink:assembleDebug
 
 # 仅同步 RokidLink APK 到 phone-app assets（不重新构建手机端）
-.\gradlew :phone-app:buildRokidLinkDebug
+D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:buildRokidLinkDebug
 ```
 
 ### 单元测试
 
 ```powershell
 # 双端 JVM 单测（当前 14 个测试类 / 155 个用例）
-D:\gradle-8.7\bin\gradle.bat :phone-app:testDebugUnitTest :RokidLink:testDebugUnitTest --offline
+D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:testDebugUnitTest :cxrl:RokidLab:RokidLink:testDebugUnitTest --offline
 ```
 
 覆盖 ADB sync 协议帧、`pullFile` FAIL 分支、HID 描述符字节与 `normalize`、`AiChannel` 跨端载荷矩阵、`ToolRiskMap` 完整性、聊天历史落盘格式（JSONL / 旧格式迁移）。
 
-> ⚠️ **必须在项目根 `d:\rokidapp\cxrl\RokidLab` 执行**（该目录才是含 `:phone-app` / `:RokidLink` 的 Gradle 根）。在外层壳工程 `d:\rokidapp`（`RenewCXRLSample`）执行会报 `Unresolved reference: okhttp`。
+> ℹ️ 仓库根是 `d:\rokidapp`（`RenewCXRLSample`），`cxrl\RokidLab` 只是模块目录、**不再是独立 Gradle 根**；所有任务名都带 `:cxrl:RokidLab:` 前缀。
 
 ### 构建期门禁与发布闸门
 
@@ -552,7 +555,7 @@ D:\gradle-8.7\bin\gradle.bat :phone-app:testDebugUnitTest :RokidLink:testDebugUn
 
 ```powershell
 # 出 release 包（工作区必须已全部提交）
-D:\gradle-8.7\bin\gradle.bat :phone-app:assembleRelease
+D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:assembleRelease
 ```
 
 ## 安装

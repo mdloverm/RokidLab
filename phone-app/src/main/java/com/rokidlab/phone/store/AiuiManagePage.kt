@@ -52,6 +52,7 @@ import com.rokidlab.phone.design.BrewMuted
 import com.rokidlab.phone.design.BrewPanel
 import com.rokidlab.phone.design.BrewPanelHi
 import com.rokidlab.phone.design.BrewTextBright
+import com.rokidlab.phone.glasses.AiuiFrontendController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -198,14 +199,21 @@ internal fun AiuiManagePage(
                                         // 本机有 .aix（对话生成/本地上传）→ 自托管宿主演示（Lab 手柄可控）；
                                         // 无本地包（内置/历史）→ 旧 Sys_AIUI_Start 直启
                                         val pkg = AiuiProject.packageFile(ctx, r.agentId)
-                                        val code = if (pkg.isFile) {
+                                        if (pkg.isFile) {
                                             val ack = app.cxrL.pushAixToRokidLinkHost(pkg)
-                                            if (ack?.trim() == "OK") 0 else -1
+                                            when (ack?.trim()) {
+                                                // 落盘 + 拉升指令已下发 ≠ 一定已渲染，故不再说「已打开」
+                                                "OK" -> ctx.getString(R.string.aiui_open_pushed, r.appName)
+                                                // 落盘成功但宿主没拉起：不能再显示「打开成功」，也不是"眼镜没连"
+                                                AiuiFrontendController.PUSHED_OPEN_FAILED ->
+                                                    ctx.getString(R.string.aiui_open_pushed_open_failed, r.appName)
+                                                else -> ctx.getString(R.string.aiui_open_fail, -1)
+                                            }
                                         } else {
-                                            app.cxrL.startAiuiPackage(r.agentId)
+                                            val code = app.cxrL.startAiuiPackage(r.agentId)
+                                            if (code == 0) ctx.getString(R.string.aiui_open_ok, r.appName)
+                                            else ctx.getString(R.string.aiui_open_fail, code)
                                         }
-                                        if (code == 0) ctx.getString(R.string.aiui_open_ok, r.appName)
-                                        else ctx.getString(R.string.aiui_open_fail, code)
                                     }
                                 }
                                 if (canReinstall) {

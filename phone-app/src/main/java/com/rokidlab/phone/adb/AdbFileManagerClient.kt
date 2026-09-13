@@ -349,7 +349,14 @@ class AdbFileManagerClient(
         return result
     }
 
-    fun downloadFile(remotePath: String, localPath: String): Boolean {
+    /**
+     * 下载远端文件到本地。
+     *
+     * @param expectedSize 远端文件大小（字节）。>= 0 时落盘后按字节数对账，不符即判失败并删除
+     *   半成品 —— 与 [AdbShellClient.pullFile] 同一契约。调用方从 FileItem.size 传入；
+     *   拿不到大小时传 -1（跳过对账，保持旧行为）。
+     */
+    fun downloadFile(remotePath: String, localPath: String, expectedSize: Long = -1L): Boolean {
         lock.lock()
         return try {
             drainStalePackets()
@@ -383,7 +390,7 @@ class AdbFileManagerClient(
                                 val error = String(msg.payload, Charsets.UTF_8)
                                 Log.e(TAG, "Error: $error")
                             }
-                            return downloadFileShell(remotePath, localPath)
+                            return downloadFileShell(remotePath, localPath, expectedSize)
                         }
                         // 其他流的 CLSE，发送 CLSE 完全关闭流
                         try { sendPacket(CMD_CLSE, msg.arg1, msg.arg0, null) } catch (_: Exception) {} // catch-ok: 清理其它流的收尾包，失败无补救
@@ -398,7 +405,7 @@ class AdbFileManagerClient(
 
             if (remoteId == 0) {
                 Log.e(TAG, "Sync service open timed out, falling back to shell")
-                return downloadFileShell(remotePath, localPath)
+                return downloadFileShell(remotePath, localPath, expectedSize)
             }
 
             // RECV 命令格式: "RECV" + 4字节路径长度(little endian) + 路径
@@ -431,23 +438,38 @@ class AdbFileManagerClient(
             var totalReceived = 0L
             var downloadSuccess = false
             try {
+                // sync 消息重组缓冲：ADB 流是**字节流**，WRTE 只是传输层分片，不等于 sync 消息边界。
+                // adbd 把 DATA 的 8 字节包头与文件负载分两次 write，传输层各成一个 WRTE（大负载还会再拆）。
+                // 旧实现「一个 WRTE = 一条完整消息」→ `payload.size >= 8 + dataLen` 不成立时**静默丢弃**
+                // 整块负载，产出的文件恒为 64KB 整数倍截断（且不报错）。
+                var acc = ByteArray(64 * 1024 + 64)
+                var accLen = 0
                 FileOutputStream(localPath).use { fos ->
-                    while (true) {
+                    download@ while (true) {
                         val msg = readPacket()
                         when (msg.command) {
                             CMD_OKAY -> {}
                             CMD_WRTE -> {
-                                val payload = msg.payload
-                                if (payload.size >= 8) {
-                                    val cmdStr = String(payload.copyOfRange(0, 4), Charsets.UTF_8)
+                                // 传输层 ack 必须先回：它只针对本 WRTE，与 sync 消息是否完整无关
+                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                                if (accLen + msg.payload.size > acc.size) {
+                                    acc = acc.copyOf(maxOf(acc.size * 2, accLen + msg.payload.size))
+                                }
+                                System.arraycopy(msg.payload, 0, acc, accLen, msg.payload.size)
+                                accLen += msg.payload.size
+                                var pos = 0
+                                while (true) {
+                                    if (accLen - pos < 8) break
+                                    val cmdStr = String(acc, pos, 4, Charsets.UTF_8)
+                                    val size = ((acc[pos + 4].toInt() and 0xFF) or
+                                                ((acc[pos + 5].toInt() and 0xFF) shl 8) or
+                                                ((acc[pos + 6].toInt() and 0xFF) shl 16) or
+                                                ((acc[pos + 7].toInt() and 0xFF) shl 24))
                                     when (cmdStr) {
                                         "FAIL" -> {
-                                            val errLen = ((payload[4].toInt() and 0xFF) or
-                                                          ((payload[5].toInt() and 0xFF) shl 8) or
-                                                          ((payload[6].toInt() and 0xFF) shl 16) or
-                                                          ((payload[7].toInt() and 0xFF) shl 24))
-                                            val errMsg = if (payload.size >= 8 + errLen) {
-                                                String(payload.copyOfRange(8, 8 + errLen), Charsets.UTF_8)
+                                            if (accLen - pos - 8 < size) break // 报错文案未到齐，等下一片
+                                            val errMsg = if (size > 0) {
+                                                String(acc, pos + 8, size, Charsets.UTF_8)
                                             } else {
                                                 "Unknown error"
                                             }
@@ -455,15 +477,13 @@ class AdbFileManagerClient(
                                             throw Exception("Download failed: $errMsg")
                                         }
                                         "DATA" -> {
-                                            val dataLen = ((payload[4].toInt() and 0xFF) or
-                                                           ((payload[5].toInt() and 0xFF) shl 8) or
-                                                           ((payload[6].toInt() and 0xFF) shl 16) or
-                                                           ((payload[7].toInt() and 0xFF) shl 24))
-                                            if (payload.size >= 8 + dataLen) {
-                                                fos.write(payload, 8, dataLen)
-                                                totalReceived += dataLen
+                                            if (accLen - pos - 8 < size) break // 负载未到齐，等下一片
+                                            if (size > 0) {
+                                                fos.write(acc, pos + 8, size)
+                                                totalReceived += size
                                             }
-                                            if (totalReceived % (1024 * 1024) == 0L) {
+                                            pos += 8 + size
+                                            if (totalReceived % (1024 * 1024) < 64 * 1024) {
                                                 Log.d(TAG, "Download progress: $totalReceived bytes")
                                             }
                                         }
@@ -480,11 +500,15 @@ class AdbFileManagerClient(
                                             } catch (_: Exception) {} // catch-ok: 消费收尾 CLSE 包，读不到即继续，非失败
                                             socket?.soTimeout = AppConfig.ADB_SOCKET_TIMEOUT_MS
                                             downloadSuccess = true
-                                            break
+                                            break@download
                                         }
+                                        else -> throw Exception("Unexpected sync frame: $cmdStr")
                                     }
                                 }
-                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                                if (pos > 0) {
+                                    System.arraycopy(acc, pos, acc, 0, accLen - pos)
+                                    accLen -= pos
+                                }
                             }
                             CMD_CLSE -> {
                                 sendPacket(CMD_CLSE, sid, remoteId, null)
@@ -493,10 +517,17 @@ class AdbFileManagerClient(
                         }
                     }
                 }
+                if (downloadSuccess &&
+                    !reconcileDownloadedSize(localPath, totalReceived, expectedSize, remotePath)
+                ) {
+                    downloadSuccess = false
+                }
                 downloadSuccess
             } catch (e: Exception) {
                 Log.e(TAG, "Download failed: ${e.message}", e)
                 LogCollector.e(TAG, "Download failed: ${e.message}", e)
+                // 失败即删半成品：旧实现只置 false，截断的文件会留在 cache 里被后续预览/分享当完整文件用
+                runCatching { File(localPath).delete() }
                 // 关闭 sync 流，防止泄漏
                 try { sendPacket(CMD_CLSE, sid, remoteId, ByteArray(0)) } catch (_: Exception) {} // catch-ok: 善后清理，失败无补救
                 false
@@ -506,7 +537,26 @@ class AdbFileManagerClient(
         }
     }
 
-    private fun downloadFileShell(remotePath: String, localPath: String): Boolean {
+    /**
+     * 落盘后按远端字节数对账；不符则判为截断/损坏，删除半成品并返回 false。
+     *
+     * [expectedSize] < 0 = 调用方未提供大小，跳过对账（保持旧行为）。
+     */
+    private fun reconcileDownloadedSize(
+        localPath: String,
+        actualSize: Long,
+        expectedSize: Long,
+        remotePath: String,
+    ): Boolean {
+        if (expectedSize < 0 || actualSize == expectedSize) return true
+        Log.e(TAG, "Download truncated: $remotePath got $actualSize bytes, expected $expectedSize, 删除半成品")
+        // 结果必须落 App 内日志面板：静默截断此前完全不可见
+        LogCollector.e(TAG, "下载大小不符（截断）：$remotePath 实际 $actualSize / 期望 $expectedSize，已删除半成品")
+        runCatching { File(localPath).delete() }
+        return false
+    }
+
+    private fun downloadFileShell(remotePath: String, localPath: String, expectedSize: Long = -1L): Boolean {
         return try {
             Log.d(TAG, "Downloading via shell: $remotePath -> $localPath")
 
@@ -523,10 +573,16 @@ class AdbFileManagerClient(
             val decoded = android.util.Base64.decode(base64Output.trim(), android.util.Base64.DEFAULT)
             File(localPath).writeBytes(decoded)
 
+            if (!reconcileDownloadedSize(localPath, decoded.size.toLong(), expectedSize, remotePath)) {
+                return false
+            }
+
             Log.d(TAG, "Shell download success: $localPath, size: ${decoded.size}")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Shell download failed: ${e.message}", e)
+            // 失败即删半成品（同 sync 路径契约）
+            runCatching { File(localPath).delete() }
             // sync 流被拒后的 shell 降级路径：此前失败在 App 内日志面板完全不可见
             LogCollector.e(TAG, "Shell 降级下载失败: $remotePath", e)
             false
@@ -1496,66 +1552,88 @@ class AdbFileManagerClient(
 
         val output = ByteArrayOutputStream()
         var totalRead = 0
+        // 与 downloadFile 同源修复：ADB 流是**字节流**，WRTE 只是传输层分片，不等于 sync 消息边界。
+        // adbd 把 DATA 的 8 字节包头与内容分两次 write，传输层各成一个 WRTE。旧实现「一个 WRTE =
+        // 一条 sync 消息」→ `payload.size >= 8 + size` 不成立时**静默丢弃**整块内容（文件内容被
+        // 截断且不报错），或把裸内容字节当包头而抛出 "Unexpected sync frame"。
+        var acc = ByteArray(64 * 1024 + 64)
+        var accLen = 0
+        var sawDone = false
+        var finished = false
 
-        while (true) {
+        while (!finished) {
             val msg = readPacket()
             when (msg.command) {
                 CMD_OKAY -> {
                     // 继续等待数据
                 }
                 CMD_WRTE -> {
-                    val payload = msg.payload
-                    if (payload.size >= 8) {
-                        val cmdStr = String(payload, 0, 4, Charsets.UTF_8)
+                    // 传输层 ack 必须先回：它只针对本 WRTE，与 sync 消息是否完整无关
+                    sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                    if (accLen + msg.payload.size > acc.size) {
+                        acc = acc.copyOf(maxOf(acc.size * 2, accLen + msg.payload.size))
+                    }
+                    System.arraycopy(msg.payload, 0, acc, accLen, msg.payload.size)
+                    accLen += msg.payload.size
+                    var pos = 0
+                    parse@ while (true) {
+                        if (accLen - pos < 8) break@parse
+                        val cmdStr = String(acc, pos, 4, Charsets.UTF_8)
+                        val size = ((acc[pos + 4].toInt() and 0xFF)) or
+                                   ((acc[pos + 5].toInt() and 0xFF) shl 8) or
+                                   ((acc[pos + 6].toInt() and 0xFF) shl 16) or
+                                   ((acc[pos + 7].toInt() and 0xFF) shl 24)
                         when (cmdStr) {
                             "DATA" -> {
-                                val size = ((payload[4].toInt() and 0xFF)) or
-                                          ((payload[5].toInt() and 0xFF) shl 8) or
-                                          ((payload[6].toInt() and 0xFF) shl 16) or
-                                          ((payload[7].toInt() and 0xFF) shl 24)
-                                if (payload.size >= 8 + size) {
-                                    output.write(payload, 8, size)
+                                if (size < 0 || size > acc.size) {
+                                    throw Exception("Read file failed: 非法 DATA 长度 $size")
+                                }
+                                if (accLen - pos - 8 < size) break@parse // 内容未到齐，等下一片
+                                if (size > 0) {
+                                    output.write(acc, pos + 8, size)
                                     totalRead += size
                                 }
+                                pos += 8 + size
                             }
                             "DONE" -> {
-                                sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                                sendPacket(CMD_CLSE, sid, remoteId, null)
-                                // 消费服务端的 CLSE 响应包（仅消费当前 stream 的）
-                                try {
-                                    while (true) {
-                                        val clseMsg = readPacket()
-                                        if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) break
-                                    }
-                                } catch (_: Exception) {} // catch-ok: 消费收尾 CLSE 包，读不到即继续，非失败
-                                return output.toString(Charsets.UTF_8.name())
+                                sawDone = true
+                                finished = true
+                                break@parse
                             }
                             "FAIL" -> {
-                                val errorSize = ((payload[4].toInt() and 0xFF)) or
-                                              ((payload[5].toInt() and 0xFF) shl 8) or
-                                              ((payload[6].toInt() and 0xFF) shl 16) or
-                                              ((payload[7].toInt() and 0xFF) shl 24)
-                                val error = if (payload.size >= 8 + errorSize)
-                                    String(payload, 8, errorSize, Charsets.UTF_8)
+                                if (accLen - pos - 8 < size) break@parse // 报错文案未到齐，等下一片
+                                val error = if (size > 0) String(acc, pos + 8, size, Charsets.UTF_8)
                                 else "Unknown error"
                                 Log.e(TAG, "Read file failed: $error")
                                 throw Exception("Read file failed: $error")
                             }
+                            else -> throw Exception("Read file failed: Unexpected sync frame: $cmdStr")
                         }
                     }
-                    sendPacket(CMD_OKAY, sid, msg.arg0, null)
+                    if (pos > 0) {
+                        System.arraycopy(acc, pos, acc, 0, accLen - pos)
+                        accLen -= pos
+                    }
                 }
                 CMD_CLSE -> {
-                    sendPacket(CMD_CLSE, sid, remoteId, null)
-                    return output.toString(Charsets.UTF_8.name())
+                    finished = true
                 }
             }
 
-            if (totalRead >= maxSize) {
-                sendPacket(CMD_CLSE, sid, remoteId, null)
-                return output.toString(Charsets.UTF_8.name())
-            }
+            if (totalRead >= maxSize) finished = true
         }
+
+        sendPacket(CMD_CLSE, sid, remoteId, null)
+        if (sawDone) {
+            // 消费服务端的 CLSE 响应包（仅消费当前 stream 的）
+            try {
+                while (true) {
+                    val clseMsg = readPacket()
+                    if (clseMsg.command == CMD_CLSE && clseMsg.arg1 == sid) break
+                }
+            } catch (_: Exception) {} // catch-ok: 消费收尾 CLSE 包，读不到即继续，非失败
+        }
+        return output.toString(Charsets.UTF_8.name())
     }
 
     private data class AdbMessage(

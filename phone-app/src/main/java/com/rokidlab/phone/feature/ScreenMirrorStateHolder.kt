@@ -172,6 +172,9 @@ internal class ScreenMirrorStateHolder(private val activity: ScreenMirrorActivit
             }
             if (isDestroyed || !connected) {
                 if (!connected) {
+                    // WiFi 首选建链失败 → 记账（清缓存 + 记失败时间），点「重试」时不再被
+                    // 60s 线路缓存导向同一个已死的 WiFi，而是直接落到蓝牙隧道。
+                    if (!isBluetoothRoute) app.routeManager.noteWifiFailure()
                     activity.runOnUiThread {
                         startupPhase = false
                         connectionStatus = activity.getString(R.string.mirror_connection_failed)

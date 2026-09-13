@@ -472,24 +472,64 @@ private fun KeyboardInputDialog(
                             sending = true; status = ""
                             scope.launch(Dispatchers.IO) {
                                 try {
+                                    val app = ctx.applicationContext as LabApplication
                                     // 1. TCP 发送文字到眼镜（设剪贴板）
-                                    val socket = java.net.Socket()
-                                    socket.connect(java.net.InetSocketAddress(ip.trim(), 7656), 3000)
-                                    socket.soTimeout = 5000
-                                    socket.getOutputStream().write((text + "\n").toByteArray(Charsets.UTF_8))
-                                    socket.getOutputStream().flush()
-                                    val reader = java.io.BufferedReader(java.io.InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
-                                    reader.readLine()
-                                    socket.close()
+                                    //    先解析线路（WiFi 直连优先，不可达时自动回落蓝牙隧道），再按线路连目标端口。
+                                    //    旧实现直连用户手填的 IP:7656：只要 WiFi 不通（眼镜没连同一网段 /
+                                    //    IP 填错 / 不在白名单），整条键盘链路直接失败且无兜底。
+                                    val route = app.routeManager.resolve(ip.trim(), 7656)
+                                    val (targetIp, targetPort) = when (route) {
+                                        is com.rokidlab.phone.connection.ConnectionRoute.Wifi ->
+                                            route.ip to route.port
+                                        is com.rokidlab.phone.connection.ConnectionRoute.Bluetooth ->
+                                            route.ip to route.localPort
+                                        is com.rokidlab.phone.connection.ConnectionRoute.None ->
+                                            throw java.io.IOException("no route to glasses")
+                                    }
+                                    Log.i("GamepadActivity", "Clipboard route: $route → $targetIp:$targetPort")
+                                    // 单次 TCP 发送（写文字 + 读回一行 ACK）；WiFi 直连与蓝牙隧道共用同一帧格式
+                                    val sendOnce = { host: String, port: Int ->
+                                        val socket = java.net.Socket()
+                                        socket.connect(java.net.InetSocketAddress(host, port), 3000)
+                                        socket.soTimeout = 5000
+                                        socket.outputStream.write((text + "\n").toByteArray(Charsets.UTF_8))
+                                        socket.outputStream.flush()
+                                        java.io.BufferedReader(
+                                            java.io.InputStreamReader(socket.inputStream, Charsets.UTF_8),
+                                        ).readLine()
+                                        socket.close()
+                                    }
+                                    try {
+                                        sendOnce(targetIp, targetPort)
+                                    } catch (e: Exception) {
+                                        // 单次点击内兜底：线路缓存可能仍是 WiFi 而 WiFi 已实际断开
+                                        // （手机掉线 / 眼镜离网），此时立刻降级蓝牙隧道重试一次，
+                                        // 而不是让这次点击直接报错。
+                                        if (route !is com.rokidlab.phone.connection.ConnectionRoute.Wifi) throw e
+                                        Log.w(
+                                            "GamepadActivity",
+                                            "WiFi route $targetIp:$targetPort failed (${e.message})，降级蓝牙隧道重试",
+                                        )
+                                        app.routeManager.noteWifiFailure()
+                                        val localPort = app.routeManager.tunnelTo(7656) ?: throw e
+                                        sendOnce("127.0.0.1", localPort)
+                                    }
                                     Log.i("GamepadActivity", "Clipboard text sent via TCP ok")
 
                                     // 2. ADB Shell 执行粘贴（作为 shell 用户有 INJECT_EVENTS 权限）
+                                    //    复用全 App 唯一的共享 ADB 会话 —— 它自身已按「WiFi 优先、蓝牙兜底」解析线路，
+                                    //    并会后台把已建在蓝牙上的会话升级到 WiFi，这里不必也不该自建第二条连接：
+                                    //    手机侧蓝牙栈对「同一设备 + 同一 SCN」只允许一条 RFCOMM，
+                                    //    自建的第二条必然被栈拒绝（所以旧的独立 ADB 实现在蓝牙线路上必失败）。
                                     var adbOk = false
                                     try {
-                                        val keyPair = com.rokidlab.phone.adb.AdbKeyManager
-                                            .getOrCreateKeyPair(ctx.filesDir.absolutePath)
-                                        adbOk = com.rokidlab.phone.adb.AdbPasteCompat
-                                            .execPaste(ip.trim(), keyPair)
+                                        val client = if (app.hasCxrL()) app.cxrL.getAdbShellClient() else null
+                                        if (client != null) {
+                                            client.executeShellCommand("input keyevent KEYCODE_PASTE", timeoutMs = 5000)
+                                            adbOk = true
+                                        } else {
+                                            Log.w("GamepadActivity", "Shared ADB session unavailable (yield/no route), falling back to HID")
+                                        }
                                     } catch (e: Exception) {
                                         Log.w("GamepadActivity", "ADB paste failed: ${e.message}")
                                     }

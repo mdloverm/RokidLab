@@ -247,27 +247,61 @@ class TimerScheduler(private val appContext: Context) {
             Log.w(TAG, "withAdbClient: no ADB IP configured")
             return
         }
-        val client = try {
-            val route = app.routeManager.resolve(ip, ADB_PORT)
-            val pair: Pair<String, Int>? = when (route) {
-                is ConnectionRoute.Wifi -> route.ip to route.port
-                is ConnectionRoute.Bluetooth -> route.ip to route.localPort
-                is ConnectionRoute.None -> null
-            }
-            pair ?: return
-            AdbShellClient(appContext, pair.first, pair.second)
+        val route = try {
+            app.routeManager.resolve(ip, ADB_PORT)
         } catch (e: Exception) {
             Log.w(TAG, "withAdbClient: route resolve failed: ${e.message}")
             return
         }
-        try {
-            if (client.connect()) {
-                block(client)
+        val primary: Pair<String, Int>? = when (route) {
+            is ConnectionRoute.Wifi -> route.ip to route.port
+            is ConnectionRoute.Bluetooth -> route.ip to route.localPort
+            is ConnectionRoute.None -> null
+        }
+        if (primary == null) {
+            Log.w(TAG, "withAdbClient: no route to glasses")
+            return
+        }
+        if (withShortLivedClient(primary, block)) return
+        if (route !is ConnectionRoute.Wifi) return
+        // WiFi 首选建链失败：记账（清缓存 + 记失败时间，使线路缓存里的死 WiFi 立即失效）后
+        // 降级蓝牙隧道重试一次。旧实现只写一行 Log.w —— 眼镜离网而手机仍在 WiFi 时，
+        // 60s 线路缓存会把每个定时任务都导向同一个死 WiFi，且不记账导致缓存永不自愈。
+        app.routeManager.noteWifiFailure()
+        val localPort = runCatching { app.routeManager.tunnelTo(ADB_PORT) }.getOrNull()
+        if (localPort == null) {
+            Log.w(TAG, "withAdbClient: BT tunnel unavailable, giving up")
+            return
+        }
+        if (!withShortLivedClient("127.0.0.1" to localPort, block)) {
+            Log.w(TAG, "withAdbClient: BT tunnel connect failed too")
+        }
+    }
+
+    /**
+     * 按给定端点建一条短连接执行 [block]，用完即断。
+     *
+     * @return true = 建链成功且 [block] 执行过（block 自身抛错只记日志，不视为建链失败）
+     */
+    private fun withShortLivedClient(endpoint: Pair<String, Int>, block: (AdbShellClient) -> Unit): Boolean {
+        val client = try {
+            AdbShellClient(appContext, endpoint.first, endpoint.second)
+        } catch (e: Exception) {
+            Log.w(TAG, "withAdbClient: client create failed: ${e.message}")
+            return false
+        }
+        return try {
+            if (!client.connect()) {
+                Log.w(TAG, "withAdbClient: connect failed -> ${endpoint.first}:${endpoint.second}")
+                false
             } else {
-                Log.w(TAG, "withAdbClient: connect failed")
+                runCatching { block(client) }
+                    .onFailure { Log.w(TAG, "withAdbClient(block) failed: ${it.message}") }
+                true
             }
         } catch (e: Exception) {
             Log.w(TAG, "withAdbClient failed: ${e.message}")
+            false
         } finally {
             client.disconnect()
         }

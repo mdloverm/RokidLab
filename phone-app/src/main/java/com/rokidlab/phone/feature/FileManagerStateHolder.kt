@@ -123,6 +123,11 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                             Log.w(TAG, "Executor shut down, skipping loadFiles")
                         }
                     } else {
+                        // WiFi 首选建链失败 → 记账（清缓存 + 记失败时间），避免下一次连接又被
+                        // 60s 线路缓存导向同一个已死的 WiFi；下次重试即可落到蓝牙隧道。
+                        if (route is ConnectionRoute.Wifi) {
+                            (activity.application as LabApplication).routeManager.noteWifiFailure()
+                        }
                         activity.connectionError = activity.getString(R.string.connection_failed_check_ip)
                     }
                 }
@@ -283,7 +288,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                     // 图片文件 - 下载到本地后预览
                     Log.i(TAG, "Image file, starting download")
                     val localPath = activity.cacheDir.absolutePath + "/" + file.name
-                    val success = adbClient?.downloadFile(file.path, localPath) ?: false
+                    val success = adbClient?.downloadFile(file.path, localPath, file.size) ?: false
                     
                     activity.runOnUiThread {
                         activity.previewLoading = false
@@ -341,7 +346,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                 return@execute
             }
             val localPath = activity.cacheDir.absolutePath + "/" + file.name
-            val success = client.downloadFile(file.path, localPath)
+            val success = client.downloadFile(file.path, localPath, file.size)
             
             if (!success) {
                 LogCollector.e(TAG, "Download failed: ${file.path}")

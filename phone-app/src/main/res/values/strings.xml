@@ -51,6 +51,7 @@
     <string name="extract_pull_failed">提取到手机失败</string>
     <string name="extract_no_dir">未选择目录</string>
     <string name="extract_saved">已保存到所选目录：%s</string>
+    <string name="extract_progress_fmt">正在提取 %1$d%%</string>
     <string name="install_to_phone">安装到手机</string>
     <string name="install_to_glasses">安装到眼镜</string>
     <string name="more">更多</string>
@@ -451,6 +452,10 @@
     <string name="reinstall_glasses_desc">重装 RokidLink 到眼镜</string>
     <string name="view_glasses_status">查看眼镜端状态</string>
     <string name="view_glasses_status_desc">显示眼镜 IP 与 ADB 状态（排障用）</string>
+    <string name="route_current">当前线路</string>
+    <string name="route_current_desc">WiFi 优先、蓝牙隧道兜底；点击重新探测</string>
+    <string name="route_probing">正在探测…</string>
+    <string name="route_unknown">未探测</string>
     <string name="ready">就绪</string>
     <string name="system_log">系统日志</string>
     <string name="registry_unavailable">商店不可用：%s</string>
@@ -563,6 +568,8 @@
     <string name="aiui_busy">处理中…</string>
     <string name="aiui_open_ok">已在眼镜上打开「%1$s」</string>
     <string name="aiui_open_fail">打开失败（错误码 %1$d），请确认眼镜已连接</string>
+    <string name="aiui_open_pushed">已推送到眼镜，正在打开「%1$s」</string>
+    <string name="aiui_open_pushed_open_failed">「%1$s」已推送到眼镜，但宿主未能拉起（可能被系统后台启动限制拦截）。请在眼镜上重试，或检查 RokidLink 悬浮窗权限</string>
     <string name="aiui_close_ok">已关闭眼镜上当前显示的智能体应用</string>
     <string name="aiui_close_fail">关闭失败（错误码 %1$d），请确认眼镜已连接</string>
     <string name="aiui_reinstall_ok">「%1$s」已重新打包并送到眼镜</string>
@@ -731,15 +738,10 @@
     <!-- DetailScreenshots -->
     <string name="loading_preview">正在加载预览</string>
 
-    <!-- PhoneMirrorActivity -->
+    <!-- 投屏 -->
     <string name="connecting_glasses">正在连接眼镜...</string>
-    <string name="requesting_screen_permission">正在请求屏幕录制权限...</string>
-    <string name="projecting_text">投屏中</string>
-    <string name="screen_permission_denied">屏幕录制权限被拒绝</string>
     <string name="back_btn">返回</string>
     <string name="retry_btn">重试</string>
-    <string name="stop_projection_btn">停止投屏</string>
-    <string name="project_text_in_progress">投屏中...</string>
     <string name="mirror_connection_failed">连接失败</string>
     <string name="mirror_starting">开始投屏...</string>
     <string name="mirror_connected">已连接，正在接收画面...</string>
@@ -760,6 +762,7 @@
 
     <!-- CxrLHiRokidSession - onStatus messages -->
     <string name="install_glasses_host_first">请先安装 %s。</string>
+    <string name="auth_host_version_too_low">%s 版本过低，请升级到最新版本后再试。</string>
     <string name="auth_page_opened">已在 %s 中打开授权页面。</string>
     <string name="auth_failed">打开 %s 授权失败：%s</string>
     <string name="auth_token_obtained">已获取 %s 授权令牌。</string>

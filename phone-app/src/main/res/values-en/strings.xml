@@ -51,6 +51,7 @@
     <string name="extract_pull_failed">Pull to phone failed</string>
     <string name="extract_no_dir">No directory selected</string>
     <string name="extract_saved">Saved to selected directory: %s</string>
+    <string name="extract_progress_fmt">Extracting %1$d%%</string>
     <string name="install_to_phone">Install to Phone</string>
     <string name="install_to_glasses">Install to Glasses</string>
     <string name="more">More</string>
@@ -449,6 +450,10 @@
     <string name="reinstall_glasses_desc">Reinstall RokidLink on glasses</string>
     <string name="view_glasses_status">View Glasses Status</string>
     <string name="view_glasses_status_desc">Show glasses IP and ADB status (troubleshooting)</string>
+    <string name="route_current">Current Route</string>
+    <string name="route_current_desc">WiFi first, Bluetooth tunnel fallback; tap to re-probe</string>
+    <string name="route_probing">Probing…</string>
+    <string name="route_unknown">Not probed</string>
     <string name="ready">Ready</string>
     <string name="system_log">System Log</string>
     <string name="registry_unavailable">Registry unavailable: %s, pull down to retry</string>
@@ -561,6 +566,8 @@
     <string name="aiui_busy">Working…</string>
     <string name="aiui_open_ok">Opening \"%1$s\" on the glasses</string>
     <string name="aiui_open_fail">Failed to open (error %1$d), make sure glasses are connected</string>
+    <string name="aiui_open_pushed">Pushed to the glasses, opening \"%1$s\"</string>
+    <string name="aiui_open_pushed_open_failed">\"%1$s\" was pushed to the glasses but the host could not be launched (possibly blocked by background launch limits). Retry on the glasses, or check RokidLink\'s overlay permission</string>
     <string name="aiui_close_ok">Closed the agent app currently shown on the glasses</string>
     <string name="aiui_close_fail">Failed to close (error %1$d), make sure glasses are connected</string>
     <string name="aiui_reinstall_ok">\"%1$s\" repackaged and sent to the glasses</string>
@@ -740,15 +747,10 @@
     <string name="install_apk_menu">Install APK</string>
     <string name="installing_with_progress">Installing (%d%%)</string>
 
-    <!-- PhoneMirrorActivity -->
+    <!-- Screen mirroring -->
     <string name="connecting_glasses">Connecting to glasses...</string>
-    <string name="requesting_screen_permission">Requesting screen recording permission...</string>
-    <string name="projecting_text">Projecting</string>
-    <string name="screen_permission_denied">Screen recording permission denied</string>
     <string name="back_btn">Back</string>
     <string name="retry_btn">Retry</string>
-    <string name="stop_projection_btn">Stop Projection</string>
-    <string name="project_text_in_progress">Projecting...</string>
     <string name="mirror_connection_failed">Connection Failed</string>
     <string name="mirror_starting">Starting mirror...</string>
     <string name="mirror_connected">Connected, receiving stream...</string>
@@ -769,6 +771,7 @@
 
     <!-- CxrLHiRokidSession -->
     <string name="install_glasses_host_first">Please install %s first.</string>
+    <string name="auth_host_version_too_low">%s is outdated. Please update it to the latest version and try again.</string>
     <string name="auth_page_opened">Authorization page opened in %s.</string>
     <string name="auth_failed">Failed to open %s authorization: %s</string>
     <string name="auth_token_obtained">Authorization token obtained from %s.</string>
