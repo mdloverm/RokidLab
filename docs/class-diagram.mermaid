@@ -1,0 +1,56 @@
+classDiagram
+    class OcrPluginContract {
+        <<object>>
+        +PKG = "com.rokidlab.phone.ocr"
+        +AUTHORITY = "com.rokidlab.phone.ocr.provider"
+        +PERMISSION = "com.rokidlab.phone.ocr.permission.USE_OCR"
+        +MIN_VERSION_CODE = 1
+        +MIN_API_VERSION = 1
+        +METHOD_PING = "ping"
+        +METHOD_RECOGNIZE_URI = "recognizeUri"
+        +KEY_IMAGE_URI = "image_uri"
+        +KEY_TEXT = "text"
+    }
+    class OcrClient {
+        <<主 App 侧>>
+        -context: Context
+        +isInstalled(ctx): Boolean
+        +isCompatible(ctx): Boolean
+        +ensureInit(ctx): Boolean
+        +recognize(ctx, jpeg: ByteArray): String
+        -callPing(): Bundle?
+        -streamImage(jpeg): Uri
+    }
+    class OcrComponentController {
+        <<主 App 侧·仿 AppUpdateController>>
+        -activity: MainActivity
+        +checkVersion(): Int
+        +install(apkUrl: String)
+        +uninstall()
+        +ensureInstalledOrUpdate()
+    }
+    class PhonePackageInstallHelper {
+        <<主 App 已有·复用>>
+        +requestInstall(activity, apkFile, onStatus): Boolean
+        +requestUninstall(activity, pkg, name, onStatus): Boolean
+    }
+    class OcrProvider {
+        <<组件侧>>
+        -engine: OcrEngineHolder
+        +call(method: String, arg: String, extras: Bundle): Bundle?
+        +openFile(uri: Uri, mode: String): ParcelFileDescriptor
+        -handlePing(): Bundle
+        -handleRecognize(uri: Uri): Bundle
+    }
+    class OcrEngineHolder {
+        <<组件侧·由 LocalOcr 迁入>>
+        -engine: RapidOCR?
+        +ensureInit(ctx)
+        +recognize(ctx, bitmap: Bitmap): String
+    }
+    OcrClient ..> OcrPluginContract : 使用常量
+    OcrClient ..> OcrProvider : call()/openFile() 跨进程
+    OcrComponentController ..> OcrPluginContract : 校验版本
+    OcrComponentController ..> PhonePackageInstallHelper : 复用安装
+    OcrProvider --> OcrEngineHolder : 持有
+    OcrProvider ..> OcrPluginContract : 实现契约

@@ -1,0 +1,32 @@
+sequenceDiagram
+    participant U as 用户
+    participant MA as 主App(MainActivity/PhotoQuizFlow)
+    participant CC as OcrComponentController
+    participant PI as PhonePackageInstallHelper
+    participant OC as OcrProvider(组件进程)
+
+    Note over MA,OC: 首次：组件未安装
+    U->>MA: 点击「拍照问 AI」
+    MA->>CC: checkVersion()
+    CC-->>MA: NOT_INSTALLED
+    MA-->>U: 引导卡片「需安装 OCR 组件(≈55MB)」
+    U->>CC: 点「安装」
+    CC->>PI: requestInstall(activity, ocr.apk, onStatus)
+    PI-->>U: 系统「安装未知应用」/确认对话框
+    U-->>PI: 确认
+    PI->>OC: 系统安装组件
+    OC-->>MA: INSTALL_STATUS 广播
+
+    Note over MA,OC: 组件就绪后：正常识别
+    U->>MA: 点击「拍照问 AI」
+    MA->>MA: 拍照 → JPEG ByteArray
+    MA->>CC: isCompatible()
+    CC-->>MA: true (versionCode≥1, apiVersion≥1)
+    MA->>OC: openFile(imageUri,"w") → ParcelFileDescriptor
+    MA->>OC: 流式写入 JPEG（不占 Binder 1MB）
+    MA->>OC: call("recognizeUri", {imageUri})
+    OC->>OC: OcrEngineHolder.ensureInit()（首次 1-3s）
+    OC->>OC: RapidOCR.run(bitmap) → text
+    OC-->>MA: Bundle{text, elapsedMs, code}
+    MA->>MA: 知识库检索 → AI 生成答案 → 回眼镜显示+播报
+    MA-->>U: 展示识别文字与答案
