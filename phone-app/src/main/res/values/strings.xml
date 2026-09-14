@@ -242,6 +242,8 @@
     <string name="wifi_grant_permission">授权位置权限</string>
     <string name="wifi_scanning">正在扫描 WiFi 网络…</string>
     <string name="wifi_no_networks">未发现可用 WiFi 网络</string>
+    <string name="wifi_scan_timeout">没扫到 WiFi 网络，请确认手机「定位服务」已开启，然后重新扫描</string>
+    <string name="wifi_rescan">重新扫描</string>
     <string name="wifi_manual_input">手动输入网络名称</string>
     <string name="wifi_change_network">更换</string>
 
@@ -510,6 +512,8 @@
     <string name="ai_tool_stop_music_desc">停止当前正在播放的音乐，回答"停止播放""别放了""不听了"等</string>
     <string name="ai_tool_show_lyrics_name">显示歌词</string>
     <string name="ai_tool_show_lyrics_desc">在 Rokid 眼镜上拉起歌词页面。歌词内容由手机播放时经蓝牙 AVRCP 自动推送，本工具仅负责在眼镜端拉起/重新触发歌词页，回答"显示歌词""打开歌词""看歌词"等</string>
+    <string name="ai_tool_get_now_playing_name">读取播放信息</string>
+    <string name="ai_tool_get_now_playing_desc">读取当前播放歌曲的完整信息（歌名、歌手、专辑、封面地址、逐行歌词与播放进度），返回 JSON 文本。AIUI 播放器页面用它取封面和歌词；回答"现在放的是什么歌""看下封面"等</string>
     <string name="ai_tool_show_image_name">显示图片</string>
     <string name="ai_tool_show_image_desc">显示一张图片：默认显示在手机端对话气泡里；若眼镜已连接，会同时同步到眼镜端悬浮显示（约 12 秒后自动消失）。可传图片直链（http/https）和说明文字；若只说“显示封面”想看当前播放歌曲的封面，可不传链接。回答"显示图片""显示封面""给我看张图"等</string>
     <string name="ai_tool_search_web_name">网页搜索</string>

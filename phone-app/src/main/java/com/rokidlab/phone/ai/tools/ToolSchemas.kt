@@ -121,6 +121,15 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
             ),
         )
 
+        "get_now_playing" -> toolSchema(
+            name = meta.name,
+            description = "读取当前播放歌曲的完整信息，返回 JSON 文本：歌名 title、歌手 artist、专辑 album、时长 durationMs、当前进度 positionMs、当前歌词行号 lineIndex、封面图地址 cover、逐行歌词 lyrics（每行含 timeMs 与 text）。AIUI 播放器页面用它取封面与歌词来渲染；语音场景下用户问“现在放的是什么歌”时也可调用。没有正在播放的音乐时返回 playing=false。",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to mapOf<String, Any>(),
+            ),
+        )
+
         "show_image" -> toolSchema(
             name = meta.name,
             description = "显示一张图片：默认渲染在手机端对话气泡里；若眼镜已连接，会同时同步到眼镜端悬浮显示（约 12 秒后自动消失）。当用户说“显示图片”“显示封面”“给我看张图”“把刚才那张图发出来”时调用。若用户给了图片链接就传 imageUrl；若用户只说“显示封面”或想看在播歌曲的封面，可以不传 imageUrl，会自动显示当前播放歌曲的封面。",

@@ -118,37 +118,42 @@ internal class StoreInstallStateHolder(private val activity: MainActivity) {
 
         val generation = ++glassesInstallRefreshGeneration
 
-        activity.cxrL.queryInstalledApps(
-            packageNames = packageNames,
-            onResult = { packageName, installed ->
-                if (generation != glassesInstallRefreshGeneration) return@queryInstalledApps
-                if (installed == null) {
-                    // 查询失败：状态未知，保持既有判定，不误标为"未安装"（否则会诱导重复安装）
-                    return@queryInstalledApps
-                }
-                val appAndArtifact = appsByPackage[packageName]
-                if (installed && appAndArtifact != null) {
-                    val (app, artifact) = appAndArtifact
-                    if (activity.installCache.getGlasses(packageName) == null) {
-                        activity.installCache.recordGlassesDiscovered(app, artifact)
+        // 必须放 IO：queryInstalledApps 首段是 session.cleanup()（拆 ADB 共享会话 / 断 CXR 链路，
+        // 全是阻塞 IO），而本方法由商店每个应用卡片的 checkGlassesInstallStateIfNeeded 在主线程
+        // 触发 —— 眼镜离线时建链要等满 TCP + 握手超时，主线程 5s 内无法响应触摸 → 系统 ANR。
+        activity.lifecycleScope.launch(Dispatchers.IO) {
+            activity.cxrL.queryInstalledApps(
+                packageNames = packageNames,
+                onResult = { packageName, installed ->
+                    if (generation != glassesInstallRefreshGeneration) return@queryInstalledApps
+                    if (installed == null) {
+                        // 查询失败：状态未知，保持既有判定，不误标为"未安装"（否则会诱导重复安装）
+                        return@queryInstalledApps
                     }
-                    setGlassesInstallState(
-                        packageName,
-                        cachedGlassesInstallState(app, artifact) ?: InstallState.INSTALLED_UNKNOWN_VERSION,
-                        InstallStateSource.VERIFIED,
-                    )
-                } else {
-                    activity.installCache.removeGlasses(packageName)
-                    setGlassesInstallState(packageName, InstallState.NOT_INSTALLED, InstallStateSource.VERIFIED)
-                }
-                installCheckTick += 1
-            },
-            onComplete = {
-                if (generation == glassesInstallRefreshGeneration) {
-                    activity.log(activity.getString(R.string.log_glasses_install_refreshed))
-                }
-            },
-        )
+                    val appAndArtifact = appsByPackage[packageName]
+                    if (installed && appAndArtifact != null) {
+                        val (app, artifact) = appAndArtifact
+                        if (activity.installCache.getGlasses(packageName) == null) {
+                            activity.installCache.recordGlassesDiscovered(app, artifact)
+                        }
+                        setGlassesInstallState(
+                            packageName,
+                            cachedGlassesInstallState(app, artifact) ?: InstallState.INSTALLED_UNKNOWN_VERSION,
+                            InstallStateSource.VERIFIED,
+                        )
+                    } else {
+                        activity.installCache.removeGlasses(packageName)
+                        setGlassesInstallState(packageName, InstallState.NOT_INSTALLED, InstallStateSource.VERIFIED)
+                    }
+                    activity.runOnUiThread { installCheckTick += 1 }
+                },
+                onComplete = {
+                    if (generation == glassesInstallRefreshGeneration) {
+                        activity.log(activity.getString(R.string.log_glasses_install_refreshed))
+                    }
+                },
+            )
+        }
     }
 
     internal fun refreshPhoneInstallStates(targetApps: List<BrewApp> = activity.apps) {
@@ -192,11 +197,17 @@ internal class StoreInstallStateHolder(private val activity: MainActivity) {
 
         if (target == "glasses") {
             activity.runWithPrerequisites {
-                activity.cxrL.launchApp(packageName) { launched ->
-                    if (launched) {
-                        activity.log(activity.getString(R.string.log_launched_glasses, app.name))
-                    } else {
-                        Toast.makeText(activity, activity.getString(R.string.cannot_launch_glasses, app.name), Toast.LENGTH_SHORT).show()
+                // 前置检查留在主线程（可能拉起授权页）；重链路调用放 IO ——
+                // launchApp 首段是 session.cleanup()（阻塞 IO），主线程同步调用会 ANR
+                activity.lifecycleScope.launch(Dispatchers.IO) {
+                    activity.cxrL.launchApp(packageName) { launched ->
+                        if (launched) {
+                            activity.log(activity.getString(R.string.log_launched_glasses, app.name))
+                        } else {
+                            activity.runOnUiThread {
+                                Toast.makeText(activity, activity.getString(R.string.cannot_launch_glasses, app.name), Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     }
                 }
             }
@@ -237,9 +248,12 @@ internal class StoreInstallStateHolder(private val activity: MainActivity) {
         if (target == "glasses" && !activity.cxrL.ensureGlassesOperationReady()) return
 
         var job: Job? = null
-        job = activity.lifecycleScope.launch {
+        // 必须放 IO：下载 APK（网络 + 落盘）与 cxrL.installApk（首段 session.cleanup() + APK 上传流）
+        // 都是重阻塞操作，跑在 Main 派发器上会直接卡死主线程（下载期间整页无响应）。
+        // 所有 UI 副作用（Toast / 弹窗 / 进度状态）均已回主线程。
+        job = activity.lifecycleScope.launch(Dispatchers.IO) {
             activity.updateBusy(true)
-            downloadProgress[progressKey] = 0
+            activity.runOnUiThread { downloadProgress[progressKey] = 0 }
             runCatching {
                 val fileName = "${app.id}-${target}-${app.version}.apk"
                 activity.log(activity.getString(R.string.log_downloading_apk, target, app.name))
@@ -247,11 +261,11 @@ internal class StoreInstallStateHolder(private val activity: MainActivity) {
                     artifact.url, fileName, artifact.sha256,
                     isCancelled = { job?.isActive == false },
                     onProgress = { progress ->
-                        downloadProgress[progressKey] = progress
+                        activity.runOnUiThread { downloadProgress[progressKey] = progress }
                         if (progress % 25 == 0) activity.log(activity.getString(R.string.log_download_progress, target, progress))
                     },
                 )
-                downloadProgress[progressKey] = 100
+                activity.runOnUiThread { downloadProgress[progressKey] = 100 }
                 activity.log(activity.getString(R.string.log_downloaded_kb, file.name, file.length() / 1024))
                 if (target == "glasses") {
                     // 传包名绕过 APK 头读取（兼容部分国产手机 getPackageArchiveInfo 返回 null）
@@ -265,49 +279,64 @@ internal class StoreInstallStateHolder(private val activity: MainActivity) {
                                     cachedGlassesInstallState(app, artifact) ?: InstallState.INSTALLED,
                                     InstallStateSource.VERIFIED,
                                 )
-                                Toast.makeText(activity, activity.getString(R.string.install_success_toast, app.name), Toast.LENGTH_SHORT).show()
+                                activity.runOnUiThread {
+                                    Toast.makeText(activity, activity.getString(R.string.install_success_toast, app.name), Toast.LENGTH_SHORT).show()
+                                }
                             } else {
                                 activity.installCache.removeGlasses(pkg)
                                 setGlassesInstallState(pkg, InstallState.NOT_INSTALLED, InstallStateSource.VERIFIED)
                             }
-                            installCheckTick += 1
-                            downloadProgress.remove(progressKey)
-                            downloadCancelJobs.remove(progressKey)
-                            activity.updateBusy(false)
+                            activity.runOnUiThread { installCheckTick += 1 }
+                            finishInstallTask(progressKey)
                         }
                     } else {
                         // 没有包名信息时降级到旧方式（从 APK 头读取）
                         activity.cxrL.installApk(file) { installed ->
                             if (installed) {
-                                Toast.makeText(activity, activity.getString(R.string.install_success_toast, app.name), Toast.LENGTH_SHORT).show()
+                                activity.runOnUiThread {
+                                    Toast.makeText(activity, activity.getString(R.string.install_success_toast, app.name), Toast.LENGTH_SHORT).show()
+                                }
                             }
-                            downloadProgress.remove(progressKey)
-                            downloadCancelJobs.remove(progressKey)
-                            activity.updateBusy(false)
+                            finishInstallTask(progressKey)
                         }
                     }
                 } else {
-                    activity.updateBusy(false)
-                    downloadProgress.remove(progressKey)
-                    downloadCancelJobs.remove(progressKey)
-                    PhonePackageInstallHelper.requestInstall(activity, file, activity::log)
+                    finishInstallTask(progressKey)
+                    // 安装手机端 APK 必须回主线程（FileProvider + startActivity）
+                    activity.runOnUiThread {
+                        PhonePackageInstallHelper.requestInstall(activity, file, activity::log)
+                    }
                 }
             }.onFailure { error ->
-                downloadProgress.remove(progressKey)
-                downloadCancelJobs.remove(progressKey)
-                activity.updateBusy(false)
+                finishInstallTask(progressKey)
                 if (error is CancellationException) {
                     // 用户主动取消：静默清理，不弹错误不触发日志导出
                     return@onFailure
                 }
                 activity.log(activity.getString(R.string.log_install_failed, error.message ?: error.javaClass.simpleName))
                 LogCollector.e("Install", activity.getString(R.string.log_install_failed, error.message ?: error.javaClass.simpleName), error)
-                Toast.makeText(activity, activity.getString(R.string.install_failed, app.name, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
-                // 安装异常时自动弹出错误报告
-                activity.showExportLogDialog()
+                activity.runOnUiThread {
+                    Toast.makeText(activity, activity.getString(R.string.install_failed, app.name, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
+                    // 安装异常时自动弹出错误报告
+                    activity.showExportLogDialog()
+                }
             }
         }
         downloadCancelJobs[progressKey] = job
+    }
+
+    /**
+     * 安装任务收尾：清下载进度、解除取消句柄、复位 busy。
+     *
+     * 三个收尾点（眼镜安装回调 / 手机分支 / 失败分支）共用；[downloadCancelJobs] 是普通
+     * HashMap（非并发容器），统一在主线程改，避免与点击侧并发写入。
+     */
+    private fun finishInstallTask(progressKey: String) {
+        activity.runOnUiThread {
+            downloadProgress.remove(progressKey)
+            downloadCancelJobs.remove(progressKey)
+            activity.updateBusy(false)
+        }
     }
 
     internal fun uninstallArtifact(app: BrewApp, target: String) {
@@ -323,14 +352,20 @@ internal class StoreInstallStateHolder(private val activity: MainActivity) {
         }
 
         if (target == "glasses") {
-            activity.cxrL.uninstallApp(packageName) { uninstalled ->
-                if (uninstalled) {
-                    activity.installCache.removeGlasses(packageName)
-                    setGlassesInstallState(packageName, InstallState.NOT_INSTALLED, InstallStateSource.VERIFIED)
-                    installCheckTick += 1
-                    activity.runOnUiThread { Toast.makeText(activity, activity.getString(R.string.uninstall_success_toast, app.name), Toast.LENGTH_SHORT).show() }
-                } else {
-                    activity.runOnUiThread { Toast.makeText(activity, activity.getString(R.string.uninstall_failed_toast, app.name), Toast.LENGTH_SHORT).show() }
+            // 放 IO：uninstallApp 首段是 session.cleanup()（拆 ADB 会话 / 断 CXR 链路，阻塞 IO），
+            // 主线程同步调用时眼镜离线会卡在建链上 → ANR
+            activity.lifecycleScope.launch(Dispatchers.IO) {
+                activity.cxrL.uninstallApp(packageName) { uninstalled ->
+                    if (uninstalled) {
+                        activity.installCache.removeGlasses(packageName)
+                        setGlassesInstallState(packageName, InstallState.NOT_INSTALLED, InstallStateSource.VERIFIED)
+                        activity.runOnUiThread {
+                            installCheckTick += 1
+                            Toast.makeText(activity, activity.getString(R.string.uninstall_success_toast, app.name), Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        activity.runOnUiThread { Toast.makeText(activity, activity.getString(R.string.uninstall_failed_toast, app.name), Toast.LENGTH_SHORT).show() }
+                    }
                 }
             }
         } else {

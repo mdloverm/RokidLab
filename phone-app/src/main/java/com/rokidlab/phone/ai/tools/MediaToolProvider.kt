@@ -23,6 +23,7 @@ import com.rokidlab.phone.glasses.AiChannel
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import com.rokidlab.phone.glasses.GlassesHandshake
 import com.rokidlab.phone.glasses.LinkProtocol
+import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -31,7 +32,7 @@ import java.util.Locale
 import java.util.UUID
 
 /**
- * MediaToolProvider —— 媒体域（音乐播放/停止/歌词显示）。
+ * MediaToolProvider —— 媒体域（音乐播放/停止/歌词显示/读取当前播放信息）。
  * Phase 4 从 `ToolRegistry.execute` 迁出的该域工具执行分支（逐字搬运，行为不变）。
  */
 internal object MediaToolProvider : ToolProvider {
@@ -41,6 +42,7 @@ internal object MediaToolProvider : ToolProvider {
         "play_song",
         "stop_music",
         "show_lyrics",
+        "get_now_playing",
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
@@ -91,8 +93,71 @@ internal object MediaToolProvider : ToolProvider {
                 }
             }
 
+            "get_now_playing" -> currentSongJson()
+
         else -> throw IllegalArgumentException("未知工具: $name")
         }
+    }
+
+    /**
+     * 当前播放信息（JSON 字符串）。
+     *
+     * **为什么需要这个工具**：AIUI 页面取外部数据的唯一通道是 `globalThis.Lab.callTool`，
+     * 而本域原先是 `play_song` / `stop_music` / `show_lyrics` 三个**只回纯文本**的工具。
+     * 于是"做一个播放器，有歌词有封面"这类需求生成出来的页面**拿不到任何素材**，
+     * 只能摆空壳（用户实测：放歌正常、歌词与封面全空）。
+     *
+     * 歌词与封面早在搜索阶段就已解析（[KuwoMusicApi.Song.lyrics] / [KuwoMusicApi.Song.cover]），
+     * 但此前只经 AVRCP 蓝牙元数据推给**眼镜端系统音乐页**（Rokid Launcher 的 MusicPageActivity，
+     * 由 `show_lyrics` 的 `am start` 拉起），页面本身读不到。本工具把这份数据直接交给页面。
+     *
+     * 返回结构（页面 `JSON.parse` 后用）：
+     * ```json
+     * {"playing":true,"title":"西厢","artist":"后弦","album":"九公主",
+     *  "durationMs":240000,"positionMs":12345,"lineIndex":5,
+     *  "cover":"https://...","lyrics":[{"timeMs":0,"text":"..."}]}
+     * ```
+     * 无歌曲时只回 `{"playing":false,"message":"..."}`。
+     *
+     * 页面同步歌词的方式：拿到本结果后用本地时钟从 `positionMs` 起推进，**不要反复轮询本工具**
+     * —— 蓝牙通道串行且单次 1~3 秒，轮询会让歌词行严重滞后。
+     */
+    private fun currentSongJson(): String {
+        val title = MusicPlayerController.currentTitle
+        if (title.isBlank()) {
+            return JSONObject()
+                .put("playing", false)
+                .put("message", "当前没有正在播放的音乐：先调用 play_song，再读取播放信息。")
+                .toString()
+        }
+        val lyrics = MusicPlayerController.currentLyrics
+        val positionMs = MusicPlayerController.currentPositionMs
+        val lyricArray = JSONArray()
+        lyrics.forEach { line ->
+            lyricArray.put(JSONObject().put("timeMs", line.timeMs).put("text", line.text))
+        }
+        return JSONObject()
+            .put("playing", MusicPlayerController.isPlaying())
+            .put("title", title)
+            .put("artist", MusicPlayerController.currentArtist)
+            .put("album", MusicPlayerController.currentAlbum)
+            .put("durationMs", MusicPlayerController.currentDurationMs)
+            .put("positionMs", positionMs)
+            .put("lineIndex", currentLineIndex(lyrics, positionMs))
+            .put("cover", MusicPlayerController.currentCoverUrl)
+            .put("lyrics", lyricArray)
+            .toString()
+    }
+
+    /**
+     * 播放进度当前落在第几行歌词（歌词按 timeMs 升序；进度早于首行时为 0）。
+     * 无歌词返回 -1 —— 页面据此隐藏歌词区，而不是显示一个空行。
+     */
+    private fun currentLineIndex(lyrics: List<KuwoMusicApi.LyricLine>, positionMs: Long): Int {
+        if (lyrics.isEmpty()) return -1
+        var index = 0
+        lyrics.forEachIndexed { i, line -> if (positionMs >= line.timeMs) index = i }
+        return index
     }
 
     /** 眼镜端系统音乐页（Rokid Launcher 内，manifest 中 exported=true）：随 AVRCP 元数据逐行显示歌词。 */

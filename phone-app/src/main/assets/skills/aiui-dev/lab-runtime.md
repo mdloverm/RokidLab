@@ -20,6 +20,24 @@
 3. `open_aiui_app` 打开演示（本地 .aix 推宿主渲染）；`stop_aiui_app` 关闭；`list_my_aiui_apps` 查历史；**修改已有项目必须先 `read_code_file` 读取当前源码**（只传 project 返回文件清单，带 file 读单个文件全文），再基于真实源码用 `save_code_file` 覆盖写回同一 project 的同一路径，最后 `install_aiui_project` 重装（同名覆盖，VERSION 内容指纹自动触发眼镜重新解压加载）。
 4. **单次输出硬上限**：一次 save_code_file 的代码参数 ≤ 3000 字符（≈120 行，JSON 转义后接近模型单轮输出预算）；单个 .ink ≤ 120 行。超过就**拆页面**（menu/play/help 各自独立 .ink）分多次调用写，每次只写一个文件、写完再写下一个——绝不能一次调用塞超过上限的文件（会被输出截断成废代码）。
 
+### 1.5 能做大到多少（规模上限）
+
+**一句话**：单页 ≤ 120 行，整个应用靠"多拆页面"横向扩展。**没有"最多几页"的限制**，但每多一页/一文件就多一次工具往返；页数越多，后续修改越容易改漏。
+
+| 维度 | 上限 | 性质 |
+|---|---|---|
+| 单个 .ink 页面 | ≤ 120 行 / ≈3000 字符 | **软约定**：宿主不校验，超了会被模型输出预算截断成废代码 |
+| 单次 save_code_file 的 content | ≤ 3000 字符 | 软约定，同上 |
+| 单文件内容 | ≤ 200,000 字符 | **硬闸**，超过直接拒收 |
+| 项目名 | ≤ 40 字符（中英文/数字/下划线/连字符） | 硬闸 |
+| 文件路径的每一段 | ≤ 81 字符 | 硬闸 |
+| 页面数 / 文件数 / 项目总体积 | **未设上限** | — |
+
+- **扩展方式＝拆页面**：menu / play / help 各自独立 .ink，每页都要登记进 app.json 的 `pages` 路由，漏登记页面不会被框架注册（跳不过去）。
+- **舒服的规模**：菜单页 + 1~2 个功能页 + 帮助页（3~5 页）是这个链路最顺手的量级。再多也能做，但注意：修改时是逐文件 read→save，页数多则一次改动要多次往返、更容易漏改。
+- **截断信号（重要）**：若某次 save_code_file 的内容超出模型单轮输出预算，参数 JSON 会在中途被截断，工具会明确回报「工具 save_code_file 的参数不是合法 JSON（多半是内容太长被输出长度截断）」。遇到这条报错**不要原样重试**——把该文件拆成两个更小的文件，或直接拆成两个页面再写。
+- **资源文件**：图片/字体等放项目内 `assets/`（如 `assets/fonts/`），页面里按 `/assets/xxx.png` 引用。`.aix` 打包后经本地 HTTP（支持 Range 续传）推给眼镜，体积本身无硬闸，但**眼镜端解压/渲染的内存边界未做验证**——大资源请分几次小批量加，别一次性塞几十 MB。
+
 ## 2. 渲染宿主差异（自托管 AiuiLinkActivity，官方 ink 引擎 WebView 版）
 
 - 本宿主**只渲染全屏页**，会话卡（只读展示）不可用；生成的页面一律是全屏交互页。
@@ -134,8 +152,9 @@ export default {
 
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
-| play_song | {songName, artist?} | 搜索并播放音乐 |
+| play_song | {songName, artist?} | 搜索并播放音乐（手机端播放）。返回纯文本，**不含封面与歌词** |
 | stop_music | {} | 停止播放 |
+| get_now_playing | {} | **读取当前歌曲的完整信息（JSON 文本）**：title/artist/album/cover/lyrics/positionMs/lineIndex —— 页面要显示封面、歌词就用它，见 §8.5 |
 | get_weather | {city?} | 天气查询 |
 | get_current_time | {} | 当前时间 |
 | set_timer / list_timers | 见清单 | 定时提醒 |
@@ -144,5 +163,43 @@ export default {
 | get_location | {} | 手机当前所在位置 |
 
 上表只是常用项，**完整清单用 `Lab.listTools()` 获取**。手机端新增工具后本文件不需要改动。
+
 - 用户要求「修改/微调/对之前的不满意」时：先 `read_code_file` 读现网源码（文件清单或单文件全文）再动手，只重写受影响的文件，禁止凭印象整页重编；改完同样用同一 project 名重存，回复仍 ≤ 3 句。
 - 需要组件/API 细节时，用 load_skill_section 读取同目录参考文件（components.md / apis-*.md）对应章节；官方 SKILL.md 正文里的相对链接（如 [components.md](./components.md)）即指向这些文件。
+
+### 8.5 音乐播放器（放歌 + 歌词 + 封面）取数范式
+
+`play_song` 只返回一句「已开始播放《X》」的纯文本，**没有封面和歌词**。要做带歌词/封面的播放器，必须
+在 `play_song` 之后再调一次 `get_now_playing`，它返回 JSON 文本（`JSON.parse` 后用）：
+
+```jsonc
+{ "playing": true, "title": "西厢", "artist": "后弦", "album": "九公主",
+  "durationMs": 240000, "positionMs": 12345, "lineIndex": 5,
+  "cover": "https://...",                       // 封面图直链，直接给 <image src>
+  "lyrics": [ { "timeMs": 0, "text": "..." } ] } // 逐行歌词，按 timeMs 升序
+```
+
+要点：
+- **一次取数、本地推进**：拿到 `positionMs` 后用页面本地时钟自己推进高亮行（`Date.now()` 差值即可），
+  **不要反复轮询 `get_now_playing`** —— 蓝牙通道串行、单次 1~3 秒，轮询会让歌词严重滞后。
+- `lineIndex` 是取数那一刻的行号（无歌词时为 -1）；据此立即 `setData` 高亮，之后按本地时钟递增。
+- 封面用 `<image src="{{ cover }}">`（支持远程 URL）；`lyrics` 为空时隐藏歌词区，别渲染空行。
+- 换歌就重走一遍：`play_song` → `get_now_playing`。
+
+```js
+async play(name) {
+  this.setData({ loading: true });
+  try {
+    await globalThis.Lab.callTool('play_song', { songName: name });
+    const info = JSON.parse(await globalThis.Lab.callTool('get_now_playing', {}));
+    this.setData({
+      loading: false, title: info.title, artist: info.artist, cover: info.cover || '',
+      lyrics: info.lyrics || [], line: info.lineIndex,
+      baseMs: info.positionMs || 0, baseAt: Date.now(),
+    });
+    this.startTick();   // 定时用 (Date.now()-baseAt)+baseMs 找当前行，setData 刷新
+  } catch (err) {
+    this.setData({ loading: false });   // 失败同样要清 loading
+  }
+}
+```

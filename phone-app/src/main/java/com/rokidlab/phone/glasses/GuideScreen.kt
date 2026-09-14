@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.delay
 
 /**
  * 引导界面 - 指导用户完成前置条件
@@ -526,6 +527,12 @@ private fun InstallLinkStep(
     }
 }
 
+/**
+ * WiFi 扫描超时兜底：超过该时长仍未收到扫描结果广播，就强制退出「正在扫描」态。
+ * 手机「定位服务」总开关关闭、或扫描被系统节流时，系统不会发结果广播。
+ */
+private const val WIFI_SCAN_TIMEOUT_MS = 8_000L
+
 @Suppress("DEPRECATION")
 @Composable
 private fun ConfigureWifiStep(
@@ -557,7 +564,10 @@ private fun ConfigureWifiStep(
     var sending by remember { mutableStateOf(false) }
     var configured by remember { mutableStateOf(false) }
     var scanResults by remember { mutableStateOf<List<ScanResult>>(emptyList()) }
-    var isScanning by remember { mutableStateOf(true) }
+    var isScanning by remember { mutableStateOf(false) }
+    var scanTimedOut by remember { mutableStateOf(false) }
+    // 自增即重新扫描；Wi-Fi 打开 / 拿到定位权限时也会自动重扫
+    var scanAttempt by remember { mutableStateOf(0) }
     var wifiEnabled by remember { mutableStateOf(wifiManager?.isWifiEnabled == true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -568,24 +578,46 @@ private fun ConfigureWifiStep(
         }
     }
 
-    // WiFi 扫描
-    DisposableEffect(hasLocationPermission) {
-        if (!hasLocationPermission || wifiManager == null) return@DisposableEffect onDispose {}
+    // Wi-Fi 开关状态：**必须单独监听**，不能顺带在扫描广播里读。
+    // Wi-Fi 关闭时系统根本不会发扫描结果广播，于是 `wifiEnabled` 永远停在 false ——
+    // 用户点「打开系统设置」去开 Wi-Fi、回到本页，界面依旧显示「WiFi 已关闭」，
+    // 看到的就是"卡住"。
+    DisposableEffect(Unit) {
+        wifiEnabled = wifiManager?.isWifiEnabled == true
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context, intent: Intent) {
+                wifiEnabled = wifiManager?.isWifiEnabled == true
+            }
+        }
+        val filter = IntentFilter(WifiManager.WIFI_STATE_CHANGED_ACTION)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            ctx.registerReceiver(receiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            ctx.registerReceiver(receiver, filter)
+        }
+        onDispose { ctx.unregisterReceiver(receiver) }
+    }
+
+    // WiFi 扫描：key 带上 wifiEnabled / scanAttempt，Wi-Fi 打开或用户点「重新扫描」都会重来一次
+    DisposableEffect(hasLocationPermission, wifiEnabled, scanAttempt) {
+        if (!hasLocationPermission || wifiManager == null || !wifiEnabled) {
+            isScanning = false
+            return@DisposableEffect onDispose {}
+        }
 
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: android.content.Context, intent: Intent) {
                 isScanning = false
-                wifiEnabled = wifiManager.isWifiEnabled
+                scanTimedOut = false
+                // scanResults 在定位权限被撤销等边界会抛 SecurityException（系统边界），
+                // 不能让广播回调炸出去，否则 isScanning 永远停在 true
+                val raw = runCatching { wifiManager.scanResults }.getOrDefault(emptyList())
                 // 去重：同 SSID 保留信号最强的
-                val grouped = wifiManager.scanResults
+                scanResults = raw
                     .filter { it.SSID.isNotBlank() }
                     .groupBy { it.SSID }
-                    .mapValues { (_, results) -> results.maxByOrNull { it.level } }
-                    .values
-                    .filterNotNull()
+                    .mapNotNull { (_, results) -> results.maxByOrNull { it.level } }
                     .sortedByDescending { it.level }
-                scanResults = grouped
-                wifiManager.startScan() // 持续扫描
             }
         }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -593,10 +625,24 @@ private fun ConfigureWifiStep(
         } else {
             ctx.registerReceiver(receiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION))
         }
-        wifiManager.startScan()
         isScanning = true
+        scanTimedOut = false
+        // 不再"收到广播就立刻 startScan()"：那样形成自续扫描，很快撞上系统扫描节流
+        // （节流后既没有广播也不会产生结果，isScanning 永久停在 true），改为用户手动重扫。
+        runCatching { wifiManager.startScan() }
 
         onDispose { ctx.unregisterReceiver(receiver) }
+    }
+
+    // 扫描超时兜底：手机「定位服务」总开关关闭、或扫描被系统节流时，系统不会发扫描结果广播，
+    // isScanning 会永久停在 true → 页面一直显示「正在扫描…」。到点强制退出扫描态。
+    LaunchedEffect(hasLocationPermission, wifiEnabled, scanAttempt) {
+        if (!hasLocationPermission || !wifiEnabled) return@LaunchedEffect
+        delay(WIFI_SCAN_TIMEOUT_MS)
+        if (isScanning) {
+            isScanning = false
+            scanTimedOut = true
+        }
     }
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -700,51 +746,72 @@ private fun ConfigureWifiStep(
                         }
                     }
                 }
-            } else if (isScanning && scanResults.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        ctx.getString(R.string.wifi_scanning),
-                        color = BrewMuted, fontSize = 14.sp,
-                    )
-                }
-            } else if (scanResults.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        ctx.getString(R.string.wifi_no_networks),
-                        color = BrewMuted, fontSize = 14.sp,
-                    )
-                }
             } else {
-                // 网络列表
-                LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
-                    items(scanResults, key = { it.SSID }) { network ->
-                        WifiNetworkItem(
-                            ssid = network.SSID,
-                            level = network.level,
-                            capabilities = network.capabilities,
-                            onClick = { selectedSsid = network.SSID },
+                if (isScanning && scanResults.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            ctx.getString(R.string.wifi_scanning),
+                            color = BrewMuted, fontSize = 14.sp,
                         )
+                    }
+                } else if (scanResults.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            ctx.getString(
+                                if (scanTimedOut) R.string.wifi_scan_timeout else R.string.wifi_no_networks
+                            ),
+                            color = BrewMuted, fontSize = 14.sp, textAlign = TextAlign.Center,
+                        )
+                    }
+                } else {
+                    // 网络列表
+                    LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
+                        items(scanResults, key = { it.SSID }) { network ->
+                            WifiNetworkItem(
+                                ssid = network.SSID,
+                                level = network.level,
+                                capabilities = network.capabilities,
+                                onClick = { selectedSsid = network.SSID },
+                            )
+                        }
                     }
                 }
 
                 Spacer(Modifier.height(8.dp))
 
-                // 手动输入 SSID
-                Box(
-                    modifier = Modifier.fillMaxWidth().clickable { selectedSsid = "" }
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center,
+                // 出口行：**必须有**。原来「正在扫描…」「未发现网络」两个分支里既没有手动输入、
+                // 也没有跳过按钮，一旦扫描卡住用户就彻底出不去这一步（这正是"卡住"的表现）。
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        ctx.getString(R.string.wifi_manual_input),
-                        color = BrewInfo, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                    )
+                    if (!isScanning) {
+                        Box(
+                            modifier = Modifier.clickable { scanAttempt += 1 }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Text(
+                                ctx.getString(R.string.wifi_rescan),
+                                color = BrewInfo, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                            )
+                        }
+                    }
+                    Box(
+                        modifier = Modifier.clickable { selectedSsid = "" }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        Text(
+                            ctx.getString(R.string.wifi_manual_input),
+                            color = BrewInfo, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        )
+                    }
                 }
 
                 Spacer(Modifier.height(8.dp))

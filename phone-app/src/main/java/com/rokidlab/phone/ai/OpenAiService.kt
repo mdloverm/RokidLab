@@ -213,6 +213,12 @@ class OpenAiService(
      *                    可能远慢于远程，调用方对本地端点已调大超时；远程保持 30s 使打断
      *                    让出时间有界）。返回半截数据由调用方依据自己的取消标志丢弃。
      * @param retryBaseDelayMs 首次重试的退避基数（毫秒），逐次翻倍，上限 4s。
+     * @param readTimeout 单次 HTTP 读超时（毫秒），默认用构造 [readTimeoutMs]。
+     *   **代码生成轮必须放大**：模型在产出超大工具参数 JSON（save_code_file 的 content）
+     *   之前可能长时间不向 SSE 下发任何数据，30s 会在首包到达前就超时、白白重放整轮
+     *   （重放又要重新生成一次大文件，用户侧表现为"生成卡住"）。远程默认仍保持 30s，
+     *   是为了让「用户打断」的让出时间有界（readLine 阻塞期间无法感知 isCancelled），
+     *   所以只在确知进入代码生成模式后传大值。
      */
     fun chatTurnStream(
         messages: JSONArray,
@@ -226,12 +232,13 @@ class OpenAiService(
          */
         retryAttempts: Int = 2,
         retryBaseDelayMs: Long = 500,
+        readTimeout: Int? = null,
     ): ChatTurn {
         var lastError: Exception? = null
         repeat(retryAttempts) { attempt ->
             val accumulator = SseStreamAccumulator(onDelta)
             try {
-                return streamOnce(messages, tools, accumulator, isCancelled)
+                return streamOnce(messages, tools, accumulator, isCancelled, readTimeout ?: readTimeoutMs)
             } catch (e: Exception) {
                 lastError = e
                 val retryable = attempt < retryAttempts - 1
@@ -269,6 +276,8 @@ class OpenAiService(
         tools: List<JSONObject>?,
         accumulator: SseStreamAccumulator,
         isCancelled: (() -> Boolean)?,
+        /** 单次 HTTP 读超时（毫秒）；取值与理由见 [chatTurnStream] 的 readTimeout 参数 */
+        timeoutMs: Int,
     ): ChatTurn {
         val base = baseUrl.trimEnd('/')
         val endpoint = when {
@@ -310,8 +319,9 @@ class OpenAiService(
             body = requestBody.toString(),
             headers = headers,
             connectTimeout = 15000,
-            // 由 readTimeoutMs 控制：本地 Ollama 加载/思考首字慢，已按需调大
-            readTimeout = readTimeoutMs,
+            // 由调用方给定的 timeoutMs 控制（默认 readTimeoutMs）：本地 Ollama 加载/思考首字慢
+            // 已按需调大；代码生成轮另传大值（见 chatTurnStream 的 readTimeout）
+            readTimeout = timeoutMs,
         ) { data ->
             // 用户打断：尽快停止读取（readLine 未阻塞时立即生效）
             if (isCancelled?.invoke() == true) {
@@ -383,7 +393,8 @@ class OpenAiService(
             val errMsg = err?.optString("message") ?: "no choices in response"
             throw Exception("AI API error: $errMsg")
         }
-        val message = choices.getJSONObject(0).getJSONObject("message")
+        val choice = choices.getJSONObject(0)
+        val message = choice.getJSONObject("message")
         val content = if (message.isNull("content")) null else message.optString("content")
         // 非流式响应：思考过程位于顶层 message.reasoning_content（思考开启时有值，供多轮回传）
         val reasoning = if (message.isNull("reasoning_content")) null else message.optString("reasoning_content")
@@ -403,7 +414,8 @@ class OpenAiService(
             }
         }
         Log.i(TAG, "chatTurn: toolCalls=${toolCalls.size} content=${content?.take(60)} reasoning=${reasoning?.length ?: 0}")
-        return ChatTurn(content, toolCalls, reasoning)
+        // finish_reason 与流式路径对齐（length=被 max_tokens 截断），否则本路径的截断无从诊断
+        return ChatTurn(content, toolCalls, reasoning, choice.optString("finish_reason").ifBlank { null })
     }
 
     /**
@@ -460,6 +472,10 @@ data class ChatTurn(
     /** 本轮的模型思考过程全文（reasoning_content，仅思考开启时有值）。
      *  开启思考的多轮对话须把该内容原样回传给服务端，否则 DeepSeek V4 会拒绝后续请求 */
     val reasoning: String? = null,
+    /** 流终止原因：length=被 max_tokens 截断（[content]/工具参数可能是半截的，JSON 解析会失败）；
+     *  stop=正常结束；null=服务端未给出。调用方据此把「被截断」如实告知模型，
+     *  避免它以为是格式问题而原样重试同样大的内容。 */
+    val finishReason: String? = null,
 )
 
 /**
@@ -568,6 +584,7 @@ internal class SseStreamAccumulator(
             content.toString().ifBlank { null },
             toolCalls,
             reasoning.toString().ifBlank { null },
+            finishReason,
         )
     }
 }

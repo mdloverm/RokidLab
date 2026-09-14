@@ -184,6 +184,14 @@ object ToolRegistry {
             displayNameRes = R.string.ai_tool_show_lyrics_name,
             descriptionRes = R.string.ai_tool_show_lyrics_desc,
         ),
+        // AIUI 页面要渲染「歌名/封面/逐行歌词」时的唯一取数口：上面三个工具只回纯文本摘要，
+        // 页面拿不到任何素材（详见 MediaToolProvider.currentSongJson 的说明）。
+        ToolMeta(
+            name = "get_now_playing",
+            group = DOMAIN_MEDIA,
+            displayNameRes = R.string.ai_tool_get_now_playing_name,
+            descriptionRes = R.string.ai_tool_get_now_playing_desc,
+        ),
         ToolMeta(
             name = "show_image",
             group = DOMAIN_DISPLAY,
@@ -430,6 +438,7 @@ object ToolRegistry {
         "play_song" -> "正在搜索歌曲…"
         "stop_music" -> "正在停止播放…"
         "show_lyrics" -> "正在打开歌词…"
+        "get_now_playing" -> "正在读取播放信息…"
         "show_image" -> "正在显示图片…"
         "search_web" -> "正在搜索网页…"
         "fetch_webpage" -> "正在读取网页内容…"

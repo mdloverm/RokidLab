@@ -344,6 +344,10 @@ private suspend fun reinstallGenerated(
 /**
  * 删除记录 + 手机端 .aix 包；源码目录/眼镜端文件按弹窗选项连带删除。
  * 眼镜端删除失败不回滚本地记录（本地已删干净，眼镜残留靠超量自动清理）。
+ *
+ * **源文件有两份，必须都删**：私有镜像（`filesDir/aiui_projects/<项目>/`，打包 .aix 读它）
+ * 与公开的 `Download/<项目>/`（MediaStore，用户在文件管理器里看到的就是这份）。
+ * 旧实现只删了前者，用户看到的现象是「项目删了，手机下载目录里的源文件还在」。
  */
 private suspend fun deleteRecord(
     ctx: android.content.Context,
@@ -354,6 +358,7 @@ private suspend fun deleteRecord(
     AiuiAppRegistry.remove(ctx, r.agentId)
     if (deleteSource) {
         runCatching { r.sourceProjectDir?.let { File(it).deleteRecursively() } }
+        runCatching { r.project?.takeIf { it.isNotBlank() }?.let { com.rokidlab.phone.ai.WebTools.deleteDownloadedProject(ctx, it) } }
     }
     runCatching { AiuiProject.packageFile(ctx, r.agentId).delete() }
     if (deleteOnGlasses) {

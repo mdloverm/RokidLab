@@ -100,6 +100,19 @@ object MusicPlayerController {
     fun isPlaying(): Boolean = player?.isPlaying == true
 
     /**
+     * 当前播放进度（毫秒）。未播放/取用异常时为 0。
+     *
+     * 供 `get_now_playing` 工具使用：AIUI 页面拿到一次进度后即可用本地时钟自行推进歌词行，
+     * 不必反复走蓝牙通道轮询（蓝牙串行且单次 1~3 秒，轮询会让歌词严重滞后）。
+     */
+    val currentPositionMs: Long
+        get() = runCatching { player?.currentPosition?.toLong() ?: 0L }.getOrDefault(0L)
+
+    /** 当前歌曲总时长（毫秒）。未播放/准备中为 0。 */
+    val currentDurationMs: Long
+        get() = runCatching { player?.duration?.toLong() ?: 0L }.getOrDefault(0L)
+
+    /**
      * 播放指定 mp3 直链。已有播放时自动先停止（换歌场景）。
      * 异步准备完成后自动开始播放；失败自动释放并清理状态。
      * [lyrics] 为该歌曲的带时间戳歌词，仅缓存供「显示歌词」工具使用，不在播放时推送。

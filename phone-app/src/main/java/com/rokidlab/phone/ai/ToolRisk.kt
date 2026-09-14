@@ -47,6 +47,8 @@ object ToolRiskMap {
         "get_phone_status" to ToolRisk.READ_ONLY,
         "get_location" to ToolRisk.READ_ONLY,
         "query_calendar" to ToolRisk.READ_ONLY,
+        // 只读当前播放信息（歌名/封面/歌词），不改任何状态；AIUI 播放器页面靠它取素材
+        "get_now_playing" to ToolRisk.READ_ONLY,
 
         // ── LOCAL_SIDE_EFFECT ──
         "launch_glasses_app" to ToolRisk.LOCAL_SIDE_EFFECT,

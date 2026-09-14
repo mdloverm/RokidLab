@@ -26,7 +26,16 @@ import org.json.JSONObject
  * Session 保留同名 public 门面（聊天界面 / photoQuiz / asrBridge 零改动）。
  */
 class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrLHiRokidSession) {
-    private companion object { const val TAG = "AiConversationService" }
+    private companion object {
+        const val TAG = "AiConversationService"
+
+        /**
+         * 代码生成轮的 HTTP 读超时（毫秒）。
+         * 模型产出超大工具参数 JSON（save_code_file 的 content）前可能长时间不向 SSE 下发
+         * 数据，默认 30s 会在首包到达前就超时、白白重放整轮（重放等于重新生成一次大文件）。
+         */
+        const val CODE_GEN_READ_TIMEOUT_MS = 120_000
+    }
 
     /**
      * AI 下行发送互斥锁：WiFi 稳定连接时聊天发送 / ASR push / 轮询 / SDK 上行
@@ -407,11 +416,22 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                                 com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION ->
                                     com.rokidlab.phone.ai.SkillRegistry.executeSection(session.appContext, tc.arguments)
                                 else -> {
-                                    // Phase 4 风险闸门：限流 + EXTERNAL_SIDE_EFFECT 确认
-                                    // （fail-open：无确认通道/超时→降级放行；仅眼镜端显式取消才拦截，见 ToolPolicy doc）
-                                    val argsObj = runCatching { org.json.JSONObject(tc.arguments) }
-                                        .getOrNull() ?: org.json.JSONObject()
-                                    when (
+                                    // 参数 JSON 非法（非空白却解析失败）：多半是模型单次输出被 max_tokens
+                                    // 截断、工具参数在半途断开（少数是模型格式瑕疵）。旧实现沿用 ToolRegistry.execute
+                                    // 的「非法即兜底成空对象」策略，下游只会回「保存失败：项目名不能为空」
+                                    // 这类误导性错误 —— 模型看不出真实原因，往往原样重试同样大的内容，
+                                    // 白耗轮次。这里把真实原因直接告诉它。
+                                    // 空白参数仍按空对象处理（国产/本地模型对无参工具常返回 ""）。
+                                    val argsObj = if (tc.arguments.isBlank()) {
+                                        org.json.JSONObject()
+                                    } else {
+                                        runCatching { org.json.JSONObject(tc.arguments) }.getOrNull()
+                                    }
+                                    if (argsObj == null) {
+                                        "工具 ${tc.name} 的参数不是合法 JSON（多半是内容太长被输出长度" +
+                                            "截断，也可能是格式有误）。请修正后重发，不要原样重试：内容过长就拆小" +
+                                            "——一次只写一个文件、单个文件不超过 120 行、多个文件分多次调用。"
+                                    } else when (
                                         val policy = com.rokidlab.phone.ai.ToolPolicy.check(
                                             com.rokidlab.phone.ai.ToolPolicy.SOURCE_CONVERSATION,
                                             tc.name,
@@ -443,6 +463,9 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 // 连续空轮计数：空轮 = 既无工具调用也无正文，说明模型在"只思考不出手"。
                 // 实测每轮空转 60-75s，等满 6 轮要 6 分钟以上，用户侧表现就是"一直等待回复"。
                 var emptyRounds = 0
+                // 上一轮是否被 max_tokens 截断（finish_reason=length）：截断会造成空轮或半截工具参数。
+                // 空轮引导语必须点明"被截断了、请拆小再发"，否则模型以为自己没出手，会原样重试同样大的内容。
+                var truncatedLastRound = false
                 // AIUI 生成场景标志：命中 load_skill(aiui-dev)/save_code_file 后置位，并把 tools 切到
                 // 精简 AIUI 子集（SESSION_AIUI_DOMAINS），仅切换一次
                 var aiuiMode = false
@@ -467,7 +490,12 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         // 本地 Ollama 不重试：首字慢是「加载/思考中」而非抖动，重试只会重复加载翻倍等待；
                         // 远程 3 次配合指数退避（500ms→1s→2s），重放安全边界=尚无 content 推给 UI
                         retryAttempts = if (localBase) 1 else 3,
+                        // 代码生成模式（已 load_skill(aiui-dev) / 已开始落盘）才放大读超时：模型产出
+                        // 超大工具参数 JSON 前可能长时间无 SSE 数据，30s 会在首包前超时、白白重放整轮。
+                        // 非代码生成轮保持 30s，让「用户打断」的让出时间有界（见 chatTurnStream doc）。
+                        readTimeout = if (aiuiMode) CODE_GEN_READ_TIMEOUT_MS else null,
                     )
+                    truncatedLastRound = turn.finishReason == "length"
                     if (turn.toolCalls.isEmpty()) {
                         // 有正文：最终回复，收尾
                         if (!turn.content.isNullOrBlank()) {
@@ -485,13 +513,19 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             Log.w(TAG, "chatTurnStream empty turn round=$round, give up after $emptyRounds consecutive empty rounds")
                             break
                         }
-                        val nudge = if (aiuiMode) {
-                            "请立即行动，不要再空想：你已加载 aiui-dev 技能。按顺序调用 save_code_file，" +
-                                "先保存 app.json（含 pages 与 window 配置），再逐文件保存页面代码（pages/index/index），" +
-                                "一次只写一个文件、不要一次输出超大 JSON。全部写完后再用一两句中文总结。"
-                        } else {
-                            "请不要再停留在思考：如果任务需要写代码，立即调用 save_code_file 一次写一个文件；" +
-                                "如果已写完或无法完成，直接用一两句中文给出最终结论。"
+                        val nudge = when {
+                            // 被截断导致的空轮（content 被切掉、工具调用没收尾）：点明真实原因，
+                            // 否则模型会以为是"自己没出手"，原样重发同样大的内容再被截断一次。
+                            truncatedLastRound ->
+                                "你上一次的输出因过长被截断了。请立刻把内容拆小：一次只调用 save_code_file 写一个文件，" +
+                                    "单个文件不超过 120 行，app.json 与页面代码分开写，绝不要在一次调用里塞多个文件。"
+                            aiuiMode ->
+                                "请立即行动，不要再空想：你已加载 aiui-dev 技能。按顺序调用 save_code_file，" +
+                                    "先保存 app.json（含 pages 与 window 配置），再逐文件保存页面代码（pages/index/index），" +
+                                    "一次只写一个文件、不要一次输出超大 JSON。全部写完后再用一两句中文总结。"
+                            else ->
+                                "请不要再停留在思考：如果任务需要写代码，立即调用 save_code_file 一次写一个文件；" +
+                                    "如果已写完或无法完成，直接用一两句中文给出最终结论。"
                         }
                         messages.put(JSONObject().apply {
                             put("role", "user")
@@ -624,7 +658,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         finalTurn = try {
                             // 总结轮常携带大工具参数/大段代码，deepseek 单次生成可能远超默认 30s：
                             // 用 120s 单次（不重试，避免翻倍等待）保证能等到模型产出 save_code_file 调用。
-                            service.chatTurn(messages, tools = activeTools, readTimeout = 120_000, attempts = 1)
+                            service.chatTurn(messages, tools = activeTools, readTimeout = CODE_GEN_READ_TIMEOUT_MS, attempts = 1)
                         } catch (_: Exception) {
                             null
                         }
@@ -693,7 +727,12 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             if (!projName.isNullOrBlank()) append("的“$projName”项目")
                             append("。")
                         }
-                    } else null
+                    } else {
+                        // 一次 save_code_file 都没写成功（参数被截断 / 校验被拒）：必须给失败结论。
+                        // 传 null 会落到 finalizeCodeGenReply 内部的「文件已生成完毕，保存在手机下载目录。」
+                        // 兜底 —— 用户看到的是假成功提示，而实际一个文件都没有落盘。
+                        "抱歉，这次没能成功生成文件，生成被中断了。请再说一次，或把需求拆小一点（比如先只做首页）。"
+                    }
                     reply = com.rokidlab.phone.ai.finalizeCodeGenReply(reply, authoritative)
                 }
                 replyRef.set(reply)

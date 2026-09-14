@@ -243,6 +243,8 @@
     <string name="wifi_grant_permission">Grant Location Permission</string>
     <string name="wifi_scanning">Scanning WiFi networks…</string>
     <string name="wifi_no_networks">No WiFi networks found</string>
+    <string name="wifi_scan_timeout">No WiFi networks found. Make sure Location Services is enabled, then scan again.</string>
+    <string name="wifi_rescan">Scan Again</string>
     <string name="wifi_manual_input">Enter SSID manually</string>
     <string name="wifi_change_network">Change</string>
 
@@ -508,6 +510,8 @@
     <string name="ai_tool_stop_music_desc">Stop currently playing music, answer \"stop playing\", \"turn it off\", \"enough music\"</string>
     <string name="ai_tool_show_lyrics_name">Show Lyrics</string>
     <string name="ai_tool_show_lyrics_desc">Bring up the lyric page on Rokid glasses. Lyrics are pushed automatically via Bluetooth AVRCP during playback; this tool only opens / re-triggers the lyric page. Triggered by \"show lyrics\", \"open lyrics\"</string>
+    <string name="ai_tool_get_now_playing_name">Now Playing Info</string>
+    <string name="ai_tool_get_now_playing_desc">Read full info about the current song (title, artist, album, cover URL, line-by-line lyrics and playback position) as JSON text. AIUI player pages use it to render the cover and lyrics; also answers \"what song is playing\", \"show me the cover\"</string>
     <string name="ai_tool_show_image_name">Show Image</string>
     <string name="ai_tool_show_image_desc">Show an image: rendered in the phone-side chat bubble by default; if the glasses are connected it is also mirrored to a glasses overlay (~12s, auto-dismiss). Pass a public image URL (http/https) and optional caption; if the user just asks to show the current song cover, the URL can be omitted. Triggered by \"show image\", \"show cover\", etc.</string>
     <string name="ai_tool_search_web_name">Web Search</string>

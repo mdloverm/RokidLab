@@ -1,5 +1,6 @@
 package com.rokidlab.phone.ai
 
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.os.Build
@@ -286,6 +287,61 @@ object WebTools {
         val file = File(base, "$proj/$rel").apply { parentFile?.mkdirs() }
         file.writeText(content, Charsets.UTF_8)
         return "已生成 $proj/$rel（${content.length} 字符）。项目目录：$file"
+    }
+
+    /**
+     * 删除「下载目录/<项目名>/」下的全部生成文件（[writeProjectFile] 落盘的公开副本）。
+     *
+     * **为什么必须删这里**：生成的源文件同时存在两处 —— 公开的 `Download/<项目名>/`
+     * （MediaStore，用户在文件管理器里能看到，AI 回复里报的也是这个路径）与私有镜像
+     * `filesDir/aiui_projects/<项目名>/`（打包 .aix 时读它）。管理页删除项目时只删了
+     * 私有镜像，于是用户看到「项目删了，手机上的源文件目录还在」。
+     *
+     * API29+ 走 MediaStore：先查 RELATIVE_PATH 前缀匹配的行，再按 _ID 逐条删除 ——
+     * 用 id 而不是 LIKE 通配，避免项目名里的 `_` / `%` 被当成 LIKE 通配符误伤。
+     * 低版本退化为删除应用专属下载目录（免存储权限）。
+     *
+     * @return 实际删除的文件数（仅用于日志）
+     */
+    fun deleteDownloadedProject(context: Context, project: String): Int {
+        val proj = project.trim()
+        if (proj.isBlank()) return 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val prefix = "${Environment.DIRECTORY_DOWNLOADS}/$proj/"
+            val uri = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            val ids = mutableListOf<Long>()
+            runCatching {
+                context.contentResolver.query(
+                    uri,
+                    arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.RELATIVE_PATH),
+                    null,
+                    null,
+                    null,
+                )?.use { c ->
+                    val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                    val relCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
+                    while (c.moveToNext()) {
+                        val rel = c.getString(relCol) ?: continue
+                        if (rel.startsWith(prefix)) ids.add(c.getLong(idCol))
+                    }
+                }
+            }.onFailure { Log.w(TAG, "deleteDownloadedProject: query failed for $proj: ${it.message}") }
+            var deleted = 0
+            ids.forEach { id ->
+                runCatching {
+                    if (context.contentResolver.delete(ContentUris.withAppendedId(uri, id), null, null) > 0) {
+                        deleted++
+                    }
+                }
+            }
+            Log.i(TAG, "deleteDownloadedProject: $proj -> deleted $deleted/${ids.size} files under Download/$proj/")
+            return deleted
+        }
+        // API < 29：writeProjectFile 的兜底路径写在应用专属下载目录，直接整目录删
+        val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, proj)
+        val ok = runCatching { dir.deleteRecursively() }.getOrDefault(false)
+        Log.i(TAG, "deleteDownloadedProject(legacy): $proj -> removed=$ok")
+        return if (ok) 1 else 0
     }
 
     /**
