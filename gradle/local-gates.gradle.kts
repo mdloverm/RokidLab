@@ -14,14 +14,25 @@
 
 val checkGitClean by tasks.registering {
     group = "verification"
-    description = "release 构建前校验工作区无未提交改动（git status --porcelain 必须为空）"
+    description = "release 构建前校验模块所在 git 仓库无未提交改动（git status --porcelain 必须为空）"
     doLast {
         if (providers.gradleProperty("allowDirtyWorktree").orNull == "true") {
             logger.lifecycle("checkGitClean: 已由 -PallowDirtyWorktree=true 跳过（禁止用于正式出包）")
             return@doLast
         }
+        // 锚定到模块所在 git 仓库根，不依赖守护进程当前工作目录：
+        // 构建入口唯一化后根工程是外层壳（d:\rokidapp，源码目录全部未跟踪、永不洁净），
+        // 旧实现受守护进程 CWD 漂移影响会误检壳工程状态，与「产物须与 Gitee 提交追溯对应」的语义不符。
+        val topLevelExec = providers.exec {
+            commandLine("git", "-C", project.projectDir.absolutePath, "rev-parse", "--show-toplevel")
+            isIgnoreExitValue = true
+        }
+        if (topLevelExec.result.get().exitValue != 0) {
+            error("checkGitClean: git rev-parse 执行失败——模块 ${project.projectDir} 不在 git 工作区内")
+        }
+        val repoRoot = topLevelExec.standardOutput.asText.get().trim()
         val execOutput = providers.exec {
-            commandLine("git", "status", "--porcelain")
+            commandLine("git", "-C", repoRoot, "status", "--porcelain")
             isIgnoreExitValue = true
         }
         val exitCode = execOutput.result.get().exitValue
