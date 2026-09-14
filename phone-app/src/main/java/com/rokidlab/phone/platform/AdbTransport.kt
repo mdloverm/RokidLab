@@ -80,6 +80,29 @@ class AdbTransport(
         const val WIFI_LIVENESS_TIMEOUT_MS = 2_000
     }
 
+    /**
+     * 建链专锁：把「TCP 建链 + ADB 握手」（最长 TCP 超时 10s + 握手超时 15s）与类锁 [this] 分离。
+     *
+     * **为什么必须分离**：类锁同时保护 [release] / [shutdown]，而这两个方法会在**主线程**被调用
+     * —— `CxrLHiRokidSession.cleanup()` → `adbTransport.shutdown()`，而 `cleanup()` 是
+     * 「引导页跳过/发送按钮」「主页自动拉起 RokidLink」等同步路径的第一段。旧实现把建链放在类锁内，
+     * 眼镜不在线或 WiFi 失联时一次建链要等满 TCP 超时 + 握手超时，期间主线程只能死等这把锁，
+     * 5s 内无法响应触摸 → 系统弹「无响应」（2026-09-14 真机三次 ANR 全是这一条栈）。
+     *
+     * 本锁只串行化建链本身（并发建出两条 RFCOMM 会话会把彼此挤断），**不与类锁同时持有**。
+     */
+    private val connectLock = Any()
+
+    /**
+     * 会话代数：每次 [release] / [shutdown] 自增。
+     *
+     * 建链是锁外的长耗时操作，期间调用方可能已经显式释放会话（主线程 `cleanup()`）。
+     * 建链完成后必须比对代数，把「释放期间建成」的会话丢弃 —— 否则会复活一个
+     * 调用方已明确要拆掉的会话，在眼镜侧留下一条无人持有的 RFCOMM 通道。
+     */
+    @Volatile
+    private var generation = 0L
+
     @Volatile
     private var client: AdbShellClient? = null
 
@@ -116,11 +139,12 @@ class AdbTransport(
      * 取共享 ADB shell 会话：已连接则直接复用；断开/缺失则按当前端点重建。
      * @return null = 无可用路径或建链失败（调用方应降级，**不要**自行新建会话）
      *
-     * **锁的边界**（[AdbShellClient.isBusy] 之外的关键约束）：类锁只保护状态读写与建链，
+     * **锁的边界**：类锁只保护**状态读写**（[client] / [currentEndpoint] / [upgradeReady] /
+     * [lastUsedAt] / [generation]），建链用的 [connectLock] 是独立的一把、且绝不在持有类锁时获取。
      * 两类阻塞操作被刻意留在锁外 —— ① [cachedWifiRouteIfDead] 的 TCP 存活探测（最长 2s）；
-     * ② `endpointProvider()` 内部的 `runBlocking { resolve }`。旧实现把整个方法 `@Synchronized`，
-     * 于是「空闲 >5s 后的取用」会持锁等满一次 TCP 往返，并发 `get()` / `release()` 全被堵在锁外
-     * （AI 工具取会话变慢；长连接消费者上场前的 `release()` 也被拖住）。
+     * ② `endpointProvider()` 内部的 `runBlocking { resolve }`；③ [AdbShellClient.connect]
+     * （TCP 10s + 握手 15s）。旧实现把整个方法 `@Synchronized` / 把建链留在类锁内，于是
+     * 主线程的 [release] / [shutdown] 会被这些阻塞操作堵死（ANR 根因，见 [connectLock]）。
      */
     fun get(): AdbShellClient? {
         // ── 锁外①：WiFi 缓存会话的空闲存活校验（只读 volatile 快照 + 一次 TCP 探测）──
@@ -166,26 +190,22 @@ class AdbTransport(
         // 并发解析最多造成重复探测，不会重复建链 —— 由下面的二次确认兜住。
         val endpoint = endpointProvider() ?: return null
 
-        // ── 锁内②：建链。二次确认避免并发重复建链（第二条 RFCOMM 会话会把第一条挤断）──
-        synchronized(this) {
-            client?.let { cached -> if (cached.isConnected()) return cached }
-            return try {
+        // ── 建链段：串行化用 [connectLock]，建链本身在类锁外（见 [connectLock] 注释）──
+        synchronized(connectLock) {
+            // 二次确认：并发取用者可能已被前一个线程建好会话，直接复用，
+            // 避免并发建出两条会话（第二条 RFCOMM 会把第一条挤断）。
+            synchronized(this) {
+                client?.let { cached -> if (cached.isConnected()) return cached }
+            }
+
+            // 建链前的代数快照：期间若发生 release()/shutdown()（主线程 cleanup 等），
+            // 本次建成的会话必须丢弃，不能复活调用方已明确要拆掉的会话。
+            val genAtStart = generation
+
+            val established: AdbShellClient? = try {
                 val c = AdbShellClient(contextProvider(), endpoint.ip, endpoint.port)
-                if (c.connect()) {
-                    client = c
-                    currentEndpoint = endpoint
-                    upgradeReady = false
-                    lastUsedAt = System.currentTimeMillis()
-                    Log.i(TAG, "shared adb session established -> ${endpoint.ip}:${endpoint.port}")
-                    c
-                } else {
+                if (c.connect()) c else {
                     runCatching { c.disconnect() }
-                    // 连接失败（含蓝牙隧道 RFCOMM 卡顿/半开）时通知调用方清理线路缓存
-                    onRouteFailure()
-                    // WiFi 端点失败额外记账：让线路缓存里的 WiFi 线路立即失效，
-                    // 下一次 resolve 重新探测并优先落到蓝牙隧道
-                    if (!endpoint.viaBluetooth) onWifiFailure()
-                    Log.w(TAG, "shared adb session connect failed -> ${endpoint.ip}:${endpoint.port}")
                     null
                 }
             } catch (e: Exception) {
@@ -193,9 +213,31 @@ class AdbTransport(
                 // （RFCOMM 被栈拒绝 / 握手超时 / 协议不匹配）在 App 内日志里完全看不到，
                 // 上层只看到「无可用路径」。此处补落面板。
                 LogCollector.e(TAG, "shared adb session 建链异常 -> ${endpoint.ip}:${endpoint.port}", e)
-                // WiFi 端点抛异常同样记账，否则下次仍会命中已死的 WiFi 线路
-                if (!endpoint.viaBluetooth) onWifiFailure()
                 null
+            }
+
+            // ── 锁内③：结算（只写状态，无阻塞 IO）──
+            synchronized(this) {
+                if (established == null) {
+                    // 连接失败（含蓝牙隧道 RFCOMM 卡顿/半开）时通知调用方清理线路缓存
+                    onRouteFailure()
+                    // WiFi 端点失败额外记账：让线路缓存里的 WiFi 线路立即失效，
+                    // 下一次 resolve 重新探测并优先落到蓝牙隧道
+                    if (!endpoint.viaBluetooth) onWifiFailure()
+                    Log.w(TAG, "shared adb session connect failed -> ${endpoint.ip}:${endpoint.port}")
+                    return null
+                }
+                if (generation != genAtStart) {
+                    Log.i(TAG, "建链期间会话已被释放，丢弃本次新建的 ADB 会话")
+                    runCatching { established.disconnect() }
+                    return null
+                }
+                client = established
+                currentEndpoint = endpoint
+                upgradeReady = false
+                lastUsedAt = System.currentTimeMillis()
+                Log.i(TAG, "shared adb session established -> ${endpoint.ip}:${endpoint.port}")
+                return established
             }
         }
     }
@@ -288,6 +330,7 @@ class AdbTransport(
     /** 主动释放共享会话（长连接消费者上场前调用），下次 [get] 自动重建。 */
     @Synchronized
     fun release() {
+        generation++
         client?.let { runCatching { it.disconnect() } }
         client = null
         currentEndpoint = null
@@ -298,6 +341,7 @@ class AdbTransport(
     /** 彻底关闭（Session 销毁时调用；语义同 [release]，仅便于日志区分）。 */
     @Synchronized
     fun shutdown() {
+        generation++
         client?.let { runCatching { it.disconnect() } }
         client = null
         currentEndpoint = null

@@ -123,7 +123,11 @@ class ConnectionService(private val session: com.rokidlab.phone.glasses.CxrLHiRo
                     ))
                 },
                 onFailure = {
-                    session.onQueryResult?.invoke(packageName, false)
+                    // 查询失败 ≠ 未安装：上报 null（状态未知），由调用方决定保守策略。
+                    // 绝不能伪造成 false —— 否则眼镜端残留的旧包（如 debug 签名旧版）会被误判为
+                    // "未安装"而跳过卸载，直接覆盖安装时眼镜端 pm install 报
+                    // INSTALL_FAILED_UPDATE_INCOMPATIBLE（用户可见的"系统报错"）。
+                    session.onQueryResult?.invoke(packageName, null)
                     queryNext(authToken, targetHostApp)
                 },
                 onBindFailure = {

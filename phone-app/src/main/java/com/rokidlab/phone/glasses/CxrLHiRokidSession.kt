@@ -146,7 +146,8 @@ class CxrLHiRokidSession(
     internal var cxrLink: CXRLink? = null
     internal var pendingOperation: CxrAppOperation? = null
     internal var queryQueue: ArrayDeque<String> = ArrayDeque()
-    internal var onQueryResult: ((String, Boolean) -> Unit)? = null
+    /** 查询安装状态结果：true=已安装，false=未安装，**null=查询失败（状态未知）** */
+    internal var onQueryResult: ((String, Boolean?) -> Unit)? = null
     internal var onQueryComplete: (() -> Unit)? = null
     internal var cxrlConnected = false
     internal var glassBtConnected = false
@@ -320,7 +321,8 @@ class CxrLHiRokidSession(
         deviceControl.stopApp(packageName, onStopResult)
     fun uninstallApp(packageName: String, onUninstallResult: ((Boolean) -> Unit)? = null) =
         deviceControl.uninstallApp(packageName, onUninstallResult)
-    fun queryInstalledApps(packageNames: List<String>, onResult: (String, Boolean) -> Unit, onComplete: () -> Unit) =
+    /** 查询安装状态；onResult 的 Boolean? 为三态：true/false 为眼镜端真实回执，null 表示查询失败（状态未知） */
+    fun queryInstalledApps(packageNames: List<String>, onResult: (String, Boolean?) -> Unit, onComplete: () -> Unit) =
         deviceControl.queryInstalledApps(packageNames, onResult, onComplete)
 
     // —— AI 对话域（domain/AiConversationService）——

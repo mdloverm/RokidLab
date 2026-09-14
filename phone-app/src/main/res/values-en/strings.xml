@@ -1080,6 +1080,7 @@
     <string name="log_uninstalling_rokidlink">Uninstalling RokidLink from glasses…</string>
     <string name="log_rokidlink_uninstalled">RokidLink uninstalled successfully</string>
     <string name="log_rokidlink_uninstall_failed">RokidLink uninstall failed</string>
+    <string name="log_rokidlink_uninstall_skip_install">Uninstall did not succeed (possibly not installed), continuing install</string>
     <string name="log_rokidlink_autostarted">Guide completed, RokidLink auto-started</string>
     <string name="log_host_set">CXR-L host set to %s. Please re-authorize before installing glasses apps.</string>
     <string name="log_guide_step">User navigated to guide step 1</string>

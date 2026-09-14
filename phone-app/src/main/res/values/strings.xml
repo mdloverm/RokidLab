@@ -1083,6 +1083,7 @@
     <string name="log_uninstalling_rokidlink">正在卸载眼镜端 RokidLink…</string>
     <string name="log_rokidlink_uninstalled">RokidLink 卸载成功</string>
     <string name="log_rokidlink_uninstall_failed">RokidLink 卸载失败</string>
+    <string name="log_rokidlink_uninstall_skip_install">未卸载成功（可能本就未安装），继续安装</string>
     <string name="log_rokidlink_autostarted">引导完成，RokidLink 已自动启动</string>
     <string name="log_host_set">CXR-L 主机已设置为 %s。安装眼镜应用前请重新授权。</string>
     <string name="log_guide_step">用户导航到引导步骤 1</string>

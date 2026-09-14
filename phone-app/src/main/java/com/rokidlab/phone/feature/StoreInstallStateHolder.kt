@@ -122,6 +122,10 @@ internal class StoreInstallStateHolder(private val activity: MainActivity) {
             packageNames = packageNames,
             onResult = { packageName, installed ->
                 if (generation != glassesInstallRefreshGeneration) return@queryInstalledApps
+                if (installed == null) {
+                    // 查询失败：状态未知，保持既有判定，不误标为"未安装"（否则会诱导重复安装）
+                    return@queryInstalledApps
+                }
                 val appAndArtifact = appsByPackage[packageName]
                 if (installed && appAndArtifact != null) {
                     val (app, artifact) = appAndArtifact

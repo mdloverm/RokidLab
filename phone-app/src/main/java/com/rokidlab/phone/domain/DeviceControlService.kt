@@ -488,7 +488,7 @@ class DeviceControlService(private val session: com.rokidlab.phone.glasses.CxrLH
 
     fun queryInstalledApps(
         packageNames: List<String>,
-        onResult: (String, Boolean) -> Unit,
+        onResult: (String, Boolean?) -> Unit,
         onComplete: () -> Unit,
     ) {
         val targetHostApp = session.hostApp

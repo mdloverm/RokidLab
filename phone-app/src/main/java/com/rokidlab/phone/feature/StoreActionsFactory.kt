@@ -2,12 +2,15 @@ package com.rokidlab.phone.feature
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.app.MainActivity
 import com.rokidlab.phone.model.BrewIndex
 import com.rokidlab.phone.model.GuideStep
 import com.rokidlab.phone.store.StoreActions
 import com.rokidlab.phone.util.LocalizationManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * 商店页动作装配（Phase 5 三轮：从 MainActivity 逐字迁出）。
@@ -91,31 +94,37 @@ internal fun MainActivity.buildStoreActions(): StoreActions = StoreActions(
         onExportCompatDiagnostics = { exportCompatDiagnostics() },
         onToggleKeepAlive = { toggleKeepAlive() },
         onLaunchGlassAppViaSdk = { pkg, activity ->
-            cxrL.launchApp(
-                packageName = pkg,
-                activityClass = activity,
-                onLaunchResult = { success ->
-                    runOnUiThread {
-                        val msg = if (success) "$pkg 启动成功" else "$pkg 启动失败"
-                        log(msg)
+            // 放 IO：launchApp 首段 session.cleanup() 为阻塞 IO，主线程同步调用会 ANR
+            lifecycleScope.launch(Dispatchers.IO) {
+                cxrL.launchApp(
+                    packageName = pkg,
+                    activityClass = activity,
+                    onLaunchResult = { success ->
+                        runOnUiThread {
+                            val msg = if (success) "$pkg 启动成功" else "$pkg 启动失败"
+                            log(msg)
+                        }
                     }
-                }
-            )
+                )
+            }
         },
         onSendKeyButtonConfig = { shortPkg, shortActivity, longPkg, longActivity, onDone ->
-            cxrL.sendKeyButtonConfig(
-                shortPkg = shortPkg,
-                shortActivity = shortActivity,
-                longPkg = longPkg,
-                longActivity = longActivity,
-                onResult = { success ->
-                    runOnUiThread {
-                        val msg = if (success) "按键配置已发送到眼镜" else "按键配置发送失败"
-                        log(msg)
-                        onDone(success)
-                    }
-                },
-            )
+            // 放 IO：sendKeyButtonConfig 首段 session.cleanup() 为阻塞 IO，主线程同步调用会 ANR
+            lifecycleScope.launch(Dispatchers.IO) {
+                cxrL.sendKeyButtonConfig(
+                    shortPkg = shortPkg,
+                    shortActivity = shortActivity,
+                    longPkg = longPkg,
+                    longActivity = longActivity,
+                    onResult = { success ->
+                        runOnUiThread {
+                            val msg = if (success) "按键配置已发送到眼镜" else "按键配置发送失败"
+                            log(msg)
+                            onDone(success)
+                        }
+                    },
+                )
+            }
         },
         onSwitchLanguage = { code ->
             com.rokidlab.phone.util.LocalizationManager.setLocale(this, code)
@@ -123,12 +132,19 @@ internal fun MainActivity.buildStoreActions(): StoreActions = StoreActions(
             recreate()
         },
         onSendWifiConfig = { ssid, password, onDone ->
-            cxrL.sendWifiConfig(ssid, password) { success, errorMsg ->
-                if (success) {
-                    prerequisitesState = prerequisitesState.copy(wifiConfigured = true)
-                    autoStartRokidLink()
+            // 放 IO：sendWifiConfig 首段是 session.cleanup()（拆 ADB 会话 / 断 CXR 链路，阻塞 IO），
+            // 而本回调由引导页 WiFi 步骤的「连接」按钮在主线程同步调用 —— 眼镜离线时主线程
+            // 会卡在建链上超过 5s → 引导页整页无响应（用户反馈的「WiFi 卡住」）
+            lifecycleScope.launch(Dispatchers.IO) {
+                cxrL.sendWifiConfig(ssid, password) { success, errorMsg ->
+                    runOnUiThread {
+                        if (success) {
+                            prerequisitesState = prerequisitesState.copy(wifiConfigured = true)
+                            autoStartRokidLink()
+                        }
+                        onDone(success, errorMsg)
+                    }
                 }
-                onDone(success, errorMsg)
             }
         },
         onInstallLink = { onDone ->
