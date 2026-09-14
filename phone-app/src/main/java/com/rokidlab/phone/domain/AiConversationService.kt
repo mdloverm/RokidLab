@@ -35,6 +35,53 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
          * 数据，默认 30s 会在首包到达前就超时、白白重放整轮（重放等于重新生成一次大文件）。
          */
         const val CODE_GEN_READ_TIMEOUT_MS = 120_000
+
+        /**
+         * 兜底总结轮的最大轮数（主循环工具轮预算用尽后的收尾阶段）。
+         * 每轮都会注入「禁止再调工具、直接给结论」的引导语，并把当轮 tool_calls 照常执行 ——
+         * 多文件生成时模型可能仍需连续几轮 save_code_file 落盘，因此"当轮没有正文"属正常，
+         * 不能提前中断（否则会截断正常的多次落盘）。
+         */
+        const val SUMMARY_MAX_ROUNDS = 3
+
+        /**
+         * 工具循环的「动作轮」预算：含至少一个非只读工具（落盘 / 装机 / 拨号等）的轮次。
+         * 分账原因见 [MAX_READONLY_ROUNDS]；本值保持原 6 轮不变。
+         */
+        const val MAX_ACTION_ROUNDS = 6
+
+        /**
+         * 工具循环的「只读轮」预算：整轮只调用只读工具（查资料）。
+         *
+         * **为什么与动作轮分账**：AIUI 任务天然「读多写少」——实测一次生成里 6 轮工具全花在
+         * `list_my_aiui_apps` / `read_code_file` / `load_skill_section` 上，勘察把统一预算吃光，
+         * 模型还没开始落盘就被判定该收尾，最终只能回固定兜底文案。只读轮本身很轻（单轮 2s 量级），
+         * 给它单独额度比整体调大轮次更对症，也不会让「动作轮」被顺带放长。
+         */
+        const val MAX_READONLY_ROUNDS = 8
+
+        /**
+         * 工具循环的轮次硬顶（兜底）。正常应由两个分账预算之一先触发；
+         * 此值取两者之和，仅用于防御计数器异常导致的死循环。
+         */
+        const val MAX_TOTAL_ROUNDS = 14
+    }
+
+    /**
+     * 判断工具是否为「只读」—— 用于工具循环的轮次预算分账。
+     *
+     * 直接复用 [com.rokidlab.phone.ai.ToolRiskMap] 的登记，另补两个 `riskOf` 判不出来的名字：
+     * - `load_skill` / `load_skill_section` 是伪工具，不在 `ToolRegistry.toolList` 中，
+     *   `riskOf` 会把它们当「完全未知的名字」判成 EXTERNAL_SIDE_EFFECT（会被算成动作轮）；
+     * - `long_term_memory` 会写长期记忆库（有副作用），因此**不**算只读，保持动作轮计费。
+     */
+    private fun isReadOnlyTool(name: String): Boolean = when (name) {
+        com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME,
+        com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION,
+        -> true
+        else -> runCatching {
+            com.rokidlab.phone.ai.ToolRiskMap.riskOf(name) == com.rokidlab.phone.ai.ToolRisk.READ_ONLY
+        }.getOrDefault(false)
     }
 
     /**
@@ -461,7 +508,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 var reply = ""
                 val toolTrace = mutableListOf<String>()
                 // 连续空轮计数：空轮 = 既无工具调用也无正文，说明模型在"只思考不出手"。
-                // 实测每轮空转 60-75s，等满 6 轮要 6 分钟以上，用户侧表现就是"一直等待回复"。
+                // 实测每轮空转 60-75s，若放任空轮到预算用尽要数分钟，用户侧表现就是"一直等待回复"。
                 var emptyRounds = 0
                 // 上一轮是否被 max_tokens 截断（finish_reason=length）：截断会造成空轮或半截工具参数。
                 // 空轮引导语必须点明"被截断了、请拆小再发"，否则模型以为自己没出手，会原样重试同样大的内容。
@@ -473,8 +520,12 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 var codeGenUsed = false
                 // 记录各项目成功生成的源文件（project -> 文件名集合），供收敛时生成权威结论
                 val genFilesByProject = LinkedHashMap<String, MutableSet<String>>()
-                // 最多 6 轮工具循环：支持多步任务（先查时间再设定时等），同时防止模型反复请求工具导致死循环
-                for (round in 0 until 6) {
+                // 轮次预算分账（详见 MAX_READONLY_ROUNDS 注释）：只读轮（查资料）与动作轮（落盘/装机等）
+                // 各自独立计数，避免 AIUI 任务的勘察把落盘额度吃光。混合轮按动作轮计费。
+                var readOnlyRounds = 0
+                var actionRounds = 0
+                // 工具循环：支持多步任务（先查时间再设定时等），同时防止模型反复请求工具导致死循环
+                for (round in 0 until MAX_TOTAL_ROUNDS) {
                     // 用户打断（有更新代际的请求进入）或链路已被替换：放弃后续生成，尽快让出 aiSendLock
                     if (isSuperseded()) {
                         Log.i(TAG, "AI generation superseded at round=$round (gen=$generation, latest=$aiGenSeq), abort")
@@ -503,7 +554,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             break
                         }
                         // 空轮（既无工具也无文本）：模型在反复"思考但不落子"，实测每轮空转 60-75s，
-                        // 等满 6 轮要 6 分钟以上。故首轮空即注入硬引导（原实现要求 round>=1，
+                        // 连等数轮就是好几分钟。故首轮空即注入硬引导（原实现要求 round>=1，
                         // 等于白耗一整轮 60-75s）；若紧接一轮仍是空轮，判定本轮无法产出、立即收尾 ——
                         // 跳出后下方 fallback 总结轮会带着 tools 再要一次，回复不会丢。
                         // 若进入 AIUI 代码生成模式，引导语给出具体的分文件落盘指令。
@@ -642,11 +693,21 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         activeTools = buildTools(ToolRegistry.SESSION_AIUI_DOMAINS)
                         Log.i(TAG, "aiuiMode on: tools switched to SESSION_AIUI_DOMAINS subset (${activeTools.size} schemas)")
                     }
+                    // 分账结算：整轮都是只读工具才扣只读额度，否则（含混合轮）按动作轮计费
+                    if (turn.toolCalls.all { isReadOnlyTool(it.name) }) readOnlyRounds++ else actionRounds++
+                    if (actionRounds >= MAX_ACTION_ROUNDS || readOnlyRounds >= MAX_READONLY_ROUNDS) {
+                        Log.i(
+                            TAG,
+                            "tool loop budget exhausted at round=$round " +
+                                "(action=$actionRounds/$MAX_ACTION_ROUNDS, readonly=$readOnlyRounds/$MAX_READONLY_ROUNDS)",
+                        )
+                        break
+                    }
                 }
-                // 6 轮工具用尽或某轮空返回，仍无最终回复：必须先带 tools 再请求一次强制生成总结。
+                // 工具轮预算用尽或某轮空返回，仍无最终回复：必须先带 tools 再请求一次强制生成总结。
                 // AIUI/代码生成回合模型可能仍需调 save_code_file 等工具落盘；摘掉工具会导致它只能
                 // 把源码当纯文本输出、随后被 finalizeCodeGenReply 收敛丢弃（“生成卡死/白耗”根因）。
-                // 允许总结轮再执行最多 2 轮工具调用，之后若仍无文本再走固定兜底文案。
+                // 收尾阶段最多 SUMMARY_MAX_ROUNDS 轮，每轮都注入收尾引导强制模型给出结论。
                 if (reply.isBlank()) {
                     // 用户已打断或链路已失效：跳过非流式兜底请求，直接放弃
                     if (isSuperseded()) {
@@ -654,7 +715,32 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         return@Thread
                     }
                     var finalTurn: com.rokidlab.phone.ai.ChatTurn? = null
-                    for (retry in 0 until 3) {
+                    // 总结轮里模型给出的正文。不能用「最后一轮的 content」代替 —— 末轮若只调了工具，
+                    // content 为空，而前一轮的结论句其实是有效的（旧实现会连它一起丢掉）。
+                    var summaryText: String? = null
+                    for (retry in 0 until SUMMARY_MAX_ROUNDS) {
+                        // 每轮都必须注入收尾引导：实测模型会把总结轮额度继续花在「再读一个文件」上，
+                        // 三轮 content 全空、最后 reply 落到固定兜底文案，用户被告知"无法处理"，
+                        // 而文件其实已经落盘。只放行 save_code_file —— 收尾阶段唯一必要的工作是落盘，
+                        // 其余读取类调用纯属浪费轮次；若上一轮仍没给结论，措辞升级为「禁止」。
+                        val nudge = if (retry == 0) {
+                            "请收尾：如果还有文件没落盘，只允许再调用 save_code_file 写入（一次一个文件）；" +
+                                "除此之外不要再调用任何工具，直接用一两句中文给出最终结论。"
+                        } else {
+                            "你上一次仍没有给出结论。现在除必要的 save_code_file 落盘外禁止再调用任何工具，" +
+                                "请立刻用一两句中文给出最终结论。"
+                        }
+                        // 主循环空轮退出时末尾已是一条 user 引导语，此时替换而非追加：
+                        // 连续两条 user 消息会被部分服务端直接 400，把整个收尾阶段打掉。
+                        val tail = messages.optJSONObject(messages.length() - 1)
+                        if (tail != null && tail.optString("role") == "user") {
+                            tail.put("content", nudge)
+                        } else {
+                            messages.put(JSONObject().apply {
+                                put("role", "user")
+                                put("content", nudge)
+                            })
+                        }
                         finalTurn = try {
                             // 总结轮常携带大工具参数/大段代码，deepseek 单次生成可能远超默认 30s：
                             // 用 120s 单次（不重试，避免翻倍等待）保证能等到模型产出 save_code_file 调用。
@@ -662,6 +748,8 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         } catch (_: Exception) {
                             null
                         }
+                        // 先留下正文（模型可能一边调工具一边给结论），再判断是否继续
+                        finalTurn?.content?.takeIf { it.isNotBlank() }?.let { summaryText = it }
                         if (finalTurn == null || finalTurn.toolCalls.isEmpty()) break
                         // 回填 assistant tool_calls 消息（协议要求原样携带）
                         val assistantMsg = JSONObject()
@@ -712,8 +800,11 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             Log.i(TAG, "aiuiMode on (final chat): tools switched to SESSION_AIUI_DOMAINS (${activeTools.size})")
                         }
                     }
-                    reply = finalTurn?.content?.takeIf { it.isNotBlank() }
-                        ?: "抱歉，我暂时无法处理这个问题，请换个说法再试一次。"
+                    // 全程没有正文时先留空，交给下方 finalizeCodeGenReply / 最终兜底决定。
+                    // 不能在这里就填固定兜底文案：那串文案只有 23 字符、也不像代码，
+                    // finalizeCodeGenReply 会把它当「模型给出的正常结论句」原样保留，
+                    // 从而丢掉真正的权威结论 —— 实测表现为「文件已落盘却回报无法处理」。
+                    reply = summaryText.orEmpty()
                 }
                 // AIUI/代码生成回合：把模型最终回复收敛为简短结论，严禁把整段源码当回复
                 // 播报/显示到眼镜；同时保证写入会话记忆的是干净文本，避免历史脏样本反复
@@ -734,6 +825,11 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         "抱歉，这次没能成功生成文件，生成被中断了。请再说一次，或把需求拆小一点（比如先只做首页）。"
                     }
                     reply = com.rokidlab.phone.ai.finalizeCodeGenReply(reply, authoritative)
+                }
+                // 走到这里仍无正文 = 模型既没给结论、也没落盘过文件（codeGenUsed=false 时
+                // finalizeCodeGenReply 不会兜底）：只有这种情况才用固定兜底文案。
+                if (reply.isBlank()) {
+                    reply = "抱歉，我暂时无法处理这个问题，请换个说法再试一次。"
                 }
                 replyRef.set(reply)
                 // 记录本轮到会话记忆（含工具轨迹，catch 分支的失败兜底回复不记录，避免污染上下文）

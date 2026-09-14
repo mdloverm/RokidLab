@@ -227,6 +227,28 @@ class SkillMarkdownTest {
     }
 
     @Test
+    fun `locateSection 支持标题自带编号（目录里的 0 章）`() {
+        // 真实场景（aiui-dev/lab-runtime.md）：章节目录形如「第 1 章 0. 开发必读顺序…」，
+        // 标题自带另一套编号。模型照字面传 section="0" 必须命中该章 ——
+        // 旧实现按位置序号越界即 return null，且 normTitle 会剥掉标题的 "0." 前缀，
+        // 导致标题匹配也兜不住，模型只能反复换数字空耗轮次。
+        val body = "## 0. 开发必读顺序\n先读宿主须知\n\n## 1. 页面结构\nSFC 规范"
+        assertEquals("0. 开发必读顺序", SkillMarkdown.locateSection(body, "0")!!.heading)
+        // 位置序号优先，不受标题自带编号影响（第 1 章 = 标题「0. …」）
+        assertEquals("0. 开发必读顺序", SkillMarkdown.locateSection(body, "1")!!.heading)
+        assertEquals("1. 页面结构", SkillMarkdown.locateSection(body, "2")!!.heading)
+        // 越界且无同号标题：仍返回 null
+        assertNull(SkillMarkdown.locateSection(body, "9"))
+    }
+
+    @Test
+    fun `locateSection 标题自带编号兼容顿号冒号右括号分隔`() {
+        assertEquals("3、样式", SkillMarkdown.locateSection("## 3、样式\n内容", "3")!!.heading)
+        assertEquals("4：事件", SkillMarkdown.locateSection("## 4：事件\n内容", "4")!!.heading)
+        assertEquals("5) 组件", SkillMarkdown.locateSection("## 5) 组件\n内容", "5")!!.heading)
+    }
+
+    @Test
     fun `locateSection 支持标题与忽略编号前缀及大小写`() {
         assertEquals("1. 准备", SkillMarkdown.locateSection(bigBody, "1. 准备")!!.heading)
         assertEquals("1. 准备", SkillMarkdown.locateSection(bigBody, "准备")!!.heading)

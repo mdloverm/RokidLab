@@ -207,8 +207,10 @@ object SkillMarkdown {
 
     /**
      * 按查询定位章节。查询可为：
-     *   1. 纯数字序号（1-based，对应目录顺序）；
-     *   2. 标题原文/去序号前缀后的标题（忽略大小写，先精确后包含）。
+     *   1. 纯数字序号（1-based，对应目录顺序，即目录里的「第 N 章」）；
+     *   2. 标题自带编号（如目录里「第 1 章 0. 开发必读顺序」的 `0`）—— 目录同时展示两套编号，
+     *      模型按字面传标题编号是合理行为，位置序号越界时按标题编号再匹配一次；
+     *   3. 标题原文/去序号前缀后的标题（忽略大小写，先精确后包含）。
      * @return 命中的章节；找不到返回 null
      */
     fun locateSection(body: String, query: String): Section? {
@@ -221,7 +223,12 @@ object SkillMarkdown {
             ?: Regex("^第\\s*(\\d+)\\s*章$").find(q)?.groupValues?.get(1)?.toIntOrNull()
         if (number != null) {
             if (number in 1..sections.size) return sections[number - 1]
-            return null
+            // 位置序号越界：目录里标题可能自带另一套编号（「第 1 章 0. 开发必读顺序」），
+            // 模型传 `0` 就是照字面读的结果，此处按标题自带编号补匹配一次。
+            // 必须比对**原始 heading**：normTitle 会剥掉开头数字前缀（^\d+[.、)\s]+），
+            // "0." 被抹掉后 "0" 永远匹配不到，下方的标题匹配帮不上忙。
+            val selfNumbered = Regex("^\\s*" + number + "\\s*[.、:：)）]")
+            return sections.firstOrNull { selfNumbered.containsMatchIn(it.heading) }
         }
         // 2) 标题精确/前缀匹配
         val normQ = normTitle(q)

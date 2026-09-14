@@ -459,7 +459,10 @@ object SkillRegistry {
         val hit = SkillMarkdown.locateSection(body, section)
         if (hit == null) {
             val index = SkillMarkdown.buildChaptersIndex(body)
-            return "「$name/$fileName」中找不到章节「$section」。可用章节：\n$index"
+            // 报错要交代清楚「序号」有两套可能：目录里的「第 N 章」位置序号，或标题自带的编号。
+            // 否则模型容易盯着「第 1 章 0. 开发必读顺序」反复猜数字，白耗轮次。
+            return "「$name/$fileName」中找不到章节「$section」。可用章节（section 请传「第 N 章」的序号 N，" +
+                "或标题自带的编号如 0，或章节标题原文）：\n$index"
         }
         val sectionText = "## ${hit.heading}\n${hit.content}".trim()
         if (sectionText.length > SkillMarkdown.MAX_SECTION_CHARS) {
