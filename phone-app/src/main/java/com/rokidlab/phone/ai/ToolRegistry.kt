@@ -339,7 +339,7 @@ object ToolRegistry {
     @Volatile
     internal var lastStartedAiuiAgentId: String? = null
 
-    /** 当前可打开的 AIUI agent 列表（统一由 [AiuiAppRegistry] 持久化事实源派生，含内置兜底/迁移记录） */
+    /** 当前可打开的 AIUI agent 列表（统一由 [AiuiAppRegistry] 持久化事实源派生，含迁移记录） */
     fun aiuiAgents(context: Context): List<AiuiAgentDef> =
         AiuiAppRegistry.list(context).map { it.toAgentDef() }
 

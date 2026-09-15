@@ -217,11 +217,11 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
 
         "open_aiui_app" -> toolSchema(
             name = meta.name,
-            description = "在 Rokid 眼镜上打开一个 AIUI 智能体应用（.aix 卡片应用，如“我是黑客”“音乐播放”）。当用户说“打开/启动/演示/预览 XXX（智能体名）”“打开我是黑客”“打开智能体”“打开某 AI 应用/小游戏”“用/通过/拿 XXX 智能体去做某事（如“用音乐播放智能体播放七里香”）”等、且该名字命中智能体应用列表时调用；普通应用（小智/浏览器等）请用 launch_glasses_app。本机生成/上传的应用（本地有 .aix）会自动推送到 RokidLink 自托管宿主（官方 ink web 宿主），支持用 Lab 手机蓝牙手柄直接操控页面；内置官方智能体走 AgentStore 打开。注意：不要仅仅口头回复“已经打开/已经在播放”，必须实际调用本工具才能把用户请求交给智能体执行。",
+            description = "在 Rokid 眼镜上打开一个 AIUI 智能体应用（.aix 卡片应用，如“音乐播放”“天气查询”）。当用户说“打开/启动/演示/预览 XXX（智能体名）”“打开智能体”“打开某 AI 应用/小游戏”“用/通过/拿 XXX 智能体去做某事（如“用音乐播放智能体播放七里香”）”等、且该名字命中智能体应用列表时调用；普通应用（小智/浏览器等）请用 launch_glasses_app。本机生成/上传的应用（本地有 .aix）会自动推送到 RokidLink 自托管宿主（官方 ink web 宿主），支持用 Lab 手机蓝牙手柄直接操控页面；内置官方智能体走 AgentStore 打开。注意：不要仅仅口头回复“已经打开/已经在播放”，必须实际调用本工具才能把用户请求交给智能体执行。",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
-                    "appName" to mapOf("type" to "string", "description" to "用户想要打开或使用的智能体应用名称，原样转述，如“我是黑客”“音乐播放”"),
+                    "appName" to mapOf("type" to "string", "description" to "用户想要打开或使用的智能体应用名称，原样转述，如“音乐播放”“天气查询”"),
                     "params" to mapOf("type" to "string", "description" to "传给该应用的启动参数，JSON 对象字符串（如 {\"songName\":\"七里香\"}）。只要用户要求“用/通过/拿某个智能体去做某事”并给出了具体对象/参数，就必须填写并调用本工具；只是“打开某应用”时可不传。传参用页面期望的参数名（如 songName / keyword / city），不确定就留空，让页面用自己的默认值处理。"),
                 ),
                 "required" to listOf("appName"),

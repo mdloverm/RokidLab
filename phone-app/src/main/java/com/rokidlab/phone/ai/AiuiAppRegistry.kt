@@ -12,7 +12,7 @@ import java.io.File
  * 每条记录对应一个可在眼镜上渲染的 AIUI 应用，来源有三类：
  *  - [ORIGIN_GENERATED]：对话中 save_code_file 生成 + install_aiui_project 打包直传（关联项目源码目录，可再编辑/更新重装）；
  *  - [ORIGIN_UPLOADED]：管理页本地 .aix 上传（无源码目录，不可再编辑，只能重新上传）；
- *  - [ORIGIN_LEGACY]：从旧 aiui_registry.json / 内置兜底迁移而来（如官方“我是黑客”）。
+ *  - [ORIGIN_LEGACY]：从旧 aiui_registry.json 迁移而来。
  *
  * 持久化在 filesDir/aiui_apps.json，App 重启不丢；供 AIUI 管理页、list_my_aiui_apps
  * 语音工具、open/stop 匹配共同使用。open_aiui_app 所需的 AgentDef 由 [toAgentDef] 派生。
@@ -26,15 +26,11 @@ object AiuiAppRegistry {
     const val ORIGIN_UPLOADED = "uploaded"
     const val ORIGIN_LEGACY = "legacy"
 
-    /** 内置兜底 agent（官方 AgentStore 已安装，走旧 Ai_RenderPayload 链路，aixOnGlasses=false） */
-    private val BUILTIN = listOf(
-        AiuiAppRecord(
-            appName = "我是黑客",
-            agentId = "5aac922daa854dcd9ae77d9556c764f2",
-            origin = ORIGIN_LEGACY,
-            aixOnGlasses = false,
-        ),
-    )
+    /**
+     * 已废弃的测试期 agentId：不再作为内置兜底写入，旧用户升级时一次性清除
+     * （注册表记录 + 本地 aiui_packages/<id>.aix + 眼镜端 .aix）。
+     */
+    private val PURGED_AGENT_IDS = setOf("5aac922daa854dcd9ae77d9556c764f2")
 
     @Volatile
     private var cache: List<AiuiAppRecord>? = null
@@ -112,7 +108,7 @@ object AiuiAppRegistry {
         synchronized(this) {
             cache?.let { return it }
             val f = File(context.filesDir, STORE_FILE)
-            val records = if (!f.isFile) {
+            var records = if (!f.isFile) {
                 migrate(context).also { persist(context, it) }
             } else {
                 runCatching { parse(f.readText()) }.getOrElse {
@@ -120,9 +116,34 @@ object AiuiAppRegistry {
                     emptyList()
                 }
             }
+            // 一次性清洗废弃的测试期 agent（老用户升级后注册表中仍可能残留）
+            if (records.any { it.agentId in PURGED_AGENT_IDS }) {
+                records = records.filterNot { it.agentId in PURGED_AGENT_IDS }
+                persist(context, records)
+                Log.i(TAG, "purged obsolete test agents: $PURGED_AGENT_IDS")
+            }
             cache = records
             return records
         }
+    }
+
+    /**
+     * App 启动时调用：清除废弃测试 agent 的**本地 .aix 包**并**尽力删除眼镜端副本**。
+     * 注册表记录已在 [load] 中过滤；此处处理文件残留。眼镜未连接时静默失败，
+     * 不影响启动（该 agent 已无法从列表/语音打开，眼镜端残留文件仅占空间）。
+     */
+    fun purgeObsoleteFiles(context: Context) {
+        Thread {
+            PURGED_AGENT_IDS.forEach { id ->
+                runCatching { AiuiProject.packageFile(context, id).takeIf { it.isFile }?.delete() }
+                    .onSuccess { Log.i(TAG, "purged local package: $id.aix") }
+                runCatching {
+                    val err = AiuiProject.deleteAixOnGlasses(context, id)
+                    if (err == null) Log.i(TAG, "purged glasses package: $id.aix")
+                    else Log.i(TAG, "glasses purge skipped ($id): $err")
+                }
+            }
+        }.start()
     }
 
     private fun persist(context: Context, records: List<AiuiAppRecord>) {
@@ -172,13 +193,12 @@ object AiuiAppRegistry {
     }
 
     /**
-     * 首次迁移：旧 aiui_registry.json 的 agents[] + 内置兜底 → 新记录。
+     * 首次迁移：旧 aiui_registry.json 的 agents[] → 新记录。
      * 旧结构只有 name/agentId/nativeVersion/pageName/aixOnGlasses，无 project/时间/来源，统一标 legacy。
+     * 已废弃的测试期 agent 不迁移。
      */
     private fun migrate(context: Context): List<AiuiAppRecord> {
         val out = LinkedHashMap<String, AiuiAppRecord>()
-        // 内置兜底
-        BUILTIN.forEach { out[it.agentId] = it.copy(createdAt = 0L, updatedAt = 0L) }
         // 旧注册表
         runCatching {
             val f = File(context.filesDir, LEGACY_FILE)
@@ -188,6 +208,7 @@ object AiuiAppRegistry {
                     for (i in 0 until arr.length()) {
                         val o = arr.optJSONObject(i) ?: continue
                         val agentId = o.optString("agentId").takeIf { it.isNotEmpty() } ?: continue
+                        if (agentId in PURGED_AGENT_IDS) continue
                         out[agentId] = AiuiAppRecord(
                             appName = o.optString("name", agentId),
                             agentId = agentId,
@@ -200,7 +221,7 @@ object AiuiAppRegistry {
                 }
             }
         }.onFailure { Log.w(TAG, "migrate read legacy failed: ${it.message}") }
-        Log.i(TAG, "migrate: ${out.size} records (legacy + builtin)")
+        Log.i(TAG, "migrate: ${out.size} records (legacy)")
         return out.values.toList()
     }
 }

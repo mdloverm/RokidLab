@@ -151,6 +151,13 @@ class LabApplication : Application() {
         // 首次启动落盘内置技能（aiui-dev 等，仅当本地不存在；不覆盖用户编辑）
         com.rokidlab.phone.ai.SkillRegistry.seedBundledSkills(this)
 
+        // 清洗测试期遗留的废弃 AIUI agent（"我是黑客"）：先触发注册表过滤落盘，
+        // 再异步清理本地/眼镜端 .aix（眼镜未连接时静默跳过）
+        runCatching {
+            com.rokidlab.phone.ai.AiuiAppRegistry.list(this)
+            com.rokidlab.phone.ai.AiuiAppRegistry.purgeObsoleteFiles(this)
+        }
+
         hidManager = BluetoothHidManager(this)
 
         routeManager = ConnectionRouteManager(this)

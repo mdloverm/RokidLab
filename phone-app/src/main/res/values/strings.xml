@@ -536,7 +536,7 @@
     <string name="ai_tool_read_code_file_name">读取项目源码</string>
     <string name="ai_tool_read_code_file_desc">读取对话生成项目当前的源码内容，配合"保存代码文件"修改已有代码/页面</string>
     <string name="ai_tool_open_aiui_app_name">打开智能体应用</string>
-    <string name="ai_tool_open_aiui_app_desc">在眼镜上打开 AIUI 智能体应用（如"我是黑客"），回答"打开我是黑客""打开某某智能体"等</string>
+    <string name="ai_tool_open_aiui_app_desc">在眼镜上打开 AIUI 智能体应用（如"音乐播放""天气查询"），回答"打开音乐播放""打开某某智能体"等</string>
     <string name="ai_tool_install_aiui_project_name">安装对话生成的AIUI项目</string>
     <string name="ai_tool_install_aiui_project_desc">把对话中通过写文件生成的 AIUI 项目打包为 .aix 并安装到眼镜。回答"把这个项目装到眼镜上""打包安装我做的AI应用"等</string>
     <string name="ai_tool_stop_aiui_app_name">退出AIUI应用</string>

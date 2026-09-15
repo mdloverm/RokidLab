@@ -534,7 +534,7 @@
     <string name="ai_tool_read_code_file_name">Read Project Source</string>
     <string name="ai_tool_read_code_file_desc">Read current source files of a chat-generated project, used with \"Save Code File\" to modify existing code/pages</string>
     <string name="ai_tool_open_aiui_app_name">Open Agent App</string>
-    <string name="ai_tool_open_aiui_app_desc">Open an AIUI agent app on the glasses (e.g. \"I Am Hacker\"), answer \"open I Am Hacker\" \"open an agent\" etc.</string>
+    <string name="ai_tool_open_aiui_app_desc">Open an AIUI agent app on the glasses (e.g. \"Music Player\" \"Weather\"), answer \"open Music Player\" \"open an agent\" etc.</string>
     <string name="ai_tool_install_aiui_project_name">Install Chat-Generated AIUI Project</string>
     <string name="ai_tool_install_aiui_project_desc">Package an AIUI project generated via code files into .aix and install it on the glasses, answer \"install this project on the glasses\" etc.</string>
     <string name="ai_tool_stop_aiui_app_name">Exit AIUI App</string>
