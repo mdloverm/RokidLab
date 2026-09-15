@@ -40,7 +40,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -60,11 +59,11 @@ internal fun SettingsScreen(
     var showContributorsDialog by remember { mutableStateOf(false) }
     val currentTheme = BrewThemeManager.currentTheme
 
-    // ── 开发者工具入口 ──
-    var showDeveloperScreen by remember { mutableStateOf(false) }
+    // ── 开发者模式入口（开发/排障工具统一收纳在二级页） ──
+    var showDeveloperMode by remember { mutableStateOf(false) }
 
-    if (showDeveloperScreen) {
-        DeveloperScreen(onBack = { showDeveloperScreen = false })
+    if (showDeveloperMode) {
+        DeveloperModeScreen(onBack = { showDeveloperMode = false }, actions = actions)
     } else {
     Column(
         modifier = Modifier
@@ -147,12 +146,6 @@ internal fun SettingsScreen(
                 keepAliveEnabled = labApp.keepAliveEnabled
             },
         )
-        Spacer(modifier = Modifier.height(12.dp))
-        SettingsCard(
-            title = ctx.getString(R.string.keep_alive_desc),
-            content = ctx.getString(R.string.keep_alive_notification_text),
-            color = BrewMagenta,
-        )
         Spacer(modifier = Modifier.height(24.dp))
 
         // ── 眼镜端服务 ──
@@ -171,39 +164,6 @@ internal fun SettingsScreen(
             color = BrewWarning,
             enabled = !state.screenMirrorState.isInstallingRokidLink,
             onClick = actions.onSettingsReinstallRokidLink,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        SettingsCard(
-            title = ctx.getString(R.string.view_glasses_status),
-            content = ctx.getString(R.string.view_glasses_status_desc),
-            color = BrewTeal,
-            onClick = actions.onSettingsOpenGlassesStatus,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // ── 当前线路（WiFi / 蓝牙隧道）──
-        // 用户报障「切了 WiFi 还是走蓝牙」时，这里直接给出实际选中的线路，点击可强制重探。
-        val routeScope = rememberCoroutineScope()
-        var routeText by remember {
-            mutableStateOf(labApp.routeManager.lastRoute?.toString() ?: ctx.getString(R.string.route_unknown))
-        }
-        var routeProbing by remember { mutableStateOf(false) }
-        SettingsCard(
-            title = ctx.getString(R.string.route_current),
-            content = if (routeProbing) ctx.getString(R.string.route_probing) else routeText,
-            color = if (routeText.startsWith("WiFi")) BrewSuccess else BrewTeal,
-            enabled = !routeProbing,
-            onClick = {
-                routeProbing = true
-                routeScope.launch {
-                    val r = withContext(Dispatchers.IO) {
-                        labApp.routeManager.clearRouteCache()
-                        labApp.routeManager.resolve(labApp.glassesIp, 5555)
-                    }
-                    routeText = r.toString()
-                    routeProbing = false
-                }
-            },
         )
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -241,30 +201,12 @@ internal fun SettingsScreen(
         )
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Submit app
+        // 开发者模式（开发/排障工具二级页：眼镜状态、线路探测、提交应用、日志/诊断导出）
         SettingsCard(
-            title = ctx.getString(R.string.developer_app_submit),
-            content = ctx.getString(R.string.developer_subtitle),
+            title = ctx.getString(R.string.settings_developer_mode),
+            content = ctx.getString(R.string.settings_developer_mode_subtitle),
             color = BrewInfo,
-            onClick = { showDeveloperScreen = true },
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Export log
-        SettingsCard(
-            title = ctx.getString(R.string.export_log),
-            content = ctx.getString(R.string.export_log_desc),
-            color = BrewMagenta,
-            onClick = actions.onExportLog,
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Export compatibility diagnostics
-        SettingsCard(
-            title = ctx.getString(R.string.export_compat_diag),
-            content = ctx.getString(R.string.export_compat_diag_desc),
-            color = BrewInfo,
-            onClick = actions.onExportCompatDiagnostics,
+            onClick = { showDeveloperMode = true },
         )
         Spacer(modifier = Modifier.height(48.dp))
     }
@@ -558,7 +500,7 @@ private fun ThemeDialog(
 }
 
 @Composable
-private fun ModuleHeader(title: String, subtitle: String, color: Color) {
+internal fun ModuleHeader(title: String, subtitle: String, color: Color) {
     Column {
         Text(text = title, color = color, fontSize = 32.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp)
         Spacer(modifier = Modifier.height(8.dp))
@@ -578,7 +520,7 @@ private fun SectionTitle(text: String, color: Color) {
 }
 
 @Composable
-private fun SettingsCard(
+internal fun SettingsCard(
     title: String,
     content: String,
     color: Color,

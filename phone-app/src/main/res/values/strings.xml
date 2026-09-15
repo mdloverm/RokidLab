@@ -86,6 +86,8 @@
     <string name="language_simple_chinese">简体中文</string>
     <string name="language_english">English</string>
     <string name="more_section">更多</string>
+    <string name="settings_developer_mode">开发者模式</string>
+    <string name="settings_developer_mode_subtitle">眼镜状态、线路探测、应用提交、日志与诊断导出</string>
     <string name="sponsor">赞助</string>
     <string name="sponsor_desc">支持 RokidLab</string>
     <string name="developer_app_submit">提交应用</string>
@@ -496,7 +498,6 @@
     <string name="keep_alive_enabled">后台保活</string>
     <string name="keep_alive_on">已开启</string>
     <string name="keep_alive_off">已关闭</string>
-    <string name="keep_alive_desc">常驻通知栏，防止系统回收后台服务</string>
 
     <!-- AI 工具（ToolRegistry 设置页展示） -->
     <string name="ai_tool_search_knowledge_base_name">知识库检索</string>
