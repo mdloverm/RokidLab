@@ -904,6 +904,7 @@
     <string name="not_connected">未连接</string>
     <string name="paired_devices">已配对的设备</string>
     <string name="no_paired_devices">无已配对的蓝牙设备</string>
+    <string name="hid_permission_required">需要蓝牙权限才能读取已配对设备并连接手柄</string>
     <string name="enter_gamepad_control">进入手柄控制</string>
     <string name="please_connect_first">请先连接设备</string>
     <string name="connecting_status">正在连接…</string>

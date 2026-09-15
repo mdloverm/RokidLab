@@ -167,7 +167,7 @@ private fun GamepadMain(hidManager: BluetoothHidManager, prefs: SharedPreference
                 modifier = Modifier.clip(BrewShapeSmall).background(BrewPanel)
                     .clickable { onExit() }.padding(horizontal = 10.dp, vertical = 6.dp))
 
-            Text(ctx.getString(R.string.controller_connected, connectedDevice?.name ?: ctx.getString(R.string.gamepad_tab)), color = BrewSuccess, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+            Text(ctx.getString(R.string.controller_connected, connectedDevice?.safeName() ?: ctx.getString(R.string.gamepad_tab)), color = BrewSuccess, fontSize = 12.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f).padding(horizontal = 4.dp), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
 
             // 编辑/自定义按钮 (仅手柄模式)

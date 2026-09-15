@@ -1481,8 +1481,27 @@ class BluetoothHidManager(private val appContext: Context) {
         if (!ok) Log.w(TAG, "sendMouseButton: sendReport failed (pressed=$pressed)")
     }
 
-    fun getPairedDevices(): List<BluetoothDevice> =
-        bluetoothAdapter?.bondedDevices?.toList() ?: emptyList()
+    /**
+     * 已配对设备列表。Android 12+ 调用 [BluetoothAdapter.getBondedDevices] 必须持有
+     * BLUETOOTH_CONNECT，否则直接抛 SecurityException（实测：debug 重装后权限被清空，
+     * 进入「蓝牙手柄」页在 Composable 初始化阶段崩溃）。缺权限/异常时返回空列表，
+     * 由 UI 层引导用户授权后重新拉取，绝不让页面崩。
+     */
+    @SuppressLint("MissingPermission")
+    fun getPairedDevices(): List<BluetoothDevice> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            appContext.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return emptyList()
+        }
+        return try {
+            bluetoothAdapter?.bondedDevices?.toList() ?: emptyList()
+        } catch (e: SecurityException) {
+            Log.w(TAG, "getBondedDevices denied: ${e.message}")
+            emptyList()
+        }
+    }
 
     private fun updateConnectionState(state: Int, device: BluetoothDevice?) {
         connectionState = state

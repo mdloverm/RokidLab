@@ -899,6 +899,7 @@
     <string name="not_connected">Not Connected</string>
     <string name="paired_devices">Paired Devices</string>
     <string name="no_paired_devices">No paired Bluetooth devices</string>
+    <string name="hid_permission_required">Bluetooth permission is required to read paired devices and connect the gamepad</string>
     <string name="enter_gamepad_control">Enter Gamepad Control</string>
     <string name="please_connect_first">Please connect a device first</string>
     <string name="connecting_status">Connecting…</string>
