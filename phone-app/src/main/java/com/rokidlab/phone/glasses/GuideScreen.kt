@@ -563,6 +563,20 @@ private fun ConfigureWifiStep(
     var showPassword by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
     var configured by remember { mutableStateOf(false) }
+
+    // 已连接过的 WiFi 密码按 SSID 加密持久化（Keystore AES-256-GCM，复用 SecretStore），
+    // 下次选中同一网络自动回填，不用每次重输。
+    val wifiPrefs = remember {
+        ctx.applicationContext.getSharedPreferences("guide_wifi_prefs", android.content.Context.MODE_PRIVATE)
+    }
+    fun savedWifiPassword(ssid: String): String? =
+        ssid.takeIf { it.isNotBlank() }?.let { SecretStore.get(wifiPrefs, "wifi_pwd_$it") }
+    fun saveWifiPassword(ssid: String, pwd: String) {
+        // 开放网络无密码，不存空值（否则会误显「已自动填入保存的密码」）
+        if (ssid.isNotBlank() && pwd.isNotEmpty()) SecretStore.put(wifiPrefs, "wifi_pwd_$ssid", pwd)
+    }
+    // 当前回填的密码是否来自存储（用于「已自动填入保存的密码」提示）
+    var passwordPreFilled by remember { mutableStateOf(false) }
     var scanResults by remember { mutableStateOf<List<ScanResult>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
     var scanTimedOut by remember { mutableStateOf(false) }
@@ -575,6 +589,28 @@ private fun ConfigureWifiStep(
     LaunchedEffect(Unit) {
         if (!hasLocationPermission && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             permissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+
+    // 从扫描列表选中网络：有保存的密码就回填，没有则清空（防止沿用上一个网络的密码）
+    LaunchedEffect(selectedSsid) {
+        val ssid = selectedSsid
+        if (!ssid.isNullOrEmpty()) {
+            val saved = savedWifiPassword(ssid)
+            password = saved.orEmpty()
+            passwordPreFilled = saved != null
+        } else {
+            passwordPreFilled = false
+        }
+    }
+    // 手动输入 SSID：输入完整 SSID 恰好匹配已保存网络时回填；未匹配不动用户已输入的密码
+    LaunchedEffect(manualSsid) {
+        if (selectedSsid == "" && manualSsid.isNotBlank()) {
+            val saved = savedWifiPassword(manualSsid)
+            if (saved != null) {
+                password = saved
+                passwordPreFilled = true
+            }
         }
     }
 
@@ -881,7 +917,11 @@ private fun ConfigureWifiStep(
             // 密码输入
             OutlinedTextField(
                 value = password,
-                onValueChange = { password = it; errorMessage = null },
+                onValueChange = {
+                    password = it
+                    errorMessage = null
+                    passwordPreFilled = false
+                },
                 label = { Text(ctx.getString(R.string.wifi_password_label)) },
                 singleLine = true,
                 enabled = !sending,
@@ -897,6 +937,8 @@ private fun ConfigureWifiStep(
                             sending = false
                             if (success) {
                                 configured = true
+                                // 连接成功才记住密码，下次自动回填
+                                saveWifiPassword(targetSsid, password)
                             } else {
                                 errorMessage = errMsg ?: "连接失败"
                             }
@@ -918,6 +960,14 @@ private fun ConfigureWifiStep(
                     if (showPassword) ctx.getString(R.string.hide_password)
                     else ctx.getString(R.string.show_password),
                     color = BrewInfo, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                )
+            }
+
+            // 自动填入保存密码的提示
+            if (passwordPreFilled) {
+                Text(
+                    ctx.getString(R.string.wifi_password_prefilled),
+                    color = BrewMuted, fontSize = 12.sp,
                 )
             }
 
@@ -968,6 +1018,8 @@ private fun ConfigureWifiStep(
                                         sending = false
                                         if (success) {
                                             configured = true
+                                            // 连接成功才记住密码，下次自动回填
+                                            saveWifiPassword(targetSsid, password)
                                         } else {
                                             errorMessage = errMsg ?: "连接失败"
                                         }

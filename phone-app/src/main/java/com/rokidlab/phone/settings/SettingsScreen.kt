@@ -57,6 +57,7 @@ internal fun SettingsScreen(
     var showLangDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
     var showSponsorDialog by remember { mutableStateOf(false) }
+    var showContributorsDialog by remember { mutableStateOf(false) }
     val currentTheme = BrewThemeManager.currentTheme
 
     // ── 开发者工具入口 ──
@@ -231,6 +232,15 @@ internal fun SettingsScreen(
         )
         Spacer(modifier = Modifier.height(12.dp))
 
+        // Contributors
+        SettingsCard(
+            title = ctx.getString(R.string.contributors),
+            content = ctx.getString(R.string.contributors_desc),
+            color = BrewSuccess,
+            onClick = { showContributorsDialog = true },
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
         // Submit app
         SettingsCard(
             title = ctx.getString(R.string.developer_app_submit),
@@ -283,6 +293,75 @@ internal fun SettingsScreen(
     // Sponsor dialog
     if (showSponsorDialog) {
         SponsorDialog(onDismiss = { showSponsorDialog = false })
+    }
+
+    // Contributors dialog
+    if (showContributorsDialog) {
+        ContributorsDialog(onDismiss = { showContributorsDialog = false })
+    }
+}
+
+/** 社区贡献者条目：作者名（昵称，不翻译）+ 贡献内容（走多语言） */
+private data class Contributor(val name: String, val contribution: String)
+
+@Composable
+private fun ContributorsDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val contributors = remember {
+        listOf(
+            Contributor("ft", ctx.getString(R.string.contributors_ft_desc)),
+        )
+    }
+
+    BrewDialog(
+        onDismiss = onDismiss,
+        title = ctx.getString(R.string.contributors),
+        color = BrewSuccess,
+    ) {
+        BrewDialogContent {
+            contributors.forEach { contributor ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(BrewSuccess.copy(alpha = 0.12f))
+                        .border(1.dp, BrewSuccess.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // 首字母圆形头像（无网络头像资源时的轻量展示）
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(BrewSuccess),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            contributor.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            contributor.name,
+                            color = BrewText,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            contributor.contribution,
+                            color = BrewMuted,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+        }
     }
 }
 

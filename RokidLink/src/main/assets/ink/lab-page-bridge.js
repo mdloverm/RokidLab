@@ -21,6 +21,13 @@
   var seq = 0;
   var BASE = 'https://ink.local/';
 
+  /**
+   * 页面侧兜底超时（毫秒）。必须 **大于** 宿主同步端点的 SYNC_TOOL_TIMEOUT_MS（25s）：
+   * 宿主本来就会在 25s 内给出结果或超时错误，这里只是防「拦截线程异常导致 fetch 永不返回」
+   * ——那种情况下 Promise 会永久 pending，页面按规范写的 loading 态就永远转不完。
+   */
+  var CALL_TIMEOUT_MS = 30_000;
+
   function parseResult(cbId, text) {
     var parsed;
     try {
@@ -46,13 +53,28 @@
       var url = BASE + '__lab/tool_call_sync?name=' +
         encodeURIComponent(name) + '&args=' + q + '&cbId=' + cbId;
 
+      var settled = false;
+      // 只在沙箱确实提供 setTimeout 时才挂兜底计时器（特性探测，避免依赖不存在的 API）
+      if (typeof setTimeout === 'function') {
+        setTimeout(function () {
+          if (!settled) {
+            settled = true;
+            reject(new Error('tool call timed out: ' + name));
+          }
+        }, CALL_TIMEOUT_MS);
+      }
+
       fetch(url).then(function (res) {
         return res.text();
       }).then(function (text) {
+        if (settled) return;
+        settled = true;
         var r = parseResult(cbId, text);
         if (r.ok) resolve(r.result);
         else reject(new Error(r.error || 'tool failed'));
       }).catch(function (e) {
+        if (settled) return;
+        settled = true;
         reject(e instanceof Error ? e : new Error(String(e)));
       });
     });

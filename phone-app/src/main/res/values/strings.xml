@@ -95,6 +95,14 @@
     <string name="sponsor_list">赞助用户</string>
     <string name="sponsor_empty">还没有赞助用户，快来支持吧！</string>
     <string name="sponsor_more_coming">更多赞助用户陆续加入</string>
+    <string name="contributors">贡献者</string>
+    <string name="contributors_desc">社区贡献</string>
+    <string name="contributors_ft_desc">安卓 10 兼容性修复</string>
+    <string name="notif_perm_title">开启通知权限</string>
+    <string name="notif_perm_message">通知权限用于：状态栏音乐播放控制、眼镜歌词同步显示、定时提醒推送。未授权时音乐仍可播放，但播放器卡片和眼镜歌词将无法显示。</string>
+    <string name="notif_perm_enable">去开启</string>
+    <string name="notif_perm_later">暂不</string>
+    <string name="notif_perm_open_settings">去系统设置开启</string>
 
     <!-- Glasses Services -->
     <string name="glasses_services">眼镜端服务</string>
@@ -230,6 +238,7 @@
     <string name="guide_step4_desc">为眼镜设置与手机 WiFi 网络</string>
     <string name="wifi_ssid_label">WiFi 名称</string>
     <string name="wifi_password_label">WiFi 密码</string>
+    <string name="wifi_password_prefilled">已自动填入该网络保存的密码</string>
     <string name="show_password">显示密码</string>
     <string name="hide_password">隐藏密码</string>
     <string name="wifi_send_to_glasses">眼镜连接 WiFi</string>

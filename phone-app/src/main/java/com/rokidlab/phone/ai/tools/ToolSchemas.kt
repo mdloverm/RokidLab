@@ -190,7 +190,7 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
 
         TOOL_CODE_FILE -> toolSchema(
             name = meta.name,
-            description = "把生成的一段代码保存为项目文件，写入手机“下载/项目名/”目录。当用户要求“写代码/生成页面或应用/创建项目文件”等需要产出代码、脚本、配置或页面文件时使用；一次调用只写一个文件，一个项目有多个文件时按文件逐个调用（每次用相同的项目名）。必须通过本工具把代码落盘，不要把整段代码直接当作回复内容发给用户；回复只简短告知项目名与文件数量。若目标是“AIUI 智能体应用（.aix）”，至少需要 app.json（页面清单）与 pages/index/index.ink（首页），可再加 VERSION/AGENTS.md/app.js 与更多 pages/*/index.ink；app.json 的页面路径与文件名一致。每个 .ink 页面必须遵循 AIUI SFC 四块结构并按顺序书写：<script def>（页面级 JSON 配置，如导航栏标题）→ <script setup>（export default 逻辑/data/生命周期）→ <page>（WXML 模板，根标签必须是 <page>，禁止用 <template>）→ <style>（样式）。写成 Vue 风格（<template>/<script>）会被拒绝保存，眼镜上也无法渲染。若目标是修改一个已生成的项目，请先调用 read_code_file 读取该文件当前的真实内容，在它基础上改动后覆盖写回同一路径，不要凭印象整文件重编。",
+            description = "把生成的一段代码保存为项目文件，写入手机“下载/项目名/”目录。当用户要求“写代码/生成页面或应用/创建项目文件”等需要产出代码、脚本、配置或页面文件时使用；一次调用只写一个文件，一个项目有多个文件时按文件逐个调用（每次用相同的项目名）。必须通过本工具把代码落盘，不要把整段代码直接当作回复内容发给用户；回复只简短告知项目名与文件数量。若目标是“AIUI 智能体应用（.aix）”，至少需要 app.json（页面清单）与 pages/index/index.ink（首页），可再加 VERSION/AGENTS.md/app.js 与更多 pages/*/index.ink；app.json 的页面路径与文件名一致。每个 .ink 页面必须遵循 AIUI SFC 四块结构并按顺序书写：<script def>（页面级 JSON 配置，如导航栏标题）→ <script setup>（export default 逻辑/data/生命周期）→ <page>（WXML 模板，根标签必须是 <page>，禁止用 <template>）→ <style>（样式）。写成 Vue 风格（<template>/<script>）会被拒绝保存，眼镜上也无法渲染。若页面需要调用手机端能力（放歌、查天气、搜网页、设提醒等），只能走 Lab 工具口：在页面逻辑里写 await globalThis.Lab.callTool('工具名', {参数})，并用 await globalThis.Lab.listTools() 查可用工具名；工具名必须与清单逐字一致，禁止自造名字；必须 try/catch 并显示 loading 态，一次只调一个工具，失败不要写自动重试循环。若目标是修改一个已生成的项目，请先调用 read_code_file 读取该文件当前的真实内容，在它基础上改动后覆盖写回同一路径，不要凭印象整文件重编。",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(

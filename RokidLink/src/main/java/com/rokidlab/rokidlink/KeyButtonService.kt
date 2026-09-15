@@ -423,6 +423,15 @@ class KeyButtonService : Service() {
          * 手机端 takePhoto 无图超时。每次按键重新续期，超时后允许再次熄屏省电。
          */
         private const val QUIZ_SCREEN_AWAKE_MS = 120_000L
+        /**
+         * 答题时「点亮屏幕」用 SCREEN_BRIGHT + ACQUIRE_CAUSES_WAKEUP 的持有时长。
+         * 只需覆盖从熄屏到官方 AI 会话把屏幕重新用起来的窗口，不需要长期持有
+         * （长期持有由 [QUIZ_SCREEN_AWAKE_MS] 的 SCREEN_DIM 锁负责）。
+         */
+        private const val QUIZ_TURN_ON_MS = 15_000L
+        /** startForeground 被拒后的重试上限与间隔（与 BtTunnelService 同策略） */
+        private const val MAX_FOREGROUND_RETRIES = 5
+        private const val FOREGROUND_RETRY_INTERVAL_MS = 5_000L
         /** ASR 文字 logcat 输出 tag：手机端经 ADB（蓝牙隧道）读取（CXR 上行被 AI App 过滤，改用 logcat） */
         internal const val AI_ASR_BRIDGE_TAG = "AiAsrBridge"
         internal const val PREFS_NAME = "key_button_config"
@@ -587,6 +596,10 @@ class KeyButtonService : Service() {
             quizScreenWakeLock?.let { if (it.isHeld) it.release() }
             quizScreenWakeLock = null
         }
+        runCatching {
+            quizTurnOnWakeLock?.let { if (it.isHeld) it.release() }
+            quizTurnOnWakeLock = null
+        }
         runCatching { unregisterWifiIpReporter() }
         runCatching { bridge?.disconnectCXRDevice() }
         bridge = null
@@ -663,6 +676,9 @@ class KeyButtonService : Service() {
     //  前台服务
     // ──────────────────────────────────────────────
 
+    // setPriority/PRIORITY_MIN 仅对 Android 8 以下生效（O 起优先级由 NotificationChannel 决定），
+    // 但 O 以下设备仍需这两个已弃用 API 才能把通知降到最低，无法用新 API 替代。
+    @Suppress("DEPRECATION")
     private fun startForegroundService() {
         val channelId = "key_button_service"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -682,8 +698,48 @@ class KeyButtonService : Service() {
             setSmallIcon(android.R.drawable.ic_menu_manage)
             setPriority(Notification.PRIORITY_MIN)
         }.build()
-        startForeground(1, notification)
-        Log.i(TAG, "Foreground service started")
+        // ★ startForeground 必须兜异常：它在 onCreate 主线程裸调用，一旦抛异常就是
+        //   未捕获异常 → 进程立刻 FATAL EXCEPTION 崩溃。已知会抛的场景：
+        //   ① Android 14+ 对 foregroundServiceType="connectedDevice" 强制校验
+        //      BLUETOOTH_CONNECT 运行时权限，未授权 → SecurityException；
+        //   ② 后台启动受限 → ForegroundServiceStartNotAllowedException；
+        //   ③ 通知渠道/类型不合法 → InvalidForegroundServiceTypeException。
+        //   BtTunnelService.startForegroundSafe 早已是这套写法，此处对齐。
+        //   降级策略：捕获后延迟重试转前台；重试期间服务仍是普通后台服务，
+        //   按键/隧道/ASR 照常工作，绝不会因「转前台失败」把整个进程带走。
+        try {
+            startForeground(1, notification)
+            foregroundRetryCount = 0
+            Log.i(TAG, "Foreground service started")
+        } catch (e: Throwable) {
+            Log.e(TAG, "startForeground failed: ${e::class.simpleName}: ${e.message}")
+            retryStartForeground(notification)
+        }
+    }
+
+    /** 前台状态重试计数（转前台被拒后延迟重试，见 [retryStartForeground]） */
+    private var foregroundRetryCount = 0
+
+    /**
+     * startForeground 被拒后的延迟重试（每 5s，最多 5 次）。
+     * 与 BtTunnelService 同策略：不因为「暂时转不了前台」而崩进程或反复重启。
+     */
+    private fun retryStartForeground(notification: android.app.Notification) {
+        if (foregroundRetryCount >= MAX_FOREGROUND_RETRIES) {
+            Log.w(TAG, "Give up startForeground retry after $MAX_FOREGROUND_RETRIES attempts")
+            return
+        }
+        foregroundRetryCount++
+        handler.postDelayed({
+            try {
+                startForeground(1, notification)
+                foregroundRetryCount = 0
+                Log.i(TAG, "Foreground service started on retry #$foregroundRetryCount")
+            } catch (e: Throwable) {
+                Log.w(TAG, "startForeground retry #$foregroundRetryCount failed: ${e.message}")
+                retryStartForeground(notification)
+            }
+        }, FOREGROUND_RETRY_INTERVAL_MS)
     }
 
     // ──────────────────────────────────────────────
@@ -811,9 +867,15 @@ class KeyButtonService : Service() {
      * 答题流程屏幕保亮：持有 SCREEN_DIM_WAKE_LOCK（带超时续期），
      * 防止答题过程中屏幕自动熄屏触发 AI 会话退出与相机释放。
      * 超时自动释放，允许答题结束后再次熄屏省电；每次按键重新续期。
-     * 若按键时屏幕已熄（如答题间隔超过保亮时长），同时用 FLAG_TURN_SCREEN_ON
-     * 重新点亮屏幕，否则 AI 会话仍处于退出态、相机不可用，takePhoto 会无图超时。
+     * 若按键时屏幕已熄（如答题间隔超过保亮时长），由 [wakeScreenForQuiz] 重新点亮屏幕，
+     * 否则 AI 会话仍处于退出态、相机不可用，takePhoto 会无图超时。
+     *
+     * SCREEN_DIM_WAKE_LOCK 已被 Android 标记弃用（官方推荐 FLAG_KEEP_SCREEN_ON），
+     * 但后者必须挂在 Activity 的 Window 上 —— 而本服务恰恰要避免拉起任何 Activity
+     * （重新拉起 BridgeActivity 会被 AssistServer 判为 third_app 并强杀，见 [yieldBridgeActivity]）。
+     * 弃用 ≠ 移除，该常量在现役 ROM 上照常生效，故此处有意保留。
      */
+    @Suppress("DEPRECATION")
     private fun keepScreenAwakeForQuiz() {
         try {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
@@ -832,8 +894,49 @@ class KeyButtonService : Service() {
         }
     }
 
-    /** 屏幕已熄时通过启动常驻透明 Activity（FLAG_TURN_SCREEN_ON）重新点亮屏幕 */
+    /** 点屏唤醒用的临时 WakeLock（ACQUIRE_CAUSES_WAKEUP），见 [wakeScreenForQuiz] */
+    private var quizTurnOnWakeLock: PowerManager.WakeLock? = null
+
+    /**
+     * 屏幕已熄时重新点亮屏幕。
+     *
+     * ★ 这里绝不能无条件 `startActivity(KeyButtonBridgeActivity)`：
+     *   按键答题期间官方 AI 链路必然活跃（此刻正在处理 ASR_End / 打断官方播报），
+     *   拉起常驻透明 Activity 会把本进程重新置回 third_app 场景，官方会话结束时
+     *   AssistServer 会据此把 com.rokidlab.rokidlink 直接 force stop ——
+     *   这正是 [yieldBridgeActivity] 退让机制要规避的强杀（用户视角同样是
+     *   「拍照答题时眼镜端崩溃/闪退」）。
+     *
+     *   故改为分层策略：
+     *   ① 优先用 ACQUIRE_CAUSES_WAKEUP 的 WakeLock 点亮屏幕 —— 不需要 Activity，
+     *      不改变场景归属，从根上避开与退让机制的冲突；
+     *   ② 只有当官方 AI 会话确实已退让（officialAiSessionActive=false，
+     *      即 restoreBridgeRunnable 已到该恢复常驻 Activity 的时候）才走 Activity 兜底。
+     *
+     * SCREEN_BRIGHT_WAKE_LOCK / ACQUIRE_CAUSES_WAKEUP 均已被 Android 标记弃用
+     * （官方替代是 Activity.setTurnScreenOn + setShowWhenLocked），但替代方案同样必须依赖
+     * Activity —— 与上面「不能碰 Activity」的前提直接冲突，故此处有意保留弃用 API。
+     */
+    @Suppress("DEPRECATION")
     private fun wakeScreenForQuiz() {
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            val lock = quizTurnOnWakeLock ?: pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "KeyButtonService::QuizTurnScreenOn"
+            ).apply { setReferenceCounted(false) }
+            quizTurnOnWakeLock = lock
+            lock.acquire(QUIZ_TURN_ON_MS)
+            Log.i(TAG, "Screen wake requested via WakeLock(ACQUIRE_CAUSES_WAKEUP, ${QUIZ_TURN_ON_MS / 1000}s)")
+        } catch (e: Exception) {
+            Log.w(TAG, "wakeScreenForQuiz wakelock failed: ${e.message}")
+        }
+        if (officialAiSessionActive) {
+            // 官方 AI 会话活跃期间绝不拉起 BridgeActivity（会重新进入 third_app 被强杀）。
+            // 屏幕已由上面的 WakeLock 点亮，常驻 Activity 等 restoreBridgeRunnable 自动恢复。
+            Log.i(TAG, "Skip BridgeActivity wake (official AI active, would be force-stopped as third_app)")
+            return
+        }
         try {
             val intent = Intent(this, KeyButtonBridgeActivity::class.java).apply {
                 putExtra(KeyButtonBridgeActivity.EXTRA_WAKE_SCREEN, true)
@@ -964,6 +1067,15 @@ class KeyButtonService : Service() {
                 handleQuizConfig(args)
             })
             Log.i(TAG, "subscribe($QUIZ_TOPIC) -> $quizResult")
+
+            // 推送通道远程踢活：手机端检测到 RFCOMM 推送监听连续秒断（监听假死）时经 CXR
+            // 频道下发（CXR 由系统 cxr-service 托管，推送死了它仍可达），收到后重建 AsrPushServer。
+            val pushRestartResult = bridge?.subscribe(AiChannel.TOPIC_PUSH_RESTART, CXRServiceBridge.MsgCallback { _, _, _ ->
+                markDownlink()
+                Log.w(TAG, "push restart requested by phone, recreating AsrPushServer")
+                AsrPushServer.restart()
+            })
+            Log.i(TAG, "subscribe(${AiChannel.TOPIC_PUSH_RESTART}) -> $pushRestartResult")
 
             // 接收 Lab 下发的 AI 配置（baseUrl/apiKey/model），供眼镜端直接调用模型
             val aiCfgResult = bridge?.subscribe(AI_CONFIG_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
@@ -1236,13 +1348,22 @@ class KeyButtonService : Service() {
                     // 这里立即本地重开会话并显示提问，官方界面立刻切到 Lab 会话等待（第二次思考中，可接受），
                     // 手机端读到文字后只需下行 DeepSeek 回复（TTS_Result），不再重发会话序列。
                     // 串行执行器：连续提问时避免多个接管任务并发导致指令交错
-                    takeoverExecutor.execute {
-                        try {
-                            openAiSession()
-                            showAiUserText(finalText)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "local takeover error", e)
-                        }
+                    // execute 前必须查 isShutdown：onDestroy 已 shutdownNow，此后 CXR 回调
+                    // 仍在途中时 execute 会抛 RejectedExecutionException —— 它在 execute 调用处
+                    // （不在传入的 lambda 里）抛出，执行线程是 CXR 回调线程，未捕获即崩进程。
+                    if (takeoverExecutor.isShutdown) {
+                        Log.w(TAG, "local takeover skipped: executor already shutdown")
+                    } else {
+                        runCatching {
+                            takeoverExecutor.execute {
+                                try {
+                                    openAiSession()
+                                    showAiUserText(finalText)
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "local takeover error", e)
+                                }
+                            }
+                        }.onFailure { Log.w(TAG, "local takeover rejected: ${it.message}") }
                     }
                     // ASR 文字双通道暴露：
                     //   1) logcat（AiAsrBridge tag）——诊断用
@@ -1961,30 +2082,56 @@ class KeyButtonService : Service() {
             Log.w(TAG, "No CXR bridge, cannot send photo_ask")
             return
         }
-        try {
-            // 1. RFCOMM 主通道：独立于 AI App 网关，可靠区分「按键意图」，
-            //    手机端收到控制指令后触发拍照答题（不会误触发）。
-            val pushSent = AsrPushServer.pushControl(AsrPushServer.CTRL_PHOTO_ASK)
-            Log.i(TAG, "pushControl(${AsrPushServer.CTRL_PHOTO_ASK}) -> $pushSent")
+        // ★ 本方法在主线程被调用（按键广播 onReceive / Service.onStartCommand），
+        //   而 CXR sendMessage 在蓝牙断/半开时可能无限阻塞 —— 同文件 sendAi() 早已因此加了
+        //   2s 超时保护（其注释原文：实测 open 卡死导致 takeoverExecutor 与回调线程双双失联）。
+        //   此前这里漏了同样的保护：两次串行 sendMessage 一旦阻塞，就会吃满前台广播 10s /
+        //   Service 20s 的 ANR 预算，被系统判定「应用无响应」后强杀进程 ——
+        //   用户视角的「拍照答题时眼镜端崩溃」正是这条路径。
+        //   因此整体移到后台线程执行，每次发送都带超时，绝不阻塞主线程。
+        Thread {
+            try {
+                // 1. RFCOMM 主通道：独立于 AI App 网关，可靠区分「按键意图」，
+                //    手机端收到控制指令后触发拍照答题（不会误触发）。
+                val pushSent = AsrPushServer.pushControl(AsrPushServer.CTRL_PHOTO_ASK)
+                Log.i(TAG, "pushControl(${AsrPushServer.CTRL_PHOTO_ASK}) -> $pushSent")
 
-            // 2. 原 photo_ask 上行（自定义频道，AI App 的 activeUid=null 时不转发，保留诊断）
-            val caps = Caps()
-            caps.write("photo_ask")
-            val result = b.sendMessage(PHOTO_ASK_TOPIC, caps)
-            Log.i(TAG, "sendMessage($PHOTO_ASK_TOPIC) -> $result")
+                // 2. 原 photo_ask 上行（自定义频道，AI App 的 activeUid=null 时不转发，保留诊断）
+                val caps = Caps()
+                caps.write("photo_ask")
+                val result = sendCxrWithTimeout(b, PHOTO_ASK_TOPIC, caps)
+                Log.i(TAG, "sendMessage($PHOTO_ASK_TOPIC) -> $result")
 
-            // 3. Sys 频道上行：模拟系统级 Sys_App_Resume_Change 事件，
-            //    AI App 对 Sys 事件无条件转发（IAiEventCallback.onGlassAppResumeChange），
-            //    手机端 SDK 据此回调 onGlassAppResume(true) 触发打断官方回复。
-            //    注意：手机端已不再用该回调触发拍照（无法区分真实 resume），仅用于打断 AI。
-            val sysCaps = Caps()
-            sysCaps.write("Sys_App_Resume_Change")
-            sysCaps.write("com.rokidlab.rokidlink")
-            val sysResult = b.sendMessage(LinkProtocol.CXR_CHANNEL_SYS, sysCaps)
-            Log.i(TAG, "sendMessage(Sys/Sys_App_Resume_Change) -> $sysResult")
-        } catch (e: Exception) {
-            Log.e(TAG, "sendPhotoAskToPhone error", e)
-        }
+                // 3. Sys 频道上行：模拟系统级 Sys_App_Resume_Change 事件，
+                //    AI App 对 Sys 事件无条件转发（IAiEventCallback.onGlassAppResumeChange），
+                //    手机端 SDK 据此回调 onGlassAppResume(true) 触发打断官方回复。
+                //    注意：手机端已不再用该回调触发拍照（无法区分真实 resume），仅用于打断 AI。
+                val sysCaps = Caps()
+                sysCaps.write("Sys_App_Resume_Change")
+                sysCaps.write("com.rokidlab.rokidlink")
+                val sysResult = sendCxrWithTimeout(b, LinkProtocol.CXR_CHANNEL_SYS, sysCaps)
+                Log.i(TAG, "sendMessage(Sys/Sys_App_Resume_Change) -> $sysResult")
+            } catch (e: Throwable) {
+                // 后台线程必须 Throwable 兜底：未捕获异常走默认 handler 会直接崩进程
+                Log.e(TAG, "sendPhotoAskToPhone error", e)
+            }
+        }.apply { name = "photo-ask-send"; isDaemon = true }.start()
+    }
+
+    /**
+     * CXR sendMessage 的超时保护包装。
+     *
+     * 与 [sendAi] 同源风险：蓝牙断/半开时 sendMessage 可能无限阻塞，
+     * 调用线程会被永久挂住。所有在按键路径上的 sendMessage 都必须走这里，不要裸调。
+     */
+    private fun sendCxrWithTimeout(b: CXRServiceBridge, topic: String, caps: Caps): Int = try {
+        aiSendExecutor.submit<Int> { b.sendMessage(topic, caps) }.get(2, TimeUnit.SECONDS)
+    } catch (e: java.util.concurrent.TimeoutException) {
+        Log.w(TAG, "sendMessage($topic) timeout (CXR channel blocked)")
+        -1
+    } catch (e: Throwable) {
+        Log.e(TAG, "sendMessage($topic) error", e)
+        -1
     }
 
     // ──────────────────────────────────────────────

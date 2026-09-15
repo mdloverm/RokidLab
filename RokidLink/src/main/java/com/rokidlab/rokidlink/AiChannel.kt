@@ -29,6 +29,10 @@ object AiChannel {
     const val TOPIC_KEY_QUIZ = "rokidlab_key_quiz"
     const val TOPIC_TTS_PLAY = "tts_play"
     const val TOPIC_TTS_STOP = "tts_stop"
+    /** 推送通道远程踢活（手机端 → 眼镜端）：手机端检测到 RFCOMM 推送通道连续秒断、
+     *  监听疑似死亡时下发，眼镜端收到后 stop+start 整个 AsrPushServer 释放蓝牙栈资源重建监听。
+     *  走 CXR 自定义频道（系统 cxr-service 托管，独立于本推送通道，推送死了它仍可达）。 */
+    const val TOPIC_PUSH_RESTART = "rokidlab_push_restart"
 
     // ── cmd（载荷[0]，与 topic 呼应）──
     const val CMD_AI_CONFIG = "ai_config"

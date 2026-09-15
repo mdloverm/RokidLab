@@ -212,7 +212,7 @@ class CxrLHiRokidSession(
             val name = obj.optString("name")
             val args = obj.optString("args").ifBlank { "{}" }
             Log.i(TAG, "handleAiuiToolCall: name=$name cbId=$cbId")
-            // 带上 cbId：页面 15s 超时重试会带同一个 cbId 回来，
+            // 带上 cbId：页面超时重试会带同一个 cbId 回来，
             // 网关据此幂等去重，避免重复拨号/重复安装这类真实副作用。
             val r = com.rokidlab.phone.ai.ToolGateway.call(appContext, name, args, cbId)
             val out = JSONObject()
@@ -221,12 +221,18 @@ class CxrLHiRokidSession(
                 .put("ok", r.ok)
             r.result?.let { out.put("result", it) }
             r.error?.let { out.put("error", it) }
-            aiuiHost.sendAiuiHostMessage(out.toString())
+            // 下行返回值必须检查：sendAiuiHostMessage 走 CXR 通道，链路断开时返回 -2/-1，
+            // 原先丢弃返回值会让「工具已执行但结果发不出去」完全无声（页面只能等到超时，
+            // 排查时也看不到任何失败记录）。
+            val sent = aiuiHost.sendAiuiHostMessage(out.toString())
+            if (sent != 0) {
+                Log.w(TAG, "handleAiuiToolCall: result send failed (ret=$sent) name=$name cbId=$cbId")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "handleAiuiToolCall failed", e)
             // 解析/下发失败也要尽力回传，否则页面 Promise 会挂到超时
             runCatching {
-                aiuiHost.sendAiuiHostMessage(
+                val ret = aiuiHost.sendAiuiHostMessage(
                     JSONObject()
                         .put("type", "toolResult")
                         .put("cbId", cbId)
@@ -234,6 +240,7 @@ class CxrLHiRokidSession(
                         .put("error", "tool call failed: ${e.message}")
                         .toString(),
                 )
+                if (ret != 0) Log.w(TAG, "handleAiuiToolCall: error send failed (ret=$ret) cbId=$cbId")
             }
         }
     }

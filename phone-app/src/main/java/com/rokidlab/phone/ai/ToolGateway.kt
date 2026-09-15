@@ -43,10 +43,11 @@ object ToolGateway {
         /** 结果返回页面前的截断上限：RFCOMM 单帧上限 64KB，且页面也渲染不下超长文本 */
         private const val MAX_RESULT_CHARS = 8000
 
-    /** 单次调用超时。工具可能走外网（搜索/天气 1~3s），留足余量 */
+    /** 单次调用超时。工具可能走外网（搜索/天气 1~3s），留足余量。
+     *  眼镜端同步等待窗口（25s）必须比它大，否则本类给出的真实错误回不到页面。 */
     private const val CALL_TIMEOUT_MS = 15_000L
 
-    /** 同一 cbId 的去重窗口：页面 15s 超时重试落在窗口内即命中，不再起第二个 worker */
+    /** 同一 cbId 的去重窗口：页面超时重试落在窗口内即命中，不再起第二个 worker */
     private const val DEDUPE_TTL_MS = 60_000L
 
     /** 去重表上限，超过后清扫已结束且过期的项，防止长期驻留 */
@@ -146,7 +147,7 @@ object ToolGateway {
      *
      * @param arguments JSON 对象字符串，可为空（按 {} 处理）
      * @param cbId 页面侧回调号。非空时本方法按 cbId 幂等：同一 cbId 的重复调用
-     *   （典型来源：页面 15s 超时后重试）进行中则挂到同一个 worker 等结果、
+     *   （典型来源：页面超时后重试）进行中则挂到同一个 worker 等结果、
      *   已完成则直接回缓存结果，不会第二次执行工具。留空则不做去重（一次性调用场景）。
      */
     fun call(context: Context, name: String, arguments: String, cbId: String = ""): CallResult {
@@ -159,8 +160,11 @@ object ToolGateway {
         }
         // 能力发现走同一条通道，页面不必额外学一套协议：
         // 结果就是 listAllowedJson，页面 JSON.parse 后得到 {tools:[{name,description}]}
+        // 注意：也必须过截断 —— 这条路径原先在 [awaitResult] 之外提前返回，
+        // 34 个工具的 name+description 在英文长描述下可能超出 RFCOMM 单帧上限（64KB），
+        // 帧超限会被 AsrPushServer 静默丢弃，页面只看到超时。
         if (toolName == LIST_TOOLS) {
-            return CallResult(true, toolName, result = listAllowedJson(context))
+            return CallResult(true, toolName, result = truncateResult(listAllowedJson(context)))
         }
         if (toolName in DENY_TOOLS) {
             return CallResult(false, toolName, error = "tool '$toolName' is not allowed in AIUI pages")
@@ -180,14 +184,8 @@ object ToolGateway {
             return CallResult(false, toolName, error = "arguments is not valid JSON: ${e.message}")
         }
 
-        // Phase 4 风险闸门：限流 + EXTERNAL_SIDE_EFFECT 确认（fail-open：无确认通道/超时→降级放行，见 ToolPolicy doc）
-        when (val policy = ToolPolicy.check(ToolPolicy.SOURCE_AIUI_PAGE, toolName, JSONObject(normalizedArgs))) {
-            is ToolPolicy.Decision.Deny ->
-                return CallResult(false, toolName, error = policy.reason)
-            is ToolPolicy.Decision.Allow -> { /* pass */ }
-        }
-
-        // 幂等闸门：同一 cbId 的重复调用（页面超时重试）不再起第二个 worker
+        // 幂等闸门必须在风险闸门之前：页面超时重试只是同一次调用的重放，
+        // 若先过 ToolPolicy 会白白再消耗一次 30/min 限流额度（后续正常调用被误拒）。
         val dedupeKey = cbId.trim()
         if (dedupeKey.isNotEmpty()) {
             val now = System.currentTimeMillis()
@@ -198,6 +196,13 @@ object ToolGateway {
                 }
                 dedupeMap.remove(dedupeKey, prev)
             }
+        }
+
+        // Phase 4 风险闸门：限流 + EXTERNAL_SIDE_EFFECT 确认（fail-open：无确认通道/超时→降级放行，见 ToolPolicy doc）
+        when (val policy = ToolPolicy.check(ToolPolicy.SOURCE_AIUI_PAGE, toolName, JSONObject(normalizedArgs))) {
+            is ToolPolicy.Decision.Deny ->
+                return CallResult(false, toolName, error = policy.reason)
+            is ToolPolicy.Decision.Allow -> { /* pass */ }
         }
 
         val appContext = context.applicationContext
@@ -217,8 +222,16 @@ object ToolGateway {
             }
         }, "aiui-tool-$toolName")
         val entry = InFlight(worker, resultRef, errorRef, finished)
+
         if (dedupeKey.isNotEmpty()) {
-            dedupeMap[dedupeKey] = entry
+            // putIfAbsent 而非「先查后写」：两个同 cbId 请求并发到达时，
+            // 后者会拿到先到者的 entry 并挂上去等结果，绝不退化成本地第二次执行工具。
+            val raced = dedupeMap.putIfAbsent(dedupeKey, entry)
+            if (raced != null) {
+                Log.i(TAG, "tool $toolName: cbId=$dedupeKey concurrent duplicate, join in-flight call")
+                // 本 worker 从未 start，直接丢弃，避免重复副作用
+                return awaitResult(raced, toolName, duplicate = true)
+            }
             evictExpiredDedupe(System.currentTimeMillis())
         }
         worker.isDaemon = true
@@ -229,7 +242,7 @@ object ToolGateway {
     /**
      * 等待一次已登记的调用结束，并按统一口径转成 [CallResult]。
      *
-     * [duplicate] 区分首次调用与重复调用：两者都在 15s 后返回错误，
+     * [duplicate] 区分首次调用与重复调用：两者都在超时后返回错误，
      * 但错误语义不同 —— 首次是「超时」，重复是「上一次仍在跑」（提示页面别再造并发）。
      */
     private fun awaitResult(entry: InFlight, toolName: String, duplicate: Boolean): CallResult {
@@ -255,10 +268,23 @@ object ToolGateway {
         }
 
         var result = entry.resultRef.get() ?: ""
-        if (result.length > MAX_RESULT_CHARS) {
-            result = result.take(MAX_RESULT_CHARS) + "…(truncated)"
-        }
+        result = truncateResult(result)
         Log.i(TAG, "tool $toolName ok, ${result.length} chars")
         return CallResult(true, toolName, result = result)
+    }
+
+    /**
+     * 结果截断：RFCOMM 单帧上限 64KB，且页面也渲染不下超长文本。
+     *
+     * 不能直接 `take(n)` —— 结果可能含 emoji/生僻字（UTF-16 代理对），
+     * 从代理对中间切断会留下孤立代理项，下行 JSON 里的结果字符串就变非法，
+     * 页面 `JSON.parse` 直接失败，表现为 "bad result: …" 而非工具错误，极难排查。
+     * 这里检测切点若落在高代理项之后，就少截一个字符让代理对完整落在截断之外。
+     */
+    private fun truncateResult(result: String): String {
+        if (result.length <= MAX_RESULT_CHARS) return result
+        var end = MAX_RESULT_CHARS
+        if (Character.isHighSurrogate(result[end - 1])) end -= 1
+        return result.substring(0, end) + "…(truncated)"
     }
 }

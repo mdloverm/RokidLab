@@ -37,6 +37,37 @@ class OpenAiService(
 ) {
     companion object {
         private const val TAG = "OpenAiService"
+
+        /**
+         * 未开启思考时的单轮输出上限（token）。
+         * 够放「一次大文件工具调用的参数 JSON」（实测成功写出 10335 字符的 .ink 时余量充足）。
+         */
+        private const val MAX_TOKENS_DEFAULT = 8192
+
+        /**
+         * 开启思考时的单轮输出上限（token）。
+         * reasoning 与正文/工具参数**共享**该预算，实测单轮 reasoning 可达 2.5~2.9 万字符，
+         * 沿用 8192 会在思考阶段就烧完预算 → finish_reason=length 且 content/工具调用全空
+         * （表现为连续 content=null 空轮，AIUI 生成整体失败）。
+         */
+        private const val MAX_TOKENS_THINKING = 32000
+
+        /**
+         * 该模型是否支持用 `thinking: {"type":"disabled"}` 关闭思考。
+         *
+         * 只能对 DeepSeek 系发送（该字段是 DeepSeek 专有，发给 OpenAI 兼容端点会 400），
+         * 且必须排除推理专用模型 —— `deepseek-reasoner` / `deepseek-r1` 设计上不支持关闭思考，
+         * 发了会被服务端拒绝（宁可少关也不要把请求打挂）。
+         *
+         * 历史坑：曾只认名字里带 `v4` / `v3.2` 的模型，`deepseek-flash` 不匹配 ——
+         * 用户在聊天设置里关掉「长思考」后，请求其实没带关思考字段，服务端照样开思考，
+         * 表现为「开关关了却仍被 reasoning 吃光预算」（2026-09-14 真机日志复现）。
+         */
+        private fun supportsThinkingDisabled(model: String): Boolean {
+            val m = model.lowercase()
+            if (!m.contains("deepseek")) return false
+            return !m.contains("reasoner") && !m.contains("-r1") && !m.contains("r1-")
+        }
     }
 
     /** 将用户自定义 JSON 逐字段合并进请求体；结构性字段（model/messages/stream/tools）忽略 */
@@ -288,25 +319,29 @@ class OpenAiService(
             put("model", model)
             put("messages", messages)
             put("stream", true)
-            // 8192：推理模型（deepseek 等）先消耗大量 token 做 reasoning，4096 会被思考吃光、
-            // 还没轮到输出 content/工具调用就 finish_reason=length 截断（表现为连续 content=null 空轮）。
-            // 8192 给「reasoning + 一次大文件工具调用 JSON」留足余量；多文件写入仍靠分轮工具拆解。
-            put("max_tokens", 8192)
+            // 输出预算必须与「是否思考」匹配：思考开启时 reasoning 与正文/工具参数共享该上限，
+            // 实测单轮 reasoning 可达 2.5~2.9 万字符，8192（未开思考时的默认值）会在思考阶段就烧完，
+            // content 与工具调用都不产出（finish_reason=length，表现为连续 content=null 空轮）。
+            // 此处曾写死 8192，导致「收尾的非流式调用能出正文、主循环流式调用却连续空轮」的怪现象
+            // （2026-09-14 真机日志：9 次空轮全部 reasoning≥2.5 万，成功轮 reasonng≤1.1 万）。
+            // 两处必须共用同一套取值，见 MAX_TOKENS_DEFAULT / MAX_TOKENS_THINKING。
+            put("max_tokens", if (thinkingEnabled) MAX_TOKENS_THINKING else MAX_TOKENS_DEFAULT)
             put("temperature", 0.7)
             if (!tools.isNullOrEmpty()) put("tools", JSONArray(tools))
-            // DeepSeek V4 / V3.2 思考默认开启：reasoning_content 会吞掉 max_tokens 预算，
-            // 实测单轮 reasoning ~2.5 万字符 → finish=length 截断 → 工具调用永不发生（连续空轮）。
-            // 默认关闭思考（输出仅约 1/7 token、更快更稳）；用户开启思考（thinkingEnabled）时
-            // 不附加，恢复服务端默认长推理（需配合 reasoning_content 历史回传）。
-            val lowerModel = model.lowercase()
-            if (!thinkingEnabled && lowerModel.contains("deepseek") &&
-                (lowerModel.contains("v4") || lowerModel.contains("v3.2"))
-            ) {
+            // 关闭思考：不附加关思考字段时，服务端按默认开启思考（reasoning 会吞掉输出预算）
+            if (!thinkingEnabled && supportsThinkingDisabled(model)) {
                 put("thinking", JSONObject().put("type", "disabled"))
             }
             // 用户自定义请求参数（本地 Ollama 调参）：最后合并，覆盖上面的默认值
             mergeExtraBody(this, extraBody)
         }
+        // 预算与思考状态打点：finish=length 空轮的第一现场，排障不该靠猜
+        Log.i(
+            TAG,
+            "chatTurnStream request: model=$model max_tokens=${requestBody.optInt("max_tokens")} " +
+                "thinking=${if (requestBody.has("thinking")) "disabled" else "server-default"} " +
+                "tools=${tools?.size ?: 0}",
+        )
         val headers = mapOf(
             "Authorization" to "Bearer $apiKey",
             "Content-Type" to "application/json; charset=utf-8",
@@ -356,16 +391,13 @@ class OpenAiService(
         requestBody.put("model", model)
         requestBody.put("messages", messages)
         requestBody.put("stream", false)
-        // 思考开启时预算放大（reasoning+输出都需容纳），关闭思考保持 8192 足够大 JSON 工具参数
-        requestBody.put("max_tokens", if (thinkingEnabled) 32000 else 8192)
+        // 思考开启时预算放大（reasoning 与正文/工具参数共享该上限），关闭思考时默认值即可。
+        // 取值与流式路径共用同一套常量，避免两条路径预算不一致（曾导致流式空轮、非流式正常）
+        requestBody.put("max_tokens", if (thinkingEnabled) MAX_TOKENS_THINKING else MAX_TOKENS_DEFAULT)
         requestBody.put("temperature", 0.7)
         if (!tools.isNullOrEmpty()) requestBody.put("tools", JSONArray(tools))
-        // DeepSeek V4/V3.2 默认关闭思考（reasoning 会耗尽输出预算导致空轮），同流式路径；
-        // 开启思考（thinkingEnabled）时不附加，恢复服务端默认长推理
-        val lowerModel = model.lowercase()
-        if (!thinkingEnabled && lowerModel.contains("deepseek") &&
-            (lowerModel.contains("v4") || lowerModel.contains("v3.2"))
-        ) {
+        // 关闭思考：不附加关思考字段时，服务端按默认开启思考（reasoning 会耗尽输出预算导致空轮），同流式路径
+        if (!thinkingEnabled && supportsThinkingDisabled(model)) {
             requestBody.put("thinking", JSONObject().put("type", "disabled"))
         }
         // 用户自定义请求参数（本地 Ollama 调参）：最后合并，覆盖上面的默认值
@@ -376,7 +408,12 @@ class OpenAiService(
             "Content-Type" to "application/json; charset=utf-8",
         )
 
-        Log.i(TAG, "chatTurn: POST $endpoint model=$model tools=${tools?.size ?: 0}")
+        Log.i(
+            TAG,
+            "chatTurn request: model=$model max_tokens=${requestBody.optInt("max_tokens")} " +
+                "thinking=${if (requestBody.has("thinking")) "disabled" else "server-default"} " +
+                "tools=${tools?.size ?: 0}",
+        )
         val response = HttpClient.postString(
             url = endpoint,
             body = requestBody.toString(),

@@ -95,6 +95,14 @@
     <string name="sponsor_list">Sponsors</string>
     <string name="sponsor_empty">No sponsors yet. Be the first!</string>
     <string name="sponsor_more_coming">More sponsors coming soon</string>
+    <string name="contributors">Contributors</string>
+    <string name="contributors_desc">Community contributions</string>
+    <string name="contributors_ft_desc">Android 10 compatibility fixes</string>
+    <string name="notif_perm_title">Enable notifications</string>
+    <string name="notif_perm_message">Notifications power the status-bar music player, on-glasses lyrics, and scheduled reminders. Music still plays without it, but the player card and glasses lyrics won\'t be available.</string>
+    <string name="notif_perm_enable">Enable</string>
+    <string name="notif_perm_later">Not now</string>
+    <string name="notif_perm_open_settings">Open system settings</string>
 
     <!-- Glasses Services -->
     <string name="glasses_services">Glasses Services</string>
@@ -231,6 +239,7 @@
     <string name="guide_step4_desc">Configure WiFi network for glasses</string>
     <string name="wifi_ssid_label">WiFi Name</string>
     <string name="wifi_password_label">WiFi Password</string>
+    <string name="wifi_password_prefilled">Saved password for this network filled in automatically</string>
     <string name="show_password">Show Password</string>
     <string name="hide_password">Hide Password</string>
     <string name="wifi_send_to_glasses">Connect Glasses to WiFi</string>

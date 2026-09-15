@@ -127,7 +127,17 @@ class AdbShellClient(
                 // 通过 executeShellCommand 执行心跳，自动使用 lock 避免与 shell 命令竞态。
                 // 心跳不计入 busyOps：它是周期性空转，若计入会让「会话是否正忙」长期为真，
                 // 线路升级永远等不到空闲窗口。
-                client.executeShellCommandInternal("echo 1", AppConfig.ADB_HEARTBEAT_TIMEOUT_MS.toInt(), countBusy = false)
+                // 必须兜住 Throwable 而非 Exception：低版本 Android 上的 NoSuchMethodError
+                // 等属于 Error，catch(Exception) 拦不住；一旦逃出后台线程 run()，未捕获异常
+                // 会直接杀死整个进程（2026-09 Android 10 真机「13秒一崩」即此路径）。
+                // 出错只停心跳并记日志，不拖垮整个 APP。
+                try {
+                    client.executeShellCommandInternal("echo 1", AppConfig.ADB_HEARTBEAT_TIMEOUT_MS.toInt(), countBusy = false)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "adb-heartbeat aborted by unexpected error; heartbeat stopped", t)
+                    client.heartbeatRunning = false
+                    break
+                }
             }
         }
     }
@@ -521,7 +531,10 @@ class AdbShellClient(
                     }
                 }
                 close(localId, remoteId)
-                baos.toString(Charsets.UTF_8)
+                // 用 String 重载而非 Charset 重载：ByteArrayOutputStream.toString(Charset) 是
+                // Java 10 / Android API 33(Android 13) 才加入的方法，minSdk 28 的低版本机型
+                // 运行时会 NoSuchMethodError。UTF-8 为各平台必装字符集，.name() 写法等价且全 API 可用。
+                baos.toString(Charsets.UTF_8.name())
             } catch (e: Exception) {
                 Log.e(TAG, "sendTcpStream fail: ${e.message}", e)
                 ""
@@ -911,7 +924,11 @@ class AdbShellClient(
                 msg.command == CMD_CLSE && msg.arg0 == remoteId -> break
             }
         }
-        return baos.toString(Charsets.UTF_8)
+        // 用 String 重载而非 Charset 重载：ByteArrayOutputStream.toString(Charset) 是
+        // Java 10 / Android API 33(Android 13) 才加入的方法，minSdk 28 的低版本机型（如
+        // Android 10）心跳线程走到这里会 NoSuchMethodError，未捕获时直接杀进程闪退。
+        // UTF-8 为各平台必装字符集，.name() 写法等价且全 API 可用。
+        return baos.toString(Charsets.UTF_8.name())
     }
 
     /**

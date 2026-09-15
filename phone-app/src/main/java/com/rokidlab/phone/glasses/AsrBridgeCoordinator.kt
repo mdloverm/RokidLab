@@ -70,6 +70,9 @@ internal class AsrBridgeCoordinator(
          *  ai_config/tts/show_main 全部静默丢失，仅进程重启可恢复）——RokidLink 以「重连后
          *  150s 内是否收到过任意下行（含本 ping）」判定路由失效并自杀重启。 */
         private const val DOWNLINK_PING_INTERVAL_MS = 60_000L
+
+        /** 远程踢活眼镜推送服务的最小间隔（秒断风暴下防止反复重启眼镜监听） */
+        private const val PUSH_RESTART_THROTTLE_MS = 60_000L
         /** ASR 文字文件通道：眼镜端把 ASR_TEXT 追加写入该文件，手机端轮询 tail 读取。
          *  logcat 缓冲会被眼镜高频系统日志数秒内冲掉，文件通道保证可靠读到 */
         private const val GLASSES_ASR_FILE = "/sdcard/Android/data/com.rokidlab.rokidlink/files/ai_asr.log"
@@ -154,6 +157,9 @@ internal class AsrBridgeCoordinator(
 
     /** 推送恢复时置位，打破兜底轮询退避，立刻补读一次积压文件 */
     @Volatile private var catchUpRequested = false
+
+    /** 上次远程踢活眼镜推送服务的时刻（节流，避免秒断风暴下反复重启眼镜端监听） */
+    @Volatile private var lastPushRestartAtMs = 0L
 
     /**
      * ASR 文字入口（三路共用：push 推送 / 文件轮询 / CXR 全局指令监听）。
@@ -313,8 +319,18 @@ internal class AsrBridgeCoordinator(
                 // 不依赖 AI App 网关，也不会被真实 resume 事件误触发）
                 if (text == PHOTO_ASK_MARKER) {
                     Log.i(TAG, "Photo-ask marker received via RFCOMM push channel")
-                    // 拍照+OCR+AI 全流程耗时数秒，切后台线程执行，避免阻塞 RFCOMM 读线程
-                    Thread { onPhotoAsk() }.start()
+                    // 拍照+OCR+AI 全流程耗时数秒，切后台线程执行，避免阻塞 RFCOMM 读线程。
+                    // 该线程是未捕获异常的终点：外层 catch 只覆盖 RFCOMM 读线程，捕不到这里抛出的
+                    // 异常（子线程异常走默认 UncaughtExceptionHandler → 直接崩进程），必须自己兜住；
+                    // 同时设为 daemon，避免拍照流程阻塞时拖住进程退出。
+                    Thread {
+                        try {
+                            onPhotoAsk()
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "onPhotoAsk failed", e)
+                            LogCollector.e(TAG, "拍照答题流程异常", e)
+                        }
+                    }.apply { name = "photo-ask"; isDaemon = true }.start()
                     return@AsrPushClient
                 }
                 // ASR 识别完成信号：眼镜端收到官方 ASR_End 后推送，此刻官方识别已完成。
@@ -340,6 +356,8 @@ internal class AsrBridgeCoordinator(
         // WiFi 直连所需的眼镜 IP：每次重连都重新取（眼镜 IP 是上线后才上报的）。
         // 取不到（空串）时 AsrPushClient 直接走 RFCOMM，行为与旧版一致。
         wifiIpProvider = { (appContext as? LabApplication)?.glassesIp.orEmpty() },
+        // RFCOMM 推送监听假死（连续秒断）：经仍健康的 CXR 通道远程踢活眼镜端 AsrPushServer
+        onChannelDead = { requestGlassesPushRestart() },
     ) {
         // 推送建链/重连成功：唤醒兜底轮询补读积压文字
         catchUpRequested = true
@@ -398,6 +416,38 @@ internal class AsrBridgeCoordinator(
     private fun stopDownlinkPing() {
         pingJob?.cancel()
         pingJob = null
+    }
+
+    /**
+     * 远程踢活眼镜端 ASR 推送服务。
+     *
+     * 触发：[AsrPushClient] 检测到 RFCOMM 连续 3 次「建链后 2.5s 内秒断」——
+     * 即眼镜端 AsrPushServer 监听已假死（SDP 残留/SCN 无人 accept）。
+     * 手段：经 CXR 自定义频道（系统 cxr-service 托管，推送通道死了它仍可达）下发
+     * [AiChannel.TOPIC_PUSH_RESTART]，眼镜端 stop+start 整个推送服务，强制蓝牙栈
+     * 重新分配 RFCOMM 资源。60s 节流：即便客户端秒断循环持续，也不会反复重启眼镜监听。
+     */
+    private fun requestGlassesPushRestart() {
+        val now = System.currentTimeMillis()
+        if (now - lastPushRestartAtMs < PUSH_RESTART_THROTTLE_MS) {
+            Log.i(TAG, "push restart requested but throttled (last ${now - lastPushRestartAtMs}ms ago)")
+            return
+        }
+        val link = linkProvider()
+        if (link == null || !linkAlive()) {
+            Log.w(TAG, "push restart skipped: CXR link not ready, glasses-side self-heal will retry")
+            return
+        }
+        lastPushRestartAtMs = now
+        appScope.launch(Dispatchers.IO) {
+            try {
+                val caps = Caps().also { it.write("push_restart") }
+                val r = synchronized(cmdLock) { link.sendCustomCmd(AiChannel.TOPIC_PUSH_RESTART, caps) }
+                Log.w(TAG, "push restart kick sent via CXR (${AiChannel.TOPIC_PUSH_RESTART}) -> $r")
+            } catch (e: Exception) {
+                Log.e(TAG, "push restart kick failed", e)
+            }
+        }
     }
 
     // ──────────────────────────────────────────────

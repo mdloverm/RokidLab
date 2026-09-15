@@ -37,8 +37,16 @@ class AsrPushClient(
      */
     private val wifiIpProvider: () -> String = { "" },
     /**
+     * 推送通道【连续秒断】回调：连接建立后不足 [RAPID_FAILURE_MS] 就被对端关闭，
+     * 且连续发生 [RAPID_FAILURE_THRESHOLD] 次 —— 典型于眼镜端 RFCOMM 监听假死
+     * （SDP 记录残留/SCN 无人 accept，connect 成功后被栈立即关闭，read ret=-1）。
+     * 上层据此经仍健康的 CXR 通道远程踢活眼镜端 AsrPushServer。
+     */
+    private val onChannelDead: (() -> Unit)? = null,
+    /**
      * 推送通道【连接建立成功】回调（每次成功建链/重连都回调一次）。
      * 用于通知上层「断连期间可能积压了数据，需要补读一次兜底通道」。
+     * 保持构造参数最后一个函数型位置：调用方以尾随 lambda 传入本参数。
      */
     private val onConnected: (() -> Unit)? = null,
 ) {
@@ -61,6 +69,10 @@ class AsrPushClient(
         /** 连接建立失败重试最长退避：眼镜不可达时避免每 3s 盲重连冲击蓝牙协议栈 */
         private const val BACKOFF_MAX_MS = 30_000L
         private const val MAX_FRAME = 65536
+        /** 建链后存活不足该时长即断开，计为一次「秒断」（眼镜监听假死时 55~440ms 即断，留足裕量） */
+        private const val RAPID_FAILURE_MS = 2_500L
+        /** 连续秒断多少次判定监听死亡，触发上层远程踢活 */
+        private const val RAPID_FAILURE_THRESHOLD = 3
     }
 
     @Volatile
@@ -90,11 +102,15 @@ class AsrPushClient(
             // 连续「连接建立失败」次数：眼镜不可达/蓝牙栈忙时指数退避，
             // 避免每 3s 盲重连冲击蓝牙协议栈（加重隧道不稳定）。
             var connectFailures = 0
+            // 连续「建链后秒断」计数：眼镜端监听假死的指纹（详见 onChannelDead 说明）
+            var rapidFailures = 0
             while (running) {
                 var established = false
+                var connectedAtMs = 0L
                 try {
                     val input = openChannel()
                     established = true
+                    connectedAtMs = System.currentTimeMillis()
                     connectFailures = 0
                     Log.i(TAG, "ASR push connected via $routeDesc")
                     // 回调失败会直接废掉「推送恢复 → 补读积压」这条兜底链，不能静默
@@ -120,6 +136,23 @@ class AsrPushClient(
                 } catch (e: Exception) {
                     if (running) logError(e)
                 } finally {
+                    // 秒断指纹判定（仅统计「曾建链成功」且非主动 stop 的断开）：
+                    // 监听假死时每次重演都是「connect 成功 → 几百毫秒内 read ret=-1」，
+                    // 连续达阈值即通知上层远程踢活；正常长连接中途断开则清零。
+                    if (established && running && connectedAtMs > 0) {
+                        val lifetime = System.currentTimeMillis() - connectedAtMs
+                        if (lifetime < RAPID_FAILURE_MS) {
+                            rapidFailures++
+                            Log.w(TAG, "ASR push rapid disconnect #$rapidFailures (lived ${lifetime}ms via $routeDesc)")
+                            if (rapidFailures >= RAPID_FAILURE_THRESHOLD) {
+                                rapidFailures = 0
+                                Log.w(TAG, "ASR push channel looks dead, requesting glasses-side restart")
+                                runCatching { onChannelDead?.invoke() }
+                            }
+                        } else {
+                            rapidFailures = 0
+                        }
+                    }
                     try { conn?.close() } catch (_: Exception) {} // catch-ok: 关闭失败无补救，且置空后由重连兜底
                     conn = null
                 }

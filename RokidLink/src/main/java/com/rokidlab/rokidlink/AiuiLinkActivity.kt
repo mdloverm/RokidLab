@@ -53,17 +53,6 @@ class AiuiLinkActivity : Activity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** 工具调用结果缓存：页面 realm 的 Lab 桥经 fetch 轮询 __lab/tool_result 拉取（兼容旧桥）。
-     *  键 cbId → 结果 JSON 文本。带 TTL，避免长期驻留。 */
-    private val toolResults = mutableMapOf<String, Pair<Long, String>>()
-    private val toolResultLock = Any()
-
-    /** 同步工具调用阻塞队列：__lab/tool_call_sync 端点会等待此队列，结果到达后立即返回。 */
-    private val syncToolQueues = ConcurrentHashMap<String, ArrayBlockingQueue<String>>()
-
-    /** 同步工具调用最长阻塞时间（与 ToolGateway 的 15s 对齐）。 */
-    private val SYNC_TOOL_TIMEOUT_MS = 15_000L
-
     /** 自动注入到每个 AIUI 页面的 Lab 桥（页面 realm 可见，解决 host.js 主 realm Lab 隔离问题）。
      *  从 assets 读取一次缓存，避免每次装配都 IO。 */
     private var pageBridgeJs: String? = null
@@ -288,11 +277,7 @@ class AiuiLinkActivity : Activity() {
                         assetPath.startsWith("__lab/tool_result") -> {
                             // 页面 realm 的 Lab 桥轮询结果：缓存里有就返回，否则返回 pending。
                             val cb = request?.url?.getQueryParameter("cbId")?.takeIf { it.isNotBlank() }
-                            val cached = synchronized(toolResultLock) {
-                                cb?.let {
-                                    toolResults[it]?.also { p -> toolResults.remove(it) }?.second
-                                }
-                            }
+                            val cached = cb?.let { takeCachedToolResult(it) }
                             if (cached != null) {
                                 Log.i(TAG, "tool_result hit cbId=$cb")
                                 textResponse(cached)
@@ -470,15 +455,9 @@ class AiuiLinkActivity : Activity() {
 
     // ── 手机侧 CXR 消息 → 页面 onMessage（预留；由 KeyButtonService 转发） ──
     fun dispatchHostMessage(json: String) {
-        // 工具结果下行：同时写入轮询缓存，供页面 realm 的 Lab 桥 fetch 拉取
-        if (json.contains("\"type\":\"toolResult\"") || json.contains("\"type\": \"toolResult\"")) {
-            try {
-                val obj = JSONObject(json)
-                if (obj.optString("type") == "toolResult") {
-                    cacheToolResult(obj.optString("cbId"), json)
-                }
-            } catch (_: Exception) { /* 不是合法 JSON 则忽略缓存 */ }
-        }
+        // 工具结果的缓存与唤醒已上移到 [dispatchMessageToActive]（静态），本方法只负责投递页面：
+        // 原来在这里做缓存时，缓存逻辑整块被包在「字符串 contains type=toolResult」判断里，
+        // 且只在前台宿主实例上执行 —— 两条都可能让结果静默丢失，页面只能等到超时。
         val js = "window.__aiuiHost && window.__aiuiHost.hostMessage($json)"
         runOnUiThread { webView?.evaluateJavascript(js, null) }
     }
@@ -511,6 +490,33 @@ class AiuiLinkActivity : Activity() {
         private val lock = Any()
         private var activeActivity: AiuiLinkActivity? = null
 
+        /**
+         * 工具调用结果缓存：页面 realm 的 Lab 桥经 fetch 轮询 __lab/tool_result 拉取（兼容旧桥）。
+         * 键 cbId → 结果 JSON 文本。带 TTL，避免长期驻留。
+         *
+         * **必须静态**：工具结果下行由 KeyButtonService 经 [dispatchMessageToActive] 送进来，
+         * 那一刻宿主 Activity 未必处于 started（`onStop` 会清空 activeActivity）。原先两张表
+         * 是实例字段，一旦 activeActivity 为空就整条丢弃 —— 工具其实已执行，页面却必然等到超时。
+         */
+        private val toolResults = mutableMapOf<String, Pair<Long, String>>()
+        private val toolResultLock = Any()
+
+        /** 同步工具调用阻塞队列：__lab/tool_call_sync 端点会等待此队列，结果到达后立即返回（静态理由同上）。 */
+        private val syncToolQueues = ConcurrentHashMap<String, ArrayBlockingQueue<String>>()
+
+        /**
+         * 同步工具调用最长阻塞时间。
+         *
+         * **必须显著大于手机端 ToolGateway.CALL_TIMEOUT_MS（15s）**：两侧窗口相等时眼镜端
+         * 几乎总是先超时（它的计时从发起上行走起，而手机端从收到后 join 起算，且眼镜端还多承担
+         * 推送/线程调度开销），于是手机端真正有用的错误（限流、参数非法、执行异常）永远回不到
+         * 页面，用户只看到笼统的 "tool timed out"。留 10s 余量让结果先到。
+         */
+        private const val SYNC_TOOL_TIMEOUT_MS = 25_000L
+
+        /** 工具结果缓存 TTL：页面轮询窗口内有效即可 */
+        private const val TOOL_RESULT_TTL_MS = 30_000L
+
         /** 打开 AIUI 宿主；context 可为 Service（自动加 NEW_TASK） */
         @JvmStatic
         fun open(context: Context, aixPath: String, launchParams: String? = null) {
@@ -524,9 +530,52 @@ class AiuiLinkActivity : Activity() {
         /** 若宿主在前台，向其转发手机侧 host 消息（页面 onMessage 协议） */
         @JvmStatic
         fun dispatchMessageToActive(json: String) {
+            // 先无条件缓存 + 唤醒同步等待队列，再尝试投递给前台宿主。
+            // 顺序与解耦都很关键：宿主不在前台（activeActivity=null）时投递必然失败，
+            // 但发起 fetch 的 WebView 拦截线程仍在阻塞等待 —— 不在这里唤醒，页面只能等到超时。
+            deliverToolResultIfAny(json)
             synchronized(lock) {
                 activeActivity?.dispatchHostMessage(json)
             }
+        }
+
+        /**
+         * 若 [json] 是工具结果（type=toolResult），写入轮询缓存并唤醒同步等待队列。
+         * 用权威 JSON 解析判定 type，不做字符串 contains —— 后者对空白/字段顺序敏感，
+         * 一旦未命中就会静默跳过缓存，让页面等到超时。
+         */
+        private fun deliverToolResultIfAny(json: String) {
+            val obj = try {
+                JSONObject(json)
+            } catch (e: Exception) {
+                Log.w(TAG, "tool result not valid JSON, skip cache: ${e.message}")
+                return
+            }
+            if (obj.optString("type") != "toolResult") return
+            cacheToolResult(obj.optString("cbId"), json)
+        }
+
+        /** 把工具结果写入轮询缓存，并唤醒同步等待队列。 */
+        private fun cacheToolResult(cbId: String, json: String) {
+            if (cbId.isBlank()) return
+            synchronized(toolResultLock) {
+                toolResults[cbId] = Pair(System.currentTimeMillis() + TOOL_RESULT_TTL_MS, json)
+                val it = toolResults.entries.iterator()
+                val now = System.currentTimeMillis()
+                while (it.hasNext()) {
+                    if (it.next().value.first < now) it.remove()
+                }
+            }
+            // 唤醒同步工具调用等待者（如果有）
+            val q = syncToolQueues[cbId]
+            if (q != null && !q.offer(json)) {
+                Log.w(TAG, "tool result queue already filled for cbId=$cbId (1-slot), dropped")
+            }
+        }
+
+        /** 取走并清除某 cbId 的缓存结果（供 __lab/tool_result 轮询端点使用）。 */
+        private fun takeCachedToolResult(cbId: String): String? = synchronized(toolResultLock) {
+            toolResults.remove(cbId)?.second
         }
 
         /** 若宿主在前台，直接关闭（手机侧 "close" 命令 / 切换包前清理） */
@@ -585,27 +634,12 @@ class AiuiLinkActivity : Activity() {
                 .put("ok", ok)
             if (result != null) payload.put("result", result)
             if (error != null) payload.put("error", error)
-            // 缓存一份供页面 realm 的 Lab 桥轮询拉取（与 onMessage 下行互补，互不冲突）
+            // 缓存一份供页面 realm 的 Lab 桥轮询拉取，并唤醒阻塞中的同步 fetch
             cacheToolResult(cbId, payload.toString())
             dispatchHostMessage(payload.toString())
         } catch (e: Exception) {
             Log.w(TAG, "deliverToolResult failed: ${e.message}")
         }
-    }
-
-    /** 把工具结果写入轮询缓存，并唤醒同步等待队列。 */
-    private fun cacheToolResult(cbId: String, json: String) {
-        if (cbId.isBlank()) return
-        synchronized(toolResultLock) {
-            toolResults[cbId] = Pair(System.currentTimeMillis() + 30_000L, json)
-            val it = toolResults.entries.iterator()
-            val now = System.currentTimeMillis()
-            while (it.hasNext()) {
-                if (it.next().value.first < now) it.remove()
-            }
-        }
-        // 唤醒同步工具调用等待者（如果有）
-        syncToolQueues[cbId]?.offer(json)
     }
 
     private fun syncErrorJson(cbId: String, error: String): String =

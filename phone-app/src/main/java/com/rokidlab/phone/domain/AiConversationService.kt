@@ -564,25 +564,34 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             Log.w(TAG, "chatTurnStream empty turn round=$round, give up after $emptyRounds consecutive empty rounds")
                             break
                         }
-                        val nudge = when {
+                        val (nudgeKind, nudge) = when {
                             // 被截断导致的空轮（content 被切掉、工具调用没收尾）：点明真实原因，
                             // 否则模型会以为是"自己没出手"，原样重发同样大的内容再被截断一次。
                             truncatedLastRound ->
-                                "你上一次的输出因过长被截断了。请立刻把内容拆小：一次只调用 save_code_file 写一个文件，" +
+                                "truncated" to
+                                    "你上一次的输出因过长被截断了。请立刻把内容拆小：一次只调用 save_code_file 写一个文件，" +
                                     "单个文件不超过 120 行，app.json 与页面代码分开写，绝不要在一次调用里塞多个文件。"
                             aiuiMode ->
-                                "请立即行动，不要再空想：你已加载 aiui-dev 技能。按顺序调用 save_code_file，" +
+                                "aiui" to
+                                    "请立即行动，不要再空想：你已加载 aiui-dev 技能。按顺序调用 save_code_file，" +
                                     "先保存 app.json（含 pages 与 window 配置），再逐文件保存页面代码（pages/index/index），" +
                                     "一次只写一个文件、不要一次输出超大 JSON。全部写完后再用一两句中文总结。"
                             else ->
-                                "请不要再停留在思考：如果任务需要写代码，立即调用 save_code_file 一次写一个文件；" +
+                                "generic" to
+                                    "请不要再停留在思考：如果任务需要写代码，立即调用 save_code_file 一次写一个文件；" +
                                     "如果已写完或无法完成，直接用一两句中文给出最终结论。"
                         }
                         messages.put(JSONObject().apply {
                             put("role", "user")
                             put("content", nudge)
                         })
-                        Log.i(TAG, "chatTurnStream empty turn round=$round, injected nudge (aiuiMode=$aiuiMode)")
+                        // 记下注入了哪种引导与真实的 finish 原因：空轮排查的第一现场
+                        // （finish=length 说明被 max_tokens 截断，需要查该轮的输出预算而非引导语）
+                        Log.i(
+                            TAG,
+                            "chatTurnStream empty turn round=$round, injected nudge (kind=$nudgeKind, " +
+                                "finish=${turn.finishReason ?: "none"}, aiuiMode=$aiuiMode)",
+                        )
                         continue
                     }
                     // 本轮有工具调用 = 模型正常出手，连续空轮计数归零
@@ -750,6 +759,12 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         }
                         // 先留下正文（模型可能一边调工具一边给结论），再判断是否继续
                         finalTurn?.content?.takeIf { it.isNotBlank() }?.let { summaryText = it }
+                        // 收尾轮逐轮打点：这一阶段此前没有任何日志，出问题时只能从"没有输出"反推
+                        Log.i(
+                            TAG,
+                            "summary round=$retry/$SUMMARY_MAX_ROUNDS toolCalls=${finalTurn?.toolCalls?.size ?: 0} " +
+                                "contentLen=${finalTurn?.content?.length ?: 0} finish=${finalTurn?.finishReason ?: "none"}",
+                        )
                         if (finalTurn == null || finalTurn.toolCalls.isEmpty()) break
                         // 回填 assistant tool_calls 消息（协议要求原样携带）
                         val assistantMsg = JSONObject()

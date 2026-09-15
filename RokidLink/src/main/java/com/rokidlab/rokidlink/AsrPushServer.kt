@@ -2,6 +2,8 @@ package com.rokidlab.rokidlink
 
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothServerSocket
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import java.io.Closeable
 import java.io.InputStream
@@ -48,6 +50,12 @@ object AsrPushServer {
      */
     private const val HANDSHAKE_TIMEOUT_MS = 1_500
 
+    /**
+     * RFCOMM 监听死亡后的重建退避（毫秒）。蓝牙栈 RFCOMM 资源释放有延迟，
+     * 立刻 re-listen 会再次失败；2s 给栈留出回收时间。
+     */
+    private const val RFCOMM_RESTART_DELAY_MS = 2_000L
+
     /** 协议帧上限（与手机端 AsrPushClient.MAX_FRAME 一致） */
     private const val MAX_FRAME = 65536
 
@@ -82,6 +90,20 @@ object AsrPushServer {
     private var rfcommAcceptThread: Thread? = null
     private var tcpAcceptThread: Thread? = null
 
+    /**
+     * 最近一次 [start] 传入的适配器：RFCOMM 监听死亡自重建 / 手机端远程踢活时复用，
+     * 免去调用方（BtTunnelService）重新下发。
+     */
+    @Volatile
+    private var lastAdapter: BluetoothAdapter? = null
+
+    /** RFCOMM 监听自重建串行化守护（蓝牙 API 必须在同一线程/串行调用，避免并发 listen） */
+    private val guardHandler = Handler(Looper.getMainLooper())
+
+    /** 是否已有排队中的 RFCOMM 重建任务（去重，防止异常风暴排出一串重连） */
+    @Volatile
+    private var rfcommRestartPending = false
+
     /** 写锁：push 可能被多个 CXR 订阅回调线程并发调用，帧拼接+写入必须串行化 */
     private val pushLock = Any()
 
@@ -107,12 +129,19 @@ object AsrPushServer {
      */
     fun start(adapter: BluetoothAdapter): Boolean {
         if (running) return true
+        lastAdapter = adapter
         // 必须先置 running 再起监听线程：accept 循环的退出条件就是 `!running`，
         // 若在之后才置位，线程在置位前的窗口里会立刻判定「已停止」而退出。
         running = true
+        rfcommRestartPending = false
         val btOk = startRfcommListener(adapter)
         val wifiOk = startTcpListener()
         Log.i(TAG, "ASR push server started (rfcomm=$btOk, wifi=$wifiOk)")
+        // RFCOMM 初始 listen 失败（蓝牙栈 RFCOMM 资源忙/未释放完）时绝不能因 WiFi 监听
+        // 成功就放过：眼镜长期不连 WiFi（实测 wifiOpen=false 是常态），此时推送通道会
+        // 永久死亡且无任何重试，只能等进程重建 —— 表现为「按键答题偶发失效、重连后恢复」。
+        // 安排守护任务退避重建，直到 listen 成功或 stop()。
+        if (!btOk) scheduleRfcommRestart("initial listen failed")
         // 两条监听都起不来才算失败：复位 running（此时并无 accept 线程在跑），留给下次重试
         if (!btOk && !wifiOk) {
             running = false
@@ -121,7 +150,42 @@ object AsrPushServer {
         return true
     }
 
-    /** RFCOMM 监听（蓝牙通道） */
+    /**
+     * 安排一次 RFCOMM 监听重建（主线程串行执行，去重）。
+     * accept 线程异常退出 / 初始 listen 失败 / 手机端远程踢活共用本入口。
+     */
+    private fun scheduleRfcommRestart(reason: String) {
+        if (!running) return
+        if (rfcommRestartPending) return
+        rfcommRestartPending = true
+        Log.w(TAG, "ASR push rfcomm listener restart scheduled in ${RFCOMM_RESTART_DELAY_MS}ms ($reason)")
+        guardHandler.postDelayed({
+            rfcommRestartPending = false
+            if (!running) return@postDelayed
+            val adapter = lastAdapter
+            if (adapter?.isEnabled != true) {
+                // 蓝牙关闭：等蓝牙状态变化/下一次 BtTunnelService 重试，不空转
+                Log.w(TAG, "ASR push rfcomm restart skipped: bluetooth disabled")
+                scheduleRfcommRestart("bluetooth was disabled")
+                return@postDelayed
+            }
+            // 已存活（accept 线程还在跑）则无需重建
+            rfcommAcceptThread?.takeIf { it.isAlive }?.let {
+                Log.i(TAG, "ASR push rfcomm restart skipped: accept thread alive")
+                return@postDelayed
+            }
+            // 先关旧 listen socket 释放 SCN，否则新 listen 可能失败或与旧监听双注册
+            runCatching { rfcommServerSocket?.close() }
+            rfcommServerSocket = null
+            rfcommAcceptThread = null
+            val ok = startRfcommListener(adapter)
+            Log.i(TAG, "ASR push rfcomm listener recreated: $ok")
+            // 再次失败：继续退避重试（蓝牙栈资源可能仍未释放）
+            if (!ok) scheduleRfcommRestart("recreate listen failed")
+        }, RFCOMM_RESTART_DELAY_MS)
+    }
+
+    /** RFCOMM 监听（蓝牙通道）。accept 线程一旦异常退出即触发整体重建，不再复用死 socket 空转 */
     private fun startRfcommListener(adapter: BluetoothAdapter): Boolean = try {
         val server = adapter.listenUsingRfcommWithServiceRecord("RokidLink AsrPush", PUSH_UUID)
         rfcommServerSocket = server
@@ -134,7 +198,11 @@ object AsrPushServer {
                 } catch (e: Exception) {
                     if (running) {
                         Log.e(TAG, "ASR push rfcomm accept error: ${e.message}")
-                        try { Thread.sleep(1000) } catch (_: InterruptedException) { break }
+                        // listen socket 本身已失效时，继续在同一个 server 上 accept 只会
+                        // 每秒刷一次异常且永远不会再有连接进来：关闭旧监听并安排整体重建
+                        // （旧实现 sleep 后 continue 复用死 socket，是监听永久消失的直接原因）。
+                        scheduleRfcommRestart("accept loop error: ${e.message}")
+                        return@Thread
                     }
                 }
             }
@@ -143,6 +211,20 @@ object AsrPushServer {
     } catch (e: Exception) {
         Log.e(TAG, "ASR push rfcomm listen failed: ${e.message}")
         false
+    }
+
+    /**
+     * 手机端远程踢活：stop 全部监听与连接后用缓存的适配器重新 start，
+     * 强制蓝牙栈释放并重新分配 RFCOMM 资源（监听假死但进程存活的场景）。
+     * 必须在主线程执行（与 [guardHandler] 上的重建串行）。
+     */
+    fun restart() {
+        guardHandler.post {
+            val adapter = lastAdapter ?: BluetoothAdapter.getDefaultAdapter()
+            Log.w(TAG, "ASR push server restart requested (remote kick), adapter enabled=${adapter?.isEnabled}")
+            stopInternal()
+            if (adapter != null) start(adapter)
+        }
     }
 
     /** WiFi TCP 监听（同网段直连通道） */
@@ -294,7 +376,14 @@ object AsrPushServer {
     }
 
     fun stop() {
+        guardHandler.post { stopInternal() }
+    }
+
+    /** 实际清理逻辑（可在 [guardHandler] 线程内直接调用，供 [restart] 复用避免二次 post 死锁） */
+    private fun stopInternal() {
         running = false
+        guardHandler.removeCallbacksAndMessages(null)
+        rfcommRestartPending = false
         try { clientConn?.close() } catch (_: Exception) {} // catch-ok: stop 收尾，关闭失败无补救
         clientConn = null
         clientOut = null

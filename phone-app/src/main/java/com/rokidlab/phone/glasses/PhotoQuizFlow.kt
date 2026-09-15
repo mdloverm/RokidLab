@@ -87,77 +87,89 @@ internal class PhotoQuizFlow(
         Log.i(TAG, "start: BEGIN, trigger=photo ask")
         onStage(R.string.chat_photo_status)
 
-        takePhoto(
-            1024,
-            768,
-            80,
-            { jpeg ->
-                Thread {
-                    try {
-                        Log.i(TAG, "photoAsk: photo received (${jpeg.size}B) after ${System.currentTimeMillis() - askStartMs}ms, starting OCR")
-                        mainHandler.post { onStage(R.string.chat_ocr_status) }
-                        // 2) 本地 OCR 识别题目文字
-                        val tOcr = System.currentTimeMillis()
-                        val text = runCatching {
-                            val bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
-                                ?: return@runCatching ""
-                            try {
-                                LocalOcr.recognize(appContext, bmp)
-                            } finally {
-                                bmp.recycle()
-                            }
-                        }.getOrDefault("").trim()
-                        Log.i(TAG, "photoAsk: OCR done in ${System.currentTimeMillis() - tOcr}ms -> ${text.take(50)}")
-                        if (text.isEmpty()) {
-                            Log.w(TAG, "photoAsk: OCR result empty, abort")
-                            inProgress = false
-                            mainHandler.post { onStage(R.string.chat_ocr_empty) }
-                            return@Thread
-                        }
-                        // 3) 把识别出的文字回调给 UI（作为「用户消息」气泡展示）
-                        mainHandler.post { onText(text) }
-                        // 4) 知识库检索相关资料（RAG）
-                        mainHandler.post { onStage(R.string.chat_kb_status) }
-                        val tKb = System.currentTimeMillis()
-                        val kbText = KnowledgeBase
-                            .searchHits(appContext, text, topK = 3)
-                            .joinToString("\n\n") { hit ->
-                                // 来源标注：让答案可溯源（出自哪份文档的哪一块）
-                                "（《${hit.docName}》第${hit.chunkIdx + 1}块）${hit.text}"
-                            }
-                        Log.i(TAG, "photoAsk: KB search done in ${System.currentTimeMillis() - tKb}ms, hits=${kbText.length} chars")
-                        // 4) 生成答案并发送到眼镜（显示 + 播报）
-                        mainHandler.post { onStage(R.string.chat_ai_status) }
-                        val tAi = System.currentTimeMillis()
-                        sendAiQuestion(
-                            text,
-                            kbText.ifBlank { null },
-                            quizInstructionProvider().ifBlank { null },
-                            { success, err ->
-                                inProgress = false
-                                Log.i(TAG, "photoAsk: AI send onResult success=$success err=$err after ${System.currentTimeMillis() - tAi}ms (total ${System.currentTimeMillis() - askStartMs}ms)")
-                                if (!success) {
-                                    // 失败且无 onReply：通知 UI 复位 photoAsking（否则拍照问 AI 入口永久失效）
-                                    mainHandler.post { onStage(R.string.chat_photo_failed) }
+        // takePhoto 必须在 try 内：它内部会走 PhotoQuizService → CXRLink.setCXRImageCbk /
+        // takePhoto（SDK 状态非法时同步抛异常，那条路径没有任何 try/catch）。
+        // 原先它在 try 之外，异常会沿 start() 逃逸到调用线程（AsrBridgeCoordinator 的
+        // Thread{ onPhotoAsk() } 或 appScope.launch），成为未捕获异常直接崩进程。
+        try {
+            takePhoto(
+                1024,
+                768,
+                80,
+                { jpeg ->
+                    Thread {
+                        try {
+                            Log.i(TAG, "photoAsk: photo received (${jpeg.size}B) after ${System.currentTimeMillis() - askStartMs}ms, starting OCR")
+                            mainHandler.post { onStage(R.string.chat_ocr_status) }
+                            // 2) 本地 OCR 识别题目文字
+                            val tOcr = System.currentTimeMillis()
+                            val text = runCatching {
+                                val bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                                    ?: return@runCatching ""
+                                try {
+                                    LocalOcr.recognize(appContext, bmp)
+                                } finally {
+                                    bmp.recycle()
                                 }
-                            },
-                            { reply ->
-                                Log.i(TAG, "photoAsk: AI reply received (${reply.length} chars) after ${System.currentTimeMillis() - askStartMs}ms total")
-                                onReply(reply)
-                            },
-                        )
-                    } catch (e: Exception) {
-                        Log.e(TAG, "startPhotoAsk failed", e)
-                        inProgress = false
-                        mainHandler.post { onStage(R.string.chat_photo_failed) }
-                    }
-                }.start()
-            },
-            { err ->
-                Log.e(TAG, "photoAsk photo error: $err")
-                inProgress = false
-                mainHandler.post { onStage(R.string.chat_photo_failed) }
-            },
-        )
+                            }.getOrDefault("").trim()
+                            Log.i(TAG, "photoAsk: OCR done in ${System.currentTimeMillis() - tOcr}ms -> ${text.take(50)}")
+                            if (text.isEmpty()) {
+                                Log.w(TAG, "photoAsk: OCR result empty, abort")
+                                inProgress = false
+                                mainHandler.post { onStage(R.string.chat_ocr_empty) }
+                                return@Thread
+                            }
+                            // 3) 把识别出的文字回调给 UI（作为「用户消息」气泡展示）
+                            mainHandler.post { onText(text) }
+                            // 4) 知识库检索相关资料（RAG）
+                            mainHandler.post { onStage(R.string.chat_kb_status) }
+                            val tKb = System.currentTimeMillis()
+                            val kbText = KnowledgeBase
+                                .searchHits(appContext, text, topK = 3)
+                                .joinToString("\n\n") { hit ->
+                                    // 来源标注：让答案可溯源（出自哪份文档的哪一块）
+                                    "（《${hit.docName}》第${hit.chunkIdx + 1}块）${hit.text}"
+                                }
+                            Log.i(TAG, "photoAsk: KB search done in ${System.currentTimeMillis() - tKb}ms, hits=${kbText.length} chars")
+                            // 4) 生成答案并发送到眼镜（显示 + 播报）
+                            mainHandler.post { onStage(R.string.chat_ai_status) }
+                            val tAi = System.currentTimeMillis()
+                            sendAiQuestion(
+                                text,
+                                kbText.ifBlank { null },
+                                quizInstructionProvider().ifBlank { null },
+                                { success, err ->
+                                    inProgress = false
+                                    Log.i(TAG, "photoAsk: AI send onResult success=$success err=$err after ${System.currentTimeMillis() - tAi}ms (total ${System.currentTimeMillis() - askStartMs}ms)")
+                                    if (!success) {
+                                        // 失败且无 onReply：通知 UI 复位 photoAsking（否则拍照问 AI 入口永久失效）
+                                        mainHandler.post { onStage(R.string.chat_photo_failed) }
+                                    }
+                                },
+                                { reply ->
+                                    Log.i(TAG, "photoAsk: AI reply received (${reply.length} chars) after ${System.currentTimeMillis() - askStartMs}ms total")
+                                    onReply(reply)
+                                },
+                            )
+                        } catch (e: Throwable) {
+                            // 必须捕 Throwable：本线程是未捕获异常的终点，Error 逃逸即崩进程；
+                            // 且必须复位 inProgress，否则拍照答题入口永久失效。
+                            Log.e(TAG, "startPhotoAsk failed", e)
+                            inProgress = false
+                            mainHandler.post { onStage(R.string.chat_photo_failed) }
+                        }
+                    }.apply { name = "photo-quiz-ocr"; isDaemon = true }.start()
+                },
+                { err ->
+                    Log.e(TAG, "photoAsk photo error: $err")
+                    inProgress = false
+                    mainHandler.post { onStage(R.string.chat_photo_failed) }
+                },
+            )
+        } catch (e: Throwable) {
+            Log.e(TAG, "startPhotoAsk: takePhoto threw synchronously", e)
+            inProgress = false
+            mainHandler.post { onStage(R.string.chat_photo_failed) }
+        }
     }
 }

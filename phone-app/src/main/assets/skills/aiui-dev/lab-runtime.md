@@ -1,205 +1,96 @@
 # Lab 宿主运行须知（开发前必读）
 
-本文是 RokidLab 自托管 AIUI 宿主的**硬性约束**，官方 SKILL.md（主指南）为基础语法与 API 权威。两者冲突时以本文为准（宿主为自托管 WebView 渲染，行为与官方 AgentStore 环境有差异）。官方 SKILL.md 与参考文件（components.md / apis-*.md / wxss.md / design-system-green.md）中缺失的细节，按本文件规则推理或向用户确认，禁止编造。
+本文是 RokidLab 自托管 AIUI 宿主的硬性约束，官方 SKILL.md 为基础语法与 API 权威。两者冲突时以本文为准。官方参考文件（components.md / apis-*.md / wxss.md）缺失的细节按本文件规则推理，禁止编造。
 
-## 0. 开发必读顺序（每次生成 AIUI 代码都执行）
+## 0. 开发必读顺序（每次生成/修改 AIUI 代码都执行）
 
 1. 本须知全文已在 load_skill 返回中（本宿主硬约束，优先级最高）。
-2. **动手写代码前**，必须用 `load_skill_section(name="aiui-dev", section=…)` 读取官方主指南相关章节，不要凭印象写 SFC：
-   - 写任何 .ink 前：先读第 2 章「SFC .ink Specification」。
-   - 处理按键/输入时：再读第 4 章「Events」（尤其 Key Events 与默认行为）。
-   - 使用组件拿不准时：查参考文件 components.md 对应组件章节。
-   - 排版样式拿不准时：查第 5 章 WXSS 或参考文件 wxss.md / design-system-green.md。
-   - API 不确定时：查对应 apis-*.md（wx.* → apis-wx.md 等）。
-3. 读完后按本文 + 官方规则产出；官方文档与本文件冲突处一律以本文件为准。
+2. 动手写代码前，必须用 load_skill_section(name="aiui-dev", section=…) 读取官方主指南相关章节，不要凭印象写 SFC：
+   - 写任何 .ink 前：读第 2 章「SFC .ink Specification」。
+   - 处理按键/输入时：读第 4 章「Events」。
+   - 用组件拿不准时：查 components.md 对应章节。
+   - API 不确定时：查对应 apis-*.md（wx.* → apis-wx.md，canvas → apis-canvas.md）。
+3. 读完后按本文 + 官方规则产出；冲突处以本文件为准。
 
-## 1. 运行链路（Lab 专用工具编排）
+## 1. 运行链路与规模上限
 
-1. `save_code_file` 写项目文件（app.json + pages/index/index.ink，可加页；新页面必须登记 app.json 的 pages 路由）。
-2. 用户要装时 `install_aiui_project` 打包推送（只推不自动开）。
-3. `open_aiui_app` 打开演示（本地 .aix 推宿主渲染）；`stop_aiui_app` 关闭；`list_my_aiui_apps` 查历史；**修改已有项目必须先 `read_code_file` 读取当前源码**（只传 project 返回文件清单，带 file 读单个文件全文），再基于真实源码用 `save_code_file` 覆盖写回同一 project 的同一路径，最后 `install_aiui_project` 重装（同名覆盖，VERSION 内容指纹自动触发眼镜重新解压加载）。
-4. **单次输出硬上限**：一次 save_code_file 的代码参数 ≤ 3000 字符（≈120 行，JSON 转义后接近模型单轮输出预算）；单个 .ink ≤ 120 行。超过就**拆页面**（menu/play/help 各自独立 .ink）分多次调用写，每次只写一个文件、写完再写下一个——绝不能一次调用塞超过上限的文件（会被输出截断成废代码）。
+1. save_code_file 写项目文件（app.json + pages/index/index.ink，可加页；新页面必须登记 app.json 的 pages 路由）。
+2. 用户要装时 install_aiui_project 打包推送（只推不自动开）。
+3. open_aiui_app 打开演示；stop_aiui_app 关闭；list_my_aiui_apps 查历史。
+4. **修改已有项目**必须先 read_code_file 读取当前源码（只传 project 返回文件清单，带 file 读单文件全文），再基于真实源码用 save_code_file 覆盖写回同一 project 同一路径，最后 install_aiui_project 重装。禁止凭印象整文件重编——只改受影响部分，改完同名覆盖（VERSION 内容指纹自动触发眼镜重新解压）。
 
-### 1.5 能做大到多少（规模上限）
+### 单次输出硬上限（★大文件出错根因）
 
-**一句话**：单页 ≤ 120 行，整个应用靠"多拆页面"横向扩展。**没有"最多几页"的限制**，但每多一页/一文件就多一次工具往返；页数越多，后续修改越容易改漏。
+- 一次 save_code_file 的 content ≤ 3000 字符（≈120 行）；单个 .ink ≤ 120 行。超过就**拆页面**（menu/play/help 各自独立 .ink）分多次调用写，每次只写一个文件、写完再写下一个。
+- **截断信号**：若 save_code_file 报「参数不是合法 JSON」，是内容太长被 max_tokens 截断——把该文件拆成两个更小的文件或拆成两个页面，**不要原样重试**。
+- **修改大文件**：read_code_file 后若文件接近 120 行，只改受影响部分不要整页重写；若改动多到超出上限，也拆成多页。
+- 扩展方式＝拆页面：每页都要登记进 app.json 的 pages 路由，漏登记页面不会被框架注册。舒服规模＝菜单页+1~2 功能页+帮助页（3~5 页）。
 
-| 维度 | 上限 | 性质 |
-|---|---|---|
-| 单个 .ink 页面 | ≤ 120 行 / ≈3000 字符 | **软约定**：宿主不校验，超了会被模型输出预算截断成废代码 |
-| 单次 save_code_file 的 content | ≤ 3000 字符 | 软约定，同上 |
-| 单文件内容 | ≤ 200,000 字符 | **硬闸**，超过直接拒收 |
-| 项目名 | ≤ 40 字符（中英文/数字/下划线/连字符） | 硬闸 |
-| 文件路径的每一段 | ≤ 81 字符 | 硬闸 |
-| 页面数 / 文件数 / 项目总体积 | **未设上限** | — |
+## 2. Canvas 使用约束（游戏/绘图/动画必读）★
 
-- **扩展方式＝拆页面**：menu / play / help 各自独立 .ink，每页都要登记进 app.json 的 `pages` 路由，漏登记页面不会被框架注册（跳不过去）。
-- **舒服的规模**：菜单页 + 1~2 个功能页 + 帮助页（3~5 页）是这个链路最顺手的量级。再多也能做，但注意：修改时是逐文件 read→save，页数多则一次改动要多次往返、更容易漏改。
-- **截断信号（重要）**：若某次 save_code_file 的内容超出模型单轮输出预算，参数 JSON 会在中途被截断，工具会明确回报「工具 save_code_file 的参数不是合法 JSON（多半是内容太长被输出长度截断）」。遇到这条报错**不要原样重试**——把该文件拆成两个更小的文件，或直接拆成两个页面再写。
-- **资源文件**：图片/字体等放项目内 `assets/`（如 `assets/fonts/`），页面里按 `/assets/xxx.png` 引用。`.aix` 打包后经本地 HTTP（支持 Range 续传）推给眼镜，体积本身无硬闸，但**眼镜端解压/渲染的内存边界未做验证**——大资源请分几次小批量加，别一次性塞几十 MB。
+当用户要求做**游戏、绘图、动画、粒子效果、物理模拟、或任何需要图形渲染而非纯文字列表**的场景时，必须用 `<canvas>` 元素 + Canvas API 绘制，不要只用文字列表凑界面。
 
-## 2. 渲染宿主差异（自托管 AiuiLinkActivity，官方 ink 引擎 WebView 版）
+- 基本用法：在 `<page>` 放 `<canvas id="game" type="2d"/>`，逻辑区用 `const ctx = wx.createCanvasContext('game')` 或 `canvas.getContext('2d')` 拿 2D 上下文，再用 `fillRect / arc / fillText / drawImage` 等绘制。
+- **渲染循环**：setData 不能驱动 canvas 动画，必须用 `setInterval` 或 `requestAnimationFrame`（参考 apis-canvas.md）每帧 `clearRect + 重绘`。
+- **键控交互**：canvas 页面同样靠 Page 级 onKeyDown/onKeyUp 接输入，按键后更新游戏状态再重绘 canvas。
+- **API 细节**：用 `load_skill_section(name="aiui-dev", file="apis-canvas.md", section=…)` 读取 Canvas API 参考，**不要凭 Web 浏览器 API 印象编造**（AIUI Canvas 是子集，不支持全部 Web Canvas API）。
+- 简单文字列表页（菜单/答题/记单词）不需要 canvas，用 `<view>/<text>` 即可。
 
-- 本宿主**只渲染全屏页**，会话卡（只读展示）不可用；生成的页面一律是全屏交互页。
-- 页面输入**唯一可靠通道 = Page 级 onKeyDown/onKeyUp**；bindfocus / 触摸 / 悬停 / 拖拽在自托管不可靠，不要依赖。
-- 官方环境有默认行为（Backspace=返回、↑↓=滚动、Enter=激活焦点），自托管**没有默认行为、页面全包**；为兼容两者，键处理函数第一行都 `event.preventDefault()`（Backspace 在首页需自行返回上一级或允许宿主双击返回逃生）。
-- 文字是第一反馈通道，语音不做主反馈；任何按键后必须 `setData` 刷新文字/高亮/计分。
+## 3. 渲染宿主差异（自托管 AiuiLinkActivity）
 
-## 3. 宿主键码契约（Lab 手柄物理键 → 页面 event.code）★权威表
+- 本宿主只渲染全屏页，会话卡不可用；生成的页面一律是全屏交互页。
+- 页面输入唯一可靠通道 = Page 级 onKeyDown/onKeyUp；bindfocus/触摸/悬停/拖拽不可靠，不要依赖。
+- 官方环境有默认行为（Backspace=返回、↑↓=滚动、Enter=激活），自托管没有默认行为、页面全包；键处理函数第一行都 `event.preventDefault()`。
+- 文字是第一反馈通道；任何按键后必须 setData 刷新文字/高亮/计分（canvas 页面则重绘）。
+
+## 4. 宿主键码契约（Lab 手柄物理键 → 页面 event.code）
 
 | Lab 手柄键 | HID 通道 | 页面收到的 code |
 |---|---|---|
-| ↑ / ↓ / ← / →（十字） | Consumer | ArrowUp / ArrowDown / ArrowLeft / ArrowRight |
-| Select | Consumer | Enter |
-| Start | Consumer | Enter |
-| A | Keyboard | KeyZ |
-| B | Keyboard | KeyX |
-| C | Keyboard | KeyC |
-| X | Keyboard | KeyA |
-| Y | Keyboard | KeyS |
-| Z | Keyboard | KeyD |
-| L | Keyboard | KeyQ |
-| R | Keyboard | KeyW |
+| ↑ / ↓ / ← / → | Consumer | ArrowUp/Down/Left/Right |
+| Select / Start | Consumer | Enter |
+| A / B / C | Keyboard | KeyZ / KeyX / KeyC |
+| X / Y / Z | Keyboard | KeyA / KeyS / KeyD |
+| L / R | Keyboard | KeyQ / KeyW |
 | 眼镜 BACK / 返回 | 系统键 | Backspace |
 | 镜腿物理键 | 系统键 | GlobalHook |
 | Esc（长按返回） | 系统键 | Escape |
 
-## 4. 手柄语义标准（生成"支持手柄"内容时按此分配）
+## 5. 手柄语义标准
 
-- 十字 = 导航/移动；Enter 语义随场景（Select/Start 同发 Enter）：菜单=确认，游戏=暂停，暂停面板=确认菜单项。
-- KeyZ(主动作=跳跃/攻击/确认) 最顺手、KeyX(取消/返回/防御) 次之、KeyC(道具/开火) 第三；KeyA/S/D 扩展功能位；KeyQ/W 肩键=翻页/场景切换。
+- 十字=导航/移动；Enter：菜单=确认，游戏=暂停，暂停面板=确认菜单项。
+- KeyZ(主动作=跳跃/攻击/确认) 最顺手、KeyX(取消/返回) 次之、KeyC(道具) 第三；KeyA/S/D 扩展功能位；KeyQ/W 肩键=翻页/场景切换。
 - 每页都要能退出：保留高亮「退出/返回」项，首页 onKeyDown 处理 Backspace 返回上一级。
 - 输入字母/数字（记单词/答题/搜索）：页面内做「字母宫格」，每键可高亮，方向+Enter 选中。禁止假设眼镜有输入法。
-- 操作项 ≤ 10 / 层级 ≤ 2；纵向列表上下移，横向选项左右移。长按=重复：连续移动/加速用 keydown 置位 + keyup 复位，不要等系统重复。
-- 网格移动：行列坐标入 data，越界钳制，每步渲染唯一高亮格。
+- 操作项 ≤ 10 / 层级 ≤ 2；纵向列表上下移，横向选项左右移。长按=重复：连续移动用 keydown 置位 + keyup 复位，不要等系统重复。
 
-## 5. 页面硬性规范（保存前自检，缺一块会被拒收）
+## 6. 页面硬性规范（保存前自检，缺一块会被拒收）
 
 1. `<script def>` 页面级 JSON 配置（navigationBarTitleText）。
 2. `<script setup>` 唯一逻辑区，export default 页面对象（data/onLoad/方法/setData）。禁止裸 `<script>`。
 3. `<page>` 根标签，禁止 `<template>`。
 4. `<style>` class 样式。
-5. 用到的每键在 onKeyDown/onKeyUp 都处理；每键动作即时 setData 反馈。
-6. 写完自检四块结构后，再按第 1 节纪律拆文件交付。
+5. 用到的每键在 onKeyDown/onKeyUp 都处理；每键动作即时反馈（文字 setData 或 canvas 重绘）。
 
-## 6. 视觉与防鬼影
+## 7. 视觉与防鬼影
 
-- AIUI 界面**默认深色背景**（如 #0d1117/#1e2430 系）：Rokid 眼镜光波导对大面积高亮白内容会产生光学鬼影（右上角出现倒置虚影），深色低亮度页面可显著抑制。
-- 避免纯白全屏闪烁与超大号纯白字体；正文文字用浅灰系（#cfd6e4 等）而非纯白。
+- AIUI 界面默认深色背景（如 #0d1117/#1e2430）：Rokid 眼镜光波导对大面积高亮白内容会产生光学鬼影（右上角倒置虚影），深色低亮度页面可显著抑制。
+- 避免纯白全屏闪烁与超大号纯白字体；正文文字用浅灰系（#cfd6e4）而非纯白。
 
-## 7. 交付纪律
+## 8. 交付纪律
 
 - 只通过 save_code_file 落盘，回复只报项目名与文件数；回复 ≤ 3 句、纯文本、无代码围栏、无源码转述。
 - 用户只说「做个支持手柄的 XX」时直接套官方模板/设计规范产出，不必再询问。
 
-## 8. 调用手机端工具（Lab 工具口）★会调工具的 AIUI
+## 9. 调用手机端工具（Lab 工具口）
 
-页面可以调用手机端的全部工具（音乐/天气/搜索/提醒/设备信息等）。这是页面与外部世界
-交互的**唯一通道**——不要在页面里自己 fetch 外网，也不要指望官方 API 能做这些事。
+页面可调用手机端全部工具（音乐/天气/搜索/提醒/设备信息等），这是页面与外部世界交互的唯一通道——不要在页面里 fetch 外网。
 
-### 8.1 调用方式
-
-```js
-// 返回 Promise<string>，结果是工具返回的文本。
-// ⚠️ 必须写 globalThis.Lab 或 window.Lab：ink 页面 realm 的裸标识符不走 globalThis，
-//    直接写 Lab.callTool 会 ReferenceError（页面看不到 host.js 主 realm 的 window.Lab）。
-const text = await globalThis.Lab.callTool('play_song', { songName: '西厢' });
-
-// 不确定有哪些工具时先查，返回 [{name, description}]
-const tools = await globalThis.Lab.listTools();
-```
-
-### 8.2 四条硬性要求
-
-1. **必须 try/catch**：官方渲染环境（Sys_AIUI_Start / AgentStore）没有 JS bridge，
-   `callTool` 会直接 reject。页面必须能降级，不能白屏或卡死。
-2. **必须有 loading 态**：一次调用含蓝牙往返 + 可能的网络请求，通常 1~3 秒，
-   最长 20 秒超时。调用前 setData 置 loading，成功和失败都要清除。
-3. **结果是字符串**：要什么格式自己解析；超长结果不要整段铺满屏幕。
-4. **一次只做一件事**：蓝牙通道是串行的，不要并发发起多个 callTool。
-
-### 8.3 启动参数（带参启动）
-
-用户说「用 AIUI 播放西厢」时，手机端会打开本应用并带上参数，页面在 `onMessage` 接收：
-
-```js
-export default {
-  data: { song: '', loading: false },
-  onMessage(e) {
-    // ⚠️ Lab 自托管 ink 宿主把真实 payload 放在 e.data（JSON 字符串），
-    //    不是直接放在 e.type/e.params。必须 JSON.parse(e.data)。
-    const msg = (typeof e.data === 'string') ? JSON.parse(e.data) : (e.data || e);
-    if (msg.type !== 'launch') return;
-    const p = msg.params || {};
-    if (p.songName) this.play(p.songName);
-  },
-  async play(name) {
-    this.setData({ loading: true });
-    try {
-      // 必须用 globalThis.Lab（或 window.Lab），裸 Lab 在 ink 页面 realm 不可用
-      await globalThis.Lab.callTool('play_song', { songName: name });
-      this.setData({ song: name, loading: false });
-    } catch (err) {
-      this.setData({ loading: false }); // 失败同样要清 loading
-    }
-  },
-}
-```
-
-启动参数只在页面**渲染完成后**投递一次，`onLoad` 里拿不到，必须在 `onMessage` 里接。
-
-### 8.4 常见工具
-
-| 工具 | 参数 | 说明 |
-| --- | --- | --- |
-| play_song | {songName, artist?} | 搜索并播放音乐（手机端播放）。返回纯文本，**不含封面与歌词** |
-| stop_music | {} | 停止播放 |
-| get_now_playing | {} | **读取当前歌曲的完整信息（JSON 文本）**：title/artist/album/cover/lyrics/positionMs/lineIndex —— 页面要显示封面、歌词就用它，见 §8.5 |
-| get_weather | {city?} | 天气查询 |
-| get_current_time | {} | 当前时间 |
-| set_timer / list_timers | 见清单 | 定时提醒 |
-| search_web | {query} | 联网搜索 |
-| get_glasses_battery | {} | 眼镜电量 |
-| get_location | {} | 手机当前所在位置 |
-
-上表只是常用项，**完整清单用 `Lab.listTools()` 获取**。手机端新增工具后本文件不需要改动。
-
-- 用户要求「修改/微调/对之前的不满意」时：先 `read_code_file` 读现网源码（文件清单或单文件全文）再动手，只重写受影响的文件，禁止凭印象整页重编；改完同样用同一 project 名重存，回复仍 ≤ 3 句。
-- 需要组件/API 细节时，用 load_skill_section 读取同目录参考文件（components.md / apis-*.md）对应章节；官方 SKILL.md 正文里的相对链接（如 [components.md](./components.md)）即指向这些文件。
-
-### 8.5 音乐播放器（放歌 + 歌词 + 封面）取数范式
-
-`play_song` 只返回一句「已开始播放《X》」的纯文本，**没有封面和歌词**。要做带歌词/封面的播放器，必须
-在 `play_song` 之后再调一次 `get_now_playing`，它返回 JSON 文本（`JSON.parse` 后用）：
-
-```jsonc
-{ "playing": true, "title": "西厢", "artist": "后弦", "album": "九公主",
-  "durationMs": 240000, "positionMs": 12345, "lineIndex": 5,
-  "cover": "https://...",                       // 封面图直链，直接给 <image src>
-  "lyrics": [ { "timeMs": 0, "text": "..." } ] } // 逐行歌词，按 timeMs 升序
-```
-
-要点：
-- **一次取数、本地推进**：拿到 `positionMs` 后用页面本地时钟自己推进高亮行（`Date.now()` 差值即可），
-  **不要反复轮询 `get_now_playing`** —— 蓝牙通道串行、单次 1~3 秒，轮询会让歌词严重滞后。
-- `lineIndex` 是取数那一刻的行号（无歌词时为 -1）；据此立即 `setData` 高亮，之后按本地时钟递增。
-- 封面用 `<image src="{{ cover }}">`（支持远程 URL）；`lyrics` 为空时隐藏歌词区，别渲染空行。
-- 换歌就重走一遍：`play_song` → `get_now_playing`。
-
-```js
-async play(name) {
-  this.setData({ loading: true });
-  try {
-    await globalThis.Lab.callTool('play_song', { songName: name });
-    const info = JSON.parse(await globalThis.Lab.callTool('get_now_playing', {}));
-    this.setData({
-      loading: false, title: info.title, artist: info.artist, cover: info.cover || '',
-      lyrics: info.lyrics || [], line: info.lineIndex,
-      baseMs: info.positionMs || 0, baseAt: Date.now(),
-    });
-    this.startTick();   // 定时用 (Date.now()-baseAt)+baseMs 找当前行，setData 刷新
-  } catch (err) {
-    this.setData({ loading: false });   // 失败同样要清 loading
-  }
-}
-```
+- 调用方式：`const text = await globalThis.Lab.callTool('play_song', {songName:'西厢'});`（必须写 `globalThis.Lab` 或 `window.Lab`，裸 Lab 在 ink 页面 realm 不可用）。
+- 查可用工具：`await globalThis.Lab.listTools()` 返回 `[{name, description}]`。**不要把工具名写死后又猜参数名**——不确定参数就先 listTools 看描述；描述里写的是中文/英文工具名，不是参数 schema，参数名按常规直觉（如 songName/keyword/city）。
+- **工具名必须逐字准确**：写错名字不会报「未知工具」以外的线索，页面只会收到 `unknown tool: xxx`。只允许使用 listTools 返回的名字，禁止自造（如把 `play_song` 写成 `music_play`）。
+- 四条硬性要求：①必须 try/catch（官方环境无 bridge 会 reject）；②必须有 loading 态（蓝牙往返 1~3 秒，最长 25 秒超时）；③结果是字符串自己解析；④一次只做一件事（蓝牙通道串行，不要并发）。
+- **失败不要自动重试**：一次 await 失败就是失败，把错误经 setData 显示给用户即可。页面里禁止写「失败后 setTimeout 再调一次」的重试循环 —— 那会绕过去重机制，造成重复拨号、重复安装这类真实副作用。
+- **一个工具调用正在等结果时，不要在它外面再起第二个 await**（例如用 Promise.all 并发两个工具）；蓝牙通道串行，并发会让两个都更容易超时。
+- 启动参数：页面在 `onMessage` 接收，payload 在 `e.data`（JSON 字符串），必须 `JSON.parse(e.data)`，`type==='launch'` 时取 `params`。只在页面渲染完成后投递一次，onLoad 里拿不到。
+- 音乐播放器取数：play_song 只返回纯文本无封面歌词；要做带歌词/封面的播放器，play_song 后再调 get_now_playing 取 JSON（含 cover/lyrics/positionMs/lineIndex），一次取数本地时钟推进高亮行，不要轮询。

@@ -1,6 +1,11 @@
 package com.rokidlab.phone.store
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,16 +31,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -55,6 +64,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.rokidlab.phone.R
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.design.BrewAmber
@@ -75,6 +85,8 @@ private const val CHAT_PREFS = "chat_prefs"
 private const val KEY_DEEPSEEK = "deepseek_key"
 /** 与 CxrLHiRokidSession.KEY_AI_THINKING 同键（shared 存储 chat_prefs），UI 直接持久化，无需等会话初始化 */
 private const val KEY_AI_THINKING = "ai_thinking"
+/** 是否已在乐奇页就通知权限做过首次提示（只主动弹一次，拒绝后不再打扰） */
+private const val KEY_NOTIF_PERM_PROMPTED = "notif_perm_prompted_for_lab"
 
 /** 聊天消息 */
 internal data class ChatMsg(
@@ -125,6 +137,45 @@ internal fun ChatModule(app: LabApplication) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "cxrL not ready", e)
+        }
+    }
+
+    // ── 首次进入乐奇：检测通知权限（状态栏音乐播放器 / 眼镜歌词 / 定时提醒依赖它）──
+    // App 启动时已统一请求过一次（无上下文，易被拒）；这里是带用途说明的二次机会，只主动弹一次。
+    var showNotifPermDialog by remember { mutableStateOf(false) }
+    // 系统权限弹窗已拒过一次：确认按钮从「去开启」切换为「去系统设置开启」
+    // （POST_NOTIFICATIONS 被拒过后再次请求，多数 ROM 直接回调拒绝不再弹系统框）
+    var notifPermNeedSettings by remember { mutableStateOf(false) }
+    fun hasNotificationPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+
+    fun openAppNotificationSettings() {
+        runCatching {
+            ctx.startActivity(
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { Log.w(TAG, "open notification settings failed", it) }
+    }
+
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            showNotifPermDialog = false
+            prefs.edit().putBoolean(KEY_NOTIF_PERM_PROMPTED, true).apply()
+        } else {
+            // 留在说明框，确认按钮切换为跳系统设置
+            notifPermNeedSettings = true
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!hasNotificationPermission() && !prefs.getBoolean(KEY_NOTIF_PERM_PROMPTED, false)) {
+            showNotifPermDialog = true
         }
     }
 
@@ -457,5 +508,43 @@ internal fun ChatModule(app: LabApplication) {
 
     if (showKbDialog) {
         KbManageDialog(onDismiss = { showKbDialog = false })
+    }
+
+    // 首次进入乐奇的通知权限说明框
+    if (showNotifPermDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showNotifPermDialog = false
+                prefs.edit().putBoolean(KEY_NOTIF_PERM_PROMPTED, true).apply()
+            },
+            title = { Text(stringResource(R.string.notif_perm_title)) },
+            text = { Text(stringResource(R.string.notif_perm_message)) },
+            confirmButton = {
+                Button(onClick = {
+                    if (notifPermNeedSettings) {
+                        openAppNotificationSettings()
+                        showNotifPermDialog = false
+                        prefs.edit().putBoolean(KEY_NOTIF_PERM_PROMPTED, true).apply()
+                    } else {
+                        notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }) {
+                    Text(
+                        stringResource(
+                            if (notifPermNeedSettings) R.string.notif_perm_open_settings
+                            else R.string.notif_perm_enable
+                        )
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showNotifPermDialog = false
+                    prefs.edit().putBoolean(KEY_NOTIF_PERM_PROMPTED, true).apply()
+                }) {
+                    Text(stringResource(R.string.notif_perm_later))
+                }
+            },
+        )
     }
 }
