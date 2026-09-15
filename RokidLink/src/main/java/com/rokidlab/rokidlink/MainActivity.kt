@@ -111,7 +111,8 @@ class MainActivity : Activity() {
          * 蓝牙隧道（BtTunnelServer.listenUsingRfcommWithServiceRecord → BluetoothAdapter.getAddress）
          * 依赖该权限：缺失时眼镜端抛 SecurityException，隧道 / ASR push / WiFi adb(5555) 全部不可用。
          * CXR-L「重装眼镜端」/ 卸载重装会清空运行时授权，故启动时必须重新检查并按需申请。
-         * Service 无法发起运行时权限请求，只能在 Activity 内申请，由 MainActivity / KeyButtonBridgeActivity 共用。
+         * Service 无法发起运行时权限请求，只能在 Activity 内申请；KeyButtonService 检测到
+         * 权限缺失时会一次性拉起本页（不再使用常驻透明 Activity 承载）。
          *
          * @return 是否发起了权限申请（弹框）
          */
@@ -133,7 +134,7 @@ class MainActivity : Activity() {
             return true
         }
 
-        /** 处理蓝牙权限申请结果（供 MainActivity / KeyButtonBridgeActivity 共用） */
+        /** 处理蓝牙权限申请结果（供 MainActivity 使用） */
         @JvmStatic
         fun handleBluetoothPermissionResult(activity: Activity, requestCode: Int, grantResults: IntArray) {
             if (requestCode != REQ_BLUETOOTH_CONNECT) return

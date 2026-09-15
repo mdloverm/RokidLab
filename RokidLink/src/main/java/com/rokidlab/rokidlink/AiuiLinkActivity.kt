@@ -51,6 +51,10 @@ class AiuiLinkActivity : Activity() {
     /** boot 后双击 BACK 逃生计时（页面若不响应 Backspace 可强制退出宿主） */
     private var lastBackMs = 0L
 
+    /** 传给 ink 的画布尺寸 = 眼镜整屏尺寸（用户要求任何情况下不留边框，全屏渲染） */
+    private var contentW = 0
+    private var contentH = 0
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
     /** 自动注入到每个 AIUI 页面的 Lab 桥（页面 realm 可见，解决 host.js 主 realm Lab 隔离问题）。
@@ -173,15 +177,15 @@ class AiuiLinkActivity : Activity() {
         }
 
         val dm = resources.displayMetrics
-        val screenW = dm.widthPixels
-        val screenH = dm.heightPixels
-        Log.i(TAG, "screen ${screenW}x${screenH} density=${dm.density}")
+        contentW = dm.widthPixels
+        contentH = dm.heightPixels
+        Log.i(TAG, "screen ${contentW}x${contentH} density=${dm.density}")
 
         // 后台解包 .aix；完成后通知 JS boot
         Thread {
             val bundle = AixBundleReader.read(File(aixPath))
             currentAppId = bundle.appId
-            bundleJson = buildBundleJson(bundle, screenW, screenH)
+            bundleJson = buildBundleJson(bundle, contentW, contentH)
             Log.i(TAG, "bundleJson ready: ${bundle.files.size} files")
             mainHandler.post {
                 if (!isFinishing) maybeBoot()
@@ -195,10 +199,11 @@ class AiuiLinkActivity : Activity() {
         val root = FrameLayout(this)
         root.setBackgroundColor(Color.BLACK)
         // 窗口与 WebView 强制不透明纯黑底：本 Activity 是 windowIsTranslucent 窗口，
-        // 页面若有透明像素会直接穿透露出下层（Launcher/KeyButtonBridge）造成背景虚影。
+        // 页面若有透明像素会直接穿透露出下层（Launcher）造成背景虚影。
         window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
         val wv = WebView(this)
         wv.setBackgroundColor(Color.BLACK)
+        // 全屏渲染，不留任何边框（用户明确要求任何情况下都无黑边）
         wv.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
@@ -376,8 +381,8 @@ class AiuiLinkActivity : Activity() {
     private fun maybeBoot() {
         if (booted || bundleJson == null || !jsHostReady || isFinishing) return
         booted = true
-        val dm = resources.displayMetrics
-        bootJs(dm.widthPixels, dm.heightPixels)
+        // 传内容区尺寸（已扣除四周边距），与 WebView 实际渲染区域一致
+        bootJs(contentW, contentH)
     }
 
     private fun bootJs(w: Int, h: Int) {

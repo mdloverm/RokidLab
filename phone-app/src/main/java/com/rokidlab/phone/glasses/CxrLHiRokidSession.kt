@@ -545,10 +545,12 @@ class CxrLHiRokidSession(
      * 授予并**复核**眼镜端 `SYSTEM_ALERT_WINDOW`（Android 12+ 后台启动限制 BAL 豁免）。
      *
      * 背景：RokidLink 是常驻前台服务，它 `startActivity` 拉起 `AiuiLinkActivity`（AIUI 宿主）/
-     * `KeyButtonBridgeActivity` 时会被系统以
+     * `PhoneMirrorActivity`（投屏）时会被系统以
      * `Background activity start ... allowBackgroundActivityStart: false` **静默拒绝** ——
      * 用户侧表现为「生成 AIUI 界面提示眼镜没权限 / 点了没反应」。
      * 唯一可靠的解法就是让 RokidLink 拿到该 appop（或改用 ADB 直启，见 AiuiFrontendController）。
+     * （RokidLink 不再持有任何常驻可见 Activity：透明保活层会抢占官方 Launcher 的顶层
+     * resumed 身份，导致眼镜官方触摸板/乐奇控制失灵。）
      */
     internal fun ensureGlassesBackgroundLaunchAllowed(client: com.rokidlab.phone.adb.AdbShellClient) {
         if (glassesBalExemptConfirmed) return

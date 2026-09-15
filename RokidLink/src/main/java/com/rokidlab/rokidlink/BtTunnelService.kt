@@ -153,7 +153,7 @@ class BtTunnelService : Service() {
 
     private val watchdogRunnable = Runnable { checkHealth() }
 
-    /** 每 30s 巡检：隧道服务 / ADB TCP / 常驻 BridgeActivity，任一失效自动恢复 */
+    /** 每 30s 巡检：隧道服务 / ADB TCP，任一失效自动恢复 */
     private fun startWatchdog() {
         mainHandler.removeCallbacks(watchdogRunnable)
         mainHandler.postDelayed(watchdogRunnable, WATCHDOG_INTERVAL_MS)
@@ -161,24 +161,12 @@ class BtTunnelService : Service() {
 
     private fun checkHealth() {
         try {
-            // 1) 隧道健康：BtTunnelServer 停止则重建（被系统停服务后 START_STICKY 重启场景）
+            // 隧道健康：BtTunnelServer 停止则重建（被系统停服务后 START_STICKY 重启场景）。
+            // 注意：不再保活任何可见 Activity —— 常驻透明层会抢占眼镜顶层 resumed 身份，
+            // 导致官方触摸板/乐奇控制失灵（用户须先在眼镜上 HOME 退出一次才能恢复）。
             if (tunnelServer?.isRunning != true) {
                 Log.w(TAG, "Tunnel server not running, restarting tunnel")
                 startTunnel()
-            }
-            // 2) BridgeActivity 保活：透明 Activity 维持进程 VISIBLE，避免被系统标记为后台。
-            //    注意：官方 AI 会话活跃期间（KeyButtonService.officialAiSessionActive）不拉起——
-            //    此时 BridgeActivity 在前台会让 AssistServer 判定为 third_app 场景，官方会话
-            //    结束时 force stop RokidLink。退让期间靠 FGS+WakeLock 保活，会话结束后由
-            //    KeyButtonService 的 restoreBridgeRunnable（10s 无 AI 活动）自动恢复。
-            if (!KeyButtonBridgeActivity.isAlive && !KeyButtonService.officialAiSessionActive) {
-                Log.i(TAG, "KeyButtonBridgeActivity not alive, relaunching")
-                runCatching {
-                    startActivity(
-                        Intent(this, KeyButtonBridgeActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                }.onFailure { Log.w(TAG, "relaunch BridgeActivity failed: ${it.message}") }
             }
         } catch (e: Exception) {
             Log.w(TAG, "checkHealth error: ${e.message}")

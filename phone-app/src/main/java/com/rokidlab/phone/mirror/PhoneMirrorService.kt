@@ -453,7 +453,8 @@ class PhoneMirrorService : Service() {
                     // 5. 创建 VirtualDisplay（固定 480x640，不因方向变化重建）
                     createMirrorSession()
 
-                    // 6. 注册方向监听（仅用于更新发送帧的方向标志）
+                    // 6. 注册方向监听（VirtualDisplay 固定竖屏不重建，
+                    //    仅把当前旋转角度 0/90/180/270 写入帧头，由眼镜端旋转帧）
                     orientationListener = object : OrientationEventListener(this) {
                         private var lastOrientation = -1
                         private var lastChangeTime = 0L
@@ -497,8 +498,6 @@ class PhoneMirrorService : Service() {
             }
         }.start()
     }
-
-    private fun isLandscapeNow(): Boolean = currentOrientation == 90 || currentOrientation == 270
 
     /**
      * 创建 ImageReader + VirtualDisplay（固定 480x640，仅创建一次）
@@ -622,7 +621,9 @@ class PhoneMirrorService : Service() {
 
     /**
      * 发送方向 + 宽高 + 灰度数据
-     * 协议: [1字节方向][2字节宽(little-endian)][2字节高(little-endian)][N字节灰度]
+     * 协议: [1字节旋转角度][2字节宽(little-endian)][2字节高(little-endian)][N字节灰度]
+     *   角度 = 手机相对自然竖屏逆时针转过的角度（0/90/180/270，由方向传感器给出），
+     *   眼镜端用同角度 Matrix 旋转帧（Canvas y 轴向下，正向旋转视觉为顺时针，恰好互逆）。
      * 注意：header 和 data 合并为一次 write，防止部分写入导致眼镜端协议偏移
      */
     private fun sendFrame(data: ByteArray, w: Int, h: Int) {
@@ -641,9 +642,8 @@ class PhoneMirrorService : Service() {
             if (socket == null || !socket!!.isConnected) {
                 reconnectSocket()
             }
-            val orientation = if (isLandscapeNow()) 1 else 0
             val header = byteArrayOf(
-                orientation.toByte(),
+                currentOrientation.toByte(),
                 (w and 0xFF).toByte(),
                 ((w shr 8) and 0xFF).toByte(),
                 (h and 0xFF).toByte(),

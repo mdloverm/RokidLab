@@ -1,7 +1,9 @@
 package com.rokidlab.rokidlink
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.util.Log
 import java.io.BufferedInputStream
 import java.net.ServerSocket
@@ -34,6 +36,10 @@ class PhoneMirrorServer(
     private val reusableBitmaps = arrayOfNulls<Bitmap>(2)
     private var currentWriteBufferIndex = 0
 
+    /** 旋转后的输出缓冲（横屏帧），与 [reusableBitmaps] 同索引配对，避免每帧分配 1.2MB */
+    private val rotatedBitmaps = arrayOfNulls<Bitmap>(2)
+    private val rotationMatrix = Matrix()
+
     /** Reuse pixel array to avoid allocating IntArray each frame, preventing native OOM */
     private var reusablePixels: IntArray? = null
 
@@ -42,7 +48,7 @@ class PhoneMirrorServer(
 
     companion object {
         private const val TAG = "RokidLink-Server"
-        private const val HEADER_SIZE = 5 // 1 orientation + 2 width + 2 height
+        private const val HEADER_SIZE = 5 // 1 rotation angle(0/90/180/270) + 2 width + 2 height
         private const val MAX_FRAME_DIMENSION = 2048
         /** Socket read timeout (ms): 15s balances faster disconnect detection
          *  vs tolerating brief pauses during orientation changes. When frames resume
@@ -51,7 +57,8 @@ class PhoneMirrorServer(
     }
 
     interface OnFrameListener {
-        fun onFrame(bitmap: Bitmap, isLandscape: Boolean)
+        /** 收到一帧已按手机方向转正的 Bitmap（竖屏 w<h / 横屏 w>h），直接显示即可 */
+        fun onFrame(bitmap: Bitmap)
         fun onStatus(status: String)
         fun onConnected()
         fun onDisconnected()
@@ -143,8 +150,14 @@ class PhoneMirrorServer(
                     headerRead += r
                 }
 
-                val orientationValue = header[0].toInt() and 0xFF
-                val isLandscape = orientationValue == 1
+                // 帧头第 1 字节：手机屏幕旋转角度（0/90/180/270，竖屏=0）。
+                // 兼容旧协议：旧版只发 0/1（1=横屏），按 90° 处理。
+                val rawOrientation = header[0].toInt() and 0xFF
+                val frameAngle = when (rawOrientation) {
+                    90, 180, 270 -> rawOrientation
+                    1 -> 90
+                    else -> 0
+                }
                 frameWidth = (header[1].toInt() and 0xFF) or ((header[2].toInt() and 0xFF) shl 8)
                 frameHeight = (header[3].toInt() and 0xFF) or ((header[4].toInt() and 0xFF) shl 8)
 
@@ -186,9 +199,9 @@ class PhoneMirrorServer(
                 }
 
                 // Create Bitmap using double buffering: write to current buffer, then send its reference to UI
-                val bitmap = createGrayscaleBitmap(buffer, frameWidth, frameHeight)
+                val bitmap = createGrayscaleBitmap(buffer, frameWidth, frameHeight, frameAngle)
                 if (bitmap != null) {
-                    frameListener?.onFrame(bitmap, isLandscape)
+                    frameListener?.onFrame(bitmap)
                 }
 
             } catch (e: java.net.SocketTimeoutException) {
@@ -219,11 +232,16 @@ class PhoneMirrorServer(
     }
 
     /**
-     * Write grayscale data into the current write buffer bitmap, then advance to the next buffer.
+     * Write grayscale data into the current write buffer bitmap, rotate by [angle] when the phone
+     * is landscape, then advance to the next buffer.
+     *
      * The returned Bitmap reference is safe to pass to UI thread because the background thread
-     * will immediately switch to the other buffer for the next frame.
+     * will immediately switch to the other buffer pair for the next frame.
+     *
+     * @param angle 手机屏幕旋转角度（0/90/180/270）。手机端 VirtualDisplay 固定竖屏，
+     *              横屏时帧内容是侧躺的，必须在此旋转回正立方向，否则眼镜上画面压扁/侧躺。
      */
-    private fun createGrayscaleBitmap(data: ByteArray, w: Int, h: Int): Bitmap? {
+    private fun createGrayscaleBitmap(data: ByteArray, w: Int, h: Int, angle: Int): Bitmap? {
         return try {
             val pixelCount = w * h
             // Reuse pixel array to avoid allocating IntArray each frame
@@ -237,8 +255,10 @@ class PhoneMirrorServer(
             val writeBuffer = reusableBitmaps[currentWriteBufferIndex]
             val writeBitmap: Bitmap
             if (writeBuffer?.width != w || writeBuffer?.height != h) {
-                // 分辨率变化：recycle 旧 Bitmap，创建新的
+                // 分辨率变化：recycle 旧 Bitmap，创建新的；配对的旋转缓冲尺寸也必然失效
                 writeBuffer?.recycle()
+                rotatedBitmaps[currentWriteBufferIndex]?.recycle()
+                rotatedBitmaps[currentWriteBufferIndex] = null
                 writeBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                 reusableBitmaps[currentWriteBufferIndex] = writeBitmap
             } else {
@@ -246,10 +266,30 @@ class PhoneMirrorServer(
             }
             writeBitmap.setPixels(pixels, 0, w, 0, 0, w, h)
 
+            val out = if (angle == 0) {
+                writeBitmap
+            } else {
+                // 旋转后宽高交换（90/270）或不变（180）；输出缓冲与源缓冲同索引配对，
+                // 与源缓冲一起参与双缓冲轮换，UI 线程持有的上一帧不会被下一帧覆盖。
+                val outW = if (angle == 180) w else h
+                val outH = if (angle == 180) h else w
+                var rotated = rotatedBitmaps[currentWriteBufferIndex]
+                if (rotated == null || rotated.width != outW || rotated.height != outH || rotated.isRecycled) {
+                    rotated?.recycle()
+                    rotated = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+                    rotatedBitmaps[currentWriteBufferIndex] = rotated
+                }
+                rotationMatrix.setRotate(angle.toFloat())
+                val canvas = Canvas(rotated)
+                canvas.drawColor(Color.BLACK)
+                canvas.drawBitmap(writeBitmap, rotationMatrix, null)
+                rotated
+            }
+
             // Swap to other buffer for next frame (UI thread now owns this frame's buffer reference)
             currentWriteBufferIndex = (currentWriteBufferIndex + 1) % reusableBitmaps.size
 
-            writeBitmap
+            out
         } catch (e: Exception) {
             Log.e(TAG, "Create Bitmap failed: ${e.message}", e)
             null
@@ -261,10 +301,12 @@ class PhoneMirrorServer(
             if (!isRunning) return
             isRunning = false
         }
-        // Recycle both buffers
+        // Recycle both buffer pairs (source + rotated)
         for (i in reusableBitmaps.indices) {
             reusableBitmaps[i]?.recycle()
             reusableBitmaps[i] = null
+            rotatedBitmaps[i]?.recycle()
+            rotatedBitmaps[i] = null
         }
         // Must close ServerSocket first, only then can accept() blocking be released
         try {

@@ -50,12 +50,16 @@ import java.util.concurrent.TimeUnit
  * 1. 作为 Foreground Service（START_STICKY）保持进程常驻
  * 2. 动态注册按键广播接收器（priority=100 + abortBroadcast）
  * 3. 收到按键事件后，直接启动目标应用
- *    - 如果 KeyButtonBridgeActivity 存活 → 它也会处理（双重保障）
- *    - 如果 BridgeActivity 被销毁 → Service 直接处理
  * 4. 通过 CXR-S SDK 订阅手机端下发的按键配置
- * 5. 启动常驻 KeyButtonBridgeActivity（透明，用于保持进程 VISIBLE 状态）
- * 6. 持有 PARTIAL_WAKE_LOCK 防止休眠后按键失效
- * 7. 监听 SCREEN_ON 广播，屏幕亮起时校验 receiver 存活状态
+ * 5. 持有 PARTIAL_WAKE_LOCK 防止休眠后按键失效
+ * 6. 监听 SCREEN_ON 广播，屏幕亮起时校验 receiver 存活状态
+ *
+ * ★ 不持有任何常驻可见 Activity（历史上有 KeyButtonBridgeActivity 透明保活层，已移除）：
+ * 透明 Activity 会成为眼镜的顶层 resumed/焦点应用，导致官方 Launcher 退居后台，
+ * 表现为「双端一连上，眼镜自身的触摸板/官方乐奇就失灵，必须在眼镜上做一次退出操作
+ * （HOME）把透明层任务踢到后台才能恢复」（2026-09-15 真机复现：mFocusedApp=KeyButtonBridge）。
+ * 后台 startActivity 改由 SYSTEM_ALERT_WINDOW（BAL 法定豁免，手机端经 ADB appops 授予）
+ * + FGS 保证；保活靠本服务 + WakeLock + 电池优化白名单。
  */
 class KeyButtonService : Service() {
     private var bridge: CXRServiceBridge? = null
@@ -391,25 +395,6 @@ class KeyButtonService : Service() {
         /** 连续短命销毁达此次数后放弃自愈，避免无限重启循环耗尽系统资源 */
         private const val MAX_SHORT_LIVED_DESTROY = 5
 
-        /**
-         * 官方 AI 会话是否活跃（true = BridgeActivity 已退让，BtTunnelService 看门狗不得拉起）。
-         * 常驻透明 BridgeActivity 会让 AssistServer 把本进程判定为 third_app 场景，官方 AI 会话
-         * 退出（ai_assist=false）时清理 third_app 会 force stop RokidLink（实测反复强杀）。
-         *
-         * 退让采用「AI 频道活动驱动 + 超时自动恢复」：只要收到官方 AI 链路流量
-         * （ASR_Result / ASR_End / Ai open）就退让 BridgeActivity 并刷新计时器；
-         * 连续 BRIDGE_YIELD_HOLD_MS 无 AI 活动才自动恢复。不再依赖手机端 open/Exit 的
-         * 配对语义——实测手机端连接瞬间连发 3 次 open 且回复序列结束后不再发 Exit，
-         * 依赖配对会导致永久退让、BridgeActivity 永不恢复。
-         */
-        @Volatile
-        var officialAiSessionActive = false
-        /** 退让保持时长：官方 AI 链路无活动超过该时长后自动恢复 BridgeActivity。
-         *  实测 BridgeActivity 一恢复，AssistServer 立即检测到 top=rokidlink（third_app 场景）
-         *  并联动下发 Ai open → 又被退让（恢复后约 0.9s 即收到 open）。因此恢复间隔必须
-         *  远大于联动周期，让进程绝大多数时间处于安全退让态（不在 third_app 场景，
-         *  官方 AI 会话结束清理不会 force stop RokidLink）。 */
-        private const val BRIDGE_YIELD_HOLD_MS = 60_000L
         /** 下行过滤窗口：收到 Lab 下行标志后，窗口内 ASR 视为重发忽略。
          *  仅 KeyDown_Client 触发（Lab 完整下行序列 KeyDown_Client→open→ASR_Result→ASR_End 约 1s）。
          *  手机端打断官方用的「Ai/open」（interruptOfficialAi）不再触发过滤，避免误吞用户真实提问。 */
@@ -493,7 +478,7 @@ class KeyButtonService : Service() {
         // 模型模式值统一引用 AiChannel.AI_MODE_OFFICIAL / AiChannel.AI_MODE_CUSTOM（协议规范单源）
         /** 「按键答题」开关存储 key */
         internal const val KEY_QUIZ_ENABLED = "key_quiz_enabled"
-        /** KeyButtonBridgeActivity 触发拍照答题时通知 Service 的 action */
+        /** 外部（如手机端 ADB am startservice）触发拍照答题时通知 Service 的 action */
         internal const val ACTION_QUIZ_PHOTO_ASK = "rokidlab.action.QUIZ_PHOTO_ASK"
         /** 工具确认窗口时长：超时未应答视为取消 */
         private const val TOOL_CONFIRM_WINDOW_MS = 30_000L
@@ -549,9 +534,12 @@ class KeyButtonService : Service() {
         // 提取/ADB 工具全部卡在「建链」（2026-09-13 真机坐实）。BtTunnelService.start 幂等。
         runCatching { BtTunnelService.start(this) }
             .onFailure { Log.e(TAG, "Failed to start BtTunnelService", it) }
-        // 同时启动常驻透明 Activity 和 Service 接收器（双重保障）
-        startBridgeActivity()
+        // 不启动任何常驻可见 Activity（透明保活层会抢走眼镜顶层 resumed 身份，导致官方控制
+        // 失灵，见类注释）。后台启动页面由 SYSTEM_ALERT_WINDOW 豁免 BAL。
         registerKeyReceiver()
+        // 蓝牙运行时权限缺失（典型：CXR-L 重装眼镜端后授权被清空）时拉起 MainActivity 申请。
+        // Service 自己不能弹运行时权限框；只在本进程存活期内未提示过时尝试一次，避免反复跳页。
+        ensureBluetoothPermissionOrPrompt()
         registerScreenOnReceiver()
         acquireWakeLock()
         startHeartbeat()
@@ -565,9 +553,9 @@ class KeyButtonService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // KeyButtonBridgeActivity 在 quiz 模式短按时通过 startService 通知本 Service 触发拍照答题
+        // 手机端或本应用组件可通过 startService(ACTION_QUIZ_PHOTO_ASK) 触发拍照答题上行
         if (intent?.action == ACTION_QUIZ_PHOTO_ASK) {
-            Log.i(TAG, "Quiz photo ask triggered by BridgeActivity")
+            Log.i(TAG, "Quiz photo ask triggered via startService")
             sendPhotoAskToPhone()
         }
         return START_STICKY
@@ -743,51 +731,35 @@ class KeyButtonService : Service() {
     }
 
     // ──────────────────────────────────────────────
-    //  启动常驻透明 Activity
+    //  运行时权限兜底
     // ──────────────────────────────────────────────
 
-    private fun startBridgeActivity() {
-        try {
-            val intent = Intent(this, KeyButtonBridgeActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-            Log.i(TAG, "BridgeActivity started")
-        } catch (e: Exception) {
-            Log.w(TAG, "startBridgeActivity: ${e::class.simpleName}: ${e.message}")
-        }
-    }
+    /** 本进程存活期内是否已为蓝牙权限弹过页（拒绝后不反复打断） */
+    @Volatile
+    private var btPermissionPrompted = false
 
     /**
-     * 退让 BridgeActivity（官方 AI 链路活跃期间）：
-     * 让本进程退出 third_app 场景，避免官方 AI 会话结束时被 AssistServer 清理强杀。
-     * 退让期间进程靠前台服务 + WakeLock + deviceidle 白名单存活，不影响按键/隧道/ASR。
+     * BLUETOOTH_CONNECT 缺失时（典型：CXR-L「重装眼镜端」覆盖安装后运行时授权被清空）
+     * 一次性拉起 [MainActivity] 发起系统权限请求。
      *
-     * 每次调用都会刷新「无活动自动恢复」计时器：AI 频道持续有流量则持续退让，
-     * 安静 BRIDGE_YIELD_HOLD_MS 后由 restoreBridgeRunnable 自动恢复。
+     * 不使用常驻透明 Activity 承载：它会抢占眼镜顶层 resumed 身份导致官方控制失灵。
+     * MainActivity 申请完权限后用户自行返回即可；正常情况下手机端会在授权流程中
+     * 经 ADB `pm grant` 直接下发，根本走不到这里。
      */
-    private fun yieldBridgeActivity() {
-        officialAiSessionActive = true
-        mainHandler.removeCallbacks(restoreBridgeRunnable)
-        mainHandler.postDelayed(restoreBridgeRunnable, BRIDGE_YIELD_HOLD_MS)
-        if (KeyButtonBridgeActivity.isAlive) {
-            runCatching { sendBroadcast(Intent(KeyButtonBridgeActivity.ACTION_YIELD)) }
-            Log.i(TAG, "BridgeActivity yield requested (official AI active)")
-        } else {
-            Log.d(TAG, "BridgeActivity already gone, keep yielded")
-        }
-    }
-
-    /**
-     * 自动恢复 BridgeActivity：BRIDGE_YIELD_HOLD_MS 内无任何官方 AI 链路流量。
-     * 到达此处说明官方 AI 会话已安静，场景清理早已完成，恢复前台 VISIBLE 保活状态安全。
-     */
-    private val restoreBridgeRunnable = Runnable {
-        if (officialAiSessionActive) {
-            officialAiSessionActive = false
-            Log.i(TAG, "BridgeActivity restore scheduled (no AI activity)")
-        }
-        if (!KeyButtonBridgeActivity.isAlive) startBridgeActivity()
+    private fun ensureBluetoothPermissionOrPrompt() {
+        if (btPermissionPrompted) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) return
+        val granted = checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) return
+        btPermissionPrompted = true
+        Log.w(TAG, "BLUETOOTH_CONNECT missing, launching MainActivity for runtime permission")
+        runCatching {
+            startActivity(
+                Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { Log.e(TAG, "launch MainActivity for BT permission failed: ${it.message}") }
     }
 
     // ──────────────────────────────────────────────
@@ -871,8 +843,8 @@ class KeyButtonService : Service() {
      * 否则 AI 会话仍处于退出态、相机不可用，takePhoto 会无图超时。
      *
      * SCREEN_DIM_WAKE_LOCK 已被 Android 标记弃用（官方推荐 FLAG_KEEP_SCREEN_ON），
-     * 但后者必须挂在 Activity 的 Window 上 —— 而本服务恰恰要避免拉起任何 Activity
-     * （重新拉起 BridgeActivity 会被 AssistServer 判为 third_app 并强杀，见 [yieldBridgeActivity]）。
+     * 但后者必须挂在 Activity 的 Window 上 —— 而本服务不能持有任何常驻可见 Activity
+     * （会抢占眼镜顶层 resumed 身份导致官方控制失灵，见类注释）。
      * 弃用 ≠ 移除，该常量在现役 ROM 上照常生效，故此处有意保留。
      */
     @Suppress("DEPRECATION")
@@ -900,21 +872,12 @@ class KeyButtonService : Service() {
     /**
      * 屏幕已熄时重新点亮屏幕。
      *
-     * ★ 这里绝不能无条件 `startActivity(KeyButtonBridgeActivity)`：
-     *   按键答题期间官方 AI 链路必然活跃（此刻正在处理 ASR_End / 打断官方播报），
-     *   拉起常驻透明 Activity 会把本进程重新置回 third_app 场景，官方会话结束时
-     *   AssistServer 会据此把 com.rokidlab.rokidlink 直接 force stop ——
-     *   这正是 [yieldBridgeActivity] 退让机制要规避的强杀（用户视角同样是
-     *   「拍照答题时眼镜端崩溃/闪退」）。
-     *
-     *   故改为分层策略：
-     *   ① 优先用 ACQUIRE_CAUSES_WAKEUP 的 WakeLock 点亮屏幕 —— 不需要 Activity，
-     *      不改变场景归属，从根上避开与退让机制的冲突；
-     *   ② 只有当官方 AI 会话确实已退让（officialAiSessionActive=false，
-     *      即 restoreBridgeRunnable 已到该恢复常驻 Activity 的时候）才走 Activity 兜底。
+     * 只用 ACQUIRE_CAUSES_WAKEUP 的 WakeLock —— 不启动任何 Activity：
+     * 本应用已无常驻透明层，且答题期间官方 AI 链路活跃，拉起任何本应用可见页面都可能被
+     * AssistServer 判为 third_app 场景而强杀进程（用户视角即「拍照答题时眼镜端崩溃」）。
      *
      * SCREEN_BRIGHT_WAKE_LOCK / ACQUIRE_CAUSES_WAKEUP 均已被 Android 标记弃用
-     * （官方替代是 Activity.setTurnScreenOn + setShowWhenLocked），但替代方案同样必须依赖
+     * （官方替代是 Activity.setTurnScreenOn + setShowWhenLocked），但替代方案必须依赖
      * Activity —— 与上面「不能碰 Activity」的前提直接冲突，故此处有意保留弃用 API。
      */
     @Suppress("DEPRECATION")
@@ -928,22 +891,6 @@ class KeyButtonService : Service() {
             quizTurnOnWakeLock = lock
             lock.acquire(QUIZ_TURN_ON_MS)
             Log.i(TAG, "Screen wake requested via WakeLock(ACQUIRE_CAUSES_WAKEUP, ${QUIZ_TURN_ON_MS / 1000}s)")
-        } catch (e: Exception) {
-            Log.w(TAG, "wakeScreenForQuiz wakelock failed: ${e.message}")
-        }
-        if (officialAiSessionActive) {
-            // 官方 AI 会话活跃期间绝不拉起 BridgeActivity（会重新进入 third_app 被强杀）。
-            // 屏幕已由上面的 WakeLock 点亮，常驻 Activity 等 restoreBridgeRunnable 自动恢复。
-            Log.i(TAG, "Skip BridgeActivity wake (official AI active, would be force-stopped as third_app)")
-            return
-        }
-        try {
-            val intent = Intent(this, KeyButtonBridgeActivity::class.java).apply {
-                putExtra(KeyButtonBridgeActivity.EXTRA_WAKE_SCREEN, true)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-            Log.i(TAG, "Screen wake requested via BridgeActivity (wake_screen=true)")
         } catch (e: Exception) {
             Log.w(TAG, "wakeScreenForQuiz failed: ${e.message}")
         }
@@ -1285,9 +1232,6 @@ class KeyButtonService : Service() {
             val cmd = args.at(0).getString() ?: return
             when (cmd) {
                 "ASR_Result" -> {
-                    // 官方 AI 链路活跃：退让 BridgeActivity（退出 third_app 场景，防会话结束时强杀），
-                    // 并刷新自动恢复计时器。下行过滤仅影响文字处理，不影响退让计时。
-                    yieldBridgeActivity()
                     // 下行过滤：Lab 回复下行序列中的 ASR_Result 不做拦截逻辑（避免自反馈），
                     // 但必须**本机重放**给官方界面 —— 手机下行的 Ai 只到我们，官方收不到（见 relayAiToOfficial）
                     if (System.currentTimeMillis() < downlinkUntilMs) {
@@ -1305,10 +1249,6 @@ class KeyButtonService : Service() {
                     }
                 }
                 "ASR_End" -> {
-                    // 官方 AI 链路活跃（提问完成）：退让 BridgeActivity 并刷新计时器。
-                    // 注意放在下行过滤与官方/自定义模式判断之前——即使放行官方模式，
-                    // 官方 AI 会话结束瞬间同样会清理 third_app 强杀，退让不能省略。
-                    yieldBridgeActivity()
                     // 下行过滤：Lab 回复下行序列中的 ASR_End 不做拦截逻辑，但本机重放给官方界面
                     if (System.currentTimeMillis() < downlinkUntilMs) {
                         relayAiToOfficial("ASR_End")
@@ -1402,21 +1342,14 @@ class KeyButtonService : Service() {
                     relayAiToOfficial("KeyDown_Client", "{\"privacy_level\":2}")
                 }
                 // 官方 AI 会话打开：手机端 interruptOfficialAi / 下行序列中的 open。
-                // 官方 AI 活跃期间必须让 BridgeActivity 退让（透明 Activity 在前台会让
-                // AssistServer 判定为 third_app 场景，官方会话结束时 force stop RokidLink
-                // —— 实测 15:47/16:01/16:10/16:19 反复强杀）。退让后靠 FGS+WakeLock 保活。
+                // 本机重放 open：官方对话界面由此打开（本应用已无常驻 Activity，不存在 third_app 强杀问题）。
                 "open" -> {
-                    Log.i(TAG, "AI channel open — yielding BridgeActivity (official AI active)")
-                    yieldBridgeActivity()
-                    // 本机重放 open：官方对话界面由此打开
+                    Log.i(TAG, "AI channel open — relay to official")
                     relayAiToOfficial("open")
                 }
-                // 官方 AI 会话结束（手机端下行 Exit 关闭官方会话）。
-                // 同样刷新退让计时器：Exit 只是下行序列第一步，随后 open/ASR/TTS 仍会活跃，
-                // 不在此立即恢复，避免场景清理瞬间 BridgeActivity 回前台再次被判定 third_app。
+                // 官方 AI 会话结束（手机端下行 Exit 关闭官方会话）：无需处理。
                 "Exit" -> {
-                    Log.i(TAG, "AI channel Exit — keeping BridgeActivity yielded")
-                    yieldBridgeActivity()
+                    Log.d(TAG, "AI channel Exit")
                 }
                 else -> Log.d(TAG, "AI channel ignored: $cmd")
             }
@@ -1886,8 +1819,8 @@ class KeyButtonService : Service() {
      * 注意：**不能复用 [launchTarget]** —— 它优先用 `getLaunchIntentForPackage(pkg)`，对 launcher
      * 这类包会返回 HOME 意图（拉起桌面而非目标页），必须用显式 ComponentName 直启。
      *
-     * 本服务持有 SYSTEM_ALERT_WINDOW 且常驻 KeyButtonBridgeActivity，属前台进程，
-     * 不受 Android 12+ 后台启动(BAL)限制。
+     * 本服务持有 SYSTEM_ALERT_WINDOW（BAL 法定豁免，手机端经 ADB appops 授予），
+     * 从后台 startActivity 不受 Android 12+ 限制。
      */
     private fun handleOpenApp(args: Caps?) {
         try {

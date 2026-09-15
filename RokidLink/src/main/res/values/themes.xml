@@ -7,4 +7,16 @@
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowContentOverlay">@null</item>
     </style>
+
+    <!-- 不透明全屏主题：投屏 / AIUI 等实际铺满屏幕的页面必须使用。
+         本机屏为 640x480 横屏 buffer 经系统旋转 90° 上屏，旋转采样会让
+         半透明窗口最外缘 1~3px 与下层 Launcher（绿色系 UI）混合，形成一圈绿边，
+         故这些页面窗口必须 isOpaque=1、背景纯黑，杜绝下层透出（配合画面 2% overscan）。
+         注意：纯黑区域里顶部偶发的左右镜像淡影是光机棱镜二次反射的物理鬼影，
+         独立 App 同样复现，与主题/透明度无关，不在软件层处理。 -->
+    <style name="Theme.RokidLink.Opaque" parent="@android:style/Theme.NoTitleBar.Fullscreen">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
 </resources>

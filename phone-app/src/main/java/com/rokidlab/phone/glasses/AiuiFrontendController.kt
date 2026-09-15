@@ -193,8 +193,8 @@ internal class AiuiFrontendController(
      * 旧实现的 `am start` 兜底自 exported=false 起已必然失败，已移除。
      *
      * [balExempt] 仅用于诊断日志：后台启动限制(BAL)会拦「后台进程启动 Activity」，
-     * 授权 SYSTEM_ALERT_WINDOW 可豁免；但 KeyButtonBridgeActivity 常驻保持进程可见时
-     * 通常不受限，所以这里不再据此跳过通道，而是统一走 topic 试一次。
+     * 授权 SYSTEM_ALERT_WINDOW 可豁免；RokidLink 不持有常驻可见 Activity
+     * （透明保活层会抢占官方控制，已移除），所以这里不再据此跳过通道，而是统一走 topic 试一次。
      *
      * @return true = 拉起指令已成功下发（链路在、CXR send 成功）；**不代表宿主一定已渲染**
      */
