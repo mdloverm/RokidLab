@@ -1,5 +1,6 @@
 package com.rokidlab.phone.store
 
+import com.rokidlab.phone.ai.AgentStep
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -34,7 +35,51 @@ internal object ChatHistoryStore {
         put("time", msg.time)
         put("isStatus", msg.isStatus)
         msg.imageUrl?.let { put("imageUrl", it) }
+        // 过程步骤：空列表不落字段（老版本读到也不出错；老历史没有该字段=无过程）
+        if (msg.trace.isNotEmpty()) put("trace", traceToJson(msg.trace))
     }.toString()
+
+    /**
+     * 过程步骤 → JSON 数组。
+     *
+     * 用单字母键：一次复杂任务的过程可达十几步、每步都带参数与结果摘要，
+     * 聊天历史是 JSONL 全量落盘（每条消息一行），键名膨胀会直接放大文件体积。
+     * 键名只在 [traceFromJson] 消费，无对外兼容要求。
+     */
+    private fun traceToJson(steps: List<AgentStep>): JSONArray = JSONArray().apply {
+        steps.forEach { s ->
+            put(JSONObject().apply {
+                put("k", s.key)
+                put("i", s.kind.name)
+                put("t", s.title)
+                put("d", s.detail)
+                put("s", s.state.name)
+            })
+        }
+    }
+
+    /** JSON 数组 → 过程步骤。无法识别的枚举值按安全默认降级（不因一条脏数据丢掉整段历史） */
+    private fun traceFromJson(arr: JSONArray?): List<AgentStep> {
+        if (arr == null || arr.length() == 0) return emptyList()
+        val out = ArrayList<AgentStep>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = runCatching { arr.getJSONObject(i) }.getOrNull() ?: continue
+            val key = o.optString("k")
+            if (key.isEmpty()) continue
+            out.add(
+                AgentStep(
+                    key = key,
+                    kind = runCatching { AgentStep.Kind.valueOf(o.optString("i")) }
+                        .getOrDefault(AgentStep.Kind.TOOL),
+                    title = o.optString("t"),
+                    detail = o.optString("d"),
+                    state = runCatching { AgentStep.State.valueOf(o.optString("s")) }
+                        .getOrDefault(AgentStep.State.OK),
+                )
+            )
+        }
+        return out
+    }
 
     /** 是否为旧的"整份 JSON 数组"格式 */
     fun isLegacyFormat(text: String): Boolean = text.trimStart().startsWith("[")
@@ -112,6 +157,7 @@ internal object ChatHistoryStore {
             time = o.optString("time", ""),
             isStatus = o.optBoolean("isStatus", false),
             imageUrl = o.optString("imageUrl", "").ifBlank { null },
+            trace = traceFromJson(o.optJSONArray("trace")),
         )
     }
 }

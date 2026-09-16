@@ -97,6 +97,16 @@ internal data class ChatMsg(
     val isStatus: Boolean = false,
     /** 非空表示这是一条图片消息：content 作 caption 渲染，imageUrl 由 [ChatBubble] 异步加载并显示 */
     val imageUrl: String? = null,
+    /**
+     * AI 回答的**过程**（思考 / 工具调用），渲染在正文之上的「过程」区块里。
+     *
+     * 为什么挂在同一条消息上而不是单独发一条：工具调用发生在正文之前（正文是工具循环跑完
+     * 才流式生成的），若单独成条会插在正文前把「回答」和「问题」隔开，视觉上割裂；
+     * 挂在消息上则天然随该轮回答一起滚动、一起落盘、一起被 [ChatStateHolder.finalizeLastAi] 收尾。
+     *
+     * 用户消息恒为空。空列表 = 该条没有过程可展示（普通闲聊、旧历史记录）。
+     */
+    val trace: List<com.rokidlab.phone.ai.AgentStep> = emptyList(),
 )
 
 /**
@@ -228,6 +238,8 @@ internal fun ChatModule(app: LabApplication) {
                         if (!success && !err.isNullOrBlank()) {
                             appendMsg(false, ctx.getString(R.string.chat_reply_failed) + ": $err")
                         }
+                        // 「过程」卡片的收尾已由会话层统一负责（sendAiTextMessage 入口包装 onResult +
+                        // 抢占/中止两处兜底），此处不再重复 —— 见 AiConversationService.setAgentTraceSink
                     },
                     onReply = { reply ->
                         // 流式 onDelta 已边生成边显示，此处用完整回复修正最后一条 AI 消息并落盘；
@@ -238,12 +250,16 @@ internal fun ChatModule(app: LabApplication) {
                         // 流式增量：边生成边显示（切主线程，SnapshotStateList 写入需 Compose 快照线程）
                         scope.launch { ChatStateHolder.appendAiDelta(delta) }
                     },
+                    // 不传 onTrace：「过程」（思考中 / 调用了哪个工具 / 结果如何）走 App 级全局
+                    // 汇聚点（LabApplication.setCxrL 里注册），与眼镜语音/拍照答题共用同一条通路。
+                    // 曾按调用逐条传参，结果漏掉眼镜语音那条入口 —— 过程通道不该靠"记得传"。
                 )
             } catch (e: Exception) {
                 // 异常路径必须复位 sending，否则发送按钮永久卡死
                 Log.e(TAG, "sendAiTextMessage crashed", e)
                 scope.launch {
                     sending = false
+                    ChatStateHolder.finishTrace(failed = true)
                     appendMsg(false, ctx.getString(R.string.chat_reply_failed) + ": ${e.message}")
                 }
             }
@@ -280,7 +296,8 @@ internal fun ChatModule(app: LabApplication) {
                 // startPhotoAsk 内部在后台线程回调，需切回主线程更新 Compose 状态
                 scope.launch {
                     photoAsking = false
-                    appendMsg(false, reply)
+                    // 与眼镜语音同理：本轮若产生了「过程」就合并到同一条消息，否则新起一条
+                    ChatStateHolder.finalizeTraceReply(reply)
                 }
             },
         )
@@ -301,7 +318,7 @@ internal fun ChatModule(app: LabApplication) {
                 onReply = { reply ->
                     scope.launch {
                         photoAsking = false
-                        appendMsg(false, reply)
+                        ChatStateHolder.finalizeTraceReply(reply)
                     }
                 },
             )
@@ -315,7 +332,9 @@ internal fun ChatModule(app: LabApplication) {
         try {
             app.cxrL.setGlassesAiUiCallbacks(
                 onText = { text -> appendMsg(true, text) },
-                onReply = { reply -> appendMsg(false, reply) },
+                // 合并进本轮那条带「过程」卡片的 AI 消息（而不是另起一条）：眼镜语音的过程
+                // 与回答因此落在同一个气泡组里，和打字路径的观感一致
+                onReply = { reply -> ChatStateHolder.finalizeTraceReply(reply) },
             )
         } catch (e: Exception) {
             Log.e(TAG, "cxrL not ready", e)

@@ -49,11 +49,19 @@ object ToolRiskMap {
         "query_calendar" to ToolRisk.READ_ONLY,
         // 只读当前播放信息（歌名/封面/歌词），不改任何状态；AIUI 播放器页面靠它取素材
         "get_now_playing" to ToolRisk.READ_ONLY,
+        // 自我认知域：自检状态与读日志都是纯读取，不应触发任何确认闸门
+        "get_agent_status" to ToolRisk.READ_ONLY,
+        "read_recent_logs" to ToolRisk.READ_ONLY,
+        // 跨会话检索：只读落盘聊天历史并打分排序，不改任何状态
+        "search_past_conversations" to ToolRisk.READ_ONLY,
 
         // ── LOCAL_SIDE_EFFECT ──
         "launch_glasses_app" to ToolRisk.LOCAL_SIDE_EFFECT,
         "set_timer" to ToolRisk.LOCAL_SIDE_EFFECT,
         "cancel_timer" to ToolRisk.LOCAL_SIDE_EFFECT,
+        // 自主定时任务：在本机注册一条「到点让 Agent 自己跑一轮推理」的调度（可取消），
+        // 属本机可控副作用；它触发的**那一轮**推理另由 ToolRegistry.schemasReadOnly 限死在只读工具
+        "schedule_agent_task" to ToolRisk.LOCAL_SIDE_EFFECT,
         "play_song" to ToolRisk.LOCAL_SIDE_EFFECT,
         "stop_music" to ToolRisk.LOCAL_SIDE_EFFECT,
         "show_lyrics" to ToolRisk.LOCAL_SIDE_EFFECT,
@@ -69,6 +77,8 @@ object ToolRiskMap {
         "open_phone_app" to ToolRisk.LOCAL_SIDE_EFFECT,
         "set_phone_volume" to ToolRisk.LOCAL_SIDE_EFFECT,
         "add_calendar_event" to ToolRisk.LOCAL_SIDE_EFFECT,
+        // 放弃未完成任务：只清本机的任务续做记录（不删任何已生成文件），可撤销且无外部影响
+        "clear_agent_task" to ToolRisk.LOCAL_SIDE_EFFECT,
 
         // ── 拨号：LOCAL_SIDE_EFFECT ──
         // 2026-09-11 用户明确要求：说「给 10086 拨打电话」要**手机直接拨打出去**，

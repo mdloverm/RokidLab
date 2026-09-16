@@ -93,4 +93,9 @@
 - **失败不要自动重试**：一次 await 失败就是失败，把错误经 setData 显示给用户即可。页面里禁止写「失败后 setTimeout 再调一次」的重试循环 —— 那会绕过去重机制，造成重复拨号、重复安装这类真实副作用。
 - **一个工具调用正在等结果时，不要在它外面再起第二个 await**（例如用 Promise.all 并发两个工具）；蓝牙通道串行，并发会让两个都更容易超时。
 - 启动参数：页面在 `onMessage` 接收，payload 在 `e.data`（JSON 字符串），必须 `JSON.parse(e.data)`，`type==='launch'` 时取 `params`。只在页面渲染完成后投递一次，onLoad 里拿不到。
-- 音乐播放器取数：play_song 只返回纯文本无封面歌词；要做带歌词/封面的播放器，play_song 后再调 get_now_playing 取 JSON（含 cover/lyrics/positionMs/lineIndex），一次取数本地时钟推进高亮行，不要轮询。
+- **音乐播放器（放歌 + 歌词 + 封面）取数**：`play_song` 只回一句纯文本，**不含封面与歌词**；要渲染素材，必须再调一次 `get_now_playing`（返回 JSON 文本，`JSON.parse` 后用）：
+  `{"playing":true,"preparing":false,"title":"西厢","artist":"后弦","album":"九公主","durationMs":240000,"positionMs":12345,"lineIndex":5,"cover":"https://…","lyrics":[{"timeMs":0,"text":"…"}]}`
+  - **一次取数、本地推进**：拿 `positionMs` 后用本地时钟（`Date.now()` 差值）自己算当前行，**禁止用 setInterval/setTimeout 反复轮询本工具**——AIUI 页面每分钟只允许 30 次工具调用，轮询几十秒就会耗尽额度，之后每次调用都被拒（现象：歌在放，歌词与封面永远空白）。
+  - **不要拿 `playing` 当渲染闸门**：`play_song` 之后立刻取数时 `playing` 已为 true（正在准备中也算），`cover`/`lyrics` 也已就绪；若为 false 就是当前根本没有曲目，显示「未在播放」即可，不要循环等待。
+  - 封面直接给 `<image src="{{ cover }}"></image>`（支持远程 URL）；`cover` 为空则隐藏该节点，`lyrics` 为空则隐藏歌词区。
+  - 换歌重走一遍 `play_song` → `get_now_playing`；只有用户主动按「刷新」时才再取一次。

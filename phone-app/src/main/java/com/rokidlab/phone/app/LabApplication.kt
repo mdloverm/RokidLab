@@ -324,6 +324,18 @@ class LabApplication : Application() {
         // 该通道的 liveSessions 登记会在 cleanup()（重连/重授权每轮都调）后被清空且不再回填，
         // 只靠登记表会把"眼镜在线"误判成"未连接"（实测 capSupport=true 但 session=false）。
         com.rokidlab.phone.ai.GlassToolConfirmChannel.appSessionProvider = { if (::cxrL.isInitialized) cxrL else null }
+
+        // 「过程」（思考 / 工具调用）全局汇聚点：落进聊天记录，由聊天窗口渲染成过程卡片。
+        //
+        // 注册在 App 层而不是聊天界面，是因为 AI 有 4 条入口 —— 打字 / 眼镜语音 ASR /
+        // 拍照答题 / 定时自主任务。界面级注册只能覆盖"界面自己发起"的那条路，
+        // **实测就漏掉了眼镜语音**（用户反馈"眼镜上说，手机上没显示思考链路，但打字可以"）。
+        // ChatStateHolder 是 App 级单例，与当前停留在哪个页面无关，因此停在别的页面时
+        // 用眼镜提问，过程照样记录、回到聊天页即可看到。
+        session.setAgentTraceSink(
+            onStep = { step -> com.rokidlab.phone.store.ChatStateHolder.upsertTrace(step) },
+            onFinish = { failed -> com.rokidlab.phone.store.ChatStateHolder.finishTrace(failed) },
+        )
     }
 
     /** 会话是否已创建（跨类访问 lateinit 的 isInitialized） */

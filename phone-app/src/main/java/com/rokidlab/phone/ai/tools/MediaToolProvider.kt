@@ -113,7 +113,7 @@ internal object MediaToolProvider : ToolProvider {
      *
      * 返回结构（页面 `JSON.parse` 后用）：
      * ```json
-     * {"playing":true,"title":"西厢","artist":"后弦","album":"九公主",
+     * {"playing":true,"preparing":false,"title":"西厢","artist":"后弦","album":"九公主",
      *  "durationMs":240000,"positionMs":12345,"lineIndex":5,
      *  "cover":"https://...","lyrics":[{"timeMs":0,"text":"..."}]}
      * ```
@@ -121,6 +121,18 @@ internal object MediaToolProvider : ToolProvider {
      *
      * 页面同步歌词的方式：拿到本结果后用本地时钟从 `positionMs` 起推进，**不要反复轮询本工具**
      * —— 蓝牙通道串行且单次 1~3 秒，轮询会让歌词行严重滞后。
+     *
+     * ★ 为什么 `playing` 要把「准备中」也算进来（2026-09-16 定案，勿改回去）：
+     * 页面在 `play_song` 之后**立刻**取数才有素材。但 [MusicPlayerController.play] 走
+     * `prepareAsync()` 拉网络流，真正出声要 1~10 秒，期间 `isPlaying()` 恒为 false。
+     * 若这里只报 `isPlaying()`，页面第一次取数就拿到 `playing:false`（尽管本响应里
+     * `cover`/`lyrics` 其实**已经齐全**），于是把这份有效载荷判死、退化成「等起播」轮询
+     * （实测生成的页面是每 1.5~2 秒一次、最多 40 次）→ 一分钟内必然撞满
+     * [com.rokidlab.phone.ai.ToolPolicy] 给 AIUI 页面的 30 次/分钟限流 → 此后**每次取数
+     * 都被拒绝**。用户看到的现象就是：歌正常在放（音频走手机端 MediaPlayer，与页面无关），
+     * 但页面的歌词与封面**永远是空的**。
+     * 把「已选好曲、正在准备/播放」统一算作 `playing=true`，页面第一次取数即拿到素材，
+     * 从根上消掉轮询动机；`preparing` 单独给出，页面要区分可自行判断。
      */
     private fun currentSongJson(): String {
         val title = MusicPlayerController.currentTitle
@@ -137,7 +149,10 @@ internal object MediaToolProvider : ToolProvider {
             lyricArray.put(JSONObject().put("timeMs", line.timeMs).put("text", line.text))
         }
         return JSONObject()
-            .put("playing", MusicPlayerController.isPlaying())
+            // 「有当前曲目」而非「音频已出声」——理由见上面 currentSongJson 的注释：
+            // prepareAsync 期间 isPlaying() 为 false，只报它会逼页面轮询并撞限流。
+            .put("playing", MusicPlayerController.isPlaying() || MusicPlayerController.isLoading)
+            .put("preparing", MusicPlayerController.isLoading)
             .put("title", title)
             .put("artist", MusicPlayerController.currentArtist)
             .put("album", MusicPlayerController.currentAlbum)

@@ -23,6 +23,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * 定时任务调度器（Application 级单例，由 LabApplication 持有）。
@@ -40,6 +42,12 @@ class TimerScheduler(private val appContext: Context) {
         private const val PREFS_ADB = "adb_prefs"
         private const val KEY_ADB_IP = "ip"
         private const val ADB_PORT = 5555
+
+        /**
+         * 自主任务等待 Agent 回复的上限（毫秒）。多轮只读工具 + 联网查询的正常量级是
+         * 十几秒到几十秒；超过此值按「无回复」处理并如实通知，绝不无限等待卡住调度协程。
+         */
+        private const val AGENT_TASK_TIMEOUT_MS = 90_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -201,18 +209,143 @@ class TimerScheduler(private val appContext: Context) {
             try {
                 when (action) {
                     is TimerAction.SendNotification -> {
+                        // 本地通知保持原文（离线可见、绝对可靠）；推给眼镜的播报文本经 AI 润色
                         postLocalNotification(action.title, action.content)
-                        withAdbClient { it.sendNotification(action.title, action.content) }
+                        val spoken = polishAnnouncement(action.content)
+                        withAdbClient { it.sendNotification(action.title, spoken) }
                     }
                     is TimerAction.LaunchApp -> withAdbClient { it.launchApp(action.packageName) }
                     is TimerAction.ExecuteShell -> withAdbClient { it.executeShellCommand(action.command) }
                     is TimerAction.Tap -> withAdbClient { it.tap(action.x, action.y) }
                     is TimerAction.SendKeyEvent -> withAdbClient { it.sendKeyEvent(action.keyCode) }
-                    is TimerAction.TtsSpeak -> speakOnGlass(action.text)
+                    is TimerAction.TtsSpeak -> speakOnGlass(polishAnnouncement(action.text))
+                    is TimerAction.AgentPrompt -> runAgentTask(action.prompt)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "executeActions ${action.javaClass.simpleName} failed: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * 到点播报文本 AI 润色 —— 事件驱动唤醒的最小闭环（Agent 缺口 #6）。
+     *
+     * 提醒到点时把模型当初生成的简短 content 润色成一句更自然、带「此刻该做什么」语境的
+     * 播报（如「该喝水了」→「到喝水时间啦，记得起身接杯水」）。任何失败（无配置/网络/
+     * 超时/输出不合规）一律降级原文 —— 提醒链路是已验证的核心路径，润色只是增益，
+     * 绝不能因润色失败而不提醒；单次尝试 + 8s 读超时保证到点响应延迟有界。
+     */
+    private suspend fun polishAnnouncement(raw: String): String {
+        if (raw.isBlank()) return raw
+        return withContext(Dispatchers.IO) {
+            try {
+                val app = appContext as? LabApplication ?: return@withContext raw
+                if (!app.hasCxrL()) return@withContext raw
+                val cfg = app.cxrL.getAiConfig()
+                val svc = com.rokidlab.phone.ai.OpenAiService(
+                    cfg.apiKey, cfg.model, cfg.baseUrl,
+                    readTimeoutMs = 8_000,
+                )
+                val messages = org.json.JSONArray().put(
+                    org.json.JSONObject().apply {
+                        put("role", "user")
+                        put(
+                            "content",
+                            "定时提醒到点了，请把这条提醒润色成一句自然的中文播报，15 字以内，" +
+                                "直接说要做什么，不要解释、不要引号。提醒内容：$raw",
+                        )
+                    },
+                )
+                val turn = svc.chatTurn(messages, tools = null, readTimeout = 8_000, attempts = 1)
+                val polished = turn.content?.trim()?.trim('"', '「', '」', '“', '”')
+                // 输出不合规（空/过长/疑似复读原文之外的整段话）一律回原文
+                if (!polished.isNullOrBlank() && polished.length <= 40) polished else raw
+            } catch (e: Exception) {
+                Log.w(TAG, "polishAnnouncement fallback to raw: ${e.message}")
+                raw
+            }
+        }
+    }
+
+    // ── 自主任务（真主动性）──
+
+    /**
+     * 执行「自主任务」（[TimerAction.AgentPrompt]）—— 真主动性的落地动作。
+     *
+     * 链路：到点 → 让 Agent 带着**只读工具**跑一轮推理（现查现算）→ 把结果播报出来。
+     * 与 [TimerAction.TtsSpeak] 的本质区别：念的是**此刻的真实结果**（今天天气、今天的日程），
+     * 而不是创建任务时写死的文案。
+     *
+     * 无人值守的安全边界（已与用户确认）：
+     *  - **只读域**：本轮工具集 = [com.rokidlab.phone.ai.ToolRegistry.schemasReadOnly]，
+     *    模型物理上拿不到拨号/装机/写文件/打开应用等副作用工具；
+     *  - **不写会话记忆**：`recordHistory=false`，不挤占用户主对话的上下文；
+     *  - **失败绝不静默**：拿不到回复时发一条本地通知说明，而不是到点什么都不发生
+     *    （"以为设了提醒其实根本没响"最伤信任）。
+     *
+     * 已知局限（接受）：本方法经 sendAiTextMessage 发起，会顺带 bump AI 代际号 ——
+     * 若恰好与用户正在进行的对话撞车，用户那条请求会被打断。定时任务通常落在整点/早晚
+     * 固定时刻，撞车概率低；彻底解耦需要独立的后台生成通道，属另一档工程。
+     */
+    private suspend fun runAgentTask(prompt: String) {
+        if (prompt.isBlank()) return
+        val reply = withContext(Dispatchers.IO) { requestAgentReply(prompt) }
+        if (reply.isNullOrBlank()) {
+            Log.w(TAG, "runAgentTask: no reply from agent, notify failure")
+            postLocalNotification(
+                appContext.getString(com.rokidlab.phone.R.string.timer_agent_task_failed_title),
+                prompt.take(60),
+            )
+            return
+        }
+        Log.i(TAG, "runAgentTask: reply ${reply.length} chars")
+        // 本地通知保证「离线可见、绝对可靠」；眼镜播报走 tts_play（RokidLink 本地合成）
+        postLocalNotification(appContext.getString(com.rokidlab.phone.R.string.timer_agent_task_title), reply)
+        speakOnGlass(reply)
+    }
+
+    /**
+     * 让 Agent 跑一轮**只读**推理并返回回复文本。
+     *
+     * 用 [CountDownLatch] 把 sendAiTextMessage 的异步回调转成同步结果；超时上限 90s
+     * （多轮只读工具 + 联网查询的正常量级），超时按「无回复」处理。
+     *
+     * 显示口径与用户在聊天框发消息一致（默认下行链路：眼镜打开助手页并显示问答），
+     * 但 `skipTtsAudioFinished=true` 保留回复留在屏上；`showAsrResult=true` 让眼镜端
+     * 能看到「问了什么」—— 主动播报若只出声不显示，用户会莫名听到一段话无从对照。
+     */
+    private fun requestAgentReply(prompt: String): String? {
+        val app = appContext as? LabApplication ?: return null
+        if (!app.hasCxrL()) {
+            Log.w(TAG, "requestAgentReply: cxrL not ready")
+            return null
+        }
+        val latch = CountDownLatch(1)
+        val out = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        try {
+            app.cxrL.sendAiTextMessage(
+                text = prompt,
+                onResult = { _, _ -> latch.countDown() },
+                onReply = { r -> out.set(r) },
+                interruptOfficialFirst = false,
+                skipTtsAudioFinished = true,
+                showAsrResult = true,
+                localTakeover = false,
+                recordHistory = false,
+                readOnlyTools = true,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "requestAgentReply: send failed: ${e.message}")
+            return null
+        }
+        return try {
+            if (!latch.await(AGENT_TASK_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "requestAgentReply: timeout after ${AGENT_TASK_TIMEOUT_MS}ms")
+            }
+            out.get()
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
         }
     }
 
@@ -462,6 +595,10 @@ class TimerScheduler(private val appContext: Context) {
                 j.put("type", "tts")
                 j.put("text", a.text)
             }
+            is TimerAction.AgentPrompt -> {
+                j.put("type", "agent")
+                j.put("prompt", a.prompt)
+            }
         }
         return j
     }
@@ -473,6 +610,7 @@ class TimerScheduler(private val appContext: Context) {
         "tap" -> TimerAction.Tap(j.optInt("x", 0), j.optInt("y", 0))
         "key" -> TimerAction.SendKeyEvent(j.optInt("keyCode", 0))
         "tts" -> TimerAction.TtsSpeak(j.getString("text"))
+        "agent" -> TimerAction.AgentPrompt(j.optString("prompt"))
         else -> TimerAction.ExecuteShell("")
     }
 }

@@ -296,6 +296,16 @@
     <string name="chat_reply_failed">AI 回复失败</string>
     <string name="chat_empty_hint">和乐奇开始聊天吧，回复将通过眼镜语音播报</string>
 
+    <!-- 乐奇聊天 - AI 过程（思考 / 工具调用）时间线 -->
+    <string name="chat_trace_title">过程</string>
+    <string name="chat_trace_steps">%1$d 步</string>
+    <string name="chat_trace_thinking">思考中…</string>
+    <string name="chat_trace_thought">已思考</string>
+    <string name="chat_trace_tool_running">执行中…</string>
+    <string name="chat_trace_collapse">收起过程</string>
+    <string name="chat_trace_expand">展开过程</string>
+    <string name="chat_trace_more">另有 %1$d 步已折叠</string>
+
     <!-- 乐奇聊天 - AI 服务设置 -->
     <string name="chat_settings">AI 设置</string>
     <string name="chat_settings_title">AI 服务设置</string>
@@ -491,6 +501,8 @@
     <string name="starting_glasses_failed">启动眼镜端失败</string>
     <string name="timer_channel_name">定时消息</string>
     <string name="timer_channel_desc">来自 ADB 工具的定时消息</string>
+    <string name="timer_agent_task_title">乐奇自主任务</string>
+    <string name="timer_agent_task_failed_title">自主任务执行失败</string>
     <string name="keep_alive_channel_name">后台保活</string>
     <string name="keep_alive_channel_desc">Rokid Lab 后台保活服务通知</string>
     <string name="keep_alive_notification_title">Rokid Lab 后台运行中</string>
@@ -548,6 +560,8 @@
     <string name="ai_tool_list_timers_desc">列出当前全部定时任务，回答"我有哪些提醒""几点有提醒"等</string>
     <string name="ai_tool_cancel_timer_name">取消定时任务</string>
     <string name="ai_tool_cancel_timer_desc">取消/删除已存在的定时任务，回答"取消刚才的提醒""删掉那个闹钟"等</string>
+    <string name="ai_tool_schedule_agent_task_name">自主定时任务</string>
+    <string name="ai_tool_schedule_agent_task_desc">到点后由 AI 自己查资料再主动播报（如"每天早上播报天气和日程"）；执行时只用只读工具，不改任何设置</string>
     <string name="ai_tool_get_weather_name">天气查询</string>
     <string name="ai_tool_get_weather_desc">查询指定城市实况天气与预报，回答"今天天气怎么样""明天会下雨吗"等</string>
     <string name="ai_tool_calculate_name">精确计算</string>
@@ -570,6 +584,14 @@
     <string name="ai_tool_query_calendar_desc">查询手机日历某天的日程安排，回答"我明天有什么安排""今天有什么日程"等</string>
     <string name="ai_tool_add_calendar_event_name">创建日程</string>
     <string name="ai_tool_add_calendar_event_desc">在手机日历创建日程，回答"记一下明天下午3点开会""加个日程"等</string>
+    <string name="ai_tool_get_agent_status_name">运行状态自检</string>
+    <string name="ai_tool_get_agent_status_desc">查询自身运行状态：模型、眼镜连接、知识库/记忆/技能数量、被关闭的工具，回答"你怎么不能XX""眼镜连上了吗"等</string>
+    <string name="ai_tool_read_recent_logs_name">读取运行日志</string>
+    <string name="ai_tool_read_recent_logs_desc">读取最近的运行日志排查异常，回答"刚才为什么失败了""是不是报错了"等</string>
+    <string name="ai_tool_clear_agent_task_name">放弃未完成任务</string>
+    <string name="ai_tool_clear_agent_task_desc">放弃当前未完成任务的续做记录，回答"算了不做了""不用继续了"等（不删除已生成文件）</string>
+    <string name="ai_tool_search_past_conversations_name">检索历史对话</string>
+    <string name="ai_tool_search_past_conversations_desc">在过去的聊天记录里按关键词查找，回答"我们上次聊的那个任务叫什么""我之前问过你什么"等</string>
     <string name="chat_settings_aiui">AIUI 应用管理</string>
     <string name="chat_settings_aiui_hint">管理对话生成或本地上传的智能体应用</string>
     <string name="aiui_manage_title">AIUI 应用管理</string>

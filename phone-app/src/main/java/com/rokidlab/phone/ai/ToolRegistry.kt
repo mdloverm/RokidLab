@@ -92,7 +92,7 @@ object ToolRegistry {
     val SIDE_EFFECT_TOOLS: Set<String> = setOf(
         "call_phone", "set_phone_alarm", "add_calendar_event",
         "install_aiui_project", "open_aiui_app", "stop_aiui_app",
-        "launch_glasses_app", "set_timer", "cancel_timer",
+        "launch_glasses_app", "set_timer", "cancel_timer", "schedule_agent_task",
         "set_phone_volume", "open_phone_app", "play_song", "stop_music", "show_lyrics",
     )
 
@@ -165,6 +165,14 @@ object ToolRegistry {
             group = DOMAIN_TIMER,
             displayNameRes = R.string.ai_tool_cancel_timer_name,
             descriptionRes = R.string.ai_tool_cancel_timer_desc,
+        ),
+        // 自主定时任务（真主动性）：到点让 Agent 自己跑一轮推理（仅只读工具）再播报结果，
+        // 区别于 set_timer 的「到点念一句固定文案」
+        ToolMeta(
+            name = "schedule_agent_task",
+            group = DOMAIN_TIMER,
+            displayNameRes = R.string.ai_tool_schedule_agent_task_name,
+            descriptionRes = R.string.ai_tool_schedule_agent_task_desc,
         ),
         ToolMeta(
             name = "play_song",
@@ -318,6 +326,34 @@ object ToolRegistry {
             displayNameRes = R.string.ai_tool_add_calendar_event_name,
             descriptionRes = R.string.ai_tool_add_calendar_event_desc,
         ),
+        // 自我认知域：Agent 对「自己」的运行时事实（模型/连接/资料/开关）与运行日志。
+        // 归属 info（基础信息）域，随主 Agent 与会话子集一起装配 —— 自检能力应始终可用。
+        ToolMeta(
+            name = "get_agent_status",
+            group = DOMAIN_INFO,
+            displayNameRes = R.string.ai_tool_get_agent_status_name,
+            descriptionRes = R.string.ai_tool_get_agent_status_desc,
+        ),
+        ToolMeta(
+            name = "read_recent_logs",
+            group = DOMAIN_INFO,
+            displayNameRes = R.string.ai_tool_read_recent_logs_name,
+            descriptionRes = R.string.ai_tool_read_recent_logs_desc,
+        ),
+        ToolMeta(
+            name = "clear_agent_task",
+            group = DOMAIN_INFO,
+            displayNameRes = R.string.ai_tool_clear_agent_task_name,
+            descriptionRes = R.string.ai_tool_clear_agent_task_desc,
+        ),
+        // 跨会话检索：在落盘聊天历史里按关键字找相关轮次，让模型能回答
+        // 「我们上次聊的那个定时任务叫什么」。归 info 域，随各会话子集一起装配。
+        ToolMeta(
+            name = "search_past_conversations",
+            group = DOMAIN_INFO,
+            displayNameRes = R.string.ai_tool_search_past_conversations_name,
+            descriptionRes = R.string.ai_tool_search_past_conversations_desc,
+        ),
     )
 
     /** 已知 AIUI agent（眼镜端 PACKAGE_INDEX 已安装的 .aix 智能体应用），供 open_aiui_app 匹配 */
@@ -412,6 +448,41 @@ object ToolRegistry {
         return result
     }
 
+    /**
+     * 只读工具声明：全域 ∩ 已开启 ∩ 风险档 = [ToolRisk.READ_ONLY]。
+     *
+     * 供**无人值守**场景装配工具（定时触发的自主任务 `TimerAction.AgentPrompt`）。
+     * 为什么不复用「按域装配」：多个域里混杂副作用工具 —— `glasses` 域含 `launch_glasses_app`、
+     * `phone` 域含 `call_phone`/`set_phone_alarm`、`timer` 域含 `set_timer`、
+     * `media` 域含 `play_song`、`files` 域含 `save_code_file`。**按域切不干净，
+     * 只能按风险档切**。无人监管时跑错一次（半夜拨号/下单/装机）代价远高于「少做一点」，
+     * 因此这里宁可只给查询能力：查时间/天气/网页/知识库/设备状态/自身状态/历史对话。
+     *
+     * 副作用档判定完全复用 [ToolRiskMap.riskOf]（唯一登记处），新增工具只要正确登记
+     * 就会自动被正确纳入/排除，无需改本函数。
+     */
+    fun schemasReadOnly(context: Context): List<JSONObject> {
+        val allowed = readOnlyToolNames()
+        return schemasFor(context, DOMAIN_ALL).filter { schema ->
+            val name = runCatching {
+                schema.optJSONObject("function")?.optString("name").orEmpty()
+            }.getOrDefault("")
+            name in allowed
+        }
+    }
+
+    /**
+     * 只读工具名集合（纯函数，可单测）：全域工具中风险档为 [ToolRisk.READ_ONLY] 的那些。
+     *
+     * 这是无人值守路径（[schemasReadOnly]）的**唯一准入名单**，也是「自主任务绝不改状态」
+     * 这条安全承诺的实际落点。抽成不依赖 Context 的纯函数，是为了让回归测试能直接断言
+     * 「拨号/装机/写文件/设定时都不在名单里」—— 新增工具若登记错了风险档，测试立刻失败。
+     */
+    internal fun readOnlyToolNames(): Set<String> = toolList
+        .filter { runCatching { ToolRiskMap.riskOf(it.name) == ToolRisk.READ_ONLY }.getOrDefault(false) }
+        .map { it.name }
+        .toSet()
+
     /** 工具执行中的人性化进度文案（眼镜端显示 + 手机端状态栏共用） */
     fun statusText(name: String): String = when (name) {
         "search_knowledge_base" -> "正在检索知识库…"
@@ -449,6 +520,11 @@ object ToolRegistry {
         "install_aiui_project" -> "正在打包并安装 AIUI 项目…"
         "stop_aiui_app" -> "正在关闭智能体应用…"
         "list_my_aiui_apps" -> "正在查看我的 AI 应用…"
+        "get_agent_status" -> "正在自检运行状态…"
+        "read_recent_logs" -> "正在读取运行日志…"
+        "clear_agent_task" -> "正在清除任务记录…"
+        "search_past_conversations" -> "正在检索历史对话…"
+        "schedule_agent_task" -> "正在创建自主任务…"
         else -> "正在执行 $name…"
     }
 
@@ -467,6 +543,7 @@ object ToolRegistry {
         com.rokidlab.phone.ai.tools.FilesToolProvider,
         com.rokidlab.phone.ai.tools.AiuiToolProvider,
         com.rokidlab.phone.ai.tools.PhoneToolProvider,
+        com.rokidlab.phone.ai.tools.StatusToolProvider,
     )
 
     /**

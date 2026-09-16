@@ -15,8 +15,8 @@ android {
         applicationId = "com.rokidlab.phone"
         minSdk = 29
         targetSdk = 34
-        versionCode = 22
-        versionName = "3.7"
+        versionCode = 23
+        versionName = "3.8"
         manifestPlaceholders["cleartextTrafficPermitted"] = "false"
 
         // 本地 OCR（onnxruntime + opencv）体积较大，只保留主流真机 ABI

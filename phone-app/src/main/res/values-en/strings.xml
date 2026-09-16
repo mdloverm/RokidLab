@@ -296,6 +296,16 @@
     <string name="chat_send_failed">Send failed</string>
     <string name="chat_reply_failed">AI reply failed</string>
     <string name="chat_empty_hint">Start chatting with LeQi. Replies will be spoken on your glasses.</string>
+
+    <!-- Chat - AI process (thinking / tool calls) timeline -->
+    <string name="chat_trace_title">Steps</string>
+    <string name="chat_trace_steps">%1$d steps</string>
+    <string name="chat_trace_thinking">Thinking…</string>
+    <string name="chat_trace_thought">Thought</string>
+    <string name="chat_trace_tool_running">Running…</string>
+    <string name="chat_trace_collapse">Collapse steps</string>
+    <string name="chat_trace_expand">Expand steps</string>
+    <string name="chat_trace_more">%1$d more steps</string>
     <string name="chat_settings">AI Settings</string>
     <string name="chat_settings_title">AI Service Settings</string>
     <string name="chat_settings_hint">Supports OpenAI-compatible APIs (DeepSeek / Qwen / Kimi / Ollama, etc.)</string>
@@ -489,6 +499,8 @@
     <string name="starting_glasses_failed">Failed to start glasses service</string>
     <string name="timer_channel_name">Timer Message</string>
     <string name="timer_channel_desc">Scheduled messages from ADB Tools</string>
+    <string name="timer_agent_task_title">Rokid Autonomous Task</string>
+    <string name="timer_agent_task_failed_title">Autonomous Task Failed</string>
     <string name="keep_alive_channel_name">Background Keep-alive</string>
     <string name="keep_alive_channel_desc">Rokid Lab background keep-alive service</string>
     <string name="keep_alive_notification_title">Rokid Lab running in background</string>
@@ -546,6 +558,8 @@
     <string name="ai_tool_list_timers_desc">List all current timer tasks, answer "what reminders do I have" etc.</string>
     <string name="ai_tool_cancel_timer_name">Cancel Timer</string>
     <string name="ai_tool_cancel_timer_desc">Cancel/delete an existing timer task, answer "cancel that reminder" etc.</string>
+    <string name="ai_tool_schedule_agent_task_name">Autonomous Task</string>
+    <string name="ai_tool_schedule_agent_task_desc">Let the AI gather info on its own and speak up when the time comes (e.g. "brief me on weather and schedule every morning"); read-only tools only</string>
     <string name="ai_tool_get_weather_name">Weather</string>
     <string name="ai_tool_get_weather_desc">Query current weather and forecast for a city, answer "how is the weather today" etc.</string>
     <string name="ai_tool_calculate_name">Calculator</string>
@@ -568,6 +582,14 @@
     <string name="ai_tool_query_calendar_desc">Query calendar events of a day, answer "what's on my schedule tomorrow" etc.</string>
     <string name="ai_tool_add_calendar_event_name">Add Calendar Event</string>
     <string name="ai_tool_add_calendar_event_desc">Create a calendar event on the phone, answer "note a meeting tomorrow 3pm" etc.</string>
+    <string name="ai_tool_get_agent_status_name">Runtime Self-Check</string>
+    <string name="ai_tool_get_agent_status_desc">Query own runtime status: model, glasses connection, knowledge base / memory / skills counts, disabled tools</string>
+    <string name="ai_tool_read_recent_logs_name">Read Runtime Logs</string>
+    <string name="ai_tool_read_recent_logs_desc">Read recent runtime logs to diagnose failures, answer "why did that fail" etc.</string>
+    <string name="ai_tool_clear_agent_task_name">Discard Pending Task</string>
+    <string name="ai_tool_clear_agent_task_desc">Discard the resume record of the pending task (generated files are kept)</string>
+    <string name="ai_tool_search_past_conversations_name">Search Past Chats</string>
+    <string name="ai_tool_search_past_conversations_desc">Keyword search over past chat history, answer "what was that task we discussed" etc.</string>
     <string name="chat_settings_aiui">AIUI App Manager</string>
     <string name="chat_settings_aiui_hint">Manage chat-generated or locally uploaded agent apps</string>
     <string name="aiui_manage_title">AIUI App Manager</string>

@@ -345,13 +345,27 @@ class CxrLHiRokidSession(
         instruction: String? = null,
         recordHistory: Boolean = true,
         onDelta: ((String) -> Unit)? = null,
-    ) = aiConversation.sendAiTextMessage(text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta)
+        readOnlyTools: Boolean = false,
+        /** Agent 过程回调（思考 / 工具调用），供手机端聊天窗口的「过程」时间线 */
+        onTrace: ((com.rokidlab.phone.ai.AgentStep) -> Unit)? = null,
+    ) = aiConversation.sendAiTextMessage(text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, onTrace, readOnlyTools)
 
     fun abortCurrentAi() = aiConversation.abortCurrentAi()
 
     /** 注册眼镜端语音对话的 UI 回调（乐奇聊天界面进入时调用） */
     fun setGlassesAiUiCallbacks(onText: (String) -> Unit, onReply: (String) -> Unit) =
         aiConversation.setGlassesAiUiCallbacks(onText, onReply)
+
+    /**
+     * 注册「过程」（思考 / 工具调用）全局汇聚点（App 启动时调用一次，见 `LabApplication.setCxrL`）。
+     *
+     * 注册在 App 层而非聊天界面：AI 入口有 4 条（打字 / 眼镜语音 / 拍照答题 / 定时任务），
+     * 逐条传参漏一条就没有过程显示（实测漏掉眼镜语音）；App 级汇聚点天然全覆盖。
+     */
+    fun setAgentTraceSink(
+        onStep: ((com.rokidlab.phone.ai.AgentStep) -> Unit)?,
+        onFinish: ((Boolean) -> Unit)? = null,
+    ) = aiConversation.setAgentTraceSink(onStep, onFinish)
 
     /** ASR 文字分发（Phase 3：委派到 L3 AiConversationService，AsrBridgeCoordinator 装配点零改动） */
     private fun dispatchGlassesAsrText(text: String) = aiConversation.dispatchGlassesAsrText(text)

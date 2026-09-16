@@ -35,6 +35,7 @@ internal object TimerToolProvider : ToolProvider {
         "set_timer",
         "list_timers",
         "cancel_timer",
+        "schedule_agent_task",
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
@@ -107,7 +108,10 @@ internal object TimerToolProvider : ToolProvider {
                             is TimerSchedule.Interval -> "每 ${s.seconds / 60} 分钟"
                             is TimerSchedule.Countdown -> "倒计时 ${s.seconds / 60} 分钟"
                         }
-                        "[${i + 1}] ${t.name}｜$sched｜${if (t.running) "运行中" else "已暂停"}"
+                        "[${i + 1}] ${t.name}｜$sched｜${if (t.running) "运行中" else "已暂停"}" +
+                            // 自主任务（到点让 Agent 自己跑一轮）与普通提醒在列表里区分开，
+                            // 否则模型会说"这是普通提醒"，用户也会以为到点只念一句话
+                            if (t.actions.any { it is TimerAction.AgentPrompt }) "｜自主任务" else ""
                     }.joinToString("\n") + "\n如需取消，告诉我任务名称即可"
                 }
             }
@@ -134,7 +138,72 @@ internal object TimerToolProvider : ToolProvider {
                 "已取消定时任务「${target.name}」"
             }
 
+            "schedule_agent_task" -> {
+                val name = args.optString("name").trim().ifBlank { "自主任务" }
+                val prompt = args.optString("prompt").trim()
+                if (prompt.isEmpty()) return "请说明到点后要我做什么（prompt 不能为空）"
+                val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
+
+                val schedule: TimerSchedule
+                val label: String
+                when (args.optString("schedule_type", "fixed").trim().lowercase()) {
+                    "countdown" -> {
+                        val seconds = args.optLong("seconds", 0L)
+                        if (seconds <= 0L) return "倒计时秒数必须大于 0"
+                        schedule = TimerSchedule.Countdown(seconds)
+                        label = "${formatSeconds(seconds)}后执行一次"
+                    }
+                    "interval" -> {
+                        val seconds = args.optLong("seconds", 0L)
+                        if (seconds <= 0L) return "间隔秒数必须大于 0"
+                        val count = args.optInt("count", 1).coerceIn(1, 100)
+                        schedule = TimerSchedule.Interval(seconds, count)
+                        label = "每 ${formatSeconds(seconds)}执行一次，共 $count 次"
+                    }
+                    else -> {
+                        val hour = args.optInt("hour", -1)
+                        val minute = args.optInt("minute", 0)
+                        if (hour !in 0..23) return "请提供 0~23 的小时（hour）"
+                        if (minute !in 0..59) return "分钟需在 0~59 之间"
+                        val repeatDaily = args.optBoolean("repeat_daily", false)
+                        schedule = TimerSchedule.FixedTime(hour, minute, repeatDaily)
+                        val now = Calendar.getInstance()
+                        val target = Calendar.getInstance().apply {
+                            set(Calendar.HOUR_OF_DAY, hour)
+                            set(Calendar.MINUTE, minute)
+                            set(Calendar.SECOND, 0)
+                        }
+                        val dayLabel = when {
+                            repeatDaily -> "每天"
+                            target.timeInMillis > now.timeInMillis -> "今天"
+                            else -> "明天"
+                        }
+                        label = "$dayLabel " + String.format(Locale.CHINA, "%02d:%02d", hour, minute)
+                    }
+                }
+
+                val task = TimerTask(
+                    id = UUID.randomUUID().toString(),
+                    name = name,
+                    schedule = schedule,
+                    actions = listOf(TimerAction.AgentPrompt(prompt)),
+                    running = true,
+                )
+                app.timerScheduler.addTask(task)
+                app.timerScheduler.startTask(task)
+                "已创建自主任务「$name」：$label。到时我会先自己去查资料，再把结果告诉你。" +
+                    "为安全起见那一轮只使用只读能力（查时间/天气/网页/知识库/设备状态等），" +
+                    "不会自动拨号、安装或修改任何设置。"
+            }
+
         else -> throw IllegalArgumentException("未知工具: $name")
         }
+    }
+
+    /** 秒数的人类可读文案（自主任务的倒计时/间隔播报用） */
+    private fun formatSeconds(seconds: Long): String = when {
+        seconds % 3600L == 0L -> "${seconds / 3600} 小时"
+        seconds % 60L == 0L -> "${seconds / 60} 分钟"
+        else -> "$seconds 秒"
     }
 }

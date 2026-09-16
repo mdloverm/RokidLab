@@ -45,6 +45,43 @@ class ToolRiskMapTest {
         assertEquals(ToolRisk.EXTERNAL_SIDE_EFFECT, ToolRiskMap.riskOf("hallucinated_tool_xyz"))
     }
 
+    /**
+     * 无人值守安全不变式：定时自主任务只装配 [ToolRegistry.readOnlyToolNames]，
+     * 该名单里**绝不能**出现任何会改状态的工具 —— 无人监管时跑错一次
+     * （半夜拨号 / 装机 / 改设置）代价远高于「少做一点」。
+     *
+     * 新增工具时若把风险档登记错了（例如给 `call_phone` 标成 READ_ONLY），
+     * 本测试立刻失败，而不是等用户在半夜被拨出去一通电话。
+     */
+    @Test
+    fun `无人值守只读名单不含任何副作用工具`() {
+        val allowed = ToolRegistry.readOnlyToolNames()
+        assertTrue("只读名单不应为空（否则自主任务什么也查不了）", allowed.size >= 10)
+
+        // 有副作用的工具，一个都不能进（覆盖各域的代表：拨号/装机/写文件/改设置/定时/媒体/展示）
+        val mustBeExcluded = listOf(
+            "call_phone", "set_phone_alarm", "add_calendar_event", "set_phone_volume",
+            "install_aiui_project", "open_aiui_app", "stop_aiui_app", "save_code_file",
+            "save_summary_txt", "set_timer", "cancel_timer", "schedule_agent_task",
+            "play_song", "stop_music", "show_lyrics", "launch_glasses_app",
+            "open_phone_app", "show_image", "clear_agent_task",
+        )
+        mustBeExcluded.forEach { name ->
+            assertTrue(
+                "副作用工具 $name 不得进入无人值守只读名单",
+                name !in allowed,
+            )
+        }
+
+        // 查询类能力必须真的可用，否则自主任务只能空口回复
+        listOf(
+            "get_current_time", "get_weather", "search_web", "fetch_webpage",
+            "search_knowledge_base", "get_agent_status", "search_past_conversations",
+        ).forEach { name ->
+            assertTrue("查询工具 $name 应在只读名单内", name in allowed)
+        }
+    }
+
     // ── 风险闸门（fail-open 语义）──
 
     @Test

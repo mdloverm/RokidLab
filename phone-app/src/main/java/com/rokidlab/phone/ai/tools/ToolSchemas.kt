@@ -123,7 +123,7 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
 
         "get_now_playing" -> toolSchema(
             name = meta.name,
-            description = "读取当前播放歌曲的完整信息，返回 JSON 文本：歌名 title、歌手 artist、专辑 album、时长 durationMs、当前进度 positionMs、当前歌词行号 lineIndex、封面图地址 cover、逐行歌词 lyrics（每行含 timeMs 与 text）。AIUI 播放器页面用它取封面与歌词来渲染；语音场景下用户问“现在放的是什么歌”时也可调用。没有正在播放的音乐时返回 playing=false。",
+            description = "读取当前播放歌曲的完整信息，返回 JSON 文本：歌名 title、歌手 artist、专辑 album、时长 durationMs、当前进度 positionMs、是否仍在准备 preparing、当前歌词行号 lineIndex、封面图地址 cover、逐行歌词 lyrics（每行含 timeMs 与 text）。play_song 之后**立刻**调它就能拿到 cover 与 lyrics（正在准备中 playing 也为 true，无需等待、无需轮询）；AIUI 播放器页面用它取封面与歌词来渲染；语音场景下用户问“现在放的是什么歌”时也可调用。没有正在播放的音乐时返回 playing=false。不要把本工具放进定时器反复调用——AIUI 页面每分钟上限 30 次，轮询会把额度耗尽导致此后每次调用都被拒。",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf<String, Any>(),
@@ -285,6 +285,25 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
             ),
         )
 
+        "schedule_agent_task" -> toolSchema(
+            name = meta.name,
+            description = "创建一个「自主任务」：到点后由我自己去查资料、再主动播报结果 —— 区别于 set_timer 只会念一句固定文案。当用户说「每天早上帮我播报天气和日程」「晚上 10 点提醒我总结今天」「每周一提醒我看待办」这类需要我到点先做点事（查询/汇总）再汇报的需求时调用。注意：出于安全，自主任务执行时我只能使用只读工具（查时间/天气/网页/知识库/设备状态等），不会自动拨号、装机或改任何设置；需要写操作时请在任务内容里让我先提醒你确认。",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "name" to mapOf("type" to "string", "description" to "任务简短名称，如「早安简报」「睡前总结」"),
+                    "prompt" to mapOf("type" to "string", "description" to "到点要执行的完整指令，写成一句自包含的中文，如「查一下杭州今天的天气和今天的日程，合成一段 80 字以内的早安播报」"),
+                    "schedule_type" to mapOf("type" to "string", "enum" to listOf("fixed", "countdown", "interval"), "description" to "fixed=每天/某天的固定时刻（默认）；countdown=多少秒后执行一次；interval=每 N 秒执行一次，共 M 次"),
+                    "hour" to mapOf("type" to "integer", "description" to "schedule_type=fixed 时的小时，24 小时制 0~23，如 8 表示早上 8 点"),
+                    "minute" to mapOf("type" to "integer", "description" to "schedule_type=fixed 时的分钟 0~59，默认 0"),
+                    "repeat_daily" to mapOf("type" to "boolean", "description" to "schedule_type=fixed 时是否每天重复，默认 false（只执行一次）；用户说「每天」时传 true"),
+                    "seconds" to mapOf("type" to "integer", "description" to "schedule_type=countdown/interval 时的间隔秒数（须 > 0）"),
+                    "count" to mapOf("type" to "integer", "description" to "schedule_type=interval 时的重复次数，默认 1"),
+                ),
+                "required" to listOf("name", "prompt", "schedule_type"),
+            ),
+        )
+
         "get_weather" -> toolSchema(
             name = meta.name,
             description = "查询指定城市的天气（实况温度/体感/湿度/风力 + 未来两天预报）。凡用户问「今天天气怎么样」「明天会下雨吗」「杭州冷不冷」等天气问题时必须调用本工具，严禁自行编造天气。",
@@ -414,6 +433,48 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
                     "note" to mapOf("type" to "string", "description" to "备注（可选），如地点、参会人"),
                 ),
                 "required" to listOf("title", "startTime"),
+            ),
+        )
+
+        "get_agent_status" -> toolSchema(
+            name = meta.name,
+            description = "查询我自己当前的运行状态：所用模型与接口、眼镜是否已连接（ADB 通道是否可用）、知识库有几篇文档、长期记忆几条、装了哪些技能、哪些工具被用户关闭、AIUI 页面工具网关是否开启。当用户问「你能做什么/你怎么不能XX」「眼镜连上了吗」「知识库里有东西吗」，或在某次设备操作失败后需要判断是不是连接/开关/权限问题时调用本工具自检后再回答，不要凭空猜测自己的状态。",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to mapOf<String, Any>(),
+            ),
+        )
+
+        "read_recent_logs" -> toolSchema(
+            name = meta.name,
+            description = "读取本机 App 最近的运行日志，用于排查功能异常（如「刚才为什么没成功」「是不是报错了」「打开应用失败了」）。默认只返回错误级日志；需要看完整流程时把 errorsOnly 设为 false。返回的是尾部最新日志片段，可据此向用户如实说明失败原因。",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "errorsOnly" to mapOf("type" to "boolean", "description" to "是否只看错误日志，默认 true（只看 ERROR/FATAL）；排查流程细节时传 false 看全部"),
+                ),
+            ),
+        )
+
+        "clear_agent_task" -> toolSchema(
+            name = meta.name,
+            description = "放弃当前未完成的任务记录（不删除任何已生成的文件）。当用户说「算了不做了」「不用继续了」「放弃这个任务」「重新开始」时调用；放弃后下次对话不会再自动带上该任务的续做提示。",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to mapOf<String, Any>(),
+            ),
+        )
+
+        "search_past_conversations" -> toolSchema(
+            name = meta.name,
+            description = "在**过去**的聊天记录里检索（只能检索本地仍保留的最近一段记录，更早的已经不在盘上）。当用户提到以前聊过但当前上下文里没有的事时调用，例如「我们上次聊的那个定时任务叫什么」「我之前问过你什么」「我上周让你记的那个事」。不要用它查长期记忆（那用 manage_memory）或知识库（那用 search_knowledge_base）。",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "query" to mapOf("type" to "string", "description" to "检索关键词（2~6 个字最有效，如「定时任务」「天气」）；传空或 * 表示不筛选，直接返回最近几轮对话"),
+                    "limit" to mapOf("type" to "integer", "description" to "返回轮数，默认 5，最多 20", "minimum" to 1, "maximum" to 20),
+                ),
+                "required" to listOf("query"),
             ),
         )
 

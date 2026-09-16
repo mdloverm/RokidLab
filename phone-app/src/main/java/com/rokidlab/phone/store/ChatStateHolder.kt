@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import com.rokidlab.phone.ai.AgentStep
 import com.rokidlab.phone.util.LogCollector
 import java.io.File
 import java.text.SimpleDateFormat
@@ -35,6 +36,8 @@ private const val HISTORY_FILE = "chat_history.json"
  *   - 所有文件 I/O 交给单线程 [writer]，按提交顺序串行执行 —— 既避免阻塞主线程，
  *     也避免并发写坏文件；
  *   - 序列化在调用线程完成后再把字符串交给 [writer]，因此后台任务只碰普通字符串。
+ *   - 例外：[upsertTrace] / [finishTrace] / [finalizeTraceReply] 可**从任意线程**调用 ——
+ *     它们由 AI 生成线程 / ASR 轮询线程直接触发，内部用 [runOnMain] 自行切主线程。
  *
  * 仍由 [ChatModule] 负责所有写入（appendMsg/clear），仅状态本身常驻。
  */
@@ -63,6 +66,15 @@ internal object ChatStateHolder {
     }
 
     private fun historyFile(ctx: Context): File = File(ctx.filesDir, HISTORY_FILE)
+
+    /**
+     * 供「跨会话检索」Agent 工具读取落盘历史（内部实现见 [ChatHistoryStore]）。
+     *
+     * 只读文件，**不触碰**主线程 [messages]（线程模型见类注释：`SnapshotStateList` 只能在
+     * Compose 主线程读写）。可在任意后台线程调用；文件不存在/损坏时返回空列表。
+     */
+    internal fun readPersistedHistory(context: Context): List<ChatMsg> =
+        ChatHistoryStore.readHistory(historyFile(context), MAX_HISTORY)
 
     /** 在落盘线程上执行任务，失败落日志面板（聊天历史丢失是用户可见问题，不能只写 logcat） */
     private fun submit(action: String, task: () -> Unit) {
@@ -153,6 +165,107 @@ internal object ChatStateHolder {
         messages.clear()
         msgIdCounter.set(0L)
         persistClear()
+    }
+
+    /**
+     * Agent 过程步骤合并（思考 / 工具调用），按 [AgentStep.key] 覆盖。
+     *
+     * 合并进**当前这轮** AI 消息（列表末尾那条非用户、非状态消息）的 [ChatMsg.trace]：
+     * 工具调用发生在正文流式生成之前，若单独发一条消息会插在正文前，把「问题」和「回答」隔开。
+     *
+     * 末尾不是 AI 消息时（本轮第一次过程事件，此时正文还没开始流）新建一条 content 为空的
+     * AI 消息承载 —— 随后的 [appendAiDelta] 会自然地把正文追加到这一条上（它同样只看末尾那条）。
+     *
+     * **不落盘**：过程事件频率高（工具轮多、思考增量多），统一由 [finishTrace] 或
+     * [finalizeTraceReply] 收尾时持久化，与 [appendAiDelta] 的处理口径一致。
+     * 可在任意线程调用（内部自动切主线程，见 [runOnMain]）。
+     */
+    fun upsertTrace(step: AgentStep) = runOnMain { upsertTraceOnMain(step) }
+
+    private fun upsertTraceOnMain(step: AgentStep) {
+        val last = messages.lastOrNull()
+        if (last != null && !last.isUser && !last.isStatus) {
+            val at = messages.size - 1
+            val pos = last.trace.indexOfFirst { it.key == step.key }
+            val merged = if (pos >= 0) {
+                last.trace.toMutableList().also { it[pos] = step }
+            } else {
+                last.trace + step
+            }
+            messages[at] = last.copy(trace = merged)
+            return
+        }
+        val id = msgIdCounter.incrementAndGet()
+        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        messages.add(ChatMsg(id, false, "", time, false, trace = listOf(step)))
+        trimIfNeeded()
+    }
+
+    /**
+     * 眼镜语音一轮的回复落地：**合并进本轮那条带「过程」的 AI 消息**，而不是另起一条。
+     *
+     * 眼镜语音走的是 `glassesAiReplyCb`（与打字的 `onReply` 不同），若直接 `add`，
+     * 过程卡片会变成独立一条、回答另起一条 —— 同一轮被拆成两个气泡，和打字路径不一致。
+     *
+     * 仅当**末尾那条就是本轮的过程消息**（非用户、非状态、trace 非空）才合并：否则会把
+     * 上一轮的回答正文覆盖掉（语音入口没有「先插一条用户消息」的保证）。
+     * 合并顺带把残留的 [AgentStep.State.RUNNING] 置 OK 并落盘 —— 正常成功路径上
+     * 步骤已是终态，此时只差正文这一次持久化。
+     */
+    fun finalizeTraceReply(reply: String) = runOnMain { finalizeTraceReplyOnMain(reply) }
+
+    private fun finalizeTraceReplyOnMain(reply: String) {
+        val last = messages.lastOrNull()
+        if (last != null && !last.isUser && !last.isStatus && last.trace.isNotEmpty()) {
+            val merged = last.copy(
+                content = reply,
+                trace = last.trace.map {
+                    if (it.state == AgentStep.State.RUNNING) it.copy(state = AgentStep.State.OK) else it
+                },
+            )
+            messages[messages.size - 1] = merged
+            persist(merged)
+            return
+        }
+        add(false, reply)
+    }
+
+    /**
+     * 把动作切到主线程（[SnapshotStateList] 只能在 Compose 快照线程写）。
+     *
+     * 过程事件来自 AI 生成线程 / ASR 轮询线程等任意后台线程，让每个调用方自己记得切线程
+     * 等于把不变量散到各处 —— 漏一处就是 `IllegalStateException` 或静默不刷新。
+     */
+    private inline fun runOnMain(crossinline block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post { block() }
+    }
+
+    /**
+     * 收尾本轮过程：把仍处于 [AgentStep.State.RUNNING] 的步骤置为终态并落盘。
+     *
+     * 为什么需要它：`onTrace` 的每条步骤都是「先 RUNNING、完成后同 key 覆盖」两段式，
+     * 一旦请求被用户打断、链路断掉或直接抛错，后一段就不会来了 —— 不兜底的话气泡里会永远
+     * 挂着一个转圈的「进行中」步骤，看起来像卡死。
+     *
+     * @param failed true = 本轮整体失败（失败气泡场景），残留步骤标 FAILED；false = 正常收尾标 OK
+     */
+    fun finishTrace(failed: Boolean = false) = runOnMain { finishTraceOnMain(failed) }
+
+    private fun finishTraceOnMain(failed: Boolean) {
+        for (i in messages.size - 1 downTo 0) {
+            val m = messages[i]
+            if (m.isUser || m.isStatus) continue
+            if (m.trace.none { it.state == AgentStep.State.RUNNING }) return
+            val updated = m.copy(
+                trace = m.trace.map {
+                    if (it.state != AgentStep.State.RUNNING) it
+                    else it.copy(state = if (failed) AgentStep.State.FAILED else AgentStep.State.OK)
+                }
+            )
+            messages[i] = updated
+            persist(updated)
+            return
+        }
     }
 
     /**

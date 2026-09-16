@@ -1,5 +1,6 @@
 package com.rokidlab.phone.store
 
+import com.rokidlab.phone.ai.AgentStep
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -29,7 +30,34 @@ class ChatHistoryStoreTest {
         isUser: Boolean = false,
         isStatus: Boolean = false,
         imageUrl: String? = null,
-    ) = ChatMsg(id = id, isUser = isUser, content = content, time = "10:00", isStatus = isStatus, imageUrl = imageUrl)
+        trace: List<AgentStep> = emptyList(),
+    ) = ChatMsg(
+        id = id,
+        isUser = isUser,
+        content = content,
+        time = "10:00",
+        isStatus = isStatus,
+        imageUrl = imageUrl,
+        trace = trace,
+    )
+
+    private fun steps() = listOf(
+        AgentStep(key = "think:0", kind = AgentStep.Kind.THINKING, title = "", detail = "先看看要调什么"),
+        AgentStep(
+            key = "tool:call_1",
+            kind = AgentStep.Kind.TOOL,
+            title = "play_song",
+            detail = "{\"songName\":\"西厢\"} → 已开始播放《西厢》",
+            state = AgentStep.State.OK,
+        ),
+        AgentStep(
+            key = "tool:call_2",
+            kind = AgentStep.Kind.TOOL,
+            title = "install_aiui_project",
+            detail = "→ 工具执行失败: 眼镜未连接",
+            state = AgentStep.State.FAILED,
+        ),
+    )
 
     private fun newFile(name: String = "chat_history.json"): File = File(tmp.newFolder(), name)
 
@@ -150,6 +178,64 @@ class ChatHistoryStoreTest {
         assertFalse("迁移后首字符不应再是 '['", ChatHistoryStore.isLegacyFormat(afterMigration))
         ChatHistoryStore.appendLine(file, ChatHistoryStore.toLine(msg(3, "新三")))
         assertEquals(listOf("旧一", "旧二", "新三"), ChatHistoryStore.readHistory(file).map { it.content })
+    }
+
+    // ── 过程（思考 / 工具调用）字段 ──
+
+    @Test
+    fun `过程步骤往返保留顺序键类型状态与摘要`() {
+        val src = msg(9, "已为你播放", trace = steps())
+        val back = ChatHistoryStore.parse(ChatHistoryStore.toLine(src)).single()
+        assertEquals(3, back.trace.size)
+        assertEquals(listOf("think:0", "tool:call_1", "tool:call_2"), back.trace.map { it.key })
+        assertEquals(AgentStep.Kind.THINKING, back.trace[0].kind)
+        assertEquals(AgentStep.Kind.TOOL, back.trace[1].kind)
+        assertEquals("play_song", back.trace[1].title)
+        assertEquals(AgentStep.State.OK, back.trace[1].state)
+        assertEquals(AgentStep.State.FAILED, back.trace[2].state)
+        assertTrue(
+            "结果摘要要能往返",
+            back.trace[1].detail.contains("已开始播放《西厢》"),
+        )
+    }
+
+    @Test
+    fun `无过程的消息落盘不含 trace 字段且回放为空列表`() {
+        val src = msg(1, "普通闲聊")
+        assertFalse("空过程不应写入字段", ChatHistoryStore.toLine(src).contains("trace"))
+        assertTrue(ChatHistoryStore.parse(ChatHistoryStore.toLine(src)).single().trace.isEmpty())
+    }
+
+    @Test
+    fun `只有过程没有正文的消息也能落盘并回放`() {
+        // 工具执行阶段正文还没开始流式生成，此时消息 content 为空、只有 trace
+        val src = msg(5, "", trace = steps().take(1))
+        val back = ChatHistoryStore.parse(ChatHistoryStore.toLine(src)).single()
+        assertEquals("", back.content)
+        assertEquals(1, back.trace.size)
+        assertEquals("think:0", back.trace[0].key)
+    }
+
+    @Test
+    fun `过程字段脏数据降级为安全默认而不丢整条消息`() {
+        val line = "{\"id\":1,\"content\":\"回复\",\"trace\":[" +
+            "{\"k\":\"tool:x\",\"i\":\"NOT_A_KIND\",\"t\":\"t\",\"d\":\"d\",\"s\":\"NOT_A_STATE\"}," +
+            "{\"t\":\"缺 key 应被跳过\"}," +
+            "\"裸字符串\"" +
+            "]}"
+        val back = ChatHistoryStore.parse(line).single()
+        assertEquals("回复", back.content)
+        assertEquals("脏枚举要降级而非丢弃整条", 1, back.trace.size)
+        assertEquals(AgentStep.Kind.TOOL, back.trace[0].kind)
+        assertEquals(AgentStep.State.OK, back.trace[0].state)
+    }
+
+    @Test
+    fun `旧历史无 trace 字段照样能解析（向后兼容）`() {
+        val line = "{\"id\":1,\"isUser\":false,\"content\":\"老消息\",\"time\":\"10:00\",\"isStatus\":false}"
+        val back = ChatHistoryStore.parse(line).single()
+        assertEquals("老消息", back.content)
+        assertTrue(back.trace.isEmpty())
     }
 
     // ── 文件级语义 ──

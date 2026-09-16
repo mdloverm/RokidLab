@@ -33,6 +33,17 @@ sealed class TimerAction {
     data class Tap(val x: Int, val y: Int) : TimerAction()
     data class SendKeyEvent(val keyCode: Int) : TimerAction()
     data class TtsSpeak(val text: String) : TimerAction()
+
+    /**
+     * 自主任务（真主动性）：到点让 Agent **自己跑一轮推理**再把结果播报出来。
+     *
+     * 与 [TtsSpeak] 的本质区别：TtsSpeak 念的是创建任务时就写死的文案（"该喝水了"），
+     * 而本动作念的是**到点那一刻现查现算**的结果（"今天杭州 18~26 度有阵雨，9 点有周会"）。
+     *
+     * 安全边界：执行时只装配只读工具（见 [com.rokidlab.phone.ai.ToolRegistry.schemasReadOnly]），
+     * 无人监管下绝不改任何状态。
+     */
+    data class AgentPrompt(val prompt: String) : TimerAction()
 }
 
 sealed class TimerSchedule {
@@ -140,7 +151,7 @@ fun TimerDialog(
                     }
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) { Text(context.getString(R.string.timer_actions_label), color = BrewMuted, fontSize = 12.sp); Spacer(Modifier.weight(1f)); if (editorActions.isNotEmpty()) Text(context.getString(R.string.timer_click_to_delete), color = BrewRed, fontSize = 10.sp) }
-                        if (editorActions.isEmpty()) { Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) { Text(context.getString(R.string.timer_no_actions), color = BrewMuted, fontSize = 13.sp) } } else { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { editorActions.forEachIndexed { i, action -> val label = when (action) { is TimerAction.SendNotification -> "${context.getString(R.string.timer_action_notify)}: ${action.content.take(30)}"; is TimerAction.LaunchApp -> "${context.getString(R.string.timer_action_launch)}: ${action.packageName}"; is TimerAction.ExecuteShell -> "${context.getString(R.string.timer_action_shell)}: ${action.command.take(30)}"; is TimerAction.Tap -> "${context.getString(R.string.timer_action_tap)}: (${action.x}, ${action.y})"; is TimerAction.SendKeyEvent -> "${context.getString(R.string.timer_action_key)}: ${action.keyCode}"; is TimerAction.TtsSpeak -> "TTS: ${action.text.take(30)}" }; Row(Modifier.fillMaxWidth().clip(BrewShapeSmall).background(BrewWarning.copy(alpha = 0.05f)).border(1.dp, BrewWarning.copy(alpha = 0.15f), BrewShapeSmall).clickable { editorActions = editorActions.toMutableList().apply { removeAt(i) } }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) { Text("${i + 1}.", color = BrewWarning, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 6.dp)); Text(label, color = BrewText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)); Text("✕", color = BrewRed.copy(alpha = 0.6f), fontSize = 12.sp) } } } }
+                        if (editorActions.isEmpty()) { Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) { Text(context.getString(R.string.timer_no_actions), color = BrewMuted, fontSize = 13.sp) } } else { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) { editorActions.forEachIndexed { i, action -> val label = when (action) { is TimerAction.SendNotification -> "${context.getString(R.string.timer_action_notify)}: ${action.content.take(30)}"; is TimerAction.LaunchApp -> "${context.getString(R.string.timer_action_launch)}: ${action.packageName}"; is TimerAction.ExecuteShell -> "${context.getString(R.string.timer_action_shell)}: ${action.command.take(30)}"; is TimerAction.Tap -> "${context.getString(R.string.timer_action_tap)}: (${action.x}, ${action.y})"; is TimerAction.SendKeyEvent -> "${context.getString(R.string.timer_action_key)}: ${action.keyCode}"; is TimerAction.TtsSpeak -> "TTS: ${action.text.take(30)}"; is TimerAction.AgentPrompt -> "AI: ${action.prompt.take(30)}" }; Row(Modifier.fillMaxWidth().clip(BrewShapeSmall).background(BrewWarning.copy(alpha = 0.05f)).border(1.dp, BrewWarning.copy(alpha = 0.15f), BrewShapeSmall).clickable { editorActions = editorActions.toMutableList().apply { removeAt(i) } }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) { Text("${i + 1}.", color = BrewWarning, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 6.dp)); Text(label, color = BrewText, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)); Text("✕", color = BrewRed.copy(alpha = 0.6f), fontSize = 12.sp) } } } }
                     }
                     Text(context.getString(R.string.timer_action_type), color = BrewMuted, fontSize = 12.sp)
                     Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("notify" to context.getString(R.string.timer_action_notify), "launch" to context.getString(R.string.timer_action_launch), "shell" to context.getString(R.string.timer_action_shell), "tap" to context.getString(R.string.timer_action_tap), "key" to context.getString(R.string.timer_action_key)).forEach { (type, label) -> Box(Modifier.height(36.dp).clip(BrewShapeSmall).background(if (selectedActionType == type) BrewWarning.copy(alpha = 0.2f) else Color.Transparent).border(1.dp, if (selectedActionType == type) BrewWarning else BrewBorder, BrewShapeSmall).clickable { selectedActionType = type }.padding(horizontal = 10.dp), contentAlignment = Alignment.Center) { Text(label, color = if (selectedActionType == type) BrewWarning else BrewText, fontSize = 12.sp) } } }

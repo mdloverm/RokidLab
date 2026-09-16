@@ -68,6 +68,50 @@ class OpenAiService(
             if (!m.contains("deepseek")) return false
             return !m.contains("reasoner") && !m.contains("-r1") && !m.contains("r1-")
         }
+
+        /**
+         * 把 AI 链路的异常翻译成「用户听得懂、且能自己动手修」的一句话。
+         *
+         * 这段话会被眼镜直接朗读并显示，所以必须短、口语化、可行动、不含换行。
+         *
+         * 背景（2026-09-15 真机事故）：流式请求遇非 2xx 时错误被静默吞成空轮，用户只看到
+         * 「抱歉，我暂时无法处理这个问题」—— 完全无法区分是密钥失效、余额不足、模型名写错
+         * 还是网络问题。此时 [com.rokidlab.phone.util.HttpClient.postSse] 已改为显式抛
+         * [com.rokidlab.phone.util.HttpStatusException]，这里再做一层「说人话」。
+         *
+         * **先看正文、再看状态码**：同为 400，原因可能是模型名不存在、上下文超长、
+         * 也可能是本机工具声明不合法（[com.rokidlab.phone.ai.ToolSchemaValidator]），
+         * 让用户去「核对模型名与接口地址」在后者上纯属误导 —— 那是我们自己的 bug。
+         */
+        fun aiFailureHint(e: Throwable): String = when (e) {
+            is com.rokidlab.phone.util.HttpStatusException -> hintForStatus(e.code, e.body)
+            else -> "抱歉，AI 服务暂时不可用。"
+        }
+
+        /** 状态码 + 服务端错误正文 → 一句可行动的提示（正文能定位原因时优先信正文）。 */
+        private fun hintForStatus(code: Int, body: String): String {
+            val b = body.lowercase()
+            return when {
+                b.contains("insufficient balance") -> "AI 账户余额不足，请先充值后再试"
+                b.contains("invalid schema") ->
+                    "AI 工具声明不合法，属本机异常，请到「开发者模式」导出日志反馈"
+                b.contains("context length") || b.contains("too long") || b.contains("max_tokens") ->
+                    "这次内容太长了，换个短一点的问题再试"
+                b.contains("authentication") || b.contains("invalid api key") ->
+                    "AI 密钥无效或已过期，请在乐奇聊天设置里重新填写接口密钥"
+                b.contains("model not exist") || b.contains("model_not_found") ||
+                    b.contains("model not found") ->
+                    "AI 不认识这个模型名，请在乐奇聊天设置里刷新模型列表后重选"
+                else -> when (code) {
+                    401, 403 -> "AI 密钥无效或已过期，请在乐奇聊天设置里重新填写接口密钥"
+                    402 -> "AI 账户余额不足，请先充值后再试"
+                    404 -> "AI 接口地址不对，请在乐奇聊天设置里核对接口地址"
+                    429 -> "AI 请求太频繁了，稍等一会儿再试"
+                    in 400..499 -> "AI 拒绝了这个请求（HTTP $code），详情见「开发者模式 → 导出日志」"
+                    else -> "AI 服务暂时不可用（HTTP $code），请稍后再试"
+                }
+            }
+        }
     }
 
     /** 将用户自定义 JSON 逐字段合并进请求体；结构性字段（model/messages/stream/tools）忽略 */
@@ -114,6 +158,7 @@ class OpenAiService(
         instruction: String? = null,
         memories: String? = null,
         skills: String? = null,
+        budget: String? = null,
         localMode: Boolean = false,
     ): JSONObject {
         val systemMsg = JSONObject()
@@ -132,10 +177,14 @@ class OpenAiService(
                 append("\n\n【工具使用准则】")
                 append("\n- 涉及实时信息（时间、电量、应用列表等）或设备操作（打开应用、播放音乐、停止播放、显示歌词、设定时提醒等）时，必须调用对应工具获取真实结果，严禁编造")
                 append("\n- 可以在一次回答中连续调用多个工具来完成多步任务（如先查时间再设定时提醒）")
+                append("\n- 多步任务（多文件生成、先勘察资料再操作设备、需要多次工具配合等）请先调用 update_plan 列出 2~6 个步骤，并在关键进展时更新各步骤状态，让用户能看到进度")
+                append("\n- 任务被中断（被打断/预算用尽）后，用户说「继续」就是接着做未完成的步骤：先看系统提示里的任务进度，从「→」那一步继续，已完成部分不要重做；若用户放弃，调用 clear_agent_task")
                 append("\n- 工具返回失败或查不到时，如实告知用户，不要假装成功")
                 append("\n- 闲聊、常识问答、创作类问题不需要调用工具，直接回答")
                 append("\n- 结合对话历史理解上下文：用户说「再来一首」「它是什么意思」时，指代的是之前聊到的内容")
                 append("\n- 当用户表达了需要长期记住的个人事实或偏好（如称呼、喜欢的歌手、常用应用、作息习惯）时，调用 manage_memory 工具记住，以便后续对话延续")
+                append("\n- 用户提到「以前聊过的」「上次那个」「我之前问你的」但当前上下文里找不到时，调用 search_past_conversations 检索历史对话，不要反问「我们聊过吗」")
+                append("\n- 用户想要「每天/每周固定时间由你主动做点什么再告诉他」（如「每天早上播报天气和日程」）时，不要用 set_timer（那只会念一句写死的话），改用 schedule_agent_task 创建自主任务；创建时如实说明该任务执行时只使用只读能力（查资料），不会自动拨号、安装或改设置")
                 append("\n- 当用户让你写代码、生成页面/应用或输出项目文件时：先用 save_code_file 工具把每个文件写入手机「下载/项目名/」目录（一次一个文件、逐个调用），生成每个文件前告知「正在生成 文件名…」，成功后告知「文件名 生成成功」；眼镜端最终只做简短结论播报（如「已生成 4 个文件，保存在下载目录的 xxx 项目」），严禁把大段代码原文直接当作回复发给用户")
             }
             append("\n\n【回复风格】（眼镜语音播报场景）")
@@ -151,6 +200,10 @@ class OpenAiService(
                 append("\n\n<skills>\n")
                 append(skills)
                 append("\n</skills>")
+            }
+            if (!budget.isNullOrBlank()) {
+                append("\n\n")
+                append(budget)
             }
             if (!contextText.isNullOrBlank()) {
                 append("\n\n以下是知识库中检索到的参考资料，请优先基于这些资料回答用户问题；如果资料与问题无关，可忽略：\n")
@@ -250,6 +303,9 @@ class OpenAiService(
      *   （重放又要重新生成一次大文件，用户侧表现为"生成卡住"）。远程默认仍保持 30s，
      *   是为了让「用户打断」的让出时间有界（readLine 阻塞期间无法感知 isCancelled），
      *   所以只在确知进入代码生成模式后传大值。
+     * @param onReasoning 思考增量回调（reasoning_content 逐帧）。仅在服务端开启了长思考
+     *   （构造参数 thinkingEnabled=true）时有数据；用于手机端聊天窗口展示「思考」过程。
+     *   与 content 不同，思考内容**不参与**回复正文，也不影响重放安全判定。
      */
     fun chatTurnStream(
         messages: JSONArray,
@@ -264,15 +320,21 @@ class OpenAiService(
         retryAttempts: Int = 2,
         retryBaseDelayMs: Long = 500,
         readTimeout: Int? = null,
+        onReasoning: ((String) -> Unit)? = null,
     ): ChatTurn {
         var lastError: Exception? = null
         repeat(retryAttempts) { attempt ->
-            val accumulator = SseStreamAccumulator(onDelta)
+            val accumulator = SseStreamAccumulator(onDelta, onReasoning)
             try {
                 return streamOnce(messages, tools, accumulator, isCancelled, readTimeout ?: readTimeoutMs)
             } catch (e: Exception) {
                 lastError = e
-                val retryable = attempt < retryAttempts - 1
+                // 服务端明确拒绝（4xx，除 408/429 这类「稍后再试」语义）→ 重试必然同样失败：
+                // 只会白白多等 ~3.5s 退避，并把真实原因埋在 "attempt 1/3 failed" 里。
+                // 直接抛出，让上层拿到状态码给出可行动的提示。
+                val hopeless = e is com.rokidlab.phone.util.HttpStatusException &&
+                    e.code in 400..499 && e.code != 408 && e.code != 429
+                val retryable = !hopeless && attempt < retryAttempts - 1
                 // 重放安全判定：只要还没有任何 content 增量推给 UI，整轮重放无副作用
                 if (retryable && !accumulator.hasEmittedContent()) {
                     val delay = (retryBaseDelayMs shl attempt).coerceAtMost(4000L)
@@ -291,7 +353,9 @@ class OpenAiService(
                         }
                     }
                 } else {
-                    if (retryable) {
+                    if (hopeless) {
+                        Log.e(TAG, "chatTurnStream: 服务端拒绝，不重试，直接上报 —— ${e.message}")
+                    } else if (retryable) {
                         Log.w(TAG, "chatTurnStream failed after partial content emitted, cannot safely replay: ${e.message}")
                     }
                     throw e
@@ -526,6 +590,9 @@ data class ChatTurn(
  */
 internal class SseStreamAccumulator(
     private val onDelta: ((String) -> Unit)? = null,
+    /** 思考增量回调（reasoning_content）。仅累计 + 转发，不参与 [hasStarted]/[hasEmittedContent]
+     *  的重放安全判定 —— 思考内容没进过用户可见的回复正文，重放它没有重复输出的副作用。 */
+    private val onReasoning: ((String) -> Unit)? = null,
 ) {
     private val content = StringBuilder()
     private val toolNameParts = mutableMapOf<Int, StringBuilder>()
@@ -573,12 +640,13 @@ internal class SseStreamAccumulator(
         val fr = choice.optString("finish_reason")
         if (fr.isNotEmpty()) finishReason = fr
         val delta = choice.optJSONObject("delta") ?: return true
-        // 推理内容增量（deepseek reasoner / 带思考的模型）：仅累计长度用于诊断，
-        // 推理过程不推给 UI、也不作为回复正文
+        // 推理内容增量（deepseek reasoner / 带思考的模型）：累计长度用于诊断 + 全文留作多轮回传；
+        // 同时转发给 UI 让手机端聊天窗口能显示「思考」过程（思考内容不作为回复正文）
         val reasoningDelta = delta.optString("reasoning_content")
         if (reasoningDelta.isNotEmpty()) {
             reasoningChars += reasoningDelta.length
             reasoning.append(reasoningDelta)
+            onReasoning?.invoke(reasoningDelta)
         }
         // content 增量
         if (!delta.isNull("content")) {
