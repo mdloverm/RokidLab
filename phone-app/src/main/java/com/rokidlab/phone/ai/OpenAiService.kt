@@ -190,6 +190,10 @@ class OpenAiService(
             append("\n\n【回复风格】（眼镜语音播报场景）")
             append("\n- 口语化、简短自然，一般不超过 3 句话")
             append("\n- 纯文本：不要用 markdown、序号、表情符号、换行符")
+            // 系统提示里用了 <memories>/<skills> 这类 XML 风格段落，模型会模仿该风格把正文包成
+            // `<answer>…</answer>`（2026-09-17 真机：眼镜上直接显示了 "answer" 字样）。
+            // 这里显式禁止；消费侧还有 ReplySanitizer 兜底，两道防线都要留。
+            append("\n- 不要用任何标签或标记包裹回复（如 <answer>…</answer>），直接输出正文")
             append("\n- 直接给结论，不要复述问题，不要描述「根据工具结果」这类过程")
             if (!memories.isNullOrBlank()) {
                 append("\n\n<memories>\n")

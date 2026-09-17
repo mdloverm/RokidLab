@@ -1182,6 +1182,10 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 if (reply.isBlank()) {
                     reply = "抱歉，我暂时无法处理这个问题，请换个说法再试一次。"
                 }
+                // 剥离模型偶发输出的包裹标签（如 `<answer>…</answer>`）。
+                // 放在「落 replyRef 之前」＝显示、语音播报、会话记忆三处统一拿到干净文本。
+                // 真机事故（2026-09-17 15:11）：眼镜上直接显示 `<answer>西安明天晴，最高31度…`。
+                reply = com.rokidlab.phone.ai.ReplySanitizer.sanitize(reply)
                 replyRef.set(reply)
                 // 记录本轮到会话记忆（含工具轨迹，catch 分支的失败兜底回复不记录，避免污染上下文）
                 if (effectiveRecord) {
@@ -1307,7 +1311,9 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
 
         // ===== 等待 DeepSeek 完成（下行显示期间已并行执行）=====
         deepSeekThread.join()
-        reply = replyRef.get()
+        // 兜底再清洗一次（生成线程里已清过一次；失败兜底文案等其他赋值路径也覆盖到）。
+        // 幂等，成本可忽略。
+        reply = com.rokidlab.phone.ai.ReplySanitizer.sanitize(replyRef.get())
         // 生成期间用户已发起新请求（新语音/新消息）或本次请求的 link 已被替换/断开：
         // 本回复已过期（可能为空串，由 isSuperseded 触发的提前退出所致），
         // 放弃显示/播报/回调，复位状态并把链路让给新请求（join 期间 deepSeekThread 已提前退出，等待有界）
