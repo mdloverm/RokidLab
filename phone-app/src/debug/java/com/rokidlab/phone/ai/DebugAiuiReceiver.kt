@@ -168,6 +168,31 @@ class DebugAiuiReceiver : BroadcastReceiver() {
                     Log.i(TAG, "openAiuiAgent(card host, no bridge) pkg=$pkg -> $r")
                 }.apply { name = "debug-aiui-opencard"; start() }
             }
+            // 发送任意一帧到 CXR `Ai` 频道（**入站**方向才被官方 AssistServer 处理），
+            // 用于验证官方的命令表 —— 例如找「哪条命令能让官方 dismissAiDialog + clearData」。
+            // AIDelayQuitHandler / AIExitHandler / AIInterruptHandler 等都在这条通路上。
+            // adb shell am broadcast ... --es act sendai --es key Ai_Idle [--es a1 x] [--es delay 3000]
+            "sendai" -> {
+                val key = intent.getStringExtra("key") ?: return
+                // KeyDown_Client 的第二个元素是 JSON；从 adb `--es` 传 JSON 会被设备 shell 吃掉引号
+                // （实测变成 `{ privacy_level\:2}` → 官方解析失败、对话框不打开），故内置默认值。
+                val a1 = intent.getStringExtra("a1")
+                    ?: if (key == "KeyDown_Client") "{\"privacy_level\":2}" else null
+                val delayMs = intent.getStringExtra("delay")?.toLongOrNull() ?: 0L
+                Thread {
+                    if (delayMs > 0) Thread.sleep(delayMs)
+                    val link = app.cxrL.cxrLink
+                    if (link == null) {
+                        Log.e(TAG, "sendai: cxrLink unavailable")
+                        return@Thread
+                    }
+                    val caps = com.rokid.cxr.Caps()
+                    caps.write(key)
+                    a1?.let { caps.write(it) }
+                    val r = link.sendCustomCmd(com.rokidlab.phone.glasses.LinkProtocol.CXR_CHANNEL_AI, caps)
+                    Log.i(TAG, "sendai key=$key a1=$a1 delay=$delayMs -> $r")
+                }.apply { name = "debug-sendai"; start() }
+            }
             else -> {
                 val pkg = intent.getStringExtra("pkg") ?: return
                 val r = app.cxrL.startAiuiPackage(pkg)
