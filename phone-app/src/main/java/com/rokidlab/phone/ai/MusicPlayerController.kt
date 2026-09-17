@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.rokidlab.phone.platform.AvrcpLyricBridge
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -117,6 +118,27 @@ object MusicPlayerController {
      * 异步准备完成后自动开始播放；失败自动释放并清理状态。
      * [lyrics] 为该歌曲的带时间戳歌词，仅缓存供「显示歌词」工具使用，不在播放时推送。
      */
+    /**
+     * 播放指定歌曲（**阻塞到就绪/失败为止**，返回人类可读结果供工具直接回给模型）。
+     *
+     * ⚠️ 2026-09-17 真机修复：**先下载到本地文件再播**，不要再直接 `setDataSource(远程直链)`。
+     *
+     * 根因（真机取证，NuPlayer 日志）：
+     * ```
+     * MediaHTTP: connect success
+     * MediaHTTP: getMIMEType-: mimeType application/octet-stream   ← CDN 不回 audio/mpeg
+     * E GenericSource: Failed to create data source!               ← 选不出 extractor
+     * MusicPlayerController: music error: what=-38 extra=0         ← INVALID_OPERATION
+     * ```
+     * 酷我对音频直链返回 `application/octet-stream`，NuPlayer 的 `GenericSource` 依赖该 MIME 选
+     * extractor ⇒ 建源失败 ⇒ **歌完全不出声**；而工具层原先只看"调用没抛异常"就回「已开始播放」，
+     * 属于**假成功**（用户听到的是"没播放"）。
+     *
+     * 本地文件走**内容嗅探**（`MediaExtractor` 不依赖 MIME），必定能建源；顺带也避免了流式播放
+     * 的网络抖动与 seek 失效。
+     *
+     * @return 成功＝`已开始播放《歌名》 - 歌手`；失败＝具体原因
+     */
     fun play(
         context: Context,
         url: String,
@@ -125,66 +147,143 @@ object MusicPlayerController {
         lyrics: List<KuwoMusicApi.LyricLine> = emptyList(),
         album: String = "",
         cover: String = "",
-    ) {
-        stop()
-        currentTitle = title
-        currentArtist = artist
-        currentAlbum = album
-        currentLyrics = lyrics
-        // 异步下载封面（不阻塞播放启动；下载完成后 setArt + 强制重推元数据让眼镜端音乐页刷新封面）
-        currentCoverUrl = cover
-        currentCoverBitmap = null
-        AvrcpLyricBridge.setArt(null)
-        if (cover.isNotBlank()) loadCoverAsync(cover)
-        isLoading = true
-        requestAudioFocus(context.applicationContext)
-        val mp = MediaPlayer()
-        player = mp
-        try {
-            mp.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            mp.setDataSource(url)
-            mp.setOnPreparedListener { p ->
-                if (player !== p) return@setOnPreparedListener
+    ): String {
+        val appCtx = context.applicationContext
+        return synchronized(opLock) {
+            stop()
+            currentTitle = title
+            currentArtist = artist
+            currentAlbum = album
+            currentLyrics = lyrics
+            // 异步下载封面（不阻塞播放；下载完成后 setArt + 强制重推元数据让眼镜端音乐页刷新封面）
+            currentCoverUrl = cover
+            currentCoverBitmap = null
+            AvrcpLyricBridge.setArt(null)
+            if (cover.isNotBlank()) loadCoverAsync(cover)
+            isLoading = true
+
+            val local = runCatching { fetchAudioToCache(appCtx, url) }.getOrElse { e ->
+                Log.w(TAG, "audio download failed: ${e.message}")
+                null
+            }
+            if (local == null) {
                 isLoading = false
-                runCatching { p.start() }
-                Log.i(TAG, "music playing: $title - $artist")
-                // 对齐汽水音乐「车载蓝牙歌词」：播放一开始即建立 AVRCP 会话并自动推送歌词，
-                // 眼镜端无需用户再说「显示歌词」即可自动获取歌词。
-                onPlaybackStarted(context.applicationContext)
-            }
-            mp.setOnErrorListener { p, what, extra ->
-                Log.e(TAG, "music error: what=$what extra=$extra")
-                if (player === p) {
-                    stopLyricsInternal()
-                    player = null
+                "播放失败：音频下载失败，请稍后再试"
+            } else {
+                requestAudioFocus(appCtx)
+                val mp = MediaPlayer()
+                player = mp
+                try {
+                    mp.setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    mp.setDataSource(local.absolutePath)
+                    mp.setOnCompletionListener { p ->
+                        Log.i(TAG, "music completed")
+                        if (player === p) {
+                            stopLyricsInternal()
+                            player = null
+                            isLoading = false
+                            runCatching { p.release() }
+                            abandonAudioFocus()
+                        }
+                    }
+                    mp.setOnErrorListener { p, what, extra ->
+                        Log.e(TAG, "music error: what=$what extra=$extra")
+                        if (player === p) {
+                            stopLyricsInternal()
+                            player = null
+                            isLoading = false
+                            runCatching { p.release() }
+                            abandonAudioFocus()
+                        }
+                        true
+                    }
+                    // 本地文件：同步 prepare，异常可直接捕获并如实上报（不再假成功）
+                    mp.prepare()
+                    mp.start()
                     isLoading = false
-                    runCatching { p.release() }
-                    abandonAudioFocus()
-                }
-                true
-            }
-            mp.setOnCompletionListener { p ->
-                Log.i(TAG, "music completed")
-                if (player === p) {
-                    stopLyricsInternal()
-                    player = null
+                    Log.i(TAG, "music playing: $title - $artist (local=${local.length()}B)")
+                    // 对齐汽水音乐「车载蓝牙歌词」：播放一开始即建立 AVRCP 会话并自动推送歌词，
+                    // 眼镜端无需用户再说「显示歌词」即可自动获取歌词。
+                    onPlaybackStarted(appCtx)
+                    val artistPart = if (artist.isNotBlank()) " - $artist" else ""
+                    "已开始播放《$title》$artistPart"
+                } catch (e: Exception) {
+                    Log.e(TAG, "music start failed: ${e.message}")
                     isLoading = false
-                    runCatching { p.release() }
+                    player = null
+                    runCatching { mp.release() }
                     abandonAudioFocus()
+                    "播放失败：" + (e.message ?: e.javaClass.simpleName)
                 }
             }
-            mp.prepareAsync()
-        } catch (e: Exception) {
-            Log.e(TAG, "music prepare failed", e)
-            isLoading = false
-            if (player === mp) player = null
-            runCatching { mp.release() }
-            abandonAudioFocus()
+        }
+    }
+
+    /**
+     * 把音频直链下载到应用缓存（单文件复用，避免堆积）。
+     *
+     * 带 Referer 与浏览器 UA：部分音乐 CDN 对裸请求会拒绝或返回错误页；
+     * 下载后还会做**体量下限校验**（< 32KB 基本可判定是错误页而不是音频）。
+     */
+    private fun fetchAudioToCache(context: Context, url: String): File? {
+        val dir = File(context.cacheDir, "lab_music").apply { mkdirs() }
+        // 保留原扩展名：本地文件也会走格式嗅探，但带上正确扩展名更稳（少数机型按扩展名判定）
+        val ext = url.substringAfterLast('.', "").take(5).filter { it.isLetterOrDigit() }
+            .ifEmpty { "mp3" }
+        val dst = File(dir, "now_playing.$ext")
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 8_000
+            readTimeout = 20_000
+            instanceFollowRedirects = true
+            setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) " +
+                    "Version/4.0 Chrome/95.0.4638.74 Mobile Safari/537.36"
+            )
+            setRequestProperty("Referer", "https://www.kuwo.cn/")
+            setRequestProperty("Accept", "*/*")
+        }
+        try {
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                Log.w(TAG, "audio download HTTP $code: $url")
+                return null
+            }
+            val maxBytes = 40L * 1024 * 1024
+            // 总时长上限：工具调用有 15s 超时，下载不能无限拖（单次 readTimeout 挡不住持续小包）
+            val deadline = System.currentTimeMillis() + 12_000
+            conn.inputStream.use { input ->
+                dst.outputStream().use { output ->
+                    val buf = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        if (System.currentTimeMillis() > deadline) {
+                            Log.w(TAG, "audio download timed out after ${total}B")
+                            return null
+                        }
+                        val n = input.read(buf)
+                        if (n <= 0) break
+                        total += n
+                        if (total > maxBytes) {
+                            Log.w(TAG, "audio too large (>${maxBytes}B), abort")
+                            return null
+                        }
+                        output.write(buf, 0, n)
+                    }
+                }
+            }
+            if (dst.length() < 32 * 1024) {
+                Log.w(TAG, "audio too small (${dst.length()}B), likely an error page")
+                return null
+            }
+            return dst
+        } finally {
+            runCatching { conn.disconnect() }
         }
     }
 

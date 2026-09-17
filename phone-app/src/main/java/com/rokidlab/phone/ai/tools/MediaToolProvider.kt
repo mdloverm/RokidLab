@@ -55,12 +55,13 @@ internal object MediaToolProvider : ToolProvider {
                     ?: return "没有找到歌曲《$songName》${
                         if (artist.isNotBlank()) "（歌手：$artist）" else ""
                     }，请换个歌名试试"
+                // play() 现在**阻塞到就绪或失败**并返回如实结果。
+                // 旧实现只回「已开始播放」而不看真实播放状态，MediaPlayer 建源失败（what=-38）
+                // 时仍然报成功 —— 用户听到的现象是"歌没播"，真机踩过。
                 MusicPlayerController.play(
                     context, song.playUrl, song.name, song.artist, song.lyrics,
                     album = song.album, cover = song.cover,
                 )
-                val artistPart = if (song.artist.isNotBlank()) " - ${song.artist}" else ""
-                "已开始播放《${song.name}》$artistPart"
             }
 
             "stop_music" -> {
