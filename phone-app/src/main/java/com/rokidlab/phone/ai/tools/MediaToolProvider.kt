@@ -1,6 +1,8 @@
 package com.rokidlab.phone.ai.tools
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.util.Base64
 import android.util.Log
 import com.rokid.cxr.Caps
 import com.rokidlab.phone.ai.AiuiAppRegistry
@@ -25,6 +27,7 @@ import com.rokidlab.phone.glasses.GlassesHandshake
 import com.rokidlab.phone.glasses.LinkProtocol
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -43,6 +46,7 @@ internal object MediaToolProvider : ToolProvider {
         "stop_music",
         "show_lyrics",
         "get_now_playing",
+        "get_cover_image",
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
@@ -95,6 +99,8 @@ internal object MediaToolProvider : ToolProvider {
             }
 
             "get_now_playing" -> currentSongJson()
+
+            "get_cover_image" -> coverDataUrl()
 
         else -> throw IllegalArgumentException("未知工具: $name")
         }
@@ -163,6 +169,32 @@ internal object MediaToolProvider : ToolProvider {
             .put("cover", MusicPlayerController.currentCoverUrl)
             .put("lyrics", lyricArray)
             .toString()
+    }
+
+    /**
+     * 当前歌曲封面 → `data:image/jpeg;base64,…`，供 AIUI 页面的 `<image src>` 直接渲染。
+     *
+     * **为什么需要这个工具（真机实测，2026-09-17）**：眼镜端**整机没有网络**
+     * （`ping 8.8.8.8` → `Network is unreachable`，DNS 也解析不了），页面里
+     * `<image src="https://…">` 必然失败（眼镜日志：`web_image_loader.rs: Failed to fetch
+     * remote Web image … Unable to resolve host`）。所以封面只能由手机侧取好、编码后
+     * 随工具结果下发。页面侧已验证：**data URL 与包内路径都能正常渲染**。
+     *
+     * 体量：≤256px + JPEG q72 ⇒ base64 约 2~4 万字符，因此 [ToolGateway] 对本工具
+     * 单独放宽了结果截断上限（默认 8000 会把图片数据砍断）。
+     */
+    private fun coverDataUrl(): String {
+        val title = MusicPlayerController.currentTitle
+        if (title.isBlank()) {
+            return "当前没有正在播放的音乐，先用 play_song 播一首，再取封面"
+        }
+        val bmp = MusicPlayerController.coverForPage() ?: return "《$title》没有可用的封面图"
+        val bytes = ByteArrayOutputStream()
+        val ok = runCatching { bmp.compress(Bitmap.CompressFormat.JPEG, 72, bytes) }.getOrDefault(false)
+        if (!ok || bytes.size() == 0) return "《$title》封面编码失败，请稍后再试"
+        val b64 = Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP)
+        Log.i(TAG, "cover data url: ${bmp.width}x${bmp.height} jpeg=${bytes.size()}B b64=${b64.length}")
+        return "data:image/jpeg;base64,$b64"
     }
 
     /**

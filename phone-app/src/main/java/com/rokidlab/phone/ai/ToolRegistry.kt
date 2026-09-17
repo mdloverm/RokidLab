@@ -201,6 +201,12 @@ object ToolRegistry {
             descriptionRes = R.string.ai_tool_get_now_playing_desc,
         ),
         ToolMeta(
+            name = "get_cover_image",
+            group = DOMAIN_MEDIA,
+            displayNameRes = R.string.ai_tool_get_cover_image_name,
+            descriptionRes = R.string.ai_tool_get_cover_image_desc,
+        ),
+        ToolMeta(
             name = "show_image",
             group = DOMAIN_DISPLAY,
             displayNameRes = R.string.ai_tool_show_image_name,

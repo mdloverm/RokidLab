@@ -110,7 +110,7 @@ globalThis.Lab.callTool('play_song', { songName: '西厢' }, function (res, err)
   self.setData({ tip: err ? ('失败: ' + err) : String(res).substring(0, 30) });
 });
 ```
-- 工具名**逐字照抄**，写错只会收到 `unknown tool: xxx`：`play_song` `stop_music` `get_now_playing` `get_weather` `search_web` `fetch_webpage` `set_timer` `get_current_time` `calculate` `search_knowledge_base` `save_summary_txt` `show_image` `get_glasses_battery` `get_phone_status`；不确定就先 `globalThis.Lab.listTools(function (tools, err) { … })`。
+- 工具名**逐字照抄**，写错只会收到 `unknown tool: xxx`：`play_song` `stop_music` `get_now_playing` `get_cover_image` `get_weather` `search_web` `fetch_webpage` `set_timer` `get_current_time` `calculate` `search_knowledge_base` `save_summary_txt` `show_image` `get_glasses_battery` `get_phone_status`；不确定就先 `globalThis.Lab.listTools(function (tools, err) { … })`。
 - 参数名按常规直觉（songName/keyword/city），但**必填参数不能省**：`play_song` 必须传 `{songName:'…'}`（传 `{}` 会失败）；结果都是字符串，自己 `JSON.parse`。
 - **一次只发起一个调用**（蓝牙通道串行，并发只会都超时）；**失败不要自动重试**（会绕过去重机制，造成重复拨号等真实副作用）。
 - 界面刷新一律由**按键事件**驱动；每次调用都要有 loading 文案（往返 1~3 秒，最长 15 秒）。

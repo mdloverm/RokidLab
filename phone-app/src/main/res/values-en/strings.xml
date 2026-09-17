@@ -536,6 +536,8 @@
     <string name="ai_tool_show_lyrics_desc">Bring up the lyric page on Rokid glasses. Lyrics are pushed automatically via Bluetooth AVRCP during playback; this tool only opens / re-triggers the lyric page. Triggered by \"show lyrics\", \"open lyrics\"</string>
     <string name="ai_tool_get_now_playing_name">Now Playing Info</string>
     <string name="ai_tool_get_now_playing_desc">Read full info about the current song (title, artist, album, cover URL, line-by-line lyrics and playback position) as JSON text. AIUI player pages use it to render the cover and lyrics; also answers \"what song is playing\", \"show me the cover\"</string>
+    <string name="ai_tool_get_cover_image_name">Cover Image Data</string>
+    <string name="ai_tool_get_cover_image_desc">Fetch the current song cover and return it as a displayable data URL (base64 text) for AIUI pages. The glasses have no network access, so pages cannot load remote images — the cover must be delivered by this tool.</string>
     <string name="ai_tool_show_image_name">Show Image</string>
     <string name="ai_tool_show_image_desc">Show an image: rendered in the phone-side chat bubble by default; if the glasses are connected it is also mirrored to a glasses overlay (~12s, auto-dismiss). Pass a public image URL (http/https) and optional caption; if the user just asks to show the current song cover, the URL can be omitted. Triggered by \"show image\", \"show cover\", etc.</string>
     <string name="ai_tool_search_web_name">Web Search</string>

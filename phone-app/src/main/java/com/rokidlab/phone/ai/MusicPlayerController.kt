@@ -302,6 +302,39 @@ object MusicPlayerController {
         }
     }
 
+    /**
+     * 供 AIUI 页面取封面：已下载好的 [currentCoverBitmap] 直接给；尚未就绪
+     * （`play_song` 之后页面立刻取数时常见）则**同步**下载一次并压到 ≤[maxPx]。
+     *
+     * 与 [loadCoverAsync] 分开的原因：那条路径是给 AVRCP/通知栏用的（限 320px、走主线程回写），
+     * 页面要的是"马上拿到一张能编码成 data URL 的图"，可以阻塞在工具线程里等它。
+     * 无封面、或下载失败时返回 null（页面据此隐藏封面区，而不是显示破图）。
+     */
+    fun coverForPage(maxPx: Int = 256): Bitmap? {
+        currentCoverBitmap?.let { return it }
+        val url = currentCoverUrl
+        if (url.isBlank()) return null
+        val raw = runCatching {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 6_000
+                readTimeout = 10_000
+            }
+            conn.inputStream.use { BitmapFactory.decodeStream(it) }
+        }.onFailure { Log.w(TAG, "cover fetch for page failed: ${it.message}") }.getOrNull() ?: return null
+        return runCatching {
+            if (raw.width <= maxPx && raw.height <= maxPx) raw
+            else {
+                val ratio = maxPx.toDouble() / maxOf(raw.width, raw.height)
+                Bitmap.createScaledBitmap(
+                    raw,
+                    (raw.width * ratio).toInt().coerceAtLeast(1),
+                    (raw.height * ratio).toInt().coerceAtLeast(1),
+                    true,
+                )
+            }
+        }.getOrDefault(raw)
+    }
+
     /** 停止并释放当前播放器，清空歌曲信息与音频焦点；同时退出歌词模式（MediaSession 复用不释放） */
     fun stop() {
         synchronized(opLock) {

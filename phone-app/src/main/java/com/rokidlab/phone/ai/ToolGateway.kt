@@ -43,6 +43,17 @@ object ToolGateway {
         /** 结果返回页面前的截断上限：RFCOMM 单帧上限 64KB，且页面也渲染不下超长文本 */
         private const val MAX_RESULT_CHARS = 8000
 
+        /**
+         * 按工具放宽的结果上限（默认 [MAX_RESULT_CHARS]）。
+         *
+         * 目前只有 `get_cover_image`：它返回封面图的 data URL，base64 后动辄 2~4 万字符，
+         * 按 8000 截断会把图片数据砍成非法串（页面 `JSON.parse`/图片解码都失败）。
+         * 上限受 RFCOMM 单帧 64KB 约束，取 40000 给 JSON 信封留足余量。
+         */
+        private val PER_TOOL_MAX_RESULT_CHARS = mapOf(
+            "get_cover_image" to 40_000,
+        )
+
     /** 单次调用超时。工具可能走外网（搜索/天气 1~3s），留足余量。
      *  眼镜端同步等待窗口（25s）必须比它大，否则本类给出的真实错误回不到页面。 */
     private const val CALL_TIMEOUT_MS = 15_000L
@@ -164,7 +175,7 @@ object ToolGateway {
         // 34 个工具的 name+description 在英文长描述下可能超出 RFCOMM 单帧上限（64KB），
         // 帧超限会被 AsrPushServer 静默丢弃，页面只看到超时。
         if (toolName == LIST_TOOLS) {
-            return CallResult(true, toolName, result = truncateResult(listAllowedJson(context)))
+            return CallResult(true, toolName, result = truncateResult(toolName, listAllowedJson(context)))
         }
         if (toolName in DENY_TOOLS) {
             return CallResult(false, toolName, error = "tool '$toolName' is not allowed in AIUI pages")
@@ -268,7 +279,7 @@ object ToolGateway {
         }
 
         var result = entry.resultRef.get() ?: ""
-        result = truncateResult(result)
+        result = truncateResult(toolName, result)
         Log.i(TAG, "tool $toolName ok, ${result.length} chars")
         return CallResult(true, toolName, result = result)
     }
@@ -281,9 +292,10 @@ object ToolGateway {
      * 页面 `JSON.parse` 直接失败，表现为 "bad result: …" 而非工具错误，极难排查。
      * 这里检测切点若落在高代理项之后，就少截一个字符让代理对完整落在截断之外。
      */
-    private fun truncateResult(result: String): String {
-        if (result.length <= MAX_RESULT_CHARS) return result
-        var end = MAX_RESULT_CHARS
+    private fun truncateResult(toolName: String, result: String): String {
+        val limit = PER_TOOL_MAX_RESULT_CHARS[toolName] ?: MAX_RESULT_CHARS
+        if (result.length <= limit) return result
+        var end = limit
         if (Character.isHighSurrogate(result[end - 1])) end -= 1
         return result.substring(0, end) + "…(truncated)"
     }

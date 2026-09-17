@@ -269,7 +269,13 @@ class AiuiLinkActivity : Activity() {
                 request: WebResourceRequest?
             ): WebResourceResponse? {
                 val url = request?.url?.toString() ?: return null
-                if (!url.startsWith(BASE_URL)) return null
+                // 远程图片代理：ink 的 <image> 由 wasm 侧 fetch 取图（web_image_loader.rs），
+                // 页面 origin 是 https://ink.local，拉第三方图站属**跨域**、对方又不带 CORS 头
+                // ⇒ fetch 直接失败（真机日志：`Failed to fetch remote Web image … TypeError: Failed to fetch`），
+                // 表现为封面/图片永远空白。这里用宿主 HTTP 栈代取并补 CORS 头。
+                if (!url.startsWith(BASE_URL)) {
+                    return if (looksLikeRemoteImage(url)) proxyRemoteImage(url) else null
+                }
                 val assetPath = url.removePrefix(BASE_URL)
                 if (assetPath.isEmpty()) return null
 
@@ -782,6 +788,72 @@ class AiuiLinkActivity : Activity() {
     private fun jsonStr(s: String?): String {
         if (s == null) return "null"
         return JSONObject.quote(s)
+    }
+
+    /**
+     * 是否看起来是远程图片资源。
+     *
+     * 只代理图片，**不**代理任意外网请求：页面与外网交互的唯一合法通道是 `Lab.callTool`，
+     * 若把普通 fetch 也代理掉，会顺带绕过 CORS 让「页面自己拉外网 API」这种违规写法也能跑通。
+     */
+    private fun looksLikeRemoteImage(url: String): Boolean {
+        val u = url.lowercase()
+        if (!u.startsWith("http://") && !u.startsWith("https://")) return false
+        val path = u.substringBefore('?').substringBefore('#')
+        return path.endsWith(".jpg") || path.endsWith(".jpeg") || path.endsWith(".png") ||
+            path.endsWith(".webp") || path.endsWith(".gif") || path.endsWith(".bmp") ||
+            path.endsWith(".avif")
+    }
+
+    /**
+     * 代取远程图片并补 CORS 头，解决 ink `<image>` 的跨域取图失败。
+     *
+     * `shouldInterceptRequest` 运行在 WebView 的 IO 线程，可以同步做网络请求。
+     * 失败时返回 null（交回 WebView 默认逻辑），不影响页面其它行为。
+     */
+    private fun proxyRemoteImage(url: String): WebResourceResponse? {
+        var conn: java.net.HttpURLConnection? = null
+        return try {
+            conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 6000
+                readTimeout = 12000
+                instanceFollowRedirects = true
+                setRequestProperty(
+                    "User-Agent",
+                    "Mozilla/5.0 (Linux; Android 12; RG-glasses) AppleWebKit/537.36 " +
+                        "(KHTML, like Gecko) Version/4.0 Chrome/95.0.4638.74 Mobile Safari/537.36"
+                )
+                // 部分图站校验 Referer，缺了会 403
+                setRequestProperty("Referer", BASE_URL)
+                setRequestProperty("Accept", "image/avif,image/webp,image/*,*/*;q=0.8")
+            }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                Log.w(TAG, "proxyImage: HTTP $code $url")
+                conn.disconnect()
+                null
+            } else {
+                val bytes = conn.inputStream.readBytes()
+                val mime = conn.contentType?.substringBefore(';')?.trim()
+                    ?.takeIf { it.startsWith("image/") } ?: "image/jpeg"
+                Log.i(TAG, "proxyImage ok: ${bytes.size}B $mime $url")
+                WebResourceResponse(
+                    mime, null, 200, "OK",
+                    mutableMapOf(
+                        "Access-Control-Allow-Origin" to "*",
+                        "Access-Control-Allow-Methods" to "GET, OPTIONS",
+                        "Access-Control-Allow-Headers" to "*",
+                        "Cache-Control" to "max-age=600",
+                    ),
+                    ByteArrayInputStream(bytes),
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "proxyImage failed: ${e.message} $url")
+            null
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
     }
 
     /** 读取页面 realm 的 Lab 桥（assets/ink/lab-page-bridge.js），缓存复用 */

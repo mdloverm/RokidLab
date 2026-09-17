@@ -130,6 +130,15 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
             ),
         )
 
+        "get_cover_image" -> toolSchema(
+            name = meta.name,
+            description = "取当前播放歌曲的封面图，返回可直接放进页面显示的 data URL（image/jpeg + base64 纯文本）。为什么必须有这个工具：眼镜端整机没有网络，AIUI 页面里直接写远程图片地址（https://…）一定加载失败，封面只能由手机侧取好再下发。AIUI 播放器页面拿到 get_now_playing 的曲目信息后可调用本工具拿封面；用户说“显示封面”“看下封面”时也可调用。没有在播歌曲或该曲无封面时返回一句中文说明。",
+            parameters = mapOf(
+                "type" to "object",
+                "properties" to mapOf<String, Any>(),
+            ),
+        )
+
         "show_image" -> toolSchema(
             name = meta.name,
             description = "显示一张图片：默认渲染在手机端对话气泡里；若眼镜已连接，会同时同步到眼镜端悬浮显示（约 12 秒后自动消失）。当用户说“显示图片”“显示封面”“给我看张图”“把刚才那张图发出来”时调用。若用户给了图片链接就传 imageUrl；若用户只说“显示封面”或想看在播歌曲的封面，可以不传 imageUrl，会自动显示当前播放歌曲的封面。",
