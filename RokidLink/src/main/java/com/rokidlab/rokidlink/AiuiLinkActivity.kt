@@ -193,6 +193,7 @@ class AiuiLinkActivity : Activity() {
         }.apply { name = "aix-unpack"; start() }
 
         createWebView()
+        activeWebView = java.lang.ref.WeakReference(webView)
     }
 
     private fun createWebView() {
@@ -276,9 +277,33 @@ class AiuiLinkActivity : Activity() {
                 // 页面运行在 quickjs+wasm 沙箱内，未必能访问 window（JS bridge 可能不可达），
                 // 此时 https://ink.local/__lab/... 是页面上行的唯一可行通道。
                 if (assetPath.startsWith("__lab/")) {
-                    Log.i(TAG, "lab endpoint hit: $assetPath")
+                    Log.i(
+                        TAG,
+                        "lab endpoint hit: $assetPath method=${request?.method} " +
+                            "main=${request?.isForMainFrame} redirect=${request?.isRedirect} " +
+                            "hdrs=${request?.requestHeaders}"
+                    )
                     return when {
-                        assetPath.startsWith("__lab/ping") -> textResponse("pong")
+                        assetPath.startsWith("__lab/ping") -> {
+                            // 诊断日志：确认真机上是「响应没构造」还是「构造了但 Chromium 没收」
+                            Log.i(TAG, "ping: building response")
+                            val r = textResponse("pong")
+                            Log.i(
+                                TAG,
+                                "ping: response ready status=${r.statusCode} mime=${r.mimeType} " +
+                                    "hdrs=${r.responseHeaders} avail=${runCatching { r.data?.available() }.getOrNull()}"
+                            )
+                            r
+                        }
+                        // 对照端点：**不挂任何自定义 header** 的最小响应体。
+                        // 与 __lab/ping（带 Content-Length）对比，可判定是不是响应头让 Chromium 挂起。
+                        assetPath.startsWith("__lab/echo") -> {
+                            Log.i(TAG, "echo: building minimal response (no custom headers)")
+                            WebResourceResponse(
+                                "text/plain", "UTF-8",
+                                ByteArrayInputStream("e".toByteArray(Charsets.UTF_8))
+                            )
+                        }
                         assetPath.startsWith("__lab/tool_result") -> {
                             // 页面 realm 的 Lab 桥轮询结果：缓存里有就返回，否则返回 pending。
                             val cb = request?.url?.getQueryParameter("cbId")?.takeIf { it.isNotBlank() }
@@ -473,8 +498,11 @@ class AiuiLinkActivity : Activity() {
             webView?.loadUrl("about:blank")
             webView?.stopLoading()
         }
+        val destroyed = webView
         webView?.destroy()
         webView = null
+        // 只清掉本实例登记的那一个（避免旧实例销毁时误清新实例的引用）
+        if (destroyed != null && activeWebView?.get() === destroyed) activeWebView = null
         super.onDestroy()
     }
 
@@ -539,10 +567,28 @@ class AiuiLinkActivity : Activity() {
             // 顺序与解耦都很关键：宿主不在前台（activeActivity=null）时投递必然失败，
             // 但发起 fetch 的 WebView 拦截线程仍在阻塞等待 —— 不在这里唤醒，页面只能等到超时。
             deliverToolResultIfAny(json)
-            synchronized(lock) {
-                activeActivity?.dispatchHostMessage(json)
+            val a = synchronized(lock) { activeActivity }
+            // 第二通道：直接投给 WebView。
+            // ⚠️ 真机实测（2026-09-17）：页面明明在正常渲染（onLoad 已跑、view focused），
+            //    但 activeActivity 仍为 null（onStop 被调用而 onStart 未再触发）——
+            //    只靠 activeActivity 会让「工具已执行、结果已送达眼镜」的消息静默丢弃，
+            //    页面侧表现为调用永远没有回调。WebView 只要没销毁就能 evaluateJavascript，
+            //    所以这里以 WebView 引用兜底。
+            val wv = activeWebView?.get()
+            Log.i(TAG, "dispatchMessageToActive len=${json.length} active=${a != null} wv=${wv != null}")
+            when {
+                a != null -> a.dispatchHostMessage(json)
+                wv != null -> {
+                    val js = "window.__aiuiHost && window.__aiuiHost.hostMessage($json)"
+                    wv.post { runCatching { wv.evaluateJavascript(js, null) } }
+                }
+                else -> Log.w(TAG, "dispatchMessageToActive: no host, message cached only")
             }
         }
+
+        /** 当前宿主的 WebView 弱引用（见 [dispatchMessageToActive] 第二通道）。主线程写，任意线程读。 */
+        @Volatile
+        private var activeWebView: java.lang.ref.WeakReference<WebView>? = null
 
         /**
          * 若 [json] 是工具结果（type=toolResult），写入轮询缓存并唤醒同步等待队列。
@@ -718,7 +764,17 @@ class AiuiLinkActivity : Activity() {
         val bytes = body.toByteArray(Charsets.UTF_8)
         return WebResourceResponse(
             "text/plain", "UTF-8", 200, "OK",
-            mutableMapOf("Content-Length" to bytes.size.toString()),
+            mutableMapOf(
+                "Content-Length" to bytes.size.toString(),
+                // 页面脚本运行在 WebView 内部的 `__ink_bundle__` 虚拟路径下，其 origin 与
+                // BASE_URL(https://ink.local) 不一定同源；缺 CORS 头时 Chromium 会直接拒收
+                // 拦截响应，页面侧表现为 fetch 永远 pending（实测：连 __lab/ping 都收不到）。
+                // 三个头都要给：跨域 fetch 会先发 OPTIONS preflight，只回 ACAO 会让 preflight 失败。
+                "Access-Control-Allow-Origin" to "*",
+                "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers" to "*",
+                "Cache-Control" to "no-store",
+            ),
             ByteArrayInputStream(bytes)
         )
     }

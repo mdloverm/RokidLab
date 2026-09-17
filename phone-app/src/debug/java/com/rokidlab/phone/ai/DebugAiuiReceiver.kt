@@ -118,15 +118,44 @@ class DebugAiuiReceiver : BroadcastReceiver() {
                     Log.i(TAG, "shell [$cmd] ->\n${out.take(2000)}")
                 }.apply { name = "debug-glass-shell"; start() }
             }
+            // 关闭当前正在渲染的自托管宿主。
+            // ⚠️ 重跑/换包前**必须先关**：宿主是 singleTask，旧实例还在时新的一次 open
+            // 会走 onNewIntent 换包，而它当前实现是 finish() + postDelayed(150ms, startActivity)，
+            // 那个延迟内旧实例的 WebView 还没销毁完，重新启动会被系统吞掉（实测：Activity
+            // START 后 384ms 被 dispose 且再无第二次 START，页面根本没跑起来）。
+            // adb shell am broadcast ... --es act closehost
+            "closehost" -> {
+                val r = app.cxrL.closeAiuiHost()
+                Log.i(TAG, "closeAiuiHost -> $r")
+            }
             // 打开已安装的 AIUI 应用，走「Lab 自托管 AiuiLinkActivity(web 宿主)」——
-            // 与工具层 open_aiui_app 完全同路径（Ai/Ai_RenderPayload），
-            // 与 startAiuiPackage(Sys_AIUI_Start → 官方原生 Ink 引擎) 是两个不同宿主，
-            // 排查渲染问题必须用这一条。
-            // adb shell am broadcast ... --es act open --es pkg <agentId>
+            // 该宿主带页面工具桥（`globalThis.Lab`），与工具层 open_aiui_app 同路径。
+            // ⚠️ 不要改用 openAiuiAgent：它发 Ai_RenderPayload(jsui)，渲染在**官方宿主**
+            //    (AssistServer)，那里没有 lab-page-bridge，页面调 callTool 必然失败。
+            // adb shell am broadcast ... --es act open --es pkg <agentId> [--es params '<json>']
             "open" -> {
                 val pkg = intent.getStringExtra("pkg") ?: return
                 // ⚠️ 不要命名为 name：局部变量会遮蔽 Thread.name，使下面 apply{} 里
                 // `name = ...` 变成给 val 赋值 → Kotlin 报 "Val cannot be reassigned"。
+                val launchParams = intent.getStringExtra("params")
+                Thread {
+                    val aix = AiuiProject.packageFile(context, pkg)
+                    if (!aix.isFile) {
+                        Log.e(TAG, "open(host): aix missing for $pkg -> ${aix.absolutePath}")
+                        return@Thread
+                    }
+                    val r = app.cxrL.pushAixToRokidLinkHost(
+                        aix,
+                        openAfter = true,
+                        launchParams = launchParams,
+                    )
+                    Log.i(TAG, "pushAixToRokidLinkHost(pkg=$pkg) -> ${r ?: "null"}")
+                }.apply { name = "debug-aiui-open-host"; start() }
+            }
+            // 走官方宿主（AiuiFrontendController.openAiuiAgent → Ai/Ai_RenderPayload，
+            // jsui 卡片 480×168）。**该宿主无工具桥**，只用于对比渲染差异/复现官方路径问题。
+            "opencard" -> {
+                val pkg = intent.getStringExtra("pkg") ?: return
                 val appName = intent.getStringExtra("appName") ?: pkg
                 Thread {
                     val rec = AiuiAppRegistry.getByAgentId(context, pkg)
@@ -136,8 +165,8 @@ class DebugAiuiReceiver : BroadcastReceiver() {
                         rec?.nativeVersion ?: "0.0.74",
                         rec?.pageName ?: "pages/index/index",
                     )
-                    Log.i(TAG, "openAiuiAgent(pkg=$pkg, name=$appName) -> $r")
-                }.apply { name = "debug-aiui-open"; start() }
+                    Log.i(TAG, "openAiuiAgent(card host, no bridge) pkg=$pkg -> $r")
+                }.apply { name = "debug-aiui-opencard"; start() }
             }
             else -> {
                 val pkg = intent.getStringExtra("pkg") ?: return

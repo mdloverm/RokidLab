@@ -2350,6 +2350,8 @@ class KeyButtonService : Service() {
                 CMD_AIUI_CLOSE -> handler.post { AiuiLinkActivity.closeActive() }
                 CMD_AIUI_MSG -> {
                     val json = f.getOrNull(1)
+                    // 诊断：toolResult 回不到页面时，先看这条 —— len=0 表示 caps[1] 没传过来
+                    Log.i(TAG, "aiui msg: argc=${f.size} len=${json?.length ?: 0} head=${json?.take(120)}")
                     if (!json.isNullOrBlank()) {
                         AiuiLinkActivity.dispatchMessageToActive(json)
                     }

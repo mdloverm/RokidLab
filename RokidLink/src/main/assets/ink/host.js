@@ -82,6 +82,9 @@ function hostMessage(jsonOrPayload) {
     console.warn('[aiui-host] hostMessage parse fail:', e);
     return;
   }
+  // 诊断：确认 Java 侧确实把消息投进来了（toolResult 收不到时先看这一行有没有）
+  log('[aiui-host] hostMessage type=' + (payload && payload.type) +
+    ' cbId=' + (payload && payload.cbId) + ' viewReady=' + !!view);
   // 工具调用结果：优先尝试兑现外层 window.Lab.callTool 的 Promise（若页面能访问到 Lab），
   // 同时把结果作为 onMessage 派发给 ink 页面。ink 沙箱内 Lab 不可见，页面必须靠 onMessage 接收。
   if (payload && payload.type === 'toolResult') {
