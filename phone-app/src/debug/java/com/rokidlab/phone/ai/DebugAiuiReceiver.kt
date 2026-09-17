@@ -118,6 +118,27 @@ class DebugAiuiReceiver : BroadcastReceiver() {
                     Log.i(TAG, "shell [$cmd] ->\n${out.take(2000)}")
                 }.apply { name = "debug-glass-shell"; start() }
             }
+            // 打开已安装的 AIUI 应用，走「Lab 自托管 AiuiLinkActivity(web 宿主)」——
+            // 与工具层 open_aiui_app 完全同路径（Ai/Ai_RenderPayload），
+            // 与 startAiuiPackage(Sys_AIUI_Start → 官方原生 Ink 引擎) 是两个不同宿主，
+            // 排查渲染问题必须用这一条。
+            // adb shell am broadcast ... --es act open --es pkg <agentId>
+            "open" -> {
+                val pkg = intent.getStringExtra("pkg") ?: return
+                // ⚠️ 不要命名为 name：局部变量会遮蔽 Thread.name，使下面 apply{} 里
+                // `name = ...` 变成给 val 赋值 → Kotlin 报 "Val cannot be reassigned"。
+                val appName = intent.getStringExtra("appName") ?: pkg
+                Thread {
+                    val rec = AiuiAppRegistry.getByAgentId(context, pkg)
+                    val r = app.cxrL.openAiuiAgent(
+                        pkg,
+                        appName,
+                        rec?.nativeVersion ?: "0.0.74",
+                        rec?.pageName ?: "pages/index/index",
+                    )
+                    Log.i(TAG, "openAiuiAgent(pkg=$pkg, name=$appName) -> $r")
+                }.apply { name = "debug-aiui-open"; start() }
+            }
             else -> {
                 val pkg = intent.getStringExtra("pkg") ?: return
                 val r = app.cxrL.startAiuiPackage(pkg)

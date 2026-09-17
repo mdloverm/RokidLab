@@ -827,7 +827,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             truncatedLastRound ->
                                 "truncated" to
                                     "你上一次的输出因过长被截断了。请立刻把内容拆小：一次只调用 save_code_file 写一个文件，" +
-                                    "单个文件不超过 120 行，app.json 与页面代码分开写，绝不要在一次调用里塞多个文件。"
+                                    "单个文件控制在 300 行内，app.json 与页面代码分开写，绝不要在一次调用里塞多个文件。"
                             aiuiMode ->
                                 "aiui" to
                                     "请立即行动，不要再空想：你已加载 aiui-dev 技能。按顺序调用 save_code_file，" +

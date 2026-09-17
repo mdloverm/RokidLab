@@ -109,6 +109,16 @@ object SkillRegistry {
         Log.i(TAG, "seed suppress [$name] = $suppressed")
     }
 
+    /**
+     * Lab 本地配套技能文件（不在官方 aiui-dev 清单内，见 SkillFetcher.OFFICIAL_AIUI_DEV_FILES）。
+     * 这些文件由 Lab 自己维护（宿主运行须知、画布/布局规范等），必须始终随 App 包内版本同步，
+     * 不受 [setSeedSuppressed] 抑制。新增本地配套文件时在此登记。
+     */
+    private val LOCAL_COMPANION_SKILL_FILES = setOf("lab-runtime.md")
+
+    private fun isLocalCompanionSkillFile(file: String): Boolean =
+        LOCAL_COMPANION_SKILL_FILES.any { it.equals(file, ignoreCase = true) }
+
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -133,14 +143,19 @@ object SkillRegistry {
         val dirs = runCatching { context.assets.list("skills")?.toList().orEmpty() }
             .getOrDefault(emptyList())
         for (name in dirs) {
-            // 用户已在线同步覆盖的内置技能：seed 跳过，防止官方更新被 App 内置旧版回滚
-            if (isSeedSuppressed(context, name)) {
-                Log.i(TAG, "seedBundledSkills: skip $name (user synced official update)")
-                continue
+            // 用户已在线同步覆盖的内置技能：**官方文件**跳过，防止官方更新被 App 内置旧版回滚。
+            // ⚠️ 但抑制必须只作用于官方清单内的文件：lab-runtime.md 是 Lab 本地配套（不在官方
+            //    OFFICIAL_AIUI_DEV_FILES 内），若随整目录一起跳过，本宿主运行须知将永远无法
+            //    随 App 升级生效（历史缺陷：用户点过一次「同步官方技能」后，画布/布局规范
+            //    之类的修订再也发不出去）。故此处按文件粒度过滤，而非整目录 continue。
+            val suppressed = isSeedSuppressed(context, name)
+            if (suppressed) {
+                Log.i(TAG, "seedBundledSkills: $name suppressed by official sync (local companion files still seeded)")
             }
             val files = runCatching { context.assets.list("skills/$name")?.toList().orEmpty() }
                 .getOrDefault(emptyList())
             for (file in files.filter { it.endsWith(".md", ignoreCase = true) }) {
+                if (suppressed && !isLocalCompanionSkillFile(file)) continue
                 try {
                     val text = context.assets
                         .open("skills/$name/$file")
