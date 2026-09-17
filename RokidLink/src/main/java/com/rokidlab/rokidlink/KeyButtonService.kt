@@ -122,17 +122,17 @@ class KeyButtonService : Service() {
     private var downlinkUntilMs = 0L
 
     /**
-     * 官方「回声」抑制窗口：本地接管时我们会先给官方发 `Exit`（关闭它的会话），
-     * 但官方云端**已经生成、正在途中**的 `TTS_Result` 仍会在几十毫秒内回流到同一个 `Ai` 频道。
+     * 官方「回声」抑制窗口 —— **已退役，仅保留作诊断参考**。
      *
-     * 为什么必须丢弃它：官方收到 `Exit` 时已 `dismissAiDialog + clearData`（清空列表），
-     * 此时它自己的回复文字已经**无处渲染**；而我们若把它当成 Lab 回复注入
-     * （[showAiReply] = 本机 `sendAi("TTS_Result")`），它就被写进了官方适配器的数据里 ——
-     * 我们随后 `openAiSession()` 重开官方界面时，这段**官方的字**就被渲染出来
-     * （用户实测反馈：「改连续对话之前官方的字我是看不到的」）。
+     * 历史做法：本地接管时先给官方发 `Exit`，但官方云端**已生成、仍在途**的 `TTS_Result`
+     * 仍会回流到同一个 `Ai` 频道；若被当成 Lab 回复注入（[showAiReply] = 本机
+     * `sendAi("TTS_Result")`），就会写进官方适配器，随后 `openAiSession()` 重开界面时
+     * 渲染成「官方的字」。当时用「打断后 [OFFICIAL_ECHO_WINDOW_MS] 内的 TTS_Result 一律丢弃」来挡。
      *
-     * 判据为何安全：Lab 自己的下行（工具进度 / 最终正文）必须等手机端拿到 ASR 文字、
-     * 调完 DeepSeek（含工具往返）才会产生，结构上不可能在打断后 800ms 内到达。
+     * ⚠️ 该方案已失效并被 [LinkProtocol.AI_REPLY_MARK] 取代：官方 TTS 回流发生在
+     * `ASR_End` 之后约 1 秒，而窗口只有 800ms —— **首轮经常落在窗口外**，
+     * 于是首条回复漏出官方的字（2026-09-17 用户实测）。
+     * 现在改为显式来源标记，本字段只在丢弃日志里打印（诊断用），**不再参与判定**。
      */
     @Volatile
     private var officialEchoUntilMs = 0L
@@ -530,7 +530,8 @@ class KeyButtonService : Service() {
          */
         private const val CONTINUE_LISTEN_SETTLE_MS = 700L
         /**
-         * 本地打断官方后，官方**仍在途的回复正文**回流窗口（见 [officialEchoUntilMs]）。
+         * 本地打断官方后的诊断时间戳窗口（见 [officialEchoUntilMs]）。
+         * **已不参与来源判定** —— 来源区分改用 [LinkProtocol.AI_REPLY_MARK]。
          */
         private const val OFFICIAL_ECHO_WINDOW_MS = 800L
 
@@ -1399,16 +1400,30 @@ class KeyButtonService : Service() {
                     //
                     // ⚠️ 该频道是**广播式**的：官方 App 自己的回复正文也从这里经过
                     //（我们订阅 `Ai` 本就是为拦截官方 ASR，见 subscribe(AI_TOPIC)）。
-                    // 因此不能无条件注入 —— 官方在 `Exit` 后仍会回流一段它自己的回复，
-                    // 注入进去就会在重开界面时被渲染成「官方的字」。见 [officialEchoUntilMs]。
+                    // ⇒ 必须区分来源：官方在 `Exit` 后仍会回流它自己的正文，若被我们当作 Lab
+                    //   回复注入官方界面，就会渲染成「官方的字」。
+                    //
+                    // 判据 = caps[2] 是否等于 [LinkProtocol.AI_REPLY_MARK]（手机端下发 Lab 回复时写入）。
+                    // ⚠️ 不要退回「时间窗口」方案：官方 TTS 回流发生在 ASR_End 之后约 1 秒，
+                    //    而窗口只有 800ms，**首轮经常落在窗口外**，于是首条回复就漏出官方的字
+                    //    （用户实测反馈：「第一次回消息又把官方的信息显示了」）。见 [officialEchoUntilMs]。
                     val t = args.at(1)
                         ?.takeIf { it.type() == Caps.Value.TYPE_STRING }?.getString()
+                    val fromLab = runCatching {
+                        args.at(2)?.takeIf { it.type() == Caps.Value.TYPE_STRING }?.getString()
+                    }.getOrNull() == LinkProtocol.AI_REPLY_MARK
                     if (t.isNullOrBlank()) {
                         Log.d(TAG, "TTS_Result without text payload")
-                    } else if (System.currentTimeMillis() < officialEchoUntilMs) {
-                        Log.w(TAG, "TTS_Result dropped (official echo within interrupt window): ${t.take(40)}")
-                    } else {
+                    } else if (fromLab) {
                         showAiReply(t)
+                    } else {
+                        // 官方回声（只带 2 个元素）。echoWindowActive 仅作诊断：恒 false 说明
+                        // 官方回流本就落在窗口外 —— 这正是必须改用显式标记的原因。
+                        Log.w(
+                            TAG,
+                            "TTS_Result dropped (not from Lab, argc=${args.size()} " +
+                                "echoWindowActive=${System.currentTimeMillis() < officialEchoUntilMs}): ${t.take(40)}"
+                        )
                     }
                 }
                 "TTS_AudioFinished", "Ai_Heartbeat" -> {
@@ -1496,9 +1511,8 @@ class KeyButtonService : Service() {
      * 即使两条都被拒，手机端 ADB 极速轮询也会在官方 TTS 前补刀。
      */
     private fun interruptOfficialLocally() {
-        // 官方此刻已生成、仍在途的回复正文（TTS_Result）必须在本频道被抑制：
-        // 它随着 Exit 的 dismissAiDialog/clearData 已无处渲染，若被我们当作 Lab 回复
-        // 注入进官方适配器，会在随后 openAiSession() 重开界面时显形为「官方的字」。
+        // 只记录诊断时间戳：真正的来源区分已由 [LinkProtocol.AI_REPLY_MARK] 承担
+        // （官方的 TTS_Result 只带 2 个元素，在 TTS_Result 分支被直接丢弃，不再依赖时间窗口）。
         officialEchoUntilMs = System.currentTimeMillis() + OFFICIAL_ECHO_WINDOW_MS
         // 1) 尝试 CXR 上行 Ai/Exit（0ms 起，300ms 重试一次）
         val r1 = sendAi("Exit")

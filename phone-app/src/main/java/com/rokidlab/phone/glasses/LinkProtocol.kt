@@ -19,6 +19,21 @@ object LinkProtocol {
     const val CXR_CHANNEL_JSAI = "Jsai"
     const val CXR_CHANNEL_AI_RENDER = "Ai_RenderPayload"
 
+    /**
+     * Lab 回复来源标记：`Ai` 频道 `TTS_Result` 帧的**第 3 个元素**（caps[2]）。
+     *
+     * 为什么需要它：`Ai` 频道是**广播式**的 —— 官方 App 自己的回复正文（TTS_Result）
+     * 也从这里经过，而 onReceive 拿不到来源，无法从帧本身区分「Lab 的回复」与
+     * 「官方仍在途的回声」。原先只能靠 interruptOfficialLocally() 开一个 800ms
+     * 时间窗口去猜，而官方 TTS 回流发生在 ASR_End 之后约 1 秒 —— **首轮经常落在
+     * 窗口之外**，于是被当成 Lab 回复注入官方界面，用户就看到「官方的字」。
+     *
+     * 现在改为显式标记：手机端下发 Lab 回复时额外写一个本标记，眼镜端**只接受
+     * 带标记的 TTS_Result**，官方帧（只有 2 个元素）一律丢弃。官方只按索引读
+     * caps[0]/caps[1]，多一个元素会被忽略，向后兼容。
+     */
+    const val AI_REPLY_MARK = "__LAB_AI_REPLY__"
+
     // ── __LAB_* 控制帧标记（ASR 推送 / 工具调用桥 等跨端控制信令）──
     const val MARKER_MUSIC_STOP = "__LAB_MUSIC_STOP__"
     const val MARKER_ABORT_AI = "__LAB_ABORT_AI__"

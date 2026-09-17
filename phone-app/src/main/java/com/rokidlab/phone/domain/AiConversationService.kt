@@ -385,6 +385,8 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 val caps = Caps()
                 caps.write("TTS_Result")
                 caps.write(text)
+                // 进度帧同样是 Lab 的回复正文，必须带来源标记，否则会被眼镜端当作官方回声丢弃
+                caps.write(LinkProtocol.AI_REPLY_MARK)
                 link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, caps)
             }
         }
@@ -1306,10 +1308,13 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         try {
             // join 等待 DeepSeek 期间可能发生 session.cleanup 断开/替换 link，发送前重新校验
             if (!abortAiSendIfLinkInvalid(link, onResult)) return
-            // 官方协议: caps[0] = "TTS_Result", caps[1] = 回复文字
+            // 官方协议: caps[0] = "TTS_Result", caps[1] = 回复文字，
+            // caps[2] = Lab 来源标记（眼镜端据此区分 Lab 回复与官方回声，见 LinkProtocol.AI_REPLY_MARK）。
+            // 官方只按索引读前两个元素，多写一个会被忽略，向后兼容。
             val ttsCaps = Caps()
             ttsCaps.write("TTS_Result")
             ttsCaps.write(reply)
+            ttsCaps.write(LinkProtocol.AI_REPLY_MARK)
             val ttsResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, ttsCaps)
             Log.i(TAG, "sendCustomCmd(Ai, TTS_Result, \"${reply.take(40)}...\") -> $ttsResult")
 
