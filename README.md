@@ -562,7 +562,7 @@ D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:assembleRelease
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v3.5-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v3.9-debug.apk
 ```
 
 ### 眼镜端服务
@@ -618,6 +618,25 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
   - `saveAiConfig` 切在线时清掉残留 `ai_local_model`
   - `sendKeyQuizConfig` 链路就绪时复用现有连接直接 `sendCustomCmd`，不再走 `cleanup()` 全链路重建
 - **新测试**：共 **14 个测试类 / 155 个 `@Test`**（v3.5 新增 `GoldenAgentEvalTest` 20 个 golden case 覆盖 SSE 重放语义 / 工具声明完整性 / prompt 路由；2026-09-12 补两批回归测试：`AdbSyncProtocolTest` / `AdbFileManagerSyncTest` / `HidReportTest` / `ToolRiskMapTest` / `ChatHistoryStoreTest`，并扩 `AiChannelTest` / `RokidLink/AiChannelProtocolTest`，详见「构建 → 单元测试」）
+
+## v3.9 更新总览
+
+- **眼镜端连续对话（多轮免唤醒）**：首轮唤醒后可连续追问，无需反复说唤醒词，一问一答更自然
+- **AIUI 页面 ↔ Lab 工具桥正式打通**：`.ink` 智能体页面内可直接调用手机端 Lab 工具能力（回调式桥 + WebView 兜底投递），如音乐播放器页面内完成点歌、取封面、取播放状态
+- **全新音乐播放器 AIUI 应用**（`music-player.aix`，在 Gitee Release 附件单独提供）：
+  - 专辑封面从屏幕顶端全屏铺满（`aspectFill` 保比例不变形），底部三行滚动歌词（上句 / 当前高亮 / 下句）
+  - 封面区与歌词区物理分区 + 2px 分隔线，绝不重叠；流体布局适配不同分辨率，`env(safe-area-inset-*)` 安全区避让
+  - 移除全部播放控件（进度条 / 时间 / 按键提示），界面只保留封面与歌词；语音点歌、快捷键控制仍在
+- **音乐播放稳定性修复**：
+  - 修复播放失败却提示成功——音频先下载到本地再播放，规避酷我 CDN 返回 `application/octet-stream` 导致 NuPlayer 选不出解码器的问题
+  - 新增 `get_cover_image` 工具：封面在手机侧转成 data URL 下发，眼镜无网络也能显示专辑封面
+  - AIUI 启动参数必定执行（补 `onMessage` / `launch` 范式，`play_song` 必填 `songName`），「用 AIUI 播放西厢」直达播放
+- **AI 回复与官方回声彻底区分**：
+  - 显式来源标记区分 Lab 回复与官方回声，修复首轮回复漏出官方答案
+  - Lab 文字落在独立干净气泡（ASR_End 渲染闸门），官方文案闪现从约 1s 压到约 0.15s
+  - 自动清洗模型偶发输出的 `<answer>` 异常包裹标签
+- **AIUI 生成侧渲染规范修正**：统一官方单色绿屏配色规范；修复技能文档同步失效
+- **版本**：手机端 3.9（versionCode 24）/ 眼镜端 RokidLink 3.9（versionCode 17），内嵌眼镜端为 R8 混淆 release 包
 
 ## 使用指南
 

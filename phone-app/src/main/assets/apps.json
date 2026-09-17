@@ -1,24 +1,22 @@
 {
     "schemaVersion":  1,
     "generatedAt":  "2026-09-16T00:00:00.000Z",
-    "brewVersion":  "3.8",
-    "brewVersionCode":  23,
+    "brewVersion":  "3.9",
+    "brewVersionCode":  24,
     "brewIconUrl":  "",
-    "brewApkUrl":  "https://gitee.com/dlover1314/RokidLab/releases/download/v3.8/RokidLab-v3.8-release.apk",
-    "brewReleaseUrl":  "https://gitee.com/dlover1314/RokidLab/releases/tag/v3.8",
-    "brewNotes":  "AI 自主任务定时播报 + 过程时间线可视化 + 运行状态自检与日志排查 + 历史对话检索",
+    "brewApkUrl":  "https://gitee.com/dlover1314/RokidLab/releases/download/v3.9/RokidLab-v3.9-release.apk",
+    "brewReleaseUrl":  "https://gitee.com/dlover1314/RokidLab/releases/tag/v3.9",
+    "brewNotes":  "眼镜连续对话免唤醒 + AIUI 页面工具桥 + 全新音乐播放器",
     "brewChanges":  [
-                        "AI 过程时间线：聊天气泡展示思考步骤与工具调用过程，AI 怎么做的一目了然",
-                        "自主定时任务：到点 AI 自主查资料并主动播报（如每天早上播报天气和日程），执行时只用只读工具",
-                        "运行状态自检工具：查询模型、眼镜连接、知识库 / 记忆 / 技能数量、被关闭的工具",
-                        "读取运行日志工具：排查近期异常，回答刚才为什么失败",
-                        "放弃未完成任务工具：放弃续做记录，不删除已生成文件",
-                        "检索历史对话工具：按关键词查找过去的聊天记录",
-                        "重构 Agent 计划执行框架，支持多步任务编排与断后续做",
-                        "工具调用链路加固：幂等性、Schema 严格校验、超时保护",
-                        "定时任务新增自主任务类型通知渠道（乐奇自主任务）",
-                        "聊天历史检索与过程展示重构，聊天状态管理独立化",
-                        "内嵌眼镜端更新为 3.8 R8 release 包（8.35MB）"
+                        "眼镜连续对话：多轮交流免唤醒，一问一答更自然",
+                        "AIUI 页面可直接调用手机端 Lab 工具（回调桥 + WebView 兜底投递）",
+                        "全新音乐播放器：封面全屏铺满 + 底部三行滚动歌词 + 语音点歌（播放器 .aix 在 Release 附件单独提供）",
+                        "修复音乐播放失败假成功：音频先下载到本地再播放，兼容酷我 CDN 内容类型",
+                        "歌曲封面经手机转 data URL 下发，眼镜无网络也能显示专辑封面",
+                        "AIUI 启动参数必定执行：「用 AIUI 播放西厢」点歌参数直达页面",
+                        "AI 回复与官方回声区分：首轮不再漏出官方答案，回复闪现从约 1 秒压到 0.15 秒，自动清洗异常包裹标签",
+                        "AIUI 生成侧渲染规范修正：统一官方单色绿屏配色，修复技能文档同步失效",
+                        "内嵌眼镜端更新为 3.9 R8 release 包"
                     ],
     "apps":  [
                  {
