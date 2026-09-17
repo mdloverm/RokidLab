@@ -160,6 +160,31 @@ object AiChannel {
         }
     }
 
+    // ── 连续对话（多轮免唤醒）开关（手机端 → 眼镜端）──
+    // 开启后：眼镜端把 Lab 回复的本地 TTS 播完作为「一轮结束」信号，自动重新开启官方
+    // ai_assist 会话（等价于再喊一次唤醒词），用户可直接接着说下一句。
+    // 决策点放在眼镜端是刻意的 —— 只有它知道 TTS 的真实播放结束时刻（ITtsListener.onTtsStop）；
+    // 手机端下发 tts_play 后拿不到播放进度，按文本长度估算会提前开麦而把播报尾音收进麦克风。
+    const val TOPIC_CONTINUE_DIALOG = "rokidlab_chat_continue"
+    /** 与 TOPIC_CONTINUE_DIALOG 呼应的载荷动作名（注意与同名的 topic 字符串分开维护） */
+    const val CMD_CONTINUE_DIALOG = "continue_dialog"
+
+    /** 编码 continue_dialog：[cmd, version, "true"/"false"] */
+    fun encodeContinueDialog(enabled: Boolean): List<String> =
+        listOf(CMD_CONTINUE_DIALOG, SCHEMA_VERSION.toString(), enabled.toString())
+
+    /**
+     * 解析 continue_dialog 载荷。
+     * @return null = cmd 不符 / 长度不足 / 未知未来版本（接收端必须整体丢弃，保持原状态）
+     */
+    fun decodeContinueDialog(fields: List<String?>): Boolean? {
+        if (fields.size < 2 || fields[0] != CMD_CONTINUE_DIALOG) return null
+        return when (fields[1]?.toIntOrNull()) {
+            SCHEMA_VERSION -> if (fields.size >= 3) fields[2] == "true" else null
+            else -> null
+        }
+    }
+
     // ── 眼镜 WiFi IP 上行通道（眼镜端 → 手机端）──
     // 眼镜连上 WiFi 后自动上报自身 IP，手机端据此免手动输入，
     // 自动填充到投屏 / 手机镜像 / 文件管理 / ADB 工具共用的单一数据源。

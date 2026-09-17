@@ -122,6 +122,22 @@ class KeyButtonService : Service() {
     private var downlinkUntilMs = 0L
 
     /**
+     * 官方「回声」抑制窗口：本地接管时我们会先给官方发 `Exit`（关闭它的会话），
+     * 但官方云端**已经生成、正在途中**的 `TTS_Result` 仍会在几十毫秒内回流到同一个 `Ai` 频道。
+     *
+     * 为什么必须丢弃它：官方收到 `Exit` 时已 `dismissAiDialog + clearData`（清空列表），
+     * 此时它自己的回复文字已经**无处渲染**；而我们若把它当成 Lab 回复注入
+     * （[showAiReply] = 本机 `sendAi("TTS_Result")`），它就被写进了官方适配器的数据里 ——
+     * 我们随后 `openAiSession()` 重开官方界面时，这段**官方的字**就被渲染出来
+     * （用户实测反馈：「改连续对话之前官方的字我是看不到的」）。
+     *
+     * 判据为何安全：Lab 自己的下行（工具进度 / 最终正文）必须等手机端拿到 ASR 文字、
+     * 调完 DeepSeek（含工具往返）才会产生，结构上不可能在打断后 800ms 内到达。
+     */
+    @Volatile
+    private var officialEchoUntilMs = 0L
+
+    /**
      * 打断次数限制：滑动窗口内打断/写文件次数达到上限后暂停拦截，让官方自然完成回复
      * （打破任何异常循环），窗口滚动后自动恢复。比固定冷却时间更可控。
      */
@@ -403,6 +419,15 @@ class KeyButtonService : Service() {
         private const val INTERRUPT_WINDOW_MS = 20_000L
         private const val INTERRUPT_MAX = 3
         /**
+         * 连续对话（多轮免唤醒）模式下的打断限流：原 20s / 3 次是「异常自反馈循环」的保险，
+         * 但连续对话时每一轮用户说话都要消耗一次额度（这才是正常用法），实测说到第 4 句
+         * （间隔均 < 20s）就会被 [allowInterrupt] 拒绝，表现为「前三句正常、之后喊了没反应」。
+         * 连续对话开启时改用 60s / 12 次：仍然是硬上限（异常循环最多多跑 9 轮就自停），
+         * 但不影响正常的多轮对话节奏。
+         */
+        private const val INTERRUPT_WINDOW_CONTINUOUS_MS = 60_000L
+        private const val INTERRUPT_MAX_CONTINUOUS = 12
+        /**
          * 答题流程屏幕保持唤醒时长：拍照+OCR+AI 生成+TTTS 播放全程不让屏幕熄屏。
          * 屏幕熄屏会触发 RokidAIController exit → closeCamera，导致对话窗口退出、
          * 手机端 takePhoto 无图超时。每次按键重新续期，超时后允许再次熄屏省电。
@@ -436,6 +461,8 @@ class KeyButtonService : Service() {
         internal const val TTS_STOP_TOPIC = "tts_stop"
         /** 「按键答题」开关下发通道（手机端 → 眼镜端） */
         internal const val QUIZ_TOPIC = "rokidlab_key_quiz"
+        /** 「连续对话（多轮免唤醒）」开关下发通道（手机端 → 眼镜端）：见 [KEY_CONTINUE_DIALOG] */
+        internal const val CONTINUE_TOPIC = "rokidlab_chat_continue"
         /** 拍照问AI 指令上行通道（眼镜端 → 手机端） */
         internal const val PHOTO_ASK_TOPIC = "rokidlab_photo_ask"
         /** 语音转文字结果上行通道（眼镜端 → 手机端）：唤醒词+语音的 ASR 文字转给 Lab 回复 */
@@ -478,12 +505,34 @@ class KeyButtonService : Service() {
         // 模型模式值统一引用 AiChannel.AI_MODE_OFFICIAL / AiChannel.AI_MODE_CUSTOM（协议规范单源）
         /** 「按键答题」开关存储 key */
         internal const val KEY_QUIZ_ENABLED = "key_quiz_enabled"
+        /** 「连续对话（多轮免唤醒）」开关存储 key：true = 每轮 Lab 回复的本地 TTS 播完后自动重开官方 AI 会话 */
+        internal const val KEY_CONTINUE_DIALOG = "chat_continue_dialog"
         /** 外部（如手机端 ADB am startservice）触发拍照答题时通知 Service 的 action */
         internal const val ACTION_QUIZ_PHOTO_ASK = "rokidlab.action.QUIZ_PHOTO_ASK"
         /** 工具确认窗口时长：超时未应答视为取消 */
         private const val TOOL_CONFIRM_WINDOW_MS = 30_000L
         /** 确认应答后的按键吞没窗口（UP/CLICK 连发去重） */
         private const val KEY_SUPPRESS_AFTER_CONFIRM_MS = 1_500L
+        /**
+         * 自动续听延时：Lab 回复本地 TTS 播完 → 重开官方 AI 会话的等待时间。
+         * 需要缓冲是因为停播瞬间扬声器仍有尾音，立即开麦会把尾音喂成一次误识别；
+         * 400ms 与 [TtsPlaybackHelper] 内部的块间稳定延时同量级。
+         */
+        private const val CONTINUE_DIALOG_DELAY_MS = 400L
+        /**
+         * 官方 startNewTalk 生效延时：眼镜端推续听标记后，要经
+         * 手机端（RFCOMM 上行 → CXR 下行）再交官方 `AudioFinishedHandler →
+         * aiAudioFinishWake → startNewTalk` 才真正重开拾音，期间 `showAudioFinishUI`
+         * 会更新会话列表（追加一条新气泡）。等它走完再把 Lab 回复补回界面。
+         *
+         * 比本机直发多一个来回（眼镜→手机→眼镜），故取 700ms：真机 trace 里官方
+         * 从收帧到 `startNewTalk` 仅 15ms，余量留给 RFCOMM/CXR 往返与线程调度。
+         */
+        private const val CONTINUE_LISTEN_SETTLE_MS = 700L
+        /**
+         * 本地打断官方后，官方**仍在途的回复正文**回流窗口（见 [officialEchoUntilMs]）。
+         */
+        private const val OFFICIAL_ECHO_WINDOW_MS = 800L
 
         /** 断线重连后下行路由 stale 的自愈：Alarm 拉活广播 action（SelfRestartReceiver 处理） */
         internal const val ACTION_SELF_HEAL_RESTART = "com.rokidlab.rokidlink.SELF_HEAL_RESTART"
@@ -504,6 +553,17 @@ class KeyButtonService : Service() {
         @JvmStatic
         fun isKeyQuizEnabled(ctx: Context): Boolean =
             ctx.getSharedPreferences(PREFS_NAME, 0).getBoolean(KEY_QUIZ_ENABLED, false)
+
+        /**
+         * 「连续对话（多轮免唤醒）」开关是否开启，默认 **true**。
+         *
+         * 开启时：每轮 Lab 回复的本地 TTS 播完后，[KeyButtonService] 自动重开一次官方
+         * ai_assist 会话（等价于用户再喊一次唤醒词），用户可以直接接着说下一句。
+         * 用户可在手机端「乐奇聊天 → 设置 → 连续对话」关闭。
+         */
+        @JvmStatic
+        fun isContinueDialogEnabled(ctx: Context): Boolean =
+            ctx.getSharedPreferences(PREFS_NAME, 0).getBoolean(KEY_CONTINUE_DIALOG, true)
 
         /** 启动此服务 */
         fun start(ctx: Context) {
@@ -566,6 +626,8 @@ class KeyButtonService : Service() {
     override fun onDestroy() {
         Log.i(TAG, "Service destroying")
         handler.removeCallbacksAndMessages(null)
+        // 显式置空待执行的自动续听引用（removeCallbacksAndMessages 已撤掉队列，这里同步清状态）
+        pendingContinueDialog = null
         // 停 AIUI 接收服务（自愈重启后会在新实例 onCreate 重新拉起）
         runCatching { aiuiPkgServer?.stop() }
         aiuiPkgServer = null
@@ -1015,6 +1077,14 @@ class KeyButtonService : Service() {
             })
             Log.i(TAG, "subscribe($QUIZ_TOPIC) -> $quizResult")
 
+            // 连续对话（多轮免唤醒）开关：手机端设置页切换时下发，落 prefs 后立即改变
+            // isContinueDialogEnabled() 的返回值（无需重连/重启服务）。
+            val continueResult = bridge?.subscribe(CONTINUE_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
+                markDownlink()
+                handleContinueDialogConfig(args)
+            })
+            Log.i(TAG, "subscribe($CONTINUE_TOPIC) -> $continueResult")
+
             // 推送通道远程踢活：手机端检测到 RFCOMM 推送监听连续秒断（监听假死）时经 CXR
             // 频道下发（CXR 由系统 cxr-service 托管，推送死了它仍可达），收到后重建 AsrPushServer。
             val pushRestartResult = bridge?.subscribe(AiChannel.TOPIC_PUSH_RESTART, CXRServiceBridge.MsgCallback { _, _, _ ->
@@ -1268,6 +1338,9 @@ class KeyButtonService : Service() {
                         return
                     }
                     Log.i(TAG, "AI ASR complete: $finalText")
+                    // 用户已开口（能走到这里说明不是 Lab 下行重发——那些已被 downlinkUntilMs 拦掉）：
+                    // 撤掉排队中的自动续听任务，避免它稍后插进来把这新一轮抢掉
+                    cancelPendingContinueDialog()
 
                     // 所有命令统一接管（含歌词命令）：
                     // 之前对"歌词"命令放行官方（期望官方打开 music_word 歌词场景），
@@ -1323,10 +1396,20 @@ class KeyButtonService : Service() {
                 "TTS_Result" -> {
                     // Lab/AI 回复正文：本机注入回**官方对话界面**（v3.0 `c2484b2` 的既有做法）。
                     // 手机下行的这帧只到本应用、官方 AssistServer 收不到 —— 这就是「有声音没文字」的根因。
+                    //
+                    // ⚠️ 该频道是**广播式**的：官方 App 自己的回复正文也从这里经过
+                    //（我们订阅 `Ai` 本就是为拦截官方 ASR，见 subscribe(AI_TOPIC)）。
+                    // 因此不能无条件注入 —— 官方在 `Exit` 后仍会回流一段它自己的回复，
+                    // 注入进去就会在重开界面时被渲染成「官方的字」。见 [officialEchoUntilMs]。
                     val t = args.at(1)
                         ?.takeIf { it.type() == Caps.Value.TYPE_STRING }?.getString()
-                    if (!t.isNullOrBlank()) showAiReply(t)
-                    else Log.d(TAG, "TTS_Result without text payload")
+                    if (t.isNullOrBlank()) {
+                        Log.d(TAG, "TTS_Result without text payload")
+                    } else if (System.currentTimeMillis() < officialEchoUntilMs) {
+                        Log.w(TAG, "TTS_Result dropped (official echo within interrupt window): ${t.take(40)}")
+                    } else {
+                        showAiReply(t)
+                    }
                 }
                 "TTS_AudioFinished", "Ai_Heartbeat" -> {
                     // 官方乐奇收尾/心跳：忽略（界面即将被 Exit 关闭）
@@ -1364,12 +1447,22 @@ class KeyButtonService : Service() {
      */
     private fun allowInterrupt(): Boolean {
         val now = System.currentTimeMillis()
-        if (now - lastInterruptMs > INTERRUPT_WINDOW_MS) {
+        // 连续对话时每一轮用户说话都要消耗一次打断额度（这是正常用法，不是异常循环）：
+        // 沿用 20s/3 会让第 4 句起被静默拒绝（现象：「前三句正常，之后喊了没反应」），
+        // 故开启时换用更宽的 60s/12。它仍是硬上限 —— 异常自反馈循环最多多跑 9 轮即自停。
+        val continuous = isContinueDialogEnabled(this)
+        val windowMs = if (continuous) INTERRUPT_WINDOW_CONTINUOUS_MS else INTERRUPT_WINDOW_MS
+        val maxCount = if (continuous) INTERRUPT_MAX_CONTINUOUS else INTERRUPT_MAX
+        if (now - lastInterruptMs > windowMs) {
             interruptCount = 0
         }
         lastInterruptMs = now
         interruptCount++
-        return interruptCount <= INTERRUPT_MAX
+        val allowed = interruptCount <= maxCount
+        if (!allowed) {
+            Log.w(TAG, "allowInterrupt denied: $interruptCount > $maxCount in ${windowMs}ms (continuous=$continuous)")
+        }
+        return allowed
     }
 
     /**
@@ -1403,6 +1496,10 @@ class KeyButtonService : Service() {
      * 即使两条都被拒，手机端 ADB 极速轮询也会在官方 TTS 前补刀。
      */
     private fun interruptOfficialLocally() {
+        // 官方此刻已生成、仍在途的回复正文（TTS_Result）必须在本频道被抑制：
+        // 它随着 Exit 的 dismissAiDialog/clearData 已无处渲染，若被我们当作 Lab 回复
+        // 注入进官方适配器，会在随后 openAiSession() 重开界面时显形为「官方的字」。
+        officialEchoUntilMs = System.currentTimeMillis() + OFFICIAL_ECHO_WINDOW_MS
         // 1) 尝试 CXR 上行 Ai/Exit（0ms 起，300ms 重试一次）
         val r1 = sendAi("Exit")
         Log.i(TAG, "interruptOfficialLocally: sendAi(Exit) -> $r1")
@@ -1686,6 +1783,18 @@ class KeyButtonService : Service() {
         }
     }
 
+    /**
+     * 最近一次下发的 Lab 回复正文。
+     * 自动续听时会重开官方会话（界面被重置），用它把刚展示过的回复补回官方界面，
+     * 让用户既能接着说下一句、又能看着上一轮的答案。仅内存持有，不落盘。
+     */
+    @Volatile
+    private var lastLabReply: String? = null
+
+    /** 待执行的「自动续听」延时任务；null = 当前没有排队中的续听 */
+    @Volatile
+    private var pendingContinueDialog: Runnable? = null
+
     /** 收到手机端文字消息后，调用眼镜本地 TTS 播放语音（AiChannel v1 编解码，兼容 v0） */
     private fun handleTtsPlay(args: Caps) {
         try {
@@ -1695,11 +1804,120 @@ class KeyButtonService : Service() {
             }
             Log.i(TAG, "Received tts_play: ${text.take(40)}...")
             if (text.isNotBlank()) {
-                TtsPlaybackHelper.play(this, text)
+                // 新一轮播报覆盖上一轮：先撤掉上一轮遗留的续听任务（本轮播完会重新调度）
+                cancelPendingContinueDialog()
+                lastLabReply = text
+                // 播完回调 = 连续对话（多轮免唤醒）的触发点，见 [onLabReplyPlaybackFinished]
+                TtsPlaybackHelper.play(this, text) { onLabReplyPlaybackFinished() }
             }
         } catch (e: Exception) {
             Log.e(TAG, "handleTtsPlay error", e)
         }
+    }
+
+    /**
+     * Lab 回复的本地 TTS「真正播完」回调（TtsPlaybackHelper 在最后一块收到 ITtsListener.onTtsStop
+     * 之后触发，不是按时长估算）。
+     *
+     * 这是「连续对话（多轮免唤醒）」的触发点：播完即代表本轮双端文字都已显示、语音已播放完毕，
+     * 此刻请手机端让官方重开拾音，用户不用再喊唤醒词，直接说下一句即可。
+     *
+     * 决策放在眼镜端（只有它拿得到真实播放结束时刻；手机端下发 `tts_play` 后没有播放进度），
+     * 但**执行**必须由手机端完成 —— 详见 [requestOfficialContinueListening]。
+     *
+     * 为什么还要延时 [CONTINUE_DIALOG_DELAY_MS]：停播瞬间扬声器仍有尾音，
+     * 立刻开麦会被自己的尾音喂进一次误识别。
+     */
+    private fun onLabReplyPlaybackFinished() {
+        if (!isCustomAiMode()) {
+            Log.i(TAG, "continue dialog: skipped (official ai mode)")
+            return
+        }
+        if (!isContinueDialogEnabled(this)) {
+            Log.i(TAG, "continue dialog: skipped (switch off)")
+            return
+        }
+        cancelPendingContinueDialog()
+        val task = Runnable { runContinueDialog() }
+        pendingContinueDialog = task
+        mainHandler.postDelayed(task, CONTINUE_DIALOG_DELAY_MS)
+        Log.i(TAG, "continue dialog: scheduled in ${CONTINUE_DIALOG_DELAY_MS}ms")
+    }
+
+    /** 撤销尚未执行的自动续听（用户已开口 / 新一轮播报覆盖 / 开关关闭 / 服务销毁） */
+    private fun cancelPendingContinueDialog() {
+        pendingContinueDialog?.let { mainHandler.removeCallbacks(it) }
+        pendingContinueDialog = null
+    }
+
+    /**
+     * 让官方重新开始拾音 —— 连续对话能成立的**关键一步**。由**手机端**代发（见下）。
+     *
+     * ⚠️ 只重开界面是不够的：`openAiSession()`（KeyDown_Client + open）只把 ai_assist
+     * 场景/对话界面拉起来，**麦克风并不会开始拾音**。用户实测「等 lab 显示并播放完
+     * 我在说话 没反应」，日志里重开之后再没出现过任何 `AI ASR stream` —— 人说了，没人听。
+     *
+     * 官方自己的续听链路是（`_g_proto_trace.md` 真机实测）：
+     *   `TTS_AudioFinished` → AssistServer `AudioFinishedHandler` → `aiAudioFinishWake`
+     *   → `AIModeManager.startNewTalk`（重新开始拾音）
+     * 而手机端为了让刚显示的 Lab 回复不被清屏，一直传 `skipTtsAudioFinished=true`
+     * **主动放弃了**它（见 `AiConversationService.sendAiTextViaLink` 注释）。
+     *
+     * ⚠️⚠️ **这一帧绝不能在眼镜端本机 `sendAi` 发出**（v1 试过，实测 21:07:32 官方毫无反应）：
+     * 真机 trace 显示 `AudioFinishedHandler` 只被 `[wire] recv cmd=Ai`（**入站**：手机→眼镜）
+     * 触发；眼镜本机 `sendAi` 是**出站**帧，走 `[wire] cmd=Ai caps=...`，官方自己的分发器
+     * 收不到（同理 `KeyDown_Client`/`open` 等本机 sendAi 也不会进官方链路）。
+     * 所以本方法改为：**推 RFCOMM 控制标记上行给手机**，由手机经 CXR `Ai` 频道下发
+     * `TTS_AudioFinished`（对眼镜而言是入站 → 官方必然走 `AudioFinishedHandler`）。
+     *
+     * 为什么仍由眼镜端决定「何时」：只有它拿得到 TTS 真实播放结束时刻
+     *（`TtsPlaybackHelper` 的 `onFinished` ← `ITtsListener.onTtsStop`），
+     * 手机端下发 `tts_play` 后只有「已发出」，没有播放进度。
+     */
+    private fun requestOfficialContinueListening() {
+        val ok = AsrPushServer.pushControl(LinkProtocol.MARKER_CONTINUE_DIALOG)
+        Log.i(TAG, "continue dialog: continue-dialog marker -> $ok (phone will send TTS_AudioFinished)")
+    }
+
+    /**
+     * 执行自动续听：请手机端下发 `TTS_AudioFinished` 让官方重开麦，并把上一轮回复文字补回界面。
+     *
+     * 执行前重查一遍开关与链路状态——排队期间用户可能已手动唤醒并开始说话
+     *（那条路径的 ASR_End 拦截会 cancel 本任务），这里是双保险。
+     */
+    private fun runContinueDialog() {
+        pendingContinueDialog = null
+        if (!isCustomAiMode() || !isContinueDialogEnabled(this)) return
+        // 手机端下行序列（KeyDown_Client→open→…→TTS_Result）仍在途中时不要抢链路，
+        // 让本轮下行自然走完（下一次播完还会再调度）。
+        if (System.currentTimeMillis() < downlinkUntilMs) {
+            Log.i(TAG, "continue dialog: postponed (downlink in progress)")
+            return
+        }
+        if (takeoverExecutor.isShutdown) {
+            Log.w(TAG, "continue dialog skipped: executor already shutdown")
+            return
+        }
+        runCatching {
+            // 复用本地接管的串行执行器：下面含 sleep，
+            // 与 ASR_End 的本地接管互斥排队，避免两条会话序列指令交错。
+            takeoverExecutor.execute {
+                try {
+                    Log.i(TAG, "continue dialog: asking phone to reopen mic for next turn")
+                    // 关键：让**手机端**下发 TTS_AudioFinished，触发官方续听链路（重开拾音）。
+                    // 本机 sendAi 发这帧官方收不到（出站帧），实测无效，见方法注释。
+                    requestOfficialContinueListening()
+                    // 手机端要经 RFCOMM 上行 + CXR 下行一个来回，官方才走完
+                    // startNewTalk/showAudioFinishUI，等它落定再补文字（见常量注释）。
+                    Thread.sleep(CONTINUE_LISTEN_SETTLE_MS)
+                    // 安全：TTS_Result 在官方侧只负责显示，播报由手机端 tts_play 驱动，不会二次发声。
+                    lastLabReply?.takeIf { it.isNotBlank() }?.let { showAiReply(it) }
+                    Log.i(TAG, "continue dialog: reopen requested via phone, waiting for user speech")
+                } catch (e: Exception) {
+                    Log.e(TAG, "continue dialog error", e)
+                }
+            }
+        }.onFailure { Log.w(TAG, "continue dialog rejected: ${it.message}") }
     }
 
     private var lyricView: TextView? = null
@@ -1996,6 +2214,28 @@ class KeyButtonService : Service() {
             Log.i(TAG, "Quiz config saved: enabled=$enabled")
         } catch (e: Exception) {
             Log.e(TAG, "handleQuizConfig error", e)
+        }
+    }
+
+    /**
+     * 保存手机端下发的「连续对话（多轮免唤醒）」开关。
+     *
+     * 落 prefs 后 [isContinueDialogEnabled] 立即生效（无需重连/重启服务，行为类开关即时生效）。
+     * 关闭时同时撤销排队中的自动续听 —— 用户可能恰好在播报结束的瞬间把开关关掉。
+     */
+    private fun handleContinueDialogConfig(args: Caps) {
+        try {
+            val enabled = AiChannel.decodeContinueDialog(capsToStrings(args)) ?: run {
+                Log.w(TAG, "handleContinueDialogConfig: rejected invalid/unsupported payload (size=${args.size()})")
+                return
+            }
+            getSharedPreferences(PREFS_NAME, 0).edit()
+                .putBoolean(KEY_CONTINUE_DIALOG, enabled)
+                .apply()
+            if (!enabled) cancelPendingContinueDialog()
+            Log.i(TAG, "Continue dialog config saved: enabled=$enabled")
+        } catch (e: Exception) {
+            Log.e(TAG, "handleContinueDialogConfig error", e)
         }
     }
 

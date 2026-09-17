@@ -133,6 +133,8 @@ class CxrLHiRokidSession(
          *  与发送键旁的「思考」切换按钮共享此键（ChatScreen 直接读写同一 prefs） */
         internal const val KEY_AI_THINKING = "ai_thinking"
         internal const val KEY_KEY_QUIZ_ENABLED = "key_quiz_enabled"
+        /** 「连续对话（多轮免唤醒）」开关：眼镜端每轮 Lab 回复的 TTS 播完后自动重开官方 AI 会话 */
+        internal const val KEY_KEY_CONTINUE_DIALOG = "chat_continue_dialog"
 
         private fun tokenPrefKey(hostApp: RokidHostApp) = KEY_TOKEN_PREFIX + hostApp.packageName
     }
@@ -185,6 +187,9 @@ class CxrLHiRokidSession(
         },
         onPhotoAsk = { startPhotoAsk() },
         onToolCall = { payload -> handleAiuiToolCall(payload) },
+        // 连续对话续听：眼镜端 Lab 回复 TTS 播完 → 手机端下发 TTS_AudioFinished，
+        // 触发官方 AudioFinishedHandler → startNewTalk 重开拾音（必须在手机侧发，见常量注释）。
+        onContinueDialog = { requestGlassesContinueDialog() },
         // 兜底轮询复用全 App 共享 ADB 会话：自建会话会挤断用户正在用的 ADB 工具/投屏会话。
         // 长连接（屏幕镜像/手机投屏/文件浏览）占用隧道时让路 —— 返回 null 触发退避，
         // 避免这条「兜底」通道反而把用户正在用的长连接挤断。
@@ -324,6 +329,16 @@ class CxrLHiRokidSession(
         deviceControl.sendWifiConfig(ssid, password, onResult)
     fun sendKeyQuizConfig(enabled: Boolean, onResult: ((Boolean) -> Unit)? = null) =
         deviceControl.sendKeyQuizConfig(enabled, onResult)
+    /** 下发「连续对话」开关到眼镜端。手机端本地持久化放在这里（而不是只在 DeviceControlService）：
+     *  眼镜不在线 / 前置条件不满足时，用户的选择同样要记住，下次设置页打开能读回。 */
+    fun sendContinueDialogConfig(enabled: Boolean, onResult: ((Boolean) -> Unit)? = null) {
+        runCatching {
+            appContext.getSharedPreferences(AI_PREFS, 0).edit()
+                .putBoolean(KEY_KEY_CONTINUE_DIALOG, enabled)
+                .apply()
+        }
+        deviceControl.sendContinueDialogConfig(enabled, onResult)
+    }
     fun stopApp(packageName: String, onStopResult: ((Boolean) -> Unit)? = null) =
         deviceControl.stopApp(packageName, onStopResult)
     fun uninstallApp(packageName: String, onUninstallResult: ((Boolean) -> Unit)? = null) =
@@ -351,6 +366,15 @@ class CxrLHiRokidSession(
     ) = aiConversation.sendAiTextMessage(text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, onTrace, readOnlyTools)
 
     fun abortCurrentAi() = aiConversation.abortCurrentAi()
+
+    /**
+     * 连续对话续听：眼镜端 Lab 回复 TTS 播完后推标记上来，由本方法经 CXR `Ai` 频道
+     * 下发 `TTS_AudioFinished`，触发官方 `AudioFinishedHandler → startNewTalk` 重开拾音。
+     *
+     * 必须是手机侧下发：该帧只有**入站**（手机→眼镜）才被官方分发器处理，
+     * 眼镜端本机 `sendAi` 是出站帧、官方收不到（真机 trace 实测）。
+     */
+    fun requestGlassesContinueDialog(): Boolean = aiConversation.requestGlassesContinueDialog()
 
     /** 注册眼镜端语音对话的 UI 回调（乐奇聊天界面进入时调用） */
     fun setGlassesAiUiCallbacks(onText: (String) -> Unit, onReply: (String) -> Unit) =
@@ -616,6 +640,14 @@ class CxrLHiRokidSession(
         return runCatching {
             appContext.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_KEY_QUIZ_ENABLED, false)
         }.getOrDefault(false)
+    }
+
+    /** 当前「连续对话（多轮免唤醒）」开关状态（手机端本地持久化；实际执行方在眼镜端）。
+     *  默认开启：这是眼镜语音对话的默认体验（答完即可接着说），不需要的用户可在设置里关掉。 */
+    fun isContinueDialogEnabled(): Boolean {
+        return runCatching {
+            appContext.getSharedPreferences(AI_PREFS, 0).getBoolean(KEY_KEY_CONTINUE_DIALOG, true)
+        }.getOrDefault(true)
     }
 
     /** 清空 Agent 会话记忆（用户点击清空对话按钮时调用） */

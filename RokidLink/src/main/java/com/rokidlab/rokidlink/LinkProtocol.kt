@@ -26,6 +26,21 @@ object LinkProtocol {
     const val MARKER_TOOL_CALL = "__LAB_TOOL__"
     const val MARKER_ASR_READY = "__LAB_ASR_READY__"
 
+    /**
+     * 连续对话（多轮免唤醒）续听请求：**眼镜端 → 手机端**，经 RFCOMM 推送通道上行。
+     *
+     * 为什么必须由眼镜端发起、却由手机端执行：官方 AssistServer 的 `AudioFinishedHandler`
+     * 只处理**入站**（手机→眼镜）的 `Ai` 帧（真机 `_g_proto_trace.md` 实测：`[wire] recv
+     * cmd=Ai` → `AudioFinishedHandler handle` → `aiAudioFinishWake` → `startNewTalk`）。
+     * 眼镜本机 `sendAi("TTS_AudioFinished")` 是**出站**帧，官方自己的分发器收不到，
+     * 实测（21:07:32）发完官方侧毫无反应 → 麦克风不会重开。
+     *
+     * 而「何时算播完」只有眼镜端知道（手机端下发 `tts_play` 后拿不到播放进度）。
+     * 所以：眼镜端在 TTS 真正播完的时刻推本标记，手机端收到后经 CXR `Ai` 频道下发
+     * `TTS_AudioFinished`（入站 → 官方重开拾音）。
+     */
+    const val MARKER_CONTINUE_DIALOG = "__LAB_CONTINUE_DIALOG__"
+
     // ── ASR 推送通道 WiFi 握手（防同网段主机挤占）──
     /**
      * ASR 推送通道（眼镜端 [AsrPushServer] 的 7660 TCP 监听）WiFi 建链握手令牌。

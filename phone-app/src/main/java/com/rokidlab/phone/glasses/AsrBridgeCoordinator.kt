@@ -48,6 +48,16 @@ internal class AsrBridgeCoordinator(
     /** 收到 AIUI 页面工具调用（TOOL_CALL_PREFIX + JSON 载荷）：交 ToolGateway 执行并回传结果 */
     private val onToolCall: (String) -> Unit,
     /**
+     * 收到「连续对话续听」标记（[LinkProtocol.MARKER_CONTINUE_DIALOG]）：
+     * 眼镜端 Lab 回复的 TTS 已真正播完，请手机端经 CXR `Ai` 频道下发 `TTS_AudioFinished`，
+     * 触发官方 `AudioFinishedHandler → aiAudioFinishWake → startNewTalk` 重开拾音。
+     *
+     * 为什么必须绕这么一圈：该帧只有**入站**（手机→眼镜）才被官方分发器处理，
+     * 眼镜端本机 `sendAi` 是出站帧、官方收不到（真机 trace 实测，详见
+     * [AiConversationService.requestGlassesContinueDialog]）。
+     */
+    private val onContinueDialog: () -> Unit = {},
+    /**
      * 全 App 共享的 ADB 会话提供者（= `app.cxrL::getAdbShellClient`）。
      *
      * 兜底轮询**必须**复用它，绝不能自建会话：手机侧蓝牙栈对「同一设备 + 同一 SCN」
@@ -98,6 +108,12 @@ internal class AsrBridgeCoordinator(
          *  与其他标记不同，它是【前缀】而非整条相等 —— 后面跟着工具参数。 */
         private val TOOL_CALL_PREFIX = LinkProtocol.MARKER_TOOL_CALL
         private val ASR_READY_MARKER = LinkProtocol.MARKER_ASR_READY
+        /**
+         * 连续对话续听标记（眼镜端 → 手机端）：眼镜端 Lab 回复 TTS 播完后推送，
+         * 手机端据此下发 `TTS_AudioFinished` 让官方重开拾音（详见
+         * [LinkProtocol.MARKER_CONTINUE_DIALOG] 与 [onContinueDialog]）。
+         */
+        private val CONTINUE_DIALOG_MARKER = LinkProtocol.MARKER_CONTINUE_DIALOG
 
         /**
          * 相同文字的「回声抑制」窗口（毫秒）。
@@ -340,6 +356,21 @@ internal class AsrBridgeCoordinator(
                 // （语音正常但文字丢失，实测 12:03 双 open 竞态）。
                 if (text == ASR_READY_MARKER) {
                     Log.i(TAG, "ASR_READY received via RFCOMM push (glasses already took over, skip interrupt)")
+                    return@AsrPushClient
+                }
+                // 连续对话续听标记：眼镜端 Lab 回复 TTS 播完 → 由手机端下发 TTS_AudioFinished，
+                // 让官方 AudioFinishedHandler 重开拾音（眼镜本机发这帧官方收不到，见常量注释）。
+                // 必须切后台线程：sendCustomCmd 在链路半开时可能阻塞到超时，
+                // 同步执行会卡死 RFCOMM 读线程导致后续 ASR 文字全部丢失。
+                if (text == CONTINUE_DIALOG_MARKER) {
+                    Log.i(TAG, "continue-dialog marker received via RFCOMM push (TTS playback finished)")
+                    Thread {
+                        try {
+                            onContinueDialog()
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "onContinueDialog failed", e)
+                        }
+                    }.apply { name = "continue-dialog"; isDaemon = true }.start()
                     return@AsrPushClient
                 }
                 // 更新去重游标：推送文字无真实时间戳，用接收时刻作为游标，

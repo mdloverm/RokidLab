@@ -149,7 +149,7 @@ object TtsPlaybackHelper {
      * stop 丢块。本方法自身不 sleep（可能在桥接回调线程被调用），实际播放逻辑全部
      * 在 playExecutor 线程。
      */
-    fun play(context: Context, text: String) {
+    fun play(context: Context, text: String, onFinished: (() -> Unit)? = null) {
         if (text.isBlank()) {
             Log.w(TAG, "play: text is blank, ignored")
             return
@@ -178,6 +178,16 @@ object TtsPlaybackHelper {
                 }
                 Log.i(TAG, "chunk ${i + 1}/${chunks.size} playing (${chunk.length}字)")
                 invokePlayTtsMsg(server, chunk)
+            }
+            // 所有分块播完 —— 这是「本轮语音真正播完」的唯一可靠时刻（由 ITtsListener.onTtsStop
+            // 驱动，无需估算时长）。代际一致才回调：被新播报抢占或用户 stop() 主动停播时，
+            // 循环内已 return@execute，本行不会执行；此处再比一次是防并发窗口的双保险。
+            if (epoch == playEpoch) {
+                Log.i(TAG, "play finished: ${chunks.size} chunk(s), notify onFinished")
+                runCatching { onFinished?.invoke() }
+                    .onFailure { Log.e(TAG, "onFinished callback error", it) }
+            } else {
+                Log.i(TAG, "play finished but superseded (epoch $epoch != $playEpoch), skip onFinished")
             }
         }
     }

@@ -312,6 +312,8 @@
     <string name="chat_settings_base_url">Base URL</string>
     <string name="chat_settings_api_key">API Key</string>
     <string name="chat_settings_model">Model</string>
+    <string name="chat_settings_continue">Continuous Chat</string>
+    <string name="chat_settings_continue_hint">After each reply finishes playing on the glasses, listening restarts automatically. No wake word needed — just keep talking.</string>
     <string name="chat_settings_quiz">Key Quiz Mode</string>
     <string name="chat_settings_quiz_hint">When ON, a short press on the temple button = Photo &amp; Ask AI; short-press shortcut is overridden, long press is unaffected.</string>
     <string name="chat_settings_quiz_instruction">Quiz Instruction</string>

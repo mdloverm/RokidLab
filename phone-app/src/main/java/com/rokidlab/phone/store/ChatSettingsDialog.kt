@@ -93,6 +93,8 @@ internal fun ChatSettingsDialog(
     var apiKeyFocused by remember { mutableStateOf(false) }
     var model by remember { mutableStateOf(onlineCfg?.model.orEmpty()) }
     var quizEnabled by remember { mutableStateOf(session?.isKeyQuizEnabled() ?: false) }
+    // 连续对话（多轮免唤醒）：行为类开关 —— 切换即下发眼镜端并落盘，不参与本页「保存」批量提交
+    var continueDialog by remember { mutableStateOf(session?.isContinueDialogEnabled() ?: true) }
     // 拍照答题指令：注入 AI 提示词控制回答方式（如「只显示答案」「给出解题步骤」）
     var quizInstruction by remember { mutableStateOf(initialCfg?.quizInstruction.orEmpty()) }
     // 对话模型来源三段选择：
@@ -429,6 +431,40 @@ internal fun ChatSettingsDialog(
             }
 
             } // if (!useLocal && customAiMode)：在线服务（地址/密钥/模型）字段结束
+
+            Spacer(Modifier.height(16.dp))
+            // 连续对话开关（多轮免唤醒）：切换即时生效（下发眼镜端），不必再点「保存」
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.chat_settings_continue),
+                        color = BrewTextBright,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = stringResource(R.string.chat_settings_continue_hint),
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                    )
+                }
+                Switch(
+                    checked = continueDialog,
+                    onCheckedChange = {
+                        continueDialog = it
+                        session?.sendContinueDialogConfig(it)
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = BrewChat,
+                        uncheckedTrackColor = BrewPanelHi,
+                        checkedThumbColor = BrewBg,
+                        uncheckedThumbColor = BrewMuted,
+                    ),
+                )
+            }
 
             Spacer(Modifier.height(16.dp))
             // 按键答题开关

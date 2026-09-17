@@ -148,11 +148,16 @@ internal fun MainActivity.buildStoreActions(): StoreActions = StoreActions(
             }
         },
         onInstallLink = { onDone ->
-            installRokidLinkForGuide { success ->
-                if (success) {
-                    prerequisitesState = prerequisitesState.copy(rokidLinkInstalled = true)
+            // 与其他「装到眼镜」的入口对齐（商店 onInstall / installRokidLinkToGlasses /
+            // reinstallRokidLinkOnGlasses 都走 runWithPrerequisites）：引导页这条此前是唯一
+            // 绕过权限/蓝牙前置的安装入口，缺蓝牙运行时权限时不会拉起请求框而直接硬跑。
+            runWithPrerequisites {
+                installRokidLinkForGuide { success ->
+                    if (success) {
+                        prerequisitesState = prerequisitesState.copy(rokidLinkInstalled = true)
+                    }
+                    onDone(success)
                 }
-                onDone(success)
             }
         },
         onSkipGuideStep = {

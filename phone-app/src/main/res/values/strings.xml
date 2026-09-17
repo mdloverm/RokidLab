@@ -313,6 +313,8 @@
     <string name="chat_settings_base_url">服务地址</string>
     <string name="chat_settings_api_key">API 密钥</string>
     <string name="chat_settings_model">模型名</string>
+    <string name="chat_settings_continue">连续对话</string>
+    <string name="chat_settings_continue_hint">每轮回复在眼镜上播报结束后自动重新开始收听，无需再喊唤醒词，直接接着说下一句</string>
     <string name="chat_settings_quiz">按键答题</string>
     <string name="chat_settings_quiz_hint">打开后短按镜腿按键 = 拍照问 AI，原短按功能失效，长按不受影响</string>
     <string name="chat_settings_quiz_instruction">答题指令</string>

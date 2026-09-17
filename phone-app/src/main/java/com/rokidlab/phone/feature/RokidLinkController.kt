@@ -218,12 +218,18 @@ internal class RokidLinkController(private val activity: MainActivity) {
                 packageNames = listOf("com.rokidlab.rokidlink"),
                 onResult = { _, isInstalled -> installed = isInstalled },
                 onComplete = {
-                    if (installed == false) {
-                        android.util.Log.i("RokidLinkInstall", "查询确认未安装，直接上传安装")
-                        installRokidLinkForGuideCore(onResult)
-                    } else {
-                        android.util.Log.i("RokidLinkInstall", "RokidLink 已安装或状态未知（installed=$installed），先停止再卸载旧版")
-                        uninstallThenInstallForGuide(onResult)
+                    // onComplete 由 SDK 回调经主线程 post 进来，而它上游的 finishQueries() 会先
+                    // session.cleanup() 把链路整个拆掉（cxrLink=null / cxrlConnected=false）；
+                    // 随后无论是安装还是「先停后卸再装」都要重建会话（阻塞 IO）→ 必须切回 IO，
+                    // 否则建链卡在主线程（ANR）。
+                    runCxrOperation {
+                        if (installed == false) {
+                            android.util.Log.i("RokidLinkInstall", "查询确认未安装，直接上传安装")
+                            installRokidLinkForGuideCore(onResult)
+                        } else {
+                            android.util.Log.i("RokidLinkInstall", "RokidLink 已安装或状态未知（installed=$installed），先停止再卸载旧版")
+                            uninstallThenInstallForGuide(onResult)
+                        }
                     }
                 },
             )

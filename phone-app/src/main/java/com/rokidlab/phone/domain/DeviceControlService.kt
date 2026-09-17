@@ -114,6 +114,26 @@ class DeviceControlService(private val session: com.rokidlab.phone.glasses.CxrLH
         }
     }
 
+    /**
+     * 是否需要「等会话恢复」再发起操作 —— 关键是区分 `cxrlConnected=false` 的两种成因：
+     *
+     * ① **有建链正在进行**（`cxrLink != null`：如 stopApp/uninstallApp 刚发起、宿主服务正在重启）
+     *    → 等它把会话拉起来复用即可，值得等；
+     * ② **没有任何在建会话**（`cxrLink == null`）→ **必须直接新建会话，绝不能等**。
+     *
+     * ② 为什么不能等：`cxrlConnected` 只由**新建 link** 的 `onConnected` 回调置位
+     * （见 `ConnectionService.connectAndRunCustomAppOperation`），等待期间没人建链
+     * ⇒ 空等到超时也永远为 false。典型触发场景是 `queryInstalledApps` 结束时的
+     * `finishQueries()`：它**先** `cleanup()`（拆链路、`cxrLink=null`、`cxrlConnected=false`）
+     * **再**回调 `onComplete`，而调用方紧接着就发安装请求 —— 旧实现因此**必然**空等 25s 后
+     * 报失败，且安装指令根本没发到眼镜。
+     * 现象：引导页「安装失败 / 请确保眼镜已通过蓝牙连接，然后重试」、
+     * 眼镜端日志只有 `Sys_App_Query`、没有任何安装请求（用户实测反馈）。
+     * 而「先下载再安装」的商店路径不经过这段 cleanup 紧邻，所以一直是正常的。
+     */
+    private fun needSessionRecoveryWait(): Boolean =
+        !session.cxrlConnected && session.cxrLink != null
+
     fun installApk(apkFile: File, onInstallResult: ((Boolean) -> Unit)? = null) {
         // 优先从 APK 头读取包名，兜底用文件名
         val packageName = runCatching { readPackageName(apkFile) }.getOrNull() ?: apkFile.name
@@ -128,7 +148,9 @@ class DeviceControlService(private val session: com.rokidlab.phone.glasses.CxrLH
         // 若此刻立刻发起安装，会在未就绪的会话上必然超时失败 —— 眼镜端连安装指令都收不到
         // （表现为「RokidLink 安装失败」，且眼镜 /sdcard/Download 里仍是旧包）。
         // 因此先等会话恢复；等待放后台线程，避免调用方（主线程）ANR。
-        if (!session.cxrlConnected) {
+        // 但**只对「有建链正在进行」这种情况等**（见 needSessionRecoveryWait）：
+        // 若链路已被 cleanup 拆干净，等下去永远等不到 onConnected，必须直接新建会话。
+        if (needSessionRecoveryWait()) {
             Thread({
                 if (!awaitCxrSession()) {
                     session.onStatus("眼镜 CXR 服务未就绪（约需 20 秒重启），请稍后重试")
@@ -138,6 +160,9 @@ class DeviceControlService(private val session: com.rokidlab.phone.glasses.CxrLH
                 installApk(apkFile, packageName, onInstallResult)
             }, "install-apk-wait-link").apply { isDaemon = true }.start()
             return
+        }
+        if (!session.cxrlConnected) {
+            android.util.Log.i("CxrLInstall", "installApk: 无在建会话（cxrLink=null，多为 query 结束时的 cleanup），跳过恢复等待，直接新建会话安装")
         }
         val targetHostApp = session.hostApp
         android.util.Log.i("CxrLInstall", "installApk: session.hostApp=$targetHostApp, packageName=$packageName, apkFile=$apkFile")
@@ -431,6 +456,97 @@ class DeviceControlService(private val session: com.rokidlab.phone.glasses.CxrLH
         )
     }
 
+    /**
+     * 下发「连续对话（多轮免唤醒）」开关到眼镜端。
+     *
+     * 开关打开后：眼镜端把每条 Lab 回复的本地 TTS「播放结束」当作一轮结束信号，
+     * 自动重新开启官方 ai_assist 会话（等价于用户再喊一次唤醒词），用户可直接接着说下一句。
+     * 决策点刻意放在眼镜端 —— 只有它拿得到 TTS 真实播完的时刻（ITtsListener.onTtsStop）；
+     * 手机端下发 tts_play 后没有播放进度，按文本长度估算会提前开麦，把播报尾音收进麦克风。
+     */
+    fun sendContinueDialogConfig(enabled: Boolean, onResult: ((Boolean) -> Unit)? = null) {
+        // onResult 防重：超时 onFailure 与迟到的回调都可能触发，保证只通知一次
+        var resultDelivered = false
+        fun deliver(success: Boolean) {
+            if (resultDelivered) return
+            resultDelivered = true
+            onResult?.invoke(success)
+        }
+        // 注：手机端本地持久化不在这里做 —— 由 CxrLHiRokidSession.sendContinueDialogConfig 统一写，
+        // 保证「眼镜不在线 / 前置条件不满足」时用户的选择依然被记住（本类只负责下发到眼镜端）。
+        val targetHostApp = session.hostApp
+        if (!session.hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
+            deliver(false)
+            return
+        }
+
+        // 与 sendKeyQuizConfig 同策略：链路已就绪时复用现有连接直发，不走 connectAndRunCustomAppOperation
+        // 的 session.cleanup() 全链路重建（重建期间 3~5s 内 ASR 推送通道与 ADB 隧道均不可用，会丢语音）。
+        val existingLink = session.cxrLink
+        if (existingLink != null && session.cxrlConnected && session.glassBtConnected) {
+            val caps = Caps()
+            AiChannel.encodeContinueDialog(enabled).forEach { caps.write(it) }
+            val r = synchronized(session.aiCmdLock) {
+                existingLink.sendCustomCmd(AiChannel.TOPIC_CONTINUE_DIALOG, caps)
+            }
+            Log.i(TAG, "sendContinueDialogConfig: reuse existing link, sendCustomCmd(${AiChannel.TOPIC_CONTINUE_DIALOG}, enabled=$enabled) -> $r")
+            if (r == 0) {
+                deliver(true)
+                return
+            }
+            Log.w(TAG, "sendContinueDialogConfig: reuse failed (r=$r), fall back to full connect")
+        }
+
+        session.onBusyChanged(true)
+        session.connection.connectAndRunCustomAppOperation(
+            authToken = session.token.orEmpty(),
+            targetHostApp = targetHostApp,
+            operation = CxrAppOperation(
+                packageName = "com.rokidlab.rokidlink",
+                timeoutMillis = 10_000,
+                timeoutMessage = "continue dialog config timeout",
+                bindMessage = "Sending continue dialog config",
+                configureFailureMessage = "Configure CXR-L CUSTOMAPP session failed",
+                bindFailureMessage = "Bind host service failed",
+                showConnectionStatus = false,
+                onReady = { link ->
+                    // CUSTOMAPP 场景构建完成后 cxr-service 才会把自定义指令路由到眼镜端：
+                    // 必须先 appStart 并等 onOpenAppResult 成功，再 sendCustomCmd（与 launchApp / quiz 一致）
+                    val entryUri = "com.rokidlab.rokidlink.MainActivity"
+                    link.appStart(entryUri, session.connection.glassAppCallback(
+                        onStart = { success ->
+                            if (success) {
+                                // appStart 会让 RokidLink 真实 resume，置一次性冷却消费该 resume，
+                                // 避免被误判定为「按键触发的拍照答题」（与 sendKeyQuizConfig 一致）
+                                session.quizResumeCooling = true
+                                session.appScope.launch {
+                                    delay(3000)
+                                    session.quizResumeCooling = false
+                                }
+                                session.registerKeyQuizResumeListener(link)
+                                val caps = Caps()
+                                AiChannel.encodeContinueDialog(enabled).forEach { caps.write(it) }
+                                val result = link.sendCustomCmd(AiChannel.TOPIC_CONTINUE_DIALOG, caps)
+                                Log.i(TAG, "sendCustomCmd(${AiChannel.TOPIC_CONTINUE_DIALOG}, enabled=$enabled) -> $result")
+                                deliver(result == 0)
+                            } else {
+                                Log.w(TAG, "appStart failed, cannot send continue dialog config")
+                                deliver(false)
+                            }
+                            session.connection.completeActiveOperation()
+                            session.onBusyChanged(false)
+                        }
+                    ))
+                },
+                onFailure = {
+                    session.cleanup()
+                    session.onBusyChanged(false)
+                    deliver(false)
+                },
+            ),
+        )
+    }
+
     fun stopApp(packageName: String, onStopResult: ((Boolean) -> Unit)? = null) {
         val targetHostApp = session.hostApp
         if (!session.hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
@@ -463,8 +579,9 @@ class DeviceControlService(private val session: com.rokidlab.phone.glasses.CxrLH
     }
 
     fun uninstallApp(packageName: String, onUninstallResult: ((Boolean) -> Unit)? = null) {
-        // 同 installApk：会话未就绪时先等恢复，否则卸载必然 30s 超时
-        if (!session.cxrlConnected) {
+        // 同 installApk：见 needSessionRecoveryWait()（query 结束后的 cleanup 会让
+        // cxrlConnected 恒 false，空等 25s 必然失败）
+        if (needSessionRecoveryWait()) {
             Thread({
                 if (!awaitCxrSession()) {
                     session.onStatus("眼镜 CXR 服务未就绪（约需 20 秒重启），请稍后重试")
@@ -474,6 +591,9 @@ class DeviceControlService(private val session: com.rokidlab.phone.glasses.CxrLH
                 uninstallApp(packageName, onUninstallResult)
             }, "uninstall-app-wait-link").apply { isDaemon = true }.start()
             return
+        }
+        if (!session.cxrlConnected) {
+            android.util.Log.i("CxrLInstall", "uninstallApp: 无在建会话（cxrLink=null），跳过恢复等待，直接新建会话卸载")
         }
         val targetHostApp = session.hostApp
         if (!session.hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {

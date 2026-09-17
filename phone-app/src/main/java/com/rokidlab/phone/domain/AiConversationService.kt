@@ -392,6 +392,49 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
     }
 
     /**
+     * 请求眼镜端官方 AssistServer 重开拾音 —— 「连续对话（多轮免唤醒）」的下一轮入口。
+     *
+     * ⚠️ **为什么这一帧必须由手机端发（而不是眼镜端本机 `sendAi`）**：
+     * 官方 AssistServer 的 `AudioFinishedHandler` 只处理**入站**（手机→眼镜）的 `Ai` 帧
+     * （真机 `_g_proto_trace.md` 实测：`[wire] recv cmd=Ai` → `AudioFinishedHandler handle`
+     * → `aiAudioFinishWake` → `AIModeManager.startNewTalk` → `CXRServiceManager
+     * startAudioStream`）。眼镜端本机 `sendAi("TTS_AudioFinished")` 是**出站**帧
+     * （`[wire] cmd=Ai caps=...`），官方自己的分发器收不到 —— 实测 21:07:32 发完官方侧
+     * 毫无反应，麦克风不重开，用户说下一句没人听。
+     *
+     * 触发时机由眼镜端决定（只有它拿得到 TTS 真实播完时刻，见 `KeyButtonService`），
+     * 眼镜端推 [LinkProtocol.MARKER_CONTINUE_DIALOG] 上来后本方法经 CXR `Ai` 频道下发。
+     *
+     * 效果：官方 `startNewTalk` 会重开会话（`showAudioFinishUI` 保留已显示的上一轮回复，
+     * 只是追加一条新气泡），并重开麦克风 —— 用户无需再说唤醒词。
+     *
+     * 按条加锁（[CxrLHiRokidSession.aiCmdLock]）与下行主链路串行，避免与
+     * `TTS_Result`/`tts_play` 序列交错。失败只记日志：续听是增强体验，不能影响主流程。
+     */
+    internal fun requestGlassesContinueDialog(): Boolean {
+        val link = session.cxrLink
+        if (link == null || !session.cxrlConnected) {
+            Log.w(TAG, "requestGlassesContinueDialog: no active link, skipped")
+            return false
+        }
+        return try {
+            val caps = Caps()
+            caps.write("TTS_AudioFinished")
+            caps.write("true")
+            val r = synchronized(session.aiCmdLock) {
+                // 加锁期间链路可能被 cleanup 替换，复查同一条 link 再发
+                if (session.cxrLink !== link || !session.cxrlConnected) return@synchronized -1
+                link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, caps)
+            }
+            Log.i(TAG, "continue dialog: sendCustomCmd(Ai, TTS_AudioFinished, true) -> $r")
+            r == 0
+        } catch (e: Exception) {
+            Log.e(TAG, "requestGlassesContinueDialog failed", e)
+            false
+        }
+    }
+
+    /**
      * 用已连接的 CXRLink 直接发送 AI 文字指令。
      *
      * 完整流程（复刻官方 App 行为，12:18:45 日志验证）：
