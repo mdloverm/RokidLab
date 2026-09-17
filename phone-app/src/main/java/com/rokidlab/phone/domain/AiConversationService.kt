@@ -215,9 +215,9 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         skipTtsAudioFinished: Boolean = false,
         /** 是否在眼镜端重发用户问题（ASR_Result）：眼镜语音唤醒链路中官方已显示提问，避免重复显示 */
         showAsrResult: Boolean = true,
-        /** 眼镜端是否已本地接管**麦克风/提问显示**（KeyButtonService 在 ASR_End 后本地接管）。
-         *  现在它**只**用来跳过打断用的 `Exit`（实测 `Exit` 不清空且会让后续文本不上屏）；
-         *  KeyDown_Client/open/ASR_Result/ASR_End 一律照发 —— 详见 sendAiTextViaLink 步骤0 注释。 */
+        /** 眼镜端是否已本地接管显示（KeyButtonService 在 ASR_End 后已本地打开会话并显示提问）：
+         *  为 true 时下行只发 DeepSeek 回复（TTS_Result + tts_play），跳过 KeyDown/open/ASR_Result/ASR_End。
+         *  ⚠️ 别给它补发 KeyDown/open：实测会让 Lab 回复「有声音没文字」（见 sendAiTextViaLink 步骤0 注释）。 */
         localTakeover: Boolean = false,
         /** 附加指令：注入 system 提示词控制回答方式（如「只显示答案」「给出解题步骤」） */
         instruction: String? = null,
@@ -346,9 +346,9 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 skipTtsAudioFinished = true,
                 // 官方 ASR 已在眼镜上显示提问，下行不再重发避免重复显示
                 showAsrResult = false,
-                // 眼镜端 KeyButtonService 已本地接管麦克风与提问显示。
-                // ⚠️ 注意：这只影响 `Exit` 的发送；KeyDown_Client/open/ASR_Result/ASR_End
-                // 现在**仍然照发**（渲染闸门 status4 + 换干净气泡，见 sendAiTextViaLink 步骤0 注释）。
+                // 眼镜端 KeyButtonService 已在 ASR_End 后本地打开会话并显示提问（本地接管），
+                // 下行只发 DeepSeek 回复，不再重发 KeyDown/open/ASR_End（避免官方界面残留"思考中"等待）
+                // ⚠️ 也不要改成 false：实测补发 KeyDown/open 会让 Lab 回复只出声不上屏（已回滚）。
                 localTakeover = true,
             )
         } catch (e: Exception) {
@@ -459,9 +459,9 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         skipTtsAudioFinished: Boolean = false,
         /** 是否在眼镜端重发用户问题（ASR_Result）：语音唤醒链路中官方已显示提问，传 false 避免重复 */
         showAsrResult: Boolean = true,
-        /** 眼镜端是否已本地接管**麦克风/提问显示**（KeyButtonService 在 ASR_End 后本地接管）。
-         *  现在它**只**用来跳过打断用的 `Exit`（实测 `Exit` 不清空且会让后续文本不上屏）；
-         *  KeyDown_Client/open/ASR_Result/ASR_End 一律照发 —— 详见 sendAiTextViaLink 步骤0 注释。 */
+        /** 眼镜端是否已本地接管显示（KeyButtonService 在 ASR_End 后已本地打开会话并显示提问）：
+         *  为 true 时下行只发 DeepSeek 回复（TTS_Result + tts_play），跳过 KeyDown/open/ASR_Result/ASR_End。
+         *  ⚠️ 别给它补发 KeyDown/open：实测会让 Lab 回复「有声音没文字」（见 sendAiTextViaLink 步骤0 注释）。 */
         localTakeover: Boolean = false,
         /** 附加指令：注入 system 提示词控制回答方式（如「只显示答案」「给出解题步骤」） */
         instruction: String? = null,
@@ -1247,58 +1247,55 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             Log.i(TAG, "sendCustomCmd(Ai, TTS_Result, 占位“正在思考…”) -> $shieldResult (shield official text)")
         }
 
-        // ===== 步骤0+1+2: 换一个干净气泡 + 显示提问 + 结束识别 =====
-        // ⚠️ 2026-09-17 真机取证后定案（两条硬规律，都踩过）：
-        //   ① **渲染闸门**：`TTS_Result` 只有在「当前气泡 status == 4」时才会被渲染
-        //      （`AiAssistantDialog showUpdateTTSUI` 依赖 `AsrEndHandler → status4`）。
-        //      之前 localTakeover 跳过 ASR_Result/ASR_End，重开的气泡停在 status 1
-        //      ⇒ 回复「只出声不上屏」。所以这里 **ASR_Result + ASR_End 必须发**。
-        //   ② **气泡是追加式的**：官方自己的答案会在官方 `ASR_End` 后 ~3ms 追加进**当前气泡**，
-        //      且无法抹除（没有"立即清空"命令；只有 ~10s 空闲后的整体 teardown 才会 clearData）。
-        //      唯一出路＝**让我们的文字不用那个脏气泡**：先 `open`（→ startNewTalk 新建空气泡，
-        //      把它设为当前），再把新气泡置到 status4，我们的文字就落在干净气泡里，官方那段
-        //      留在上一个气泡（RecyclerView 自动滚到最新气泡）。
-        //   ③ 不要发 `Exit`：实测只走 `AIExitHandler`（不清空）且会把官方置"已退出"，反而
-        //      让后续 `TTS_Result` 彻底不上屏（见 runOfficialInterrupt 的注释）。
+        // ===== 步骤0+1+2: 开启会话 + 显示提问 + 结束识别 =====
+        // localTakeover：眼镜端已本地完成（KeyButtonService ASR_End 后立即 open + 显示提问），
+        // 下行无需重发，避免官方界面残留"思考中"等待手机端轮询（约 3s 空白）。
+        // ⚠️ 2026-09-17 实测教训：**不要**在这里给 localTakeover 补发 KeyDown_Client/open。
+        // 补发后官方会 `startNewTalk` + `insertNew` 出一个新气泡，但 Lab 的 TTS_Result 便不再
+        // 更新对话框（只有 `TtsResultHandler` 日志、没有 `showUpdateTTSUI`/`AiAdapter setData`），
+        // 表现＝「有声音没文字」，官方自己的答案反而留在原气泡里。已回滚，详见当日日志。
         var keyDownResult: Int? = 0
         var openResult: Int? = 0
-        // 0a. KeyDown_Client（privacy_level=2）：AI 未运行时官方会 openAiAssistant()
-        //     → openSceneWithIgnoreTips("ai_assist")，置 aiIsRunning=true
-        val keyDownCaps = Caps()
-        keyDownCaps.write("KeyDown_Client")
-        keyDownCaps.write("{\"privacy_level\":2}")
-        synchronized(session.aiCmdLock) {
-            if (!abortAiSendIfLinkInvalid(link, onResult)) return
-            keyDownResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, keyDownCaps)
-        }
-        Log.i(TAG, "sendCustomCmd(Ai, KeyDown_Client, privacy_level=2) -> $keyDownResult")
-        Thread.sleep(600)
-
-        // 0b. open：AIOpenHandler → startNewTalk()，**新建一个空气泡**并设为当前
-        val openCaps = Caps()
-        openCaps.write("open")
-        synchronized(session.aiCmdLock) {
-            if (!abortAiSendIfLinkInvalid(link, onResult)) return
-            openResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, openCaps)
-        }
-        Log.i(TAG, "sendCustomCmd(Ai, open) -> $openResult")
-        Thread.sleep(400)
-
-        // ===== 步骤1: 发送 ASR_Result（用户文字）=====
-        // 无论哪条链路都要发：它把新气泡置到 status 2，是随后 ASR_End → status 4 的前置。
-        run {
-            val asrCaps = Caps()
-            asrCaps.write("ASR_Result")
-            asrCaps.write(text)
+        if (!localTakeover) {
+            // 0a. 发送 KeyDown_Client（privacy_level=2）：眼镜端 AIPhoneOpenHandler 在 AI 未运行时
+            //     调用 openAiAssistant() -> openSceneWithIgnoreTips("ai_assist")，真正设置 aiIsRunning=true，
+            //     这是 ASR_Result / TTS_Result 能显示文字的前置条件
+            val keyDownCaps = Caps()
+            keyDownCaps.write("KeyDown_Client")
+            keyDownCaps.write("{\"privacy_level\":2}")
             synchronized(session.aiCmdLock) {
                 if (!abortAiSendIfLinkInvalid(link, onResult)) return
-                asrResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, asrCaps)
+                keyDownResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, keyDownCaps)
             }
-            Log.i(TAG, "sendCustomCmd(Ai, ASR_Result, \"$text\") -> $asrResult (showAsrResult=$showAsrResult, 现在恒发)")
-        }
+            Log.i(TAG, "sendCustomCmd(Ai, KeyDown_Client, privacy_level=2) -> $keyDownResult")
+            Thread.sleep(600)
 
-        // ===== 步骤2: 发送 ASR_End（置 status 4 = 渲染闸门）=====
-        run {
+            // 0b. 发送 Ai + open：眼镜端 AIOpenHandler 调用 startNewTalk()，开启 AI 对话
+            val openCaps = Caps()
+            openCaps.write("open")
+            synchronized(session.aiCmdLock) {
+                if (!abortAiSendIfLinkInvalid(link, onResult)) return
+                openResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, openCaps)
+            }
+            Log.i(TAG, "sendCustomCmd(Ai, open) -> $openResult")
+            Thread.sleep(400)
+
+            // ===== 步骤1: 发送 ASR_Result（用户文字）=====
+            // 语音唤醒链路（showAsrResult=false）：官方 ASR 已在眼镜上显示提问，不再重发避免重复显示。
+            if (showAsrResult) {
+                val asrCaps = Caps()
+                asrCaps.write("ASR_Result")
+                asrCaps.write(text)
+                synchronized(session.aiCmdLock) {
+                    if (!abortAiSendIfLinkInvalid(link, onResult)) return
+                    asrResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, asrCaps)
+                }
+                Log.i(TAG, "sendCustomCmd(Ai, ASR_Result, \"$text\") -> $asrResult")
+            } else {
+                Log.i(TAG, "skip ASR_Result resend (voice wakeup chain, question already shown)")
+            }
+
+            // ===== 步骤2: 发送 ASR_End（标记 ASR 结束）=====
             val endCaps = Caps()
             endCaps.write("ASR_End")
             synchronized(session.aiCmdLock) {
@@ -1306,8 +1303,11 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 endResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, endCaps)
             }
             Log.i(TAG, "sendCustomCmd(Ai, ASR_End) -> $endResult")
+            session.onStatus("已发送到眼镜，正在获取 AI 回复...")
+        } else {
+            Log.i(TAG, "localTakeover: skip KeyDown/open/ASR_Result/ASR_End (glasses already shown)")
+            session.onStatus("正在获取 AI 回复...")
         }
-        session.onStatus("已发送到眼镜，正在获取 AI 回复...")
 
         // ===== 等待 DeepSeek 完成（下行显示期间已并行执行）=====
         deepSeekThread.join()
