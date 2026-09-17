@@ -1222,6 +1222,27 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         // 步骤-1 在 AI 线程启动后执行（原位置在 thread 启动前）：打断等待 300ms 与 AI 请求并行
         runOfficialInterrupt()
 
+        // ===== 步骤-1b: 抢占官方文案的显示位（仅眼镜语音链路）=====
+        // 背景（2026-09-17 真机实测）：官方云的答案比我们的大模型快得多 —— 官方 `ASR_End` 后
+        // 仅 3ms 它就把「新城区今天晴…」推上屏（`showUpdateTTSUI` status3），而我们的第一条
+        // 文本要等大模型首次工具调用（约 1s 后）才发；两者落在**同一个气泡**（`id=1`），
+        // 于是用户会读到约 1s 的官方文案（实测 14:31:28.649 上屏 → 14:31:29.670 被覆盖）。
+        // 这里先发一条极短占位，把官方文案的可见时间压到单程链路耗时（约 0.15s）。
+        // 注意：入站 `TTS_Result` 只更新 UI、不会触发官方 TTS 播报（播报走我们的 `tts_play`），
+        // 所以这条占位是静默的。
+        if (localTakeover) {
+            var shieldResult: Int? = null
+            val shieldCaps = Caps()
+            shieldCaps.write("TTS_Result")
+            shieldCaps.write("正在思考…")
+            shieldCaps.write(LinkProtocol.AI_REPLY_MARK)
+            synchronized(session.aiCmdLock) {
+                if (!abortAiSendIfLinkInvalid(link, onResult)) return
+                shieldResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, shieldCaps)
+            }
+            Log.i(TAG, "sendCustomCmd(Ai, TTS_Result, 占位“正在思考…”) -> $shieldResult (shield official text)")
+        }
+
         // ===== 步骤0+1+2: 开启会话 + 显示提问 + 结束识别 =====
         // localTakeover：眼镜端已本地完成（KeyButtonService ASR_End 后立即 open + 显示提问），
         // 下行无需重发，避免官方界面残留"思考中"等待手机端轮询（约 3s 空白）。
