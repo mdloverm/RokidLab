@@ -49,6 +49,8 @@ object ToolRiskMap {
         "query_calendar" to ToolRisk.READ_ONLY,
         // 只读当前播放信息（歌名/封面/歌词），不改任何状态；AIUI 播放器页面靠它取素材
         "get_now_playing" to ToolRisk.READ_ONLY,
+        // 只读：在手机侧下载当前歌曲封面并压缩成 data URL 回传页面，不改任何状态
+        "get_cover_image" to ToolRisk.READ_ONLY,
         // 自我认知域：自检状态与读日志都是纯读取，不应触发任何确认闸门
         "get_agent_status" to ToolRisk.READ_ONLY,
         "read_recent_logs" to ToolRisk.READ_ONLY,

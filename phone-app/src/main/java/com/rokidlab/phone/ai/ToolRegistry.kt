@@ -516,6 +516,7 @@ object ToolRegistry {
         "stop_music" -> "正在停止播放…"
         "show_lyrics" -> "正在打开歌词…"
         "get_now_playing" -> "正在读取播放信息…"
+        "get_cover_image" -> "正在获取歌曲封面…"
         "show_image" -> "正在显示图片…"
         "search_web" -> "正在搜索网页…"
         "fetch_webpage" -> "正在读取网页内容…"
