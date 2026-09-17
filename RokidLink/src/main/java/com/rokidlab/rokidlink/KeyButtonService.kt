@@ -1505,10 +1505,18 @@ class KeyButtonService : Service() {
     }
 
     /**
-     * 眼镜端本地立即打断官方 AI（实测诊断，尽量抢在官方 TTS 播报前）：
-     * 1) bridge.sendMessage(Ai/Exit)：CXR 上行到手机，cxr-service 可能拒绝（-1）
-     * 2) Runtime.exec 双击广播：protected 广播，第三方 uid 大概率被拒
-     * 即使两条都被拒，手机端 ADB 极速轮询也会在官方 TTS 前补刀。
+     * 眼镜端本地打断官方 AI 的**尽力而为**尝试。
+     *
+     * ⚠️ 2026-09-17 真机取证：这两条**都不能真正打断官方**——
+     * 1) `sendAi("Exit")` = `bridge.sendMessage(AI_TOPIC, …)`，是 **CXR 上行帧**（眼镜→手机）；
+     *    官方 AssistServer 的 AI 分发器只处理**入站（手机→眼镜）帧**，所以官方收不到。
+     *    实测判据：14:01:18 发出后，官方侧直到 14:01:42 才因自身超时收尾，全程
+     *    **没有任何 `AiDialogManager dismissAiDialog` / `AiAdapter clearData`**。
+     * 2) `am broadcast ACTION_SPRITE_BUTTON_DOUBLE_CLICK` 是 protected 广播，第三方 uid 被拒。
+     *
+     * ⇒ 真正生效的打断是**手机端下发的入站 `Exit`**（`AiConversationService.runOfficialInterrupt`，
+     * 两条链路都会发，见该方法注释）。此处保留仅为兼容/诊断，**不要**再把它当作
+     * 「眼镜端已打断」的依据去省略手机侧的下行（那正是官方答案残留、与 Lab 回复并存的根因）。
      */
     private fun interruptOfficialLocally() {
         // 只记录诊断时间戳：真正的来源区分已由 [LinkProtocol.AI_REPLY_MARK] 承担
