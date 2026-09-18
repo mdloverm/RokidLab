@@ -85,6 +85,10 @@ class KeyButtonService : Service() {
         keepAlive.registerScreenOnReceiver()
         keepAlive.acquireWakeLock()
         keepAlive.startHeartbeat()
+        // 常驻服务周期心跳（Alarm，5min）：进程被 LMK 回收 / app idle 停服务后自我恢复。
+        // 与上面 30s 的 startHeartbeat 是两回事 —— 那个是 Handler 心跳，只在本进程存活期间
+        // 修 receiver/WakeLock/TTS 绑定；本行是**跨进程死亡**的恢复链（Alarm 由 system_server 持有）。
+        keepAlive.startWatchdogHeartbeat()
         cxrBridge.init()
         // AIUI .aix 接收服务常驻：等手机端推包即可拉起自托管宿主渲染
         aiuiHost.startPackageServer()
@@ -123,9 +127,11 @@ class KeyButtonService : Service() {
         overlays.release()
         ipReporter.unregister()
         cxrBridge.onDestroy()
-        // 崩溃/异常销毁自愈：延迟检查，若服务未恢复则重新拉起。
-        // START_STICKY 在 startRequested=false（服务被 stop）时不生效，需要主动重启。
-        // 眼镜 ROM 在 app idle 时可能停服务，且后台 FGS 启动受限，因此多次重试直到成功。
+        // 崩溃/异常销毁自愈：经 AlarmManager 排一次补拉（**不是** Handler.postDelayed）。
+        // START_STICKY 在 startRequested=false（服务被 stop）时不生效，需要主动重启；
+        // 眼镜 ROM 在 app idle 时也可能停服务，且后台 FGS 启动受限，因此需要多次重试直到成功。
+        // ⚠️ 重试必须由系统 Alarm 驱动：Handler 延时任务随本进程一起消亡，
+        //    而本方法的一个典型触发场景正是「进程即将不复存在」。
         //
         // ⚠️ 短命销毁防护：若服务启动后 <60s 就被销毁，说明是「启动即失败」（典型如 bridge
         // JNI 初始化崩溃），此时反复重启只会形成无限循环、持续空转耗尽电量与系统资源。

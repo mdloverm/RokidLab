@@ -134,6 +134,9 @@ internal fun ChatModule(app: LabApplication) {
     var showSettings by remember { mutableStateOf(false) }
     // 清空对话确认弹窗
     var showClearConfirm by remember { mutableStateOf(false) }
+    // 「本机模式」开关（不连眼镜也能聊）：状态源是 LabApplication（每次发送时读取），
+    // 这里只做 UI 镜像，因此首次组合时取当前值即可。
+    var localOnly by remember { mutableStateOf(app.chatLocalOnlyEnabled) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
@@ -356,6 +359,14 @@ internal fun ChatModule(app: LabApplication) {
                 if (ChatStateHolder.messages.isNotEmpty()) {
                     showClearConfirm = true
                 }
+            },
+            localOnly = localOnly,
+            onToggleLocalOnly = {
+                // 立即落盘 + 更新内存标志：开关按「每次发送时读取」实现，
+                // 因此下一步发消息就生效，不用重连、也不会打断正在进行的对话。
+                val next = !localOnly
+                localOnly = next
+                app.setChatLocalOnlyEnabled(next)
             },
         )
 

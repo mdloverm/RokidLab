@@ -19,7 +19,20 @@ Thumbs.db
 
 # Android
 local.properties
+# ⚠️ gradle.properties 中包含本地机器专属路径与签名口令，
+#    仅在本仓库中通过 .gitignore 排除；不要依赖它的默认忽略规则。
 gradle.properties
+# 允许提交占位模板（各项为空值时无害），靠这一行覆盖上面的忽略规则
+!gradle.properties.example
+
+# ── 签名材料（永不入库）──
+# 密钥本体、JKS、以及任何口令副本
+release.keystore
+*.keystore
+*.jks
+*keystore*.properties
+keystore.properties
+local.properties.example
 
 # Misc
 *.log

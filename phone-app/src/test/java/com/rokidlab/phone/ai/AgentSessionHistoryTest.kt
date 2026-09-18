@@ -39,8 +39,8 @@ class AgentSessionHistoryTest {
 
     @Test
     fun `工具轨迹随 assistant 消息保留`() {
-        store.recordTurn("看下电量", "当前电量 80%", listOf("get_glasses_battery"), nowMs = t0)
-        assertEquals(listOf("get_glasses_battery"), store.getHistory().last().toolTrace)
+        store.recordTurn("看下电量", "当前电量 80%", listOf("get_glasses_status"), nowMs = t0)
+        assertEquals(listOf("get_glasses_status"), store.getHistory().last().toolTrace)
     }
 
     @Test

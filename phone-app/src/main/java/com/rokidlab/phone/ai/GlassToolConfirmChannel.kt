@@ -187,7 +187,7 @@ class GlassToolConfirmChannel : ToolPolicy.ConfirmationChannel {
             if (!who.isNullOrBlank()) "拨打电话给 $who" else "拨打电话"
         }
         "set_phone_alarm" -> "设置手机闹钟"
-        "add_calendar_event" -> "添加日历日程"
+        "manage_calendar" -> if (args.optString("action").equals("create", true)) "添加日历日程" else "查询日历日程"
         "install_aiui_project" -> "安装 AIUI 应用"
         "open_phone_app" -> "打开手机应用 ${args.optString("app_name").takeIf { it.isNotBlank() } ?: ""}".trim()
         else -> "执行操作 $toolName"

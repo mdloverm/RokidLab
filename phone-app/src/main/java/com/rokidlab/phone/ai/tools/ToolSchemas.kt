@@ -33,24 +33,6 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
             ),
         )
 
-        "get_glasses_battery" -> toolSchema(
-            name = meta.name,
-            description = "查询 Rokid 眼镜的当前电量百分比与充电状态（是否在充电/已接电源）。当用户问「眼镜还有多少电」「眼镜要充电吗」等电量问题时调用。",
-            parameters = mapOf(
-                "type" to "object",
-                "properties" to mapOf<String, Any>(),
-            ),
-        )
-
-        "get_glasses_storage" -> toolSchema(
-            name = meta.name,
-            description = "查询 Rokid 眼镜的存储空间占用情况（已用/剩余容量）。当用户问「眼镜存储还剩多少」「内存够不够」等存储问题时调用。",
-            parameters = mapOf(
-                "type" to "object",
-                "properties" to mapOf<String, Any>(),
-            ),
-        )
-
         "list_glasses_apps" -> toolSchema(
             name = meta.name,
             description = "列出 Rokid 眼镜上安装的应用。当用户询问眼镜装了哪些应用、有没有某个应用时调用。",
@@ -74,41 +56,36 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
             ),
         )
 
-        "set_timer" -> toolSchema(
+        "manage_timer" -> toolSchema(
             name = meta.name,
-            description = "创建定时提醒或定时任务，到点后眼镜语音播报（可同时打开应用）。当用户说“X分钟后提醒我”“X点叫我”“X点打开某应用”时调用。绝对时间需转换为 24 小时制 HH:mm。",
+            description = "管理定时提醒 / 定时任务，一个工具管三种意图。action=\"create\"：创建（「5分钟后提醒我喝水」「明早8点叫我」「17点打开小智」）。action=\"list\"：列出全部（「我有哪些提醒」「几点有提醒」）。action=\"cancel\"：取消（「取消刚才的提醒」「删掉那个闹钟」；全部取消传 all=true）。注意：到点要我自己查资料再汇报的需求请改用 schedule_agent_task，本工具到点只会念一句固定内容（或在眼镜上打开指定应用）。",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
-                    "time" to mapOf("type" to "string", "description" to "触发时间（24 小时制 HH:mm，如 17:00）。“X分钟后”转换为当前时间加 X 分钟后的时间"),
-                    "content" to mapOf("type" to "string", "description" to "提醒内容，到点后语音播报，如“该喝水了”"),
-                    "action" to mapOf("type" to "string", "enum" to listOf("notify", "launch"), "description" to "动作类型：notify=仅语音提醒（默认），launch=到点打开应用并提醒"),
-                    "appName" to mapOf("type" to "string", "description" to "action=launch 时要打开的应用名称（如“小智”）"),
-                    "repeatDaily" to mapOf("type" to "boolean", "description" to "是否每天重复，默认 false"),
+                    "action" to mapOf("type" to "string", "enum" to listOf("create", "list", "cancel"), "description" to "create=创建；list=列出全部；cancel=取消"),
+                    "time" to mapOf("type" to "string", "description" to "action=create 时的时间，24 小时制 HH:mm，如 17:00"),
+                    "content" to mapOf("type" to "string", "description" to "action=create 时的提醒内容 / 任务名，如「喝水」「开会」"),
+                    "repeatDaily" to mapOf("type" to "boolean", "description" to "action=create 时是否每天重复，默认 false；用户说「每天」时传 true"),
+                    "timerAction" to mapOf("type" to "string", "enum" to listOf("notify", "launch"), "description" to "action=create 时到点做什么：notify=只提醒（默认）；launch=提醒并在眼镜上打开某应用（需同时给 appName）"),
+                    "appName" to mapOf("type" to "string", "description" to "timerAction=launch 时要打开的眼镜应用名，如「小智」"),
+                    "timerName" to mapOf("type" to "string", "description" to "action=cancel 时要取消的任务名称或提醒内容；不知道就先 action=list 查看"),
+                    "all" to mapOf("type" to "boolean", "description" to "action=cancel 时用户要求全部取消传 true，默认 false"),
                 ),
-                "required" to listOf("time", "content"),
+                "required" to listOf("action"),
             ),
         )
 
-        "play_song" -> toolSchema(
+        "control_music" -> toolSchema(
             name = meta.name,
-            description = "播放用户点名的歌曲。当用户说“播放某某歌”“来一首某歌”“放首某某的歌”时调用，联网搜索并直接播放该歌曲。",
+            description = "控制手机上的音乐播放，一个工具管两种意图。action=\"play\"：播放指定歌曲（用户说「播放某某歌」「来一首某歌」「放首某某的歌」）——必须给 songName，会联网搜索并直接播放。action=\"stop\"：停止当前播放（用户说「停止播放」「别放了」「停一下」「不听了」）。",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
-                    "songName" to mapOf("type" to "string", "description" to "歌曲名称，如“晴天”“海阔天空”"),
-                    "artist" to mapOf("type" to "string", "description" to "歌手名（可选），用于更精确地找到歌曲，如“周杰伦”"),
+                    "action" to mapOf("type" to "string", "enum" to listOf("play", "stop"), "description" to "play=播放指定歌曲；stop=停止当前播放"),
+                    "songName" to mapOf("type" to "string", "description" to "action=play 时的歌曲名称，如「晴天」「海阔天空」"),
+                    "artist" to mapOf("type" to "string", "description" to "可选，歌手名，用于同名歌曲消歧，如「周杰伦」"),
                 ),
-                "required" to listOf("songName"),
-            ),
-        )
-
-        "stop_music" -> toolSchema(
-            name = meta.name,
-            description = "停止当前正在播放的音乐。当用户说“停止播放”“别放了”“停一下”“不听了”时调用。",
-            parameters = mapOf(
-                "type" to "object",
-                "properties" to mapOf<String, Any>(),
+                "required" to listOf("action"),
             ),
         )
 
@@ -151,9 +128,9 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
             ),
         )
 
-        "get_glasses_device_info" -> toolSchema(
+        "get_glasses_status" -> toolSchema(
             name = meta.name,
-            description = "查询 Rokid 眼镜的设备/系统信息，包括型号、厂商、Android 系统版本、SDK 版本、序列号。当用户询问眼镜的“系统信息”“设备信息”“是什么型号”“什么版本”“固件版本”时调用。",
+            description = "查询 Rokid 眼镜的整体状态，一次返回三部分：①电量百分比与充电状态；②存储空间占用（已用/剩余）；③设备系统信息（型号、厂商、Android 版本、SDK 版本、序列号）。凡是问眼镜自身状况的都调用本工具 —— 「眼镜还有多少电」「要充电吗」「存储还剩多少」「内存够不够」「什么型号」「什么版本」「系统信息/设备信息」。数值由设备实时读取，不要凭印象回答。",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf<String, Any>(),
@@ -272,31 +249,9 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
             ),
         )
 
-        "list_timers" -> toolSchema(
-            name = meta.name,
-            description = "列出当前已设置的全部定时任务（名称、触发时间、是否每天重复、运行状态）。当用户问「我有哪些提醒」「都有什么定时任务」「几点有提醒」时调用；用户想取消某个提醒前也先调用本工具拿到任务名称或编号。",
-            parameters = mapOf(
-                "type" to "object",
-                "properties" to mapOf<String, Any>(),
-            ),
-        )
-
-        "cancel_timer" -> toolSchema(
-            name = meta.name,
-            description = "取消/删除一个已存在的定时任务。当用户说「取消刚才的提醒」「删掉明天的闹钟」「不要那个定时了」时调用；不知道要取消哪个时先用 list_timers 查看再取消。",
-            parameters = mapOf(
-                "type" to "object",
-                "properties" to mapOf(
-                    "timerName" to mapOf("type" to "string", "description" to "要取消的定时任务名称或提醒内容（用户提到的那个，如「喝水提醒」）"),
-                    "all" to mapOf("type" to "boolean", "description" to "用户要求全部取消时传 true，默认 false"),
-                ),
-                "required" to listOf("timerName"),
-            ),
-        )
-
         "schedule_agent_task" -> toolSchema(
             name = meta.name,
-            description = "创建一个「自主任务」：到点后由我自己去查资料、再主动播报结果 —— 区别于 set_timer 只会念一句固定文案。当用户说「每天早上帮我播报天气和日程」「晚上 10 点提醒我总结今天」「每周一提醒我看待办」这类需要我到点先做点事（查询/汇总）再汇报的需求时调用。注意：出于安全，自主任务执行时我只能使用只读工具（查时间/天气/网页/知识库/设备状态等），不会自动拨号、装机或改任何设置；需要写操作时请在任务内容里让我先提醒你确认。",
+            description = "创建一个「自主任务」：到点后由我自己去查资料、再主动播报结果 —— 区别于 manage_timer 的 create 只会念一句固定文案。当用户说「每天早上帮我播报天气和日程」「晚上 10 点提醒我总结今天」「每周一提醒我看待办」这类需要我到点先做点事（查询/汇总）再汇报的需求时调用。注意：出于安全，自主任务执行时我只能使用只读工具（查时间/天气/网页/知识库/设备状态等），不会自动拨号、装机或改任何设置；需要写操作时请在任务内容里让我先提醒你确认。",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
@@ -364,7 +319,7 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
 
         "set_phone_alarm" -> toolSchema(
             name = meta.name,
-            description = "在手机上设置闹钟或倒计时（区别于眼镜端的定时提醒，本工具响铃在手机上）。当用户说「明早 7 点叫我起床」「30 分钟后手机闹我」「设个手机闹钟」时调用。「X分钟后提醒」若未强调手机，优先用眼镜定时任务（set_timer）。",
+            description = "在手机上设置闹钟或倒计时（区别于眼镜端的定时提醒，本工具响铃在手机上）。当用户说「明早 7 点叫我起床」「30 分钟后手机闹我」「设个手机闹钟」时调用。「X分钟后提醒」若未强调手机，优先用眼镜定时任务（manage_timer 的 create，即 set_timer）。",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
@@ -418,30 +373,20 @@ internal fun ToolRegistry.buildToolSchema(meta: ToolMeta): JSONObject {
             ),
         )
 
-        "query_calendar" -> toolSchema(
+        "manage_calendar" -> toolSchema(
             name = meta.name,
-            description = "查询手机日历中某天的日程安排。当用户问「我明天有什么安排」「今天有什么日程」「9月10号我要干什么」时调用。",
+            description = "管理手机日历，一个工具管两种意图。action=\"query\"：查询某天的日程安排（「我明天有什么安排」「今天有什么日程」）。action=\"create\"：创建日程（「记一下明天下午3点开会」「加个日程：周五19点健身」）——title 与 startTime 必填，开始时间要具体到 HH:mm（用户只说「下午」按 15:00 估算并告知用户）。",
             parameters = mapOf(
                 "type" to "object",
                 "properties" to mapOf(
-                    "date" to mapOf("type" to "string", "description" to "要查询的日期：today/tomorrow/今天/明天，或 YYYY-MM-DD；不传默认今天"),
+                    "action" to mapOf("type" to "string", "enum" to listOf("query", "create"), "description" to "query=查询日程；create=创建日程"),
+                    "date" to mapOf("type" to "string", "description" to "日期：today/tomorrow/今天/明天，或 YYYY-MM-DD；不传默认今天（create 时已过时刻自动顺延到明天）"),
+                    "title" to mapOf("type" to "string", "description" to "action=create 时的日程标题，如「团队会议」"),
+                    "startTime" to mapOf("type" to "string", "description" to "action=create 时的开始时间，24 小时制 HH:mm，如 14:30"),
+                    "durationMinutes" to mapOf("type" to "integer", "description" to "action=create 时的时长（分钟），默认 60"),
+                    "note" to mapOf("type" to "string", "description" to "action=create 时的备注（可选），如地点、参会人"),
                 ),
-            ),
-        )
-
-        "add_calendar_event" -> toolSchema(
-            name = meta.name,
-            description = "在手机日历上创建一个日程。当用户说「帮我记一下明天下午 3 点开会」「加个日程：周五 19 点健身」时调用。开始时间必须是具体的 HH:mm（用户只说「下午」按 15:00 左右估算并告知用户）。",
-            parameters = mapOf(
-                "type" to "object",
-                "properties" to mapOf(
-                    "title" to mapOf("type" to "string", "description" to "日程标题，如「团队会议」"),
-                    "date" to mapOf("type" to "string", "description" to "日期：today/tomorrow/今天/明天，或 YYYY-MM-DD；不传默认今天（已过时刻自动顺延到明天）"),
-                    "startTime" to mapOf("type" to "string", "description" to "开始时间，24 小时制 HH:mm，如 14:30"),
-                    "durationMinutes" to mapOf("type" to "integer", "description" to "时长（分钟），默认 60"),
-                    "note" to mapOf("type" to "string", "description" to "备注（可选），如地点、参会人"),
-                ),
-                "required" to listOf("title", "startTime"),
+                "required" to listOf("action"),
             ),
         )
 

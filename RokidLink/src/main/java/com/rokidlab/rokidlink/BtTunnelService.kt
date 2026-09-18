@@ -45,10 +45,6 @@ class BtTunnelService : Service() {
         /** 健康看门狗巡检间隔 */
         private const val WATCHDOG_INTERVAL_MS = 30_000L
 
-        /** 服务销毁后自愈重启的重试间隔 / 上限 */
-        private const val RESTART_RETRY_INTERVAL_MS = 5_000L
-        private const val MAX_RESTART_ATTEMPTS = 10
-
         fun start(context: Context) {
             val intent = Intent(context, BtTunnelService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -175,40 +171,12 @@ class BtTunnelService : Service() {
     }
 
     // ---------------- 自愈重启 ----------------
-
-    /** onDestroy 后延迟检查，若服务未恢复（app idle 停服务）则主动拉起 */
-    private fun retryRestartSelf(attempt: Int) {
-        if (attempt >= MAX_RESTART_ATTEMPTS) {
-            Log.e(TAG, "Give up restarting after $MAX_RESTART_ATTEMPTS attempts")
-            return
-        }
-        mainHandler.postDelayed({
-            if (isServiceRunning(BtTunnelService::class.java)) {
-                Log.i(TAG, "BtTunnelService running again, no restart needed")
-                return@postDelayed
-            }
-            Log.w(TAG, "BtTunnelService not running after destroy, restarting (attempt ${attempt + 1})")
-            try {
-                // 用普通 startService 而非 startForegroundService，规避 FGS 后台启动限制；
-                // onStartCommand 中 startForegroundSafe 会尝试转前台
-                startService(Intent(this, BtTunnelService::class.java))
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to restart BtTunnelService", e)
-            }
-            retryRestartSelf(attempt + 1)
-        }, RESTART_RETRY_INTERVAL_MS)
-    }
-
-    private fun isServiceRunning(clazz: Class<*>): Boolean {
-        return try {
-            val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
-            am.getRunningServices(100).any {
-                it.service.packageName == packageName && it.service.className == clazz.name
-            }
-        } catch (e: Exception) {
-            false
-        }
-    }
+    //
+    // 自愈补拉已统一收口到 [ResidentWatchdog]（AlarmManager 驱动，跨进程死亡有效）：
+    // 见下方 onDestroy 的调用与 ResidentWatchdog.scheduleRetry。
+    // 原先此处有一份 Handler.postDelayed 递归重试的实现（retryRestartSelf）——
+    // 它随进程消亡而失效，且其「startService 规避 FGS 限制」的手法已被
+    // ResidentWatchdog.startResidentService 的回退逻辑覆盖，故整段删除。
 
     /**
      * 释放当前隧道服务端实例（幂等）。
@@ -328,8 +296,16 @@ class BtTunnelService : Service() {
         AsrPushServer.stop()
         Log.i(TAG, "BtTunnelService destroyed")
         // 自愈：app idle 可能停掉本服务（实测日志：Stopping service due to app idle），
-        // 主动延迟检查并拉起，配合 START_STICKY 系统重启双重保障隧道尽快恢复
-        retryRestartSelf(0)
+        // 主动补拉 —— 与 START_STICKY 构成双重保障。
+        //
+        // ⚠️ 走 ResidentWatchdog（AlarmManager）而不是 Handler.postDelayed：
+        //    旧实现的 retryRestartSelf 是 5s 一次的 Handler 递归重试，而 Handler 队列
+        //    随进程消亡 —— 「服务被停」与「进程被杀」常常是同一件事，此时重试链直接断开。
+        //    Alarm 由 system_server 持有，进程死了也照样投递（详见 ResidentWatchdog 类注释）。
+        //
+        // 为什么不再自己 startService：ensureResidentServices 会先查运行状态、只补缺失的，
+        // 并对「后台启动 FGS 被拒」做了 startService 降级回退 —— 覆盖了旧实现的手工规避。
+        ResidentWatchdog.scheduleRetry(this, 0)
         super.onDestroy()
     }
 

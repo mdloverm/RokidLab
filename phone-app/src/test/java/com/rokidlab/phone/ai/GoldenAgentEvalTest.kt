@@ -57,14 +57,14 @@ class GoldenAgentEvalTest {
     @Test
     fun `A5 tool_call id 只在首帧出现也能关联到结果`() {
         val acc = SseStreamAccumulator()
-        acc.onSseLine(sse("""{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","function":{"name":"play_song"}}]}}]}"""))
+        acc.onSseLine(sse("""{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","function":{"name":"control_music"}}]}}]}"""))
         // 后续分片不带 id（真实协议常见），仍应归并到 call_x
         acc.onSseLine(sse("""{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"songName\":\"晴天\"}"}}]}}]}"""))
         acc.onSseLine(sse("""data: [DONE]"""))
         val turn = acc.build()
         assertEquals(1, turn.toolCalls.size)
         assertEquals("call_x", turn.toolCalls[0].id)
-        assertEquals("play_song", turn.toolCalls[0].name)
+        assertEquals("control_music", turn.toolCalls[0].name)
         assertEquals("""{"songName":"晴天"}""", turn.toolCalls[0].arguments)
     }
 
@@ -135,8 +135,11 @@ class GoldenAgentEvalTest {
         assertTrue(requiredOf("search_knowledge_base").contains("query"))
         assertTrue(requiredOf("search_web").contains("query"))
         assertTrue(requiredOf("fetch_webpage").contains("url"))
-        assertTrue(requiredOf("play_song").contains("songName"))
-        assertTrue(requiredOf("set_timer").containsAll(listOf("time", "content")))
+        // action 型工具（合并后）只能声明 action 必填 —— play 需要的 songName、
+        // create 需要的 time/content 都依赖 action 取值，JSON Schema 无条件必填无法表达，
+        // 改由 schema description + 执行侧兜底报错保证（见 ToolSchemas / Provider）
+        assertTrue(requiredOf("control_music").contains("action"))
+        assertTrue(requiredOf("manage_timer").contains("action"))
         assertTrue(requiredOf(ToolRegistry.TOOL_CODE_FILE).containsAll(listOf("project", "file", "content")))
         assertTrue(requiredOf("launch_glasses_app").contains("appName"))
     }

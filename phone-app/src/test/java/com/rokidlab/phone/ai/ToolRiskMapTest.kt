@@ -60,10 +60,10 @@ class ToolRiskMapTest {
 
         // 有副作用的工具，一个都不能进（覆盖各域的代表：拨号/装机/写文件/改设置/定时/媒体/展示）
         val mustBeExcluded = listOf(
-            "call_phone", "set_phone_alarm", "add_calendar_event", "set_phone_volume",
+            "call_phone", "set_phone_alarm", "manage_calendar", "set_phone_volume",
             "install_aiui_project", "open_aiui_app", "stop_aiui_app", "save_code_file",
-            "save_summary_txt", "set_timer", "cancel_timer", "schedule_agent_task",
-            "play_song", "stop_music", "show_lyrics", "launch_glasses_app",
+            "save_summary_txt", "manage_timer", "schedule_agent_task",
+            "control_music", "show_lyrics", "launch_glasses_app",
             "open_phone_app", "show_image", "clear_agent_task",
         )
         mustBeExcluded.forEach { name ->

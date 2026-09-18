@@ -101,24 +101,24 @@ onLaunch(p) {
 }
 ```
 键名与 `open_aiui_app` 的 params 对应：音乐 `songName`、搜索 `keyword`、城市 `city`。
-- ⚠️ **别让启动动作被互斥标志挡掉**：`onLoad` 已发起的取数会把 `_loading` 占住，`onMessage` 里的启动动作（自动播放等）就被静默丢弃 → **各动作用独立标志**（实测踩过，页面日志只显示"收到"却没发工具调用）。
+- ⚠️ **别让启动动作被互斥标志挡掉**：`onLoad` 已发起的取数会把 `_loading` 占住，`onMessage` 里的启动动作（自动播放等）就被静默丢弃 → **各动作用独立标志**（实测踩过）。
 
 ### 9.2 调用范式
 ```js
 // 在按键处理里发起；回调里同步刷新界面（不要 await、不要 setTimeout）
-globalThis.Lab.callTool('play_song', { songName: '西厢' }, function (res, err) {
+globalThis.Lab.callTool('control_music', { action: 'play', songName: '西厢' }, function (res, err) {
   self.setData({ tip: err ? ('失败: ' + err) : String(res).substring(0, 30) });
 });
 ```
-- 工具名**逐字照抄**，写错只会收到 `unknown tool: xxx`：`play_song` `stop_music` `get_now_playing` `get_cover_image` `get_weather` `search_web` `fetch_webpage` `set_timer` `get_current_time` `calculate` `search_knowledge_base` `save_summary_txt` `show_image` `get_glasses_battery` `get_phone_status`；不确定就先 `globalThis.Lab.listTools(function (tools, err) { … })`。
-- 参数名按常规直觉（songName/keyword/city），但**必填参数不能省**：`play_song` 必须传 `{songName:'…'}`（传 `{}` 会失败）；结果都是字符串，自己 `JSON.parse`。
-- **一次只发起一个调用**（蓝牙通道串行，并发只会都超时）；**失败不要自动重试**（会绕过去重机制，造成重复拨号等真实副作用）。
+- 工具名**逐字照抄**，写错只会收到 `unknown tool: xxx`：`control_music` `get_now_playing` `get_cover_image` `get_weather` `search_web` `fetch_webpage` `manage_timer` `get_current_time` `calculate` `search_knowledge_base` `save_summary_txt` `show_image` `get_glasses_status` `get_phone_status`；不确定就先 `globalThis.Lab.listTools(function (tools, err) { … })`。
+- 参数名按常规直觉（songName/keyword/city），但**必填参数不能省**：`control_music` 必须传 `{action:'play',songName:'…'}`（传 `{}` 会失败）；结果都是字符串，自己 `JSON.parse`。
+- **一次只发起一个调用**（通道串行，并发会超时）；**失败不要自动重试**（会绕过去重，造成重复拨号等副作用）。
 - 界面刷新一律由**按键事件**驱动；每次调用都要有 loading 文案（往返 1~3 秒，最长 15 秒）。
 - 启动参数经 onMessage 投递一次，**onLoad 里拿不到**（要在 onMessage 里处理，见 9.1）。
 
 ### 9.3 音乐播放器取数
-`play_song` 只回纯文本、不含封面歌词；素材必须再调 `get_now_playing`（JSON 文本）：
+`control_music` 只回纯文本、不含封面歌词；素材必须再调 `get_now_playing`（JSON 文本）：
 `{"playing":true,"title":"西厢","artist":"后弦","album":"九公主","durationMs":240000,"positionMs":12345,"cover":"https://…","lyrics":[{"timeMs":0,"text":"…"}]}`
-- **一次取数、本地推进**：拿 `positionMs` 用 `Date.now()` 差值自己算当前行；**页面每分钟仅 30 次调用额度，轮询几十秒即耗尽、之后全被拒**（现象：歌在放，歌词封面永远空白）。
-- **别拿 `playing` 当闸门**：`play_song` 后立刻取数已为 true；false 即无曲目，显示「未在播放」。
+- **一次取数、本地推进**：拿 `positionMs` 用 `Date.now()` 差值自己算当前行；**页面每分钟仅 30 次调用额度，轮询几十秒即耗尽、之后全被拒**（现象：歌在放但封面歌词空白）。
+- **别拿 `playing` 当闸门**：`control_music` 后立刻取数已为 true；false 即无曲目，显示「未在播放」。
 - `cover` 给 `<image src="{{ cover }}"></image>`，空则隐藏该节点。

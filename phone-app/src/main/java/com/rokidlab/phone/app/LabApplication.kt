@@ -35,6 +35,9 @@ class LabApplication : Application() {
     companion object {
         private const val TAG = "LabApplication"
         private const val PREFS_KEEP_ALIVE = "keep_alive_enabled"
+
+        /** 乐奇聊天「本机模式」持久化键（见 [chatLocalOnlyEnabled]） */
+        private const val PREFS_CHAT_LOCAL_ONLY = "chat_local_only"
         private const val CHANNEL_KEEP_ALIVE_FGS = "keep_alive_fgs"
     }
     lateinit var cxrL: CxrLHiRokidSession
@@ -124,6 +127,23 @@ class LabApplication : Application() {
     var keepAliveEnabled: Boolean = true
         private set
 
+    /**
+     * 乐奇聊天「本机模式」开关（默认**关闭**）。
+     *
+     * 开启后：聊天不再尝试连接眼镜（原来没眼镜时要白等 15s 连接超时才报错），
+     * 直接把文字交给自己这一侧的模型与工具链处理；
+     * 工具清单里也会摘掉 [com.rokidlab.phone.ai.ToolRegistry.GLASSES_REQUIRED_TOOLS]
+     * （眼镜电量/存储/App 列表/AIUI 应用/歌词），模型看不到就不会去调。
+     *
+     * 为什么做成**手动开关**而不是自动探测：自动判定（比如「CXR 没连上就本机」）在
+     * 「眼镜在、只是链路刚断」这类中间态上会让回复悄悄不下发到眼镜，
+     * 用户无法预期；手动切换语义明确、行为可预测。
+     *
+     * 由「乐奇聊天 → 工具」页切换（项目约定：新增开关默认放该页）。
+     */
+    var chatLocalOnlyEnabled: Boolean = false
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -174,6 +194,8 @@ class LabApplication : Application() {
         prefs = getSharedPreferences("rokidbrew", MODE_PRIVATE)
         
         keepAliveEnabled = prefs.getBoolean(PREFS_KEEP_ALIVE, true)
+
+        chatLocalOnlyEnabled = prefs.getBoolean(PREFS_CHAT_LOCAL_ONLY, false)
         
         // 从 SharedPreferences 恢复眼镜 IP（单一数据源 glasses_ip，兼容历史多键与 adb_prefs）
         val adbLegacyIp = getSharedPreferences("adb_prefs", MODE_PRIVATE).getString("ip", "") ?: ""
@@ -296,6 +318,18 @@ class LabApplication : Application() {
         } else {
             stopKeepAliveService()
         }
+    }
+
+    /**
+     * 切换乐奇聊天「本机模式」（见 [chatLocalOnlyEnabled]）。
+     *
+     * 只落盘 + 更新内存标志：该开关在**每次发送时**读取，因此下一个消息立即生效，
+     * 不需要重连/重启任何东西，也不会打断正在进行的对话。
+     */
+    fun setChatLocalOnlyEnabled(enabled: Boolean) {
+        chatLocalOnlyEnabled = enabled
+        prefs.edit().putBoolean(PREFS_CHAT_LOCAL_ONLY, enabled).apply()
+        Log.i(TAG, "chat local-only mode -> $enabled")
     }
 
     /** 启动后台保活前台服务（App 打开时调用；保活开启时后台能力常驻） */

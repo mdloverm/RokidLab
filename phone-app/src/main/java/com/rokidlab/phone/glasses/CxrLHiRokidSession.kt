@@ -108,6 +108,52 @@ class CxrLHiRokidSession(
          */
         private const val AI_ASR_POLL_CMD = "rokidlab_ai_asr_poll"
 
+        /** 眼镜端 RokidLink 包名（存活探针用；与 ToolRegistry.ensureGlassesLinkRunning 同一目标） */
+        private const val GLASSES_LINK_PKG = "com.rokidlab.rokidlink"
+
+        /**
+         * 常驻服务存活探针的各段时序（详见 [startGlassesServiceProbe]）。
+         *
+         * 首轮等 [PROBE_FIRST_DELAY_MS]：连接建立时 [requestGlassesHello] 已发过一次 HELLO_REQ，
+         * 先给它留出应答时间，避免「刚连上就判死并拉起」。
+         */
+        private const val PROBE_FIRST_DELAY_MS = 8_000L
+
+        /**
+         * 探针周期。
+         *
+         * 取 60s：眼镜端被强杀是低频事件，而每次探针在「握手正常」时只花一条 CXR 空帧
+         * （不碰 ADB 隧道，不与投屏/文件提取争抢那条唯一的 RFCOMM）。
+         * 更短没有收益（真被杀了，晚 1 分钟恢复不影响可用性）。
+         */
+        private const val PROBE_INTERVAL_MS = 60_000L
+
+        /** 等待 HELLO 应答的窗口；与 GlassesHandshake.LEGACY_DETECT_DELAY_MS 同量级 */
+        private const val PROBE_ACK_TIMEOUT_MS = 4_000L
+
+        /** pidof 命令超时。比通用 15s 短：探针宁可快速放弃，也不要占着 ADB 会话 */
+        private const val PROBE_PIDOF_TIMEOUT_MS = 6_000
+
+        /**
+         * ADB 校验失败后的退避时长。
+         *
+         * 拿不到 pid 意味着「本轮无法验证」，而这一般是线路本身不通（无共享会话 / WiFi 与蓝牙
+         * 都不可达），此时每次重建都要付满 TCP+握手超时（最长 25s），一分钟一次纯属耗电。
+         * 退避只影响「验证步骤」，不影响探针本身 —— 握手一旦恢复刷新，探针立刻回到健康判定。
+         */
+        private const val ADB_VERIFY_BACKOFF_MS = 5 * 60_000L
+
+        /**
+         * 「ADB 不可达」时改走 CXR appStart 兜底的退避时长。
+         *
+         * 为什么它必须比探针周期（60s）长得多：[launchGlassesLinkViaCxr] 走
+         * `launchApp` → `connectAndRunCustomAppOperation`，该路径**首段就会
+         * `session.cleanup()` 拆掉并重建整条 CXR 链路**（timeout 30s）。
+         * 每分钟做一次等于每分钟把链路拆一次，纯自伤。5 分钟一次既够快恢复，
+         * 又把最坏情况的抖动限制在可接受范围。
+         */
+        private const val CXR_LAUNCH_BACKOFF_MS = 5 * 60_000L
+
 
 
 
@@ -158,6 +204,23 @@ class CxrLHiRokidSession(
     /** 防止超时与 operation.onReady 回调竞态 */
     internal var operationCompleted = false
     internal var timeoutJob: Job? = null
+
+    /**
+     * 眼镜端常驻服务存活探针（见 [startGlassesServiceProbe]）。
+     * 生命周期与本次链路一致：连接建立时启动，[cleanup] 时取消。
+     */
+    private var glassesProbeJob: Job? = null
+
+    /**
+     * ADB 校验退避截止时刻（见 [ADB_VERIFY_BACKOFF_MS]）。0 = 不处于退避中，每轮都校验。
+     * 只在探针协程内读写，协程单实例串行执行，故用 @Volatile 即可（无需额外同步）。
+     */
+    @Volatile
+    private var nextAdbVerifyAtMs = 0L
+
+    /** CXR appStart 兜底的退避截止时刻（见 [CXR_LAUNCH_BACKOFF_MS]）。0 = 可立即尝试。 */
+    @Volatile
+    private var nextCxrLaunchAtMs = 0L
     /** 「拍照问 AI」图片回调超时兜底（takePhoto 成功但图片回调永不到达时复位状态） */
     /** 使用同步锁保护操作状态 */
     internal val operationLock = Any()
@@ -890,6 +953,9 @@ class CxrLHiRokidSession(
         android.util.Log.i("CxrLInstall", "cleanup() called")
         timeoutJob?.cancel()
         timeoutJob = null
+        // 停常驻服务探针：它持有本次 link 的引用并周期发帧，不停会随会话重建越积越多
+        glassesProbeJob?.cancel()
+        glassesProbeJob = null
         asrBridge.stop()
         // 补漏：取消其余遗留协程任务（原实现漏取消导致后台任务残留）
         aiConfig.cancelPushJob()
@@ -1078,6 +1144,10 @@ class CxrLHiRokidSession(
             }
             // 插播 B：主动询问眼镜端协议版本/能力（旧版眼镜端不应答 → 超时判为 legacy）
             requestGlassesHello(link)
+            // 常驻服务存活探针：眼镜端被 AssistServer 强杀后它自己无法复活（force-stop 清 alarm
+            // 且置 stopped=true），只能由手机端经 ADB 拉起。原先拉起只发生在「用户恰好调用了
+            // 显示类工具」时，这里改成自主周期检查。
+            startGlassesServiceProbe(link)
         } catch (e: Exception) {
             Log.e(TAG, "registerGlobalCmdListener failed", e)
         }
@@ -1097,6 +1167,207 @@ class CxrLHiRokidSession(
             delay(GlassesHandshake.LEGACY_DETECT_DELAY_MS)
             GlassesHandshake.markLegacy()
         }
+    }
+
+    // ═══════════════════════════════════════════════════
+    // 眼镜端常驻服务存活探针（进程被强杀后的恢复）
+    // ═══════════════════════════════════════════════════
+
+    /**
+     * 启动周期探针：判定眼镜端 RokidLink 是否还在跑，不在则经 ADB 拉起。
+     *
+     * ## 为什么必须由手机端来做
+     *
+     * 眼镜端 RokidLink 被 **force-stop**（AssistServer 场景抢占走的就是这条路，真机日志
+     * `Force stopping com.rokidlab.rokidlink ... from pid 2013`）之后，它**自己无法复活**：
+     * force-stop 会置 `stopped=true` 并清除该包所有 alarm/job，此后 START_STICKY、
+     * BOOT_COMPLETED、Alarm 心跳（眼镜端 `ResidentWatchdog`）**全部失效**。
+     * 唯一合法突破点是外部拉起 —— `stopped=true` 的包允许被 ADB shell 的
+     * `am start-foreground-service` 启动，也就是 [ToolRegistry.ensureGlassesLinkRunning]。
+     *
+     * 原先该函数**只有一个调用点**（`DisplayToolProvider`，`show_image` 失败后顺手拉一次），
+     * 于是恢复完全取决于用户是否恰好触发过一次显示类工具。本探针把它升级为自主行为。
+     *
+     * ## 判活依据
+     *
+     * 手机侧的 CXR 链路连的是眼镜**系统**的 cxr-service，**不是** RokidLink 进程 ——
+     * 所以 `cxrlConnected` / `glassBtConnected` 在 RokidLink 死后**依然为真**，
+     * 不能用来判断它是否还活着。可靠信号有两个：
+     *  1. **HELLO 新鲜度**：眼镜端服务就绪会回 [LinkProtocol.TOPIC_HELLO]。
+     *     只看一次不够 —— 它死后不会有人来把 `known` 复位，据 `known` 判断会把尸体当活人；
+     *     必须看 [GlassesHandshake.lastHelloAtMs] 是否在本轮窗口内被刷新。
+     *  2. **进程实况**：HELLO 没来时用 ADB `pidof` 直接问设备（见 [readGlassesLinkPid]）。
+     *     这一步不能省 —— 旧版眼镜端（v1，无握手能力）同样「不应答 HELLO」，
+     *     若把「无应答」直接当成「进程已死」，就会对着一台正常运行的旧版设备反复发拉起命令。
+     *
+     * ## 恢复动作是分层的（重要）
+     *
+     * | 判定 | 动作 | 依赖 |
+     * |---|---|---|
+     * | `pid == 0`（确实不在跑） | ADB `am start-foreground-service`（[ToolRegistry.ensureGlassesLinkRunning]） | 需要 ADB 可达 |
+     * | `pid == null`（ADB 不可达） | CXR appStart（[launchGlassesLinkViaCxr]） | 只需眼镜系统 AI App |
+     * | `pid > 0`（活着但静默） | 不动作 | —— |
+     *
+     * 第二层是为「force-stop 把 ADB 通道一起带走」而加的：ADB 走蓝牙隧道，而隧道服务端就在
+     * 被杀的进程里 ⇒ 最需要恢复的场景恰好用不了 ADB（2026-09-18 实测）。详见 [launchGlassesLinkViaCxr]。
+     */
+    internal fun startGlassesServiceProbe(link: CXRLink) {
+        glassesProbeJob?.cancel()
+        glassesProbeJob = appScope.launch {
+            delay(PROBE_FIRST_DELAY_MS)
+            while (isActive) {
+                runCatching { probeGlassesResidentServiceOnce(link) }
+                    .onFailure { Log.w(TAG, "glasses service probe error: ${it.message}") }
+                delay(PROBE_INTERVAL_MS)
+            }
+        }
+        Log.i(TAG, "glasses resident-service probe started (every ${PROBE_INTERVAL_MS}ms)")
+    }
+
+    /** 探针单轮：先看握手新鲜度，不新鲜则用 pidof 定论，确认不在才拉起。 */
+    private suspend fun probeGlassesResidentServiceOnce(link: CXRLink) {
+        if (!cxrlConnected) {
+            Log.d(TAG, "probe: cxrl disconnected, skip")
+            return
+        }
+        val before = GlassesHandshake.lastHelloAtMs
+        // 低成本路径：一条 CXR 空帧，不占 ADB 隧道
+        runCatching { rawSendCustomCmd(link, LinkProtocol.TOPIC_HELLO_REQ, Caps()) }
+            .onFailure { Log.w(TAG, "probe: hello_req send failed: ${it.message}") }
+        delay(PROBE_ACK_TIMEOUT_MS)
+        if (GlassesHandshake.lastHelloAtMs > before) {
+            Log.d(TAG, "probe: glasses resident service healthy (hello refreshed)")
+            return
+        }
+
+        // 握手没刷新 —— 可能是进程死了，也可能是旧版眼镜端/瞬时丢帧。用设备实况定论。
+        //
+        // 节流：ADB 校验失败（无共享会话 / 线路不通）意味着「注定失败的一次建链」，
+        // 那可能是最长 25s 的阻塞（TCP 10s + 握手 15s）。一分钟一次纯耗电无收益，
+        // 故失败后退避 ADB_VERIFY_BACKOFF_MS；一旦成功判定则立即恢复每分钟校验。
+        if (System.currentTimeMillis() < nextAdbVerifyAtMs) {
+            Log.i(TAG, "probe: no hello, ADB verification backed off — skip this round")
+            return
+        }
+        val pid = readGlassesLinkPid()
+        if (pid == null) {
+            nextAdbVerifyAtMs = System.currentTimeMillis() + ADB_VERIFY_BACKOFF_MS
+            Log.w(
+                TAG,
+                "probe: no hello and cannot verify glasses process (ADB unavailable); " +
+                    "back off ${ADB_VERIFY_BACKOFF_MS}ms",
+            )
+            // ★ 不要就此放弃 —— 这正是「眼镜端进程已被强杀」的典型现场：
+            //   ADB 走蓝牙隧道，而隧道的服务端 BtTunnelServer 就住在被杀的进程里 ⇒
+            //   验证通道与恢复通道**与病人同生共死**（2026-09-18 端到端实测：force-stop 后
+            //   探针报 no shared adb session，150s 也没能拉起）。
+            //   改走 CXR appStart：那条链路经眼镜**系统 AI App** 执行，与我们自己的进程无关。
+            launchGlassesLinkViaCxr()
+            return
+        }
+        nextAdbVerifyAtMs = 0L
+        if (pid > 0L) {
+            Log.i(
+                TAG,
+                "probe: glasses process alive (pid=$pid) but not answering hello -> " +
+                    "treat as legacy/silent, no pull",
+            )
+            return
+        }
+        Log.w(TAG, "probe: glasses resident service NOT running (pidof empty) -> pulling via ADB")
+        val ok = ToolRegistry.ensureGlassesLinkRunning(appContext)
+        Log.w(TAG, "probe: ensureGlassesLinkRunning -> $ok")
+    }
+
+    /**
+     * 经「眼镜端系统 AI App」拉起 RokidLink（CXR appStart 通道）—— **不依赖眼镜端进程存活**。
+     *
+     * ## 为什么需要它
+     *
+     * ADB 是首选通道（`ToolRegistry.ensureGlassesLinkRunning`），但它**只在眼镜端进程活着时可用**：
+     * 手机到眼镜的 ADB 走蓝牙隧道，而隧道的服务端 `BtTunnelServer` 就住在被杀的进程里。
+     * 于是「眼镜端被 force-stop」这个最需要恢复的场景，恰好把 ADB 通道一起带走了
+     * （2026-09-18 实测：force-stop 后探针报 `no shared adb session`，150s 无恢复；
+     * 且实测环境眼镜 WiFi 关闭 ⇒ adbd 虽在 `[::]:5555` 监听却没有任何 IP 可达，无旁路）。
+     *
+     * `appStart` 走的是另一条链路：请求由眼镜**系统 AI App / cxr-service** 执行，
+     * 它们不随我们的进程消亡。项目里本来就用它来启动 RokidLink 自己
+     * （见 `RokidLinkController.autoStartRokidLink` / `ensureRokidLinkRunning`），
+     * 只是此前只在**界面进入前台**时触发，没有自主重试。
+     *
+     * ## ⚠️ 两个必须注意的点
+     *
+     * 1. **必须在独立协程里调用**：`launchApp` → `connectAndRunCustomAppOperation` 的首行是
+     *    `session.cleanup()`，而 [cleanup] 会 `glassesProbeJob?.cancel()` —— 直接在探针协程里
+     *    调用等于**中途把自己拆掉**（后续判定全部不再执行）。所以这里另起 `appScope.launch`。
+     *    同理，链路重建完成后 `onConnected → maybeRunPendingOperation → registerGlobalCmdListener
+     *    → startGlassesServiceProbe` 会**重新挂上一个新探针**，所以自我取消不会让探针永久消失。
+     * 2. **必须节流**：该调用会拆掉并重建整条 CXR 链路，代价远高于一次 `pidof`，
+     *    故用 [CXR_LAUNCH_BACKOFF_MS] 限制到 5 分钟一次。
+     *
+     * @return true = 本次真的发起了尝试（被节流时返回 false）
+     */
+    private fun launchGlassesLinkViaCxr(): Boolean {
+        // 未授权时不要走这条路：launchApp → hasGlassesOperationPrerequisites(…, requestAuthorizationIfMissing = true)
+        // 在 token 为空时会**去拉起授权页**；无界面会话（保活重建）下这是用户完全没预期的弹窗。
+        // 没有 token 时 CXR 链路本就用不起来，直接放弃更诚实。
+        if (!hasAuthorization()) {
+            Log.w(TAG, "probe: CXR appStart fallback skipped (no authorization token)")
+            return false
+        }
+        val now = System.currentTimeMillis()
+        if (now < nextCxrLaunchAtMs) {
+            Log.i(
+                TAG,
+                "probe: CXR appStart fallback throttled, next in ${(nextCxrLaunchAtMs - now) / 1000}s",
+            )
+            return false
+        }
+        nextCxrLaunchAtMs = now + CXR_LAUNCH_BACKOFF_MS
+        Log.w(
+            TAG,
+            "probe: ADB unavailable -> fallback to CXR appStart for $GLASSES_LINK_PKG " +
+                "(系统 AI App 执行，不依赖眼镜端进程)",
+        )
+        appScope.launch {
+            runCatching {
+                launchApp(
+                    packageName = GLASSES_LINK_PKG,
+                    onLaunchResult = { ok ->
+                        Log.w(TAG, "probe: CXR appStart $GLASSES_LINK_PKG -> launched=$ok")
+                    },
+                )
+            }.onFailure { Log.e(TAG, "probe: CXR appStart threw", it) }
+        }
+        return true
+    }
+
+    /**
+     * 读眼镜端 RokidLink 的 pid。
+     *
+     * @return `0` = 进程确实不存在（pidof 有输出格式但无匹配）；
+     *         正数 = 存活 pid；
+     *         `null` = **无法判定**（无共享 ADB 会话、命令失败、或输出无法识别）。
+     *         调用方只在拿到 `0` 时才拉起 —— 无法判定时宁可不动，避免误拉起。
+     *
+     * 复用全 App 共享 ADB 会话（不新建）：投屏/文件提取等长连接占用隧道时，
+     * [getAdbShellClient] 内部的 `ChannelArbiter` 守卫会返回 null，本方法随之返回 null 并跳过本轮 ——
+     * 这条探针是「锦上添花」，绝不能去抢用户正在用的那条唯一 RFCOMM。
+     */
+    private fun readGlassesLinkPid(): Long? {
+        val client = getAdbShellClient() ?: run {
+            Log.i(TAG, "probe: no shared adb session, cannot verify glasses process")
+            return null
+        }
+        val out = runCatching {
+            client.executeShellCommand("pidof $GLASSES_LINK_PKG", PROBE_PIDOF_TIMEOUT_MS)
+        }.onFailure { Log.w(TAG, "probe: pidof failed: ${it.message}") }.getOrNull() ?: return null
+        Regex("\\d+").find(out)?.let { return it.value.toLong() }
+        val trimmed = out.trim()
+        // pidof 无匹配时输出为空；空输出即「进程不存在」，这是唯一可下结论的情形。
+        if (trimmed.isEmpty()) return 0L
+        Log.w(TAG, "probe: unexpected pidof output: ${trimmed.take(80)}")
+        return null
     }
 
 

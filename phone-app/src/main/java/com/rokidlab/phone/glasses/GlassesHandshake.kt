@@ -43,12 +43,26 @@ object GlassesHandshake {
     var legacy: Boolean = false
         private set
 
+    /**
+     * 最近一次收到握手通告的时刻（0 = 从未收到）。
+     *
+     * **为什么除了 [known] 还需要它**：[known] 一旦为 true 就再不复位（除了 [reset]），
+     * 它回答的是「眼镜端**曾经**应答过吗」。而常驻服务看护需要的是「眼镜端**现在**还在吗」——
+     * RokidLink 进程被强杀后，手机侧 CXR 链路（连的是系统 cxr-service）依旧完好，
+     * [known] 会一直停留在 true，据此判断会把「进程已死」误判成健康。
+     * 判活必须看这个时间戳是否在容忍窗口内被刷新。
+     */
+    @Volatile
+    var lastHelloAtMs: Long = 0L
+        private set
+
     /** 收到眼镜端握手通告。 */
     fun onHello(ver: Int, capsBitmask: Int, linkVersion: String?) {
         version = ver
         caps = capsBitmask
         known = true
         legacy = false
+        lastHelloAtMs = System.currentTimeMillis()
         Log.i(TAG, "hello: version=$ver caps=0x${capsBitmask.toString(16)} linkVersion=${linkVersion ?: "-"}")
     }
 
@@ -76,6 +90,15 @@ object GlassesHandshake {
         caps = 0
         known = false
         legacy = false
+        lastHelloAtMs = 0L
+    }
+
+    /**
+     * 距最近一次握手的毫秒数；从未收到时为 [Long.MAX_VALUE]（调用方按「远早于任何窗口」处理）。
+     */
+    fun millisSinceHello(): Long {
+        val at = lastHelloAtMs
+        return if (at == 0L) Long.MAX_VALUE else System.currentTimeMillis() - at
     }
 
     /** 供日志/诊断面板展示。 */

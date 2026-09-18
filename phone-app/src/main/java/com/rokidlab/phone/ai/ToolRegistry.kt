@@ -90,11 +90,39 @@ object ToolRegistry {
      * 只读/查询/文件读写等幂等工具不在此集合，允许瞬时失败重试一次。
      */
     val SIDE_EFFECT_TOOLS: Set<String> = setOf(
-        "call_phone", "set_phone_alarm", "add_calendar_event",
+        "call_phone", "set_phone_alarm", "manage_calendar",
         "install_aiui_project", "open_aiui_app", "stop_aiui_app",
-        "launch_glasses_app", "set_timer", "cancel_timer", "schedule_agent_task",
-        "set_phone_volume", "open_phone_app", "play_song", "stop_music", "show_lyrics",
+        "launch_glasses_app", "manage_timer", "schedule_agent_task",
+        "set_phone_volume", "open_phone_app", "control_music", "show_lyrics",
     )
+
+    /**
+     * 设置页的**用户视角**分类（与内部 [group] 域不是一回事：域是装配用的，分类是给人看的）。
+     * 例如 `show_image` 在 display 域、`show_lyrics` 在 media 域，但对用户都属「音乐与图片」。
+     */
+    enum class ToolCategory(val labelRes: Int) {
+        GLASSES(R.string.ai_tool_cat_glasses),
+        PHONE(R.string.ai_tool_cat_phone),
+        INFO_WEB(R.string.ai_tool_cat_info_web),
+        MEDIA(R.string.ai_tool_cat_media),
+        TIMER(R.string.ai_tool_cat_timer),
+        AIUI(R.string.ai_tool_cat_aiui),
+        FILES(R.string.ai_tool_cat_files),
+        /** 系统性/内部工具（自检、日志、任务续做记账等），设置页不展示 */
+        SYSTEM(R.string.ai_tool_cat_system),
+    }
+
+    /** 由内部域推导默认分类；少数需要「按用户意图归类」的工具在条目上显式覆盖 */
+    private fun categoryOfGroup(group: String): ToolCategory = when (group) {
+        DOMAIN_GLASSES -> ToolCategory.GLASSES
+        DOMAIN_PHONE -> ToolCategory.PHONE
+        DOMAIN_TIMER -> ToolCategory.TIMER
+        DOMAIN_MEDIA, DOMAIN_DISPLAY -> ToolCategory.MEDIA
+        DOMAIN_AIUI -> ToolCategory.AIUI
+        DOMAIN_FILES -> ToolCategory.FILES
+        // info / web / knowledge 对用户都是「查信息」
+        else -> ToolCategory.INFO_WEB
+    }
 
     /** 工具元数据（设置页展示用，名称/描述走多语言资源；group 用于按会话装配） */
     data class ToolMeta(
@@ -102,7 +130,55 @@ object ToolRegistry {
         val group: String,
         val displayNameRes: Int,
         val descriptionRes: Int,
+        /** 设置页分类（用户视角）；默认由 [group] 推导 */
+        val category: ToolCategory = categoryOfGroup(group),
+        /**
+         * 系统性/内部工具：设置页**不展示**，但仍会正常下发给模型、也仍可被调用。
+         *
+         * 为什么只隐藏 UI 而不摘掉工具：这些能力（自检 / 读日志 / 放弃任务记录 / 给 AIUI 页面取封面）
+         * 是模型自己判断该用时才用的**内部机制**，不是让用户逐项开关的「能力」——
+         * 摆进设置页只会让用户困惑「这个关了会怎样」，且它默认开启、几乎没人会去关。
+         */
+        val hidden: Boolean = false,
     )
+
+    /** 设置页要展示的工具（按分类分组前先过滤掉系统性工具） */
+    val visibleTools: List<ToolMeta> get() = toolList.filterNot { it.hidden }
+
+    /**
+     * **必须有眼镜端在线才能真正完成**的工具（乐奇聊天「本机模式」的排除名单）。
+     *
+     * 为什么单独列一张表而不是直接按域切：需要眼镜的工具**跨了 3 个域** ——
+     * `glasses` 域 5 个（全部要）、`aiui` 域 4 个（生成/装/开/管 AIUI 应用都要落到眼镜上）、
+     * 以及 `media` 域的 `show_lyrics`（要把歌词推到眼镜并拉起眼镜系统音乐页）。
+     * 按域切要么漏（media 只该摘 1 个，不能整域摘掉 play_song/stop_music）要么多。
+     * 与 [SIDE_EFFECT_TOOLS] / [ToolRiskMap] 同一模式：**显式登记、单一出处、可 grep**。
+     *
+     * ⚠️ 判定口径是「**没有眼镜就做不成**」，不是「和眼镜有关」。以下**故意不在名单里**，
+     * 因为它们在手机侧独立完成、且眼镜不可用时已优雅降级（摘掉反而白白损失能力）：
+     *  - `show_image`：先把图片放进手机对话气泡，再**尽力**镜像到眼镜悬浮层，
+     *    眼镜不在时如实回「已在手机端显示图片；眼镜端未连接…」（见 DisplayToolProvider）。
+     *  - `play_song` / `stop_music`：本地 `MusicPlayerController` 播放，不依赖眼镜。
+     *  - `get_now_playing` / `get_cover_image`：读手机侧 MediaSession、在手机侧下载封面。
+     *  - `save_code_file` / `read_code_file`：读写手机本地项目文件，离线可写代码。
+     */
+    val GLASSES_REQUIRED_TOOLS: Set<String> = setOf(
+        // ── glasses 域：ADB 查询/控制眼镜硬件 ──
+        "get_glasses_status",
+        "list_glasses_apps",
+        "launch_glasses_app",
+        // ── aiui 域：生成/安装/打开/管理 AIUI 应用，最终都要落到眼镜渲染 ──
+        "open_aiui_app",
+        "install_aiui_project",
+        "stop_aiui_app",
+        "list_my_aiui_apps",
+        // ── media 域：只有歌词这一项要把内容推到眼镜并拉起眼镜系统音乐页 ──
+        "show_lyrics",
+    )
+
+    /** 取 Schema 里的工具名（`{"function":{"name":…}}`）。解析失败返回空串（调用方按「不在名单」处理）。 */
+    private fun functionNameOf(schema: JSONObject): String =
+        runCatching { schema.optJSONObject("function")?.optString("name").orEmpty() }.getOrDefault("")
 
     /** 全部工具（含已禁用），按声明顺序 */
     val toolList: List<ToolMeta> = listOf(
@@ -119,22 +195,10 @@ object ToolRegistry {
             descriptionRes = R.string.ai_tool_get_current_time_desc,
         ),
         ToolMeta(
-            name = "get_glasses_battery",
+            name = "get_glasses_status",
             group = DOMAIN_GLASSES,
-            displayNameRes = R.string.ai_tool_get_glasses_battery_name,
-            descriptionRes = R.string.ai_tool_get_glasses_battery_desc,
-        ),
-        ToolMeta(
-            name = "get_glasses_device_info",
-            group = DOMAIN_GLASSES,
-            displayNameRes = R.string.ai_tool_get_glasses_device_info_name,
-            descriptionRes = R.string.ai_tool_get_glasses_device_info_desc,
-        ),
-        ToolMeta(
-            name = "get_glasses_storage",
-            group = DOMAIN_GLASSES,
-            displayNameRes = R.string.ai_tool_get_glasses_storage_name,
-            descriptionRes = R.string.ai_tool_get_glasses_storage_desc,
+            displayNameRes = R.string.ai_tool_get_glasses_status_name,
+            descriptionRes = R.string.ai_tool_get_glasses_status_desc,
         ),
         ToolMeta(
             name = "list_glasses_apps",
@@ -149,22 +213,10 @@ object ToolRegistry {
             descriptionRes = R.string.ai_tool_launch_glasses_app_desc,
         ),
         ToolMeta(
-            name = "set_timer",
+            name = "manage_timer",
             group = DOMAIN_TIMER,
-            displayNameRes = R.string.ai_tool_set_timer_name,
-            descriptionRes = R.string.ai_tool_set_timer_desc,
-        ),
-        ToolMeta(
-            name = "list_timers",
-            group = DOMAIN_TIMER,
-            displayNameRes = R.string.ai_tool_list_timers_name,
-            descriptionRes = R.string.ai_tool_list_timers_desc,
-        ),
-        ToolMeta(
-            name = "cancel_timer",
-            group = DOMAIN_TIMER,
-            displayNameRes = R.string.ai_tool_cancel_timer_name,
-            descriptionRes = R.string.ai_tool_cancel_timer_desc,
+            displayNameRes = R.string.ai_tool_manage_timer_name,
+            descriptionRes = R.string.ai_tool_manage_timer_desc,
         ),
         // 自主定时任务（真主动性）：到点让 Agent 自己跑一轮推理（仅只读工具）再播报结果，
         // 区别于 set_timer 的「到点念一句固定文案」
@@ -175,16 +227,10 @@ object ToolRegistry {
             descriptionRes = R.string.ai_tool_schedule_agent_task_desc,
         ),
         ToolMeta(
-            name = "play_song",
+            name = "control_music",
             group = DOMAIN_MEDIA,
-            displayNameRes = R.string.ai_tool_play_song_name,
-            descriptionRes = R.string.ai_tool_play_song_desc,
-        ),
-        ToolMeta(
-            name = "stop_music",
-            group = DOMAIN_MEDIA,
-            displayNameRes = R.string.ai_tool_stop_music_name,
-            descriptionRes = R.string.ai_tool_stop_music_desc,
+            displayNameRes = R.string.ai_tool_control_music_name,
+            descriptionRes = R.string.ai_tool_control_music_desc,
         ),
         ToolMeta(
             name = "show_lyrics",
@@ -205,6 +251,7 @@ object ToolRegistry {
             group = DOMAIN_MEDIA,
             displayNameRes = R.string.ai_tool_get_cover_image_name,
             descriptionRes = R.string.ai_tool_get_cover_image_desc,
+            hidden = true,   // 系统性/内部工具：设置页不展示（仍会下发给模型）
         ),
         ToolMeta(
             name = "show_image",
@@ -321,16 +368,10 @@ object ToolRegistry {
             descriptionRes = R.string.ai_tool_set_phone_volume_desc,
         ),
         ToolMeta(
-            name = "query_calendar",
+            name = "manage_calendar",
             group = DOMAIN_PHONE,
-            displayNameRes = R.string.ai_tool_query_calendar_name,
-            descriptionRes = R.string.ai_tool_query_calendar_desc,
-        ),
-        ToolMeta(
-            name = "add_calendar_event",
-            group = DOMAIN_PHONE,
-            displayNameRes = R.string.ai_tool_add_calendar_event_name,
-            descriptionRes = R.string.ai_tool_add_calendar_event_desc,
+            displayNameRes = R.string.ai_tool_manage_calendar_name,
+            descriptionRes = R.string.ai_tool_manage_calendar_desc,
         ),
         // 自我认知域：Agent 对「自己」的运行时事实（模型/连接/资料/开关）与运行日志。
         // 归属 info（基础信息）域，随主 Agent 与会话子集一起装配 —— 自检能力应始终可用。
@@ -339,18 +380,21 @@ object ToolRegistry {
             group = DOMAIN_INFO,
             displayNameRes = R.string.ai_tool_get_agent_status_name,
             descriptionRes = R.string.ai_tool_get_agent_status_desc,
+            hidden = true,   // 系统性/内部工具：设置页不展示（仍会下发给模型）
         ),
         ToolMeta(
             name = "read_recent_logs",
             group = DOMAIN_INFO,
             displayNameRes = R.string.ai_tool_read_recent_logs_name,
             descriptionRes = R.string.ai_tool_read_recent_logs_desc,
+            hidden = true,   // 系统性/内部工具：设置页不展示（仍会下发给模型）
         ),
         ToolMeta(
             name = "clear_agent_task",
             group = DOMAIN_INFO,
             displayNameRes = R.string.ai_tool_clear_agent_task_name,
             descriptionRes = R.string.ai_tool_clear_agent_task_desc,
+            hidden = true,   // 系统性/内部工具：设置页不展示（仍会下发给模型）
         ),
         // 跨会话检索：在落盘聊天历史里按关键字找相关轮次，让模型能回答
         // 「我们上次聊的那个定时任务叫什么」。归 info 域，随各会话子集一起装配。
@@ -440,18 +484,27 @@ object ToolRegistry {
      */
     private val schemaCache = java.util.concurrent.ConcurrentHashMap<Set<String>, Pair<Map<String, Boolean>, List<JSONObject>>>()
 
-    fun schemasFor(context: Context, domains: Set<String>): List<JSONObject> {
+    /**
+     * @param excludeGlassesTools true = 摘掉 [GLASSES_REQUIRED_TOOLS]（乐奇聊天「本机模式」：
+     *   没眼镜时不要让模型去调注定失败的工具）。过滤发生在缓存**之后**，
+     *   因此不改变缓存键、也不重建 JSONObject。
+     */
+    fun schemasFor(context: Context, domains: Set<String>, excludeGlassesTools: Boolean = false): List<JSONObject> {
         val prefs = context.getSharedPreferences(TOOL_PREFS, Context.MODE_PRIVATE)
         val snapshot = HashMap<String, Boolean>(toolList.size)
         toolList.forEach { snapshot[it.name] = prefs.getBoolean(KEY_PREFIX + it.name, true) }
-        schemaCache[domains]?.let { (cachedSnapshot, cachedSchemas) ->
-            if (cachedSnapshot == snapshot) return cachedSchemas
+        val cached = schemaCache[domains]?.let { (cachedSnapshot, cachedSchemas) ->
+            if (cachedSnapshot == snapshot) cachedSchemas else null
         }
-        val result = toolList
+        val result = cached ?: toolList
             .filter { it.group in domains && snapshot[it.name] == true }
             .map { buildSchema(it) }
-        schemaCache[domains] = snapshot to result
-        return result
+            .also { schemaCache[domains] = snapshot to it }
+        return if (excludeGlassesTools) {
+            result.filterNot { functionNameOf(it) in GLASSES_REQUIRED_TOOLS }
+        } else {
+            result
+        }
     }
 
     /**
@@ -466,14 +519,18 @@ object ToolRegistry {
      *
      * 副作用档判定完全复用 [ToolRiskMap.riskOf]（唯一登记处），新增工具只要正确登记
      * 就会自动被正确纳入/排除，无需改本函数。
+     *
+     * @param excludeGlassesTools true = 一并摘掉 [GLASSES_REQUIRED_TOOLS]（本机模式下的自主任务：
+     *   无人值守 + 没眼镜，更需要把注定失败的工具排除干净）
      */
-    fun schemasReadOnly(context: Context): List<JSONObject> {
+    fun schemasReadOnly(context: Context, excludeGlassesTools: Boolean = false): List<JSONObject> {
         val allowed = readOnlyToolNames()
-        return schemasFor(context, DOMAIN_ALL).filter { schema ->
-            val name = runCatching {
-                schema.optJSONObject("function")?.optString("name").orEmpty()
-            }.getOrDefault("")
-            name in allowed
+        val schemas = schemasFor(context, DOMAIN_ALL)
+            .filter { functionNameOf(it) in allowed }
+        return if (excludeGlassesTools) {
+            schemas.filterNot { functionNameOf(it) in GLASSES_REQUIRED_TOOLS }
+        } else {
+            schemas
         }
     }
 
@@ -493,14 +550,10 @@ object ToolRegistry {
     fun statusText(name: String): String = when (name) {
         "search_knowledge_base" -> "正在检索知识库…"
         "get_current_time" -> "正在查看时间…"
-        "get_glasses_battery" -> "正在查询眼镜电量…"
-        "get_glasses_device_info" -> "正在查询设备信息…"
-        "get_glasses_storage" -> "正在查询存储空间…"
+        "get_glasses_status" -> "正在查询眼镜状态…"
         "list_glasses_apps" -> "正在查询应用列表…"
         "launch_glasses_app" -> "正在打开应用…"
-        "set_timer" -> "正在设置定时任务…"
-        "list_timers" -> "正在查看定时任务…"
-        "cancel_timer" -> "正在取消定时任务…"
+        "manage_timer" -> "正在处理定时任务…"
         "get_weather" -> "正在查询天气…"
         "calculate" -> "正在精确计算…"
         "search_contacts" -> "正在查找联系人…"
@@ -510,10 +563,8 @@ object ToolRegistry {
         "get_phone_status" -> "正在查询手机状态…"
         "get_location" -> "正在获取位置…"
         "set_phone_volume" -> "正在调节手机音量…"
-        "query_calendar" -> "正在查询日程…"
-        "add_calendar_event" -> "正在创建日程…"
-        "play_song" -> "正在搜索歌曲…"
-        "stop_music" -> "正在停止播放…"
+        "manage_calendar" -> "正在处理日程…"
+        "control_music" -> "正在处理音乐播放…"
         "show_lyrics" -> "正在打开歌词…"
         "get_now_playing" -> "正在读取播放信息…"
         "get_cover_image" -> "正在获取歌曲封面…"

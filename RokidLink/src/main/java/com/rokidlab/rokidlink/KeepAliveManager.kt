@@ -22,7 +22,8 @@ import android.util.Log
  *  3. 30s 心跳：按键 receiver 丢失重注册、WakeLock 掉了重取、TTS 绑定掉了重绑
  *  4. SCREEN_ON 广播：发现 receiver 失活时重新注册
  *  5. 蓝牙运行时权限缺失时一次性拉起 MainActivity 申请
- *  6. 崩溃/异常销毁自愈：短命销毁计数持久化 + 延迟重试拉起
+ *  6. 崩溃/异常销毁自愈：短命销毁计数持久化 + 经 [ResidentWatchdog] 的 Alarm 链补拉服务
+ *  7. 常驻服务周期心跳（5min，[startWatchdogHeartbeat]）：进程被 LMK 回收 / app idle 停服务后自我恢复
  */
 internal class KeepAliveManager(
     private val service: KeyButtonService,
@@ -277,45 +278,22 @@ internal class KeepAliveManager(
                     "<${SHORT_LIVED_THRESHOLD_MS}ms (last ${aliveMs}ms)"
             )
         } else {
-            retryRestartSelf(0)
+            // ★ 必须走 AlarmManager，不能用 Handler.postDelayed 重试。
+            //   旧实现用 core.mainHandler.postDelayed(...,5000) 递归重试 10 次 —— 但那个 Runnable
+            //   活在本进程里：一旦进程被杀（LMK / SwipeUpClean / 系统停服务把进程一并带走），
+            //   队列随之蒸发，重试链当场断裂，服务再也不会回来。
+            //   只有系统级 Alarm 能把「该重启了」这件事投递到一个新拉起的进程里。
+            ResidentWatchdog.scheduleRetry(service, 0)
         }
     }
 
-    /** 自愈重试：最多尝试 10 次，每次间隔 5 秒（后台 FGS 启动受限时等待系统放行） */
-    private fun retryRestartSelf(attempt: Int) {
-        if (attempt >= 10) {
-            Log.e(TAG, "Give up restarting after $attempt attempts")
-            return
-        }
-        core.mainHandler.postDelayed({
-            if (isServiceRunning(KeyButtonService::class.java)) {
-                Log.i(TAG, "Service running again, no restart needed")
-                return@postDelayed
-            }
-            Log.w(TAG, "KeyButtonService not running after destroy, restarting (attempt ${attempt + 1})")
-            try {
-                KeyButtonService.start(service)
-                // 同时确保蓝牙隧道服务（ADB 通道依赖它）也恢复
-                runCatching { BtTunnelService.start(service) }
-                    .onFailure { Log.e(TAG, "Failed to restart BtTunnelService", it) }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to restart KeyButtonService after destroy", e)
-            }
-            retryRestartSelf(attempt + 1)
-        }, 5_000L)
-    }
-
-    /** 检查本应用服务是否在运行 */
-    private fun isServiceRunning(clazz: Class<*>): Boolean {
-        return try {
-            val am = service.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-            am.getRunningServices(100).any {
-                it.service.packageName == service.packageName && it.service.className == clazz.name
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "isServiceRunning failed", e)
-            false
-        }
+    /**
+     * 挂上常驻服务周期心跳（5min 一次，见 [ResidentWatchdog]）。
+     * 由 [KeyButtonService.onCreate] 调用 —— 每次服务起来都重挂一次，
+     * 保证「设备重启 / 覆盖安装 / 进程被回收后重建」等任意路径进入本类后，心跳链都被续上。
+     */
+    fun startWatchdogHeartbeat() {
+        ResidentWatchdog.armHeartbeat(service)
     }
 
     fun markStart() {

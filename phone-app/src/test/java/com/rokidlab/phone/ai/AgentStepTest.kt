@@ -40,7 +40,7 @@ class AgentStepTest {
     fun `业务上不理想但正常返回的文案算成功`() {
         // 这些是工具的正常返回，只是结果不理想：不该挂红叉，否则过程卡片全是失败噪音
         assertFalse(AgentStep.isFailureResult("没有找到歌曲《不存在》，请换个歌名试试"))
-        assertFalse(AgentStep.isFailureResult("当前没有正在播放的音乐：先调用 play_song。"))
+        assertFalse(AgentStep.isFailureResult("当前没有正在播放的音乐：先调用 control_music。"))
         assertFalse(AgentStep.isFailureResult("已开始播放《西厢》 - 后弦"))
     }
 
@@ -48,8 +48,8 @@ class AgentStepTest {
 
     @Test
     fun `同一工具调用的两段式共用同一个覆盖键`() {
-        val running = AgentStep.tool("call_1", "play_song", AgentStep.State.RUNNING, argsRaw = "{\"songName\":\"西厢\"}")
-        val done = AgentStep.tool("call_1", "play_song", AgentStep.State.OK, argsRaw = "{\"songName\":\"西厢\"}", result = "已开始播放《西厢》")
+        val running = AgentStep.tool("call_1", "control_music", AgentStep.State.RUNNING, argsRaw = "{\"songName\":\"西厢\"}")
+        val done = AgentStep.tool("call_1", "control_music", AgentStep.State.OK, argsRaw = "{\"songName\":\"西厢\"}", result = "已开始播放《西厢》")
         assertEquals("先 RUNNING 后完成必须能覆盖同一行", running.key, done.key)
         assertEquals("tool:call_1", running.key)
         assertEquals(AgentStep.State.RUNNING, running.state)

@@ -46,7 +46,7 @@ class ChatHistoryStoreTest {
         AgentStep(
             key = "tool:call_1",
             kind = AgentStep.Kind.TOOL,
-            title = "play_song",
+            title = "control_music",
             detail = "{\"songName\":\"西厢\"} → 已开始播放《西厢》",
             state = AgentStep.State.OK,
         ),
@@ -190,7 +190,7 @@ class ChatHistoryStoreTest {
         assertEquals(listOf("think:0", "tool:call_1", "tool:call_2"), back.trace.map { it.key })
         assertEquals(AgentStep.Kind.THINKING, back.trace[0].kind)
         assertEquals(AgentStep.Kind.TOOL, back.trace[1].kind)
-        assertEquals("play_song", back.trace[1].title)
+        assertEquals("control_music", back.trace[1].title)
         assertEquals(AgentStep.State.OK, back.trace[1].state)
         assertEquals(AgentStep.State.FAILED, back.trace[2].state)
         assertTrue(

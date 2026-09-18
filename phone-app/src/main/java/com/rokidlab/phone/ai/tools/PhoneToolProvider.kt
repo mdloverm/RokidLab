@@ -41,8 +41,7 @@ internal object PhoneToolProvider : ToolProvider {
         "open_phone_app",
         "get_phone_status",
         "set_phone_volume",
-        "query_calendar",
-        "add_calendar_event",
+        "manage_calendar",
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
@@ -81,16 +80,19 @@ internal object PhoneToolProvider : ToolProvider {
 
             "set_phone_volume" -> PhoneTools.setPhoneVolume(context, args.optInt("volume", 50))
 
-            "query_calendar" -> PhoneTools.queryCalendar(context, args.optString("date"))
-
-            "add_calendar_event" -> PhoneTools.addCalendarEvent(
-                context,
-                title = args.optString("title"),
-                date = args.optString("date"),
-                startTime = args.optString("startTime"),
-                durationMinutes = args.optInt("durationMinutes", 60),
-                note = args.optString("note").trim().ifBlank { null },
-            )
+            // 查询 / 创建二合一（原 query_calendar + add_calendar_event）：同一能力域，
+            // 合并后模型在「改到明天吧」这类来回对话里不必两组 schema 反复挑。
+            "manage_calendar" -> when (args.optString("action").trim().lowercase()) {
+                "create" -> PhoneTools.addCalendarEvent(
+                    context,
+                    title = args.optString("title"),
+                    date = args.optString("date"),
+                    startTime = args.optString("startTime"),
+                    durationMinutes = args.optInt("durationMinutes", 60),
+                    note = args.optString("note").trim().ifBlank { null },
+                )
+                else -> PhoneTools.queryCalendar(context, args.optString("date"))
+            }
 
         else -> throw IllegalArgumentException("未知工具: $name")
         }

@@ -561,6 +561,22 @@ adb/
   - 闸门挂 `packageRelease` 而非 `preReleaseBuild`：只堵「把脏工作区打成包」，不连带堵死 `compileReleaseKotlin` 这类纯编译校验
   - ⚠️ 该脚本由两个模块各自 `apply`，因此 `:cxrl:RokidLab:RokidLink:assembleRelease` 单跑同样受约束（不同于 §12.12 里 `checkProtocolSynced` 只挂 phone-app 的历史局限）
 - 密钥（Gitee token、签名口令、API Key）**禁止明文入库**，一律走环境变量或不入库的 `local.properties`
+  - **签名材料具体口径（2026-09-18 落地）**：`release.keystore` / `*.jks` / `keystore.properties` 在 `.gitignore` 中永久排除；`gradle.properties` 已 `git rm --cached` 移出索引（⚠️ 它此前**确实被跟踪过**，明文口令 2026-06-16 起进入历史并推送至 Gitee —— 仅改文件不清理历史无法真正止损）
+  - 两端 `signingConfigs.release` 已去掉 `orElse("rokid123")` 明文回退：**缺失即中止构建**，绝不静默产出「签名看似正确」的包
+  - ⚠️ **校验必须挂在任务图上，不能挂在 `preBuild` / 配置阶段**（2026-09-18 踩坑修正）：
+    初版把 `requireSigningProperty(...)` 直接写在 `signingConfigs.create("release") {}` 里，
+    而该块在**配置阶段无条件执行** —— 于是没配 release 口令的机器连 `compileDebugKotlin` /
+    `installDebug` 都构建失败，发布闸门被误当成日常开发闸门。
+    现拆为：`optionalSigningProperty(...)`（缺失返回 null，不抛）+ `releaseSigningProblems()`
+    + `gradle.taskGraph.whenReady { ... }`，**仅当任务图里出现 `package/assemble/bundle/install/publish*Release`
+    时才硬失败**；判定基于实际任务图而非任务名猜测，故 `assemble` / `build` 这类同时产出
+    debug+release 的聚合任务同样被拦住。
+  - ⚠️ Kotlin DSL 写法坑：`TaskExecutionGraph.whenReady` 有 `Action` 与 Groovy `Closure` 两个重载，
+    裸 lambda 会解析到 `Closure` 报 `Closure<(raw) Any!> was expected`；而 Kotlin DSL 的
+    `Action<T> { }` 又是**带接收者**变体（`T.() -> Unit`），写成带参数 lambda 会报 `Expected no parameters`。
+    正确写法：`gradle.taskGraph.whenReady(org.gradle.api.Action<org.gradle.api.execution.TaskExecutionGraph> { /* this = graph */ })`
+  - 参数提供方式（四选一）：`gradle.properties`（不入库）/ `~/.gradle/gradle.properties`（推荐）/ 环境变量 `ORG_GRADLE_PROJECT_<名>` / 命令行 `-P<名>=...`；模板见仓库根 `gradle.properties.example`（该文件可入库）
+  - 修改两端任一签名读取/闸门函数时必须**双改**（两份各持一份，逐字一致）
 - `phone-app/src/main/assets/RokidLink.apk` 必须是 RokidLink **release** 产物，不得内嵌 debug 包
 - 新增/修改/删除 `values/strings.xml`（中文）时必须同步 `values-en/strings.xml`，**两模块（phone-app / RokidLink）的 key 集合必须完全相等**（当前 phone-app 1100=1100、RokidLink 22=22）—— 由构建期任务 `checkI18nKeysSynced` 挂在 `preBuild` 强制，不一致直接构建失败并列出差异键名（历史欠账 5 条已于 2026-09-12 补齐）
 

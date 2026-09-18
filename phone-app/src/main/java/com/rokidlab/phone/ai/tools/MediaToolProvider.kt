@@ -42,8 +42,7 @@ internal object MediaToolProvider : ToolProvider {
     private const val TAG = "MediaToolProvider"
 
     override val toolNames = setOf(
-        "play_song",
-        "stop_music",
+        "control_music",
         "show_lyrics",
         "get_now_playing",
         "get_cover_image",
@@ -51,26 +50,29 @@ internal object MediaToolProvider : ToolProvider {
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
         return when (name) {
-            "play_song" -> {
-                val songName = args.optString("songName").trim()
-                if (songName.isEmpty()) return "请告诉我要播放哪首歌"
-                val artist = args.optString("artist").trim()
-                val song = KuwoMusicApi.search(songName, artist.ifBlank { null })
-                    ?: return "没有找到歌曲《$songName》${
-                        if (artist.isNotBlank()) "（歌手：$artist）" else ""
-                    }，请换个歌名试试"
-                // play() 现在**阻塞到就绪或失败**并返回如实结果。
-                // 旧实现只回「已开始播放」而不看真实播放状态，MediaPlayer 建源失败（what=-38）
-                // 时仍然报成功 —— 用户听到的现象是"歌没播"，真机踩过。
-                MusicPlayerController.play(
-                    context, song.playUrl, song.name, song.artist, song.lyrics,
-                    album = song.album, cover = song.cover,
-                )
-            }
-
-            "stop_music" -> {
-                MusicPlayerController.stop()
-                "已停止播放音乐"
+            // 播放 / 停止二合一（原 play_song + stop_music）：同一能力域，
+            // 合并后模型不必在「用户说别放了」时去另一个工具里找停止动作。
+            "control_music" -> when (args.optString("action").trim().lowercase()) {
+                "stop" -> {
+                    MusicPlayerController.stop()
+                    "已停止播放音乐"
+                }
+                else -> {
+                    val songName = args.optString("songName").trim()
+                    if (songName.isEmpty()) return "请告诉我要播放哪首歌（action=play 需要 songName）"
+                    val artist = args.optString("artist").trim()
+                    val song = KuwoMusicApi.search(songName, artist.ifBlank { null })
+                        ?: return "没有找到歌曲《$songName》${
+                            if (artist.isNotBlank()) "（歌手：$artist）" else ""
+                        }，请换个歌名试试"
+                    // play() 现在**阻塞到就绪或失败**并返回如实结果。
+                    // 旧实现只回「已开始播放」而不看真实播放状态，MediaPlayer 建源失败（what=-38）
+                    // 时仍然报成功 —— 用户听到的现象是"歌没播"，真机踩过。
+                    MusicPlayerController.play(
+                        context, song.playUrl, song.name, song.artist, song.lyrics,
+                        album = song.album, cover = song.cover,
+                    )
+                }
             }
 
             "show_lyrics" -> {
@@ -146,7 +148,7 @@ internal object MediaToolProvider : ToolProvider {
         if (title.isBlank()) {
             return JSONObject()
                 .put("playing", false)
-                .put("message", "当前没有正在播放的音乐：先调用 play_song，再读取播放信息。")
+                .put("message", "当前没有正在播放的音乐：先调用 control_music，再读取播放信息。")
                 .toString()
         }
         val lyrics = MusicPlayerController.currentLyrics

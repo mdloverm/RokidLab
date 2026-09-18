@@ -17,6 +17,18 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 开机自启常驻服务（见 BootReceiver）。
+         ⚠️ 实测边界（2026-09-18 真机）：本项**只覆盖设备重启**。
+         - `force-stop`（AssistServer 场景抢占强杀）会置 stopped=true 并清除 alarm/job，
+           stopped 的包连 BOOT_COMPLETED 也收不到 ⇒ 本项失效；
+         - `MY_PACKAGE_REPLACED` 同样打不进来 —— `adb install -r` 会先 `force-stop` 目标包
+           （`installPackageLI` → `pkg removed`），装完停在 stopped=true（实测接收器零日志）。
+           保留该 action 只为覆盖「运行中被更新」等其他路径，不要当兜底用。
+         ⇒ 上述两类场景的恢复由**手机端 ADB 外部拉起**承担：
+           phone-app `ai/ToolRegistry.ensureGlassesLinkRunning` +
+           `CxrLHiRokidSession.startGlassesServiceProbe`（`am start-foreground-service`
+           是 stopped=true 的唯一合法突破点，真机已验证）。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <queries>
         <package android:name="mark.via.gp" />
@@ -92,6 +104,29 @@
         <receiver
             android:name=".SelfRestartReceiver"
             android:exported="false" />
+
+        <!-- 开机 / 覆盖安装自启接收器。
+             为什么必须单独一个 receiver 而不是给 SelfRestartReceiver 加 intent-filter：
+             系统广播要求 exported=true，而 SelfRestartReceiver 的内部 action（SELF_HEAL_RESTART
+             会杀进程）一旦导出，任何第三方应用都能发一条广播让本进程自杀 —— 故二者按
+             「是否接收外部广播」拆开，各自保持最小暴露面。
+
+             ⚠️ 有意**不**声明 LOCKED_BOOT_COMPLETED / directBootAware：
+             那两个常驻服务都要读写 SharedPreferences（凭据加密存储，解锁前不可用），
+             应用整体也不是 direct-boot aware —— 在解锁前拉起只会启动失败或直接被推迟，
+             属于「加了也没用、还多一条失败日志」的路径。
+             非 direct-boot 应用的 BOOT_COMPLETED 本就在用户解锁后投递，眼镜上二者几乎同时。
+
+             ⚠️ 实际生效范围只有「设备重启」：覆盖安装与被强杀后包都是 stopped=true，
+             广播投不进来（真机实测）。详见上方 RECEIVE_BOOT_COMPLETED 的注释。 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

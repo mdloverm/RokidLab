@@ -11,6 +11,17 @@
 // 不应连带把 `compileReleaseKotlin` 这类纯编译校验也堵死。
 //
 // 逃逸阀（仅限本地临时验证，禁止用于正式出包）：-PallowDirtyWorktree=true
+//
+// 注：release 签名材料的读取与闸门（optionalSigningProperty / releaseSigningProblems /
+// releaseSigningGate）**不放在本文件**，而是各自定义在 phone-app 与 RokidLink 两个模块脚本内部
+// （`apply(from=...)` 是独立脚本作用域，顶层声明不跨脚本可见），两端那两份必须逐字一致。
+//
+// 为什么签名校验不直接用 `preBuild` 式的任务依赖、而是挂在任务图上：
+// 签名材料是**发布专属**的，而 preBuild 在 debug 构建里也跑 —— 若在那里强校验，
+// 一台没配 release 口令的开发机连 `compileDebugKotlin` 都过不去（2026-09-18 踩到）。
+// 本文件里的 checkGitClean 同理：它只挂 packageRelease，不挂 preBuild。
+
+import java.io.File
 
 val checkGitClean by tasks.registering {
     group = "verification"

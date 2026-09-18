@@ -33,11 +33,8 @@ object ToolRiskMap {
         "search_knowledge_base" to ToolRisk.READ_ONLY,
         "read_code_file" to ToolRisk.READ_ONLY,
         "get_current_time" to ToolRisk.READ_ONLY,
-        "get_glasses_battery" to ToolRisk.READ_ONLY,
-        "get_glasses_device_info" to ToolRisk.READ_ONLY,
-        "get_glasses_storage" to ToolRisk.READ_ONLY,
+        "get_glasses_status" to ToolRisk.READ_ONLY,
         "list_glasses_apps" to ToolRisk.READ_ONLY,
-        "list_timers" to ToolRisk.READ_ONLY,
         "search_web" to ToolRisk.READ_ONLY,
         "fetch_webpage" to ToolRisk.READ_ONLY,
         "list_my_aiui_apps" to ToolRisk.READ_ONLY,
@@ -46,7 +43,6 @@ object ToolRiskMap {
         "search_contacts" to ToolRisk.READ_ONLY,
         "get_phone_status" to ToolRisk.READ_ONLY,
         "get_location" to ToolRisk.READ_ONLY,
-        "query_calendar" to ToolRisk.READ_ONLY,
         // 只读当前播放信息（歌名/封面/歌词），不改任何状态；AIUI 播放器页面靠它取素材
         "get_now_playing" to ToolRisk.READ_ONLY,
         // 只读：在手机侧下载当前歌曲封面并压缩成 data URL 回传页面，不改任何状态
@@ -59,13 +55,11 @@ object ToolRiskMap {
 
         // ── LOCAL_SIDE_EFFECT ──
         "launch_glasses_app" to ToolRisk.LOCAL_SIDE_EFFECT,
-        "set_timer" to ToolRisk.LOCAL_SIDE_EFFECT,
-        "cancel_timer" to ToolRisk.LOCAL_SIDE_EFFECT,
+        "manage_timer" to ToolRisk.LOCAL_SIDE_EFFECT,
         // 自主定时任务：在本机注册一条「到点让 Agent 自己跑一轮推理」的调度（可取消），
         // 属本机可控副作用；它触发的**那一轮**推理另由 ToolRegistry.schemasReadOnly 限死在只读工具
         "schedule_agent_task" to ToolRisk.LOCAL_SIDE_EFFECT,
-        "play_song" to ToolRisk.LOCAL_SIDE_EFFECT,
-        "stop_music" to ToolRisk.LOCAL_SIDE_EFFECT,
+        "control_music" to ToolRisk.LOCAL_SIDE_EFFECT,
         "show_lyrics" to ToolRisk.LOCAL_SIDE_EFFECT,
         // 屏幕展示域：把图片渲染到手机对话气泡并下推眼镜悬浮层（本机/本链路副作用，可撤销）
         "show_image" to ToolRisk.LOCAL_SIDE_EFFECT,
@@ -78,7 +72,7 @@ object ToolRiskMap {
         "set_phone_alarm" to ToolRisk.LOCAL_SIDE_EFFECT,
         "open_phone_app" to ToolRisk.LOCAL_SIDE_EFFECT,
         "set_phone_volume" to ToolRisk.LOCAL_SIDE_EFFECT,
-        "add_calendar_event" to ToolRisk.LOCAL_SIDE_EFFECT,
+        "manage_calendar" to ToolRisk.LOCAL_SIDE_EFFECT,
         // 放弃未完成任务：只清本机的任务续做记录（不删任何已生成文件），可撤销且无外部影响
         "clear_agent_task" to ToolRisk.LOCAL_SIDE_EFFECT,
 

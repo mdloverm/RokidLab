@@ -32,54 +32,53 @@ internal object GlassesToolProvider : ToolProvider {
     private const val TAG = "GlassesToolProvider"
 
     override val toolNames = setOf(
-        "get_glasses_battery",
-        "get_glasses_device_info",
-        "get_glasses_storage",
+        "get_glasses_status",
         "list_glasses_apps",
         "launch_glasses_app",
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
         return when (name) {
-            "get_glasses_battery" -> synchronized(ToolRegistry.adbLock) {
-                val client = ToolRegistry.adbClient(context) ?: return "眼镜 ADB 连接失败，无法查询电量"
+            // 电量 / 存储 / 设备信息三合一（原 get_glasses_battery + get_glasses_storage +
+            // get_glasses_device_info）：三者是同一个数据源（同一台眼镜的 ADB 查询）、同属只读，
+            // 拆成三个工具只会让模型漏查用户真正想知道的项。一次全返回，代价是几条多余文本。
+            "get_glasses_status" -> synchronized(ToolRegistry.adbLock) {
+                val client = ToolRegistry.adbClient(context) ?: return "眼镜 ADB 连接失败，无法查询眼镜状态"
                 try {
-                    val raw = client.getBatteryInfo()
-                    // dumpsys battery 精简解析：level / status
-                    val level = Regex("level: (\\d+)").find(raw)?.groupValues?.get(1)
-                    val status = when (Regex("status: (\\d+)").find(raw)?.groupValues?.get(1)) {
+                    val sb = StringBuilder()
+
+                    // ① 电量
+                    val battRaw = runCatching { client.getBatteryInfo() }.getOrNull()
+                    val level = battRaw?.let { Regex("level: (\\d+)").find(it)?.groupValues?.get(1) }
+                    val status = when (battRaw?.let { Regex("status: (\\d+)").find(it)?.groupValues?.get(1) }) {
                         "2" -> "正在充电"
                         "3" -> "放电中"
                         "4" -> "未充电"
                         "5" -> "已充满"
                         else -> "未知"
                     }
-                    val powered = if (raw.contains("AC powered: true") || raw.contains("USB powered: true")) "已接电源" else "未接电源"
-                    "眼镜电量 ${level ?: "未知"}%，状态：$status（$powered）"
+                    val powered = when {
+                        battRaw == null -> "未知"
+                        battRaw.contains("AC powered: true") || battRaw.contains("USB powered: true") -> "已接电源"
+                        else -> "未接电源"
+                    }
+                    sb.append("【电量】").append(level ?: "未知").append("%，状态：").append(status)
+                        .append("（").append(powered).append("）\n")
+
+                    // ② 存储
+                    val df = runCatching { client.executeShellCommand("df -h /sdcard /data 2>/dev/null") }.getOrNull()
+                    sb.append("【存储】").append(df?.trim()?.ifBlank { "未获取到" } ?: "未获取到").append('\n')
+
+                    // ③ 设备信息（脱敏：ro.serialno 值替换为 [已隐藏]，避免序列号泄露给 AI/日志）
+                    val info = runCatching { client.getDeviceInfo() }.getOrNull()
+                    val masked = info?.replace(Regex("(ro\\.serialno): .*")) { "${it.groupValues[1]}: [已隐藏]" }
+                    sb.append("【设备信息】\n").append(masked?.trim()?.ifBlank { "未获取到" } ?: "未获取到")
+
+                    sb.toString()
                 } finally {
                     // 常驻复用共享 ADB 连接（CxrLHiRokidSession 缓存）：不再用后即断，
                     // 避免 AI 工具循环每次执行都重建 TCP+RFCOMM+ADB 鉴权造成隧道风暴。
                     // 连接失败/断线时 getAdbShellClient 检测 isConnected=false 会自动重建。
-                }
-            }
-
-            "get_glasses_device_info" -> synchronized(ToolRegistry.adbLock) {
-                val client = ToolRegistry.adbClient(context) ?: return "眼镜 ADB 连接失败，无法查询设备信息"
-                try {
-                    val raw = client.getDeviceInfo()
-                    // 脱敏：ro.serialno 值替换为 [已隐藏]，避免设备序列号泄露给 AI/日志
-                    raw.replace(Regex("(ro\\.serialno): .*")) { "${it.groupValues[1]}: [已隐藏]" }
-                } finally {
-                    // 常驻复用共享 ADB 连接，不用后即断（原因见 get_glasses_battery）
-                }
-            }
-
-            "get_glasses_storage" -> synchronized(ToolRegistry.adbLock) {
-                val client = ToolRegistry.adbClient(context) ?: return "眼镜 ADB 连接失败，无法查询存储"
-                try {
-                    client.executeShellCommand("df -h /sdcard /data 2>/dev/null")
-                } finally {
-                    // 常驻复用共享 ADB 连接，不用后即断（原因见 get_glasses_battery）
                 }
             }
 
@@ -94,7 +93,7 @@ internal object GlassesToolProvider : ToolProvider {
                         packages.take(20).joinToString("\n")
                     }
                 } finally {
-                    // 常驻复用共享 ADB 连接，不用后即断（原因见 get_glasses_battery）
+                    // 常驻复用共享 ADB 连接，不用后即断（原因见 get_glasses_status）
                 }
             }
 
@@ -114,7 +113,7 @@ internal object GlassesToolProvider : ToolProvider {
                         "已为你打开 $appName（$pkg）"
                     }
                 } finally {
-                    // 常驻复用共享 ADB 连接，不用后即断（原因见 get_glasses_battery）
+                    // 常驻复用共享 ADB 连接，不用后即断（原因见 get_glasses_status）
                 }
             }
 

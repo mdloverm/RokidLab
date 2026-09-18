@@ -6,18 +6,34 @@ import android.content.Intent
 import android.util.Log
 
 /**
- * 断线自愈重启接收器（AlarmManager 触发）。
+ * 断线自愈 / 常驻服务看护接收器（AlarmManager 触发，**仅本应用内部广播**）。
  *
- * cxr-service bridge 断线重连后，其分发路由可能进入 stale 状态：订阅 API 返回 0，
- * 但实际消息不再投递到本 App（实测 ai_config/tts/show_main 全部静默丢失），
- * 进程内重建 bridge 无法恢复，仅进程重启有效。KeyButtonService 检测到该状态后
- * 经 Alarm 调度本接收器执行自杀重启。
+ * 三个动作：
  *
- * 双动作：
- * - ACTION_SELF_HEAL_RESTART：先显式启动常驻服务（保证有新的 START 记录），再杀进程，
- *   由 START_STICKY 在新进程重建 KeyButtonService/BtTunnelService 及 CXR 订阅。
- * - ACTION_SELF_HEAL_BOOTSTRAP：兜底拉起。自杀后若粘性重启被 ROM 延迟/拦截，
- *   该闹钟会唤醒新进程并显式启动两个常驻服务。
+ * - [KeyButtonService.ACTION_SELF_HEAL_RESTART]：先显式补发启动请求（保证有新的 START 记录），
+ *   再自杀。用于 cxr-service bridge 重连后**分发路由 stale** 的场景 —— 此时订阅 API 返回 0、
+ *   消息却不再投递到本 App（实测 ai_config/tts/show_main 全部静默丢失），
+ *   进程内重建 bridge 无法恢复，只有进程重启有效。
+ *
+ * - [KeyButtonService.ACTION_SELF_HEAL_BOOTSTRAP]：拉起常驻服务。两个来源共用它：
+ *   ① 自杀后的兜底拉起（防粘性重启被 ROM 延迟/拦截）；
+ *   ② [ResidentWatchdog.scheduleRetry] 的自愈重试链（每次带 attempt+1 再排下一次）。
+ *
+ * - [ResidentWatchdog.ACTION_HEARTBEAT]：周期心跳（5min）。收到即补齐缺失的常驻服务，
+ *   **并重挂下一次心跳** —— 重挂发生在本接收器（可能是新拉起的进程）内，
+ *   因此这条链能在进程被回收后自我延续。
+ *
+ * ## 为什么必须用 Receiver + Alarm，而不是 Handler.postDelayed
+ *
+ * Handler 的延时任务活在被杀的进程里：进程一死队列即蒸发，回调永不执行。
+ * 只有系统级的 Alarm 能把「进程已经不在了」这件事投递到一个新拉起的进程里。
+ *
+ * ## ⚠️ 本接收器为什么保持 exported=false
+ *
+ * [KeyButtonService.ACTION_SELF_HEAL_RESTART] 会 `killProcess(myPid())`。
+ * 一旦导出，同机任意第三方应用发一条同名广播就能让 RokidLink 自杀。
+ * 需要接系统广播（开机/覆盖安装）的部分由 [BootReceiver] 单独承担（那里 exported=true 且
+ * 只做「拉起服务」这一件无害的事）。**新增动作前请先确认是否会让本类具备被外部触发的破坏性。**
  */
 class SelfRestartReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -32,13 +48,29 @@ class SelfRestartReceiver : BroadcastReceiver() {
                 // 自杀：cxr-service 侧需要看到本进程断开并以全新注册重建订阅路由
                 android.os.Process.killProcess(android.os.Process.myPid())
             }
+
             KeyButtonService.ACTION_SELF_HEAL_BOOTSTRAP -> {
-                Log.w(TAG, "SELF_HEAL_BOOTSTRAP: ensuring services up in fresh process")
-                runCatching { KeyButtonService.start(context) }
-                    .onFailure { Log.e(TAG, "bootstrap start KeyButtonService failed", it) }
-                runCatching { BtTunnelService.start(context) }
-                    .onFailure { Log.e(TAG, "bootstrap start BtTunnelService failed", it) }
+                val attempt = intent.getIntExtra(ResidentWatchdog.EXTRA_RETRY_ATTEMPT, 0)
+                val healthy = ResidentWatchdog.ensureResidentServices(context)
+                Log.w(TAG, "SELF_HEAL_BOOTSTRAP (attempt=$attempt): healthy=$healthy")
+                // 仍未补齐 → 继续排下一次（attempt+1），直到上限。
+                // 排在这里而不是原进程里，是这条链能在进程死亡后继续的唯一原因。
+                if (!healthy) {
+                    // 服务没起来时顺手把周期心跳也续上：短周期重试有上限（10 次 ≈ 50s），
+                    // 用尽后不能连「长期兜底」也一起断掉。
+                    ResidentWatchdog.armHeartbeat(context)
+                    ResidentWatchdog.scheduleRetry(context, attempt)
+                }
             }
+
+            ResidentWatchdog.ACTION_HEARTBEAT -> {
+                val healthy = ResidentWatchdog.ensureResidentServices(context)
+                Log.i(TAG, "WATCHDOG_HEARTBEAT: resident services healthy=$healthy")
+                // 无论健康与否都重挂：健康时重挂是「续期」，不健康时重挂是「继续尝试」
+                ResidentWatchdog.armHeartbeat(context)
+            }
+
+            else -> Log.d(TAG, "ignored action: ${intent.action}")
         }
     }
 

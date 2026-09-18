@@ -264,6 +264,20 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             onResult?.invoke(success, err)
         }
 
+        // ★ 本机模式（设置页「乐奇聊天 → 工具 → 本机模式」）：用户明确要求不依赖眼镜时，
+        //   直接把 link 置空交给 sendAiTextViaLink —— 那里会跳过全部眼镜下行并摘掉眼镜类工具。
+        //   放在最前面是刻意的：**不再尝试连接眼镜**，所以没连眼镜时不会白等 15s 连接超时。
+        val phoneOnly = (session.appContext as? com.rokidlab.phone.app.LabApplication)
+            ?.chatLocalOnlyEnabled == true
+        if (phoneOnly) {
+            Log.i(TAG, "sendAiTextMessage: local-only mode (no glasses), skip link/prerequisites")
+            session.onBusyChanged(true)
+            session.appScope.launch(Dispatchers.IO) {
+                sendAiTextViaLink(null, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace)
+            }
+            return
+        }
+
         // 快速路径: 如果 CXR 已连接且 link 可用，直接发送（跳过前置检查 + 重新 connect）
         val link = session.cxrLink
         if (session.cxrlConnected && session.glassBtConnected && link != null) {
@@ -276,8 +290,13 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         Log.i(TAG, "sendAiTextMessage: no active link, falling back to connectAndRun path")
         val targetHostApp = session.hostApp
         if (!session.hasGlassesOperationPrerequisites(targetHostApp, requestAuthorizationIfMissing = true)) {
-            Log.w(TAG, "sendAiTextMessage: missing prerequisites")
-            session.mainHandler.post { settledResult(false, "missing prerequisites") }
+            // 前置条件不满足（宿主 App 没装/版本太低/未授权）**同样退本机模式**，而不是报错退出：
+            // 用户的诉求就是「没有眼镜也能用聊天」，此时唯一正确的行为是继续把问题交给模型。
+            Log.w(TAG, "sendAiTextMessage: missing glasses prerequisites -> fall back to local-only")
+            session.onBusyChanged(true)
+            session.appScope.launch(Dispatchers.IO) {
+                sendAiTextViaLink(null, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace)
+            }
             return
         }
         val authToken = session.token.orEmpty()
@@ -304,9 +323,14 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                     }
                 },
                 onFailure = {
+                    // 连接失败不再直接报错 —— 退到本机模式照样把问题回答给用户。
+                    // 旧行为是 settledResult(false, "connection failed")，用户侧表现为
+                    // 「眼镜不在/连不上 → 聊天完全不能用」，而模型其实完全有能力离线回答。
+                    Log.w(TAG, "sendAiTextMessage: glasses connect failed -> fall back to local-only")
                     session.cleanup()
-                    session.onBusyChanged(false)
-                    session.mainHandler.post { settledResult(false, "connection failed") }
+                    session.appScope.launch(Dispatchers.IO) {
+                        sendAiTextViaLink(null, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace)
+                    }
                 },
             ),
         )
@@ -449,9 +473,19 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
      *   4. 发 TTS_Result（AI 回复）→ 眼镜显示回复 + 语音播放
      *
      * 前置条件：眼镜端 ai_assist 场景已开启（用户按按键开 AI），即 aiIsRunning=true
+     *
+     * ## ★ `link` 可为 null = **本机模式**（乐奇聊天不依赖眼镜）
+     *
+     * `link == null` 时：**跳过全部眼镜下行**（9 处 `sendCustomCmd`），
+     * 并从下发给模型的工具清单里摘掉 [ToolRegistry.GLASSES_REQUIRED_TOOLS]；
+     * 而模型调用、Agent 工具循环、会话记忆、长期记忆、流式 `onDelta`、`onReply` 全部照常 ——
+     * 也就是说「聊天」这条主业务不再需要眼镜。回复照常进手机聊天窗口，只是不再推给眼镜。
+     *
+     * 这样设计的原因是：眼镜在线时行为**一字不改**（`link != null` 走原路径），
+     * 只有明确无眼镜时才走新分支，不存在回归面。
      */
     internal fun sendAiTextViaLink(
-        link: CXRLink,
+        link: CXRLink?,
         text: String,
         onResult: ((Boolean, String?) -> Unit)?,
         onReply: ((String) -> Unit)? = null,
@@ -485,8 +519,9 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         // session.cleanup() 的 disconnect 产生竞态（SDK native 崩溃）。加锁保证同一时刻只有
         // 一条 AI 下行链路执行，并在发送过程中持续校验 link 有效性。
         synchronized(aiSendLock) {
-        // 入口校验：link 必须仍是最新且未断开（防止慢速路径 session.cleanup 后使用旧 link）
-        if (!abortAiSendIfLinkInvalid(link, onResult)) return
+        // 本机模式（link == null）：没有眼镜可校验，跳过链路有效性检查
+        val phoneOnly = link == null
+        if (link != null && !abortAiSendIfLinkInvalid(link, onResult)) return
         // 排队期间已有更新的请求进入（用户再次说话/发消息）：本请求作废，让出链路并复位调用方，
         // 避免过期任务抢到锁后继续跑多轮工具（用户新请求正在等待接管）
         if (generation != aiGenSeq) {
@@ -514,7 +549,8 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         // ⇒ 用户看不到 Lab 回复。故眼镜语音链路（localTakeover）暂时**不发**这条；
         // 待找到真正能清空官方内容又不影响 Lab 渲染的手段再启用。
         val runOfficialInterrupt: () -> Unit = {
-            if (interruptOfficialFirst && !localTakeover) {
+            // 本机模式没有眼镜可打断：link == null 时整段跳过（否则会在此处 NPE/编译不过）
+            if (interruptOfficialFirst && !localTakeover && link != null) {
                 val exitCaps = Caps()
                 exitCaps.write("Exit")
                 val exitResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, exitCaps)
@@ -530,7 +566,11 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         //   1) 代际被更新请求抢占（用户再次说话/发消息）；
         //   2) 本条请求绑定的 link 被替换/断开（会话重建，例如安装/启动等非 AI 操作触发的重连，
         //      这类重建不会 bump 代际，只能靠 link 身份兜底，否则生成线程会带着已失效的链路空跑）。
-        val isSuperseded: () -> Boolean = { generation != aiGenSeq || session.cxrLink !== link }
+        // ⚠️ 本机模式（link == null）必须排除第 2 条：此时 session.cxrLink 是 null 或**别人的**链路，
+        //    若仍比对身份，会立刻把自己判成「已被替换」而中断（用户侧表现为本机模式发消息没回复）。
+        val isSuperseded: () -> Boolean = {
+            generation != aiGenSeq || (link != null && session.cxrLink !== link)
+        }
 
         // 本地轻量会话标志（catch 分支也要用，故提到 try 外；try 内算出后回填）
         var localLightMode = false
@@ -639,9 +679,11 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         // 无人值守（定时自主任务，见 readOnlyTools 说明）：只装配只读工具。
                         // 连伪工具也不挂 —— manage_memory 会写长期记忆库、load_skill 可能把模型
                         // 引向代码生成（写出文件），update_plan 的进度也无人看，全部无意义。
-                        ToolRegistry.schemasReadOnly(session.appContext).toMutableList()
+                        ToolRegistry.schemasReadOnly(session.appContext, excludeGlassesTools = phoneOnly).toMutableList()
                     } else {
-                        ToolRegistry.schemasFor(session.appContext, domains).toMutableList().apply {
+                        // 本机模式（无眼镜）：把「需要眼镜的工具」从 Schema 里摘掉 ——
+                        // 模型看不到就不会去调，避免每轮白等一次注定失败的调用与 15s 超时。
+                        ToolRegistry.schemasFor(session.appContext, domains, excludeGlassesTools = phoneOnly).toMutableList().apply {
                             if (longTermOn && !localLight) add(longTermMemory.schema())
                             // 任务计划伪工具（Agent 缺口 #1）：所有域子集都带，多步任务显式规划
                             if (!localLight) add(com.rokidlab.phone.ai.AgentPlan.schema())
@@ -902,11 +944,14 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                                     .getOrDefault("")
                             } else ""
                             if (!silent) {
-                                sendGlassesProgress(
-                                    link,
-                                    if (isCodeFile && relFile.isNotEmpty()) "正在生成 $relFile…"
-                                    else ToolRegistry.statusText(tc.name),
-                                )
+                                // 本机模式（link == null）没有眼镜可推，进度只进手机端过程时间线
+                                link?.let {
+                                    sendGlassesProgress(
+                                        it,
+                                        if (isCodeFile && relFile.isNotEmpty()) "正在生成 $relFile…"
+                                        else ToolRegistry.statusText(tc.name),
+                                    )
+                                }
                             }
                             // Agent 过程：把这一步工具调用呈现到手机端「过程」时间线。
                             // 只屏蔽长期记忆维护（纯内部记账，用户既看不懂也不需要看）；
@@ -936,7 +981,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             // 计划更新（Agent 缺口 #1）：把最新计划文本作为进度显示推到眼镜，
                             // 用户随时能看到「做到第几步」，替代多轮工具执行期间的黑盒等待
                             if (tc.name == com.rokidlab.phone.ai.AgentPlan.TOOL_NAME) {
-                                sendGlassesProgress(link, results[idx] ?: "")
+                                link?.let { sendGlassesProgress(it, results[idx] ?: "") }
                                 // 流程级 checkpoint（缺口「长任务可恢复」）：计划一落盘，
                                 // 即便本 turn 随后被预算截断/链路中断，下轮也能接着做
                                 com.rokidlab.phone.ai.AgentTaskStore.recordPlan(
@@ -946,11 +991,13 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             // 落盘结果一句话回报眼镜（覆盖上面的「正在生成」，最终 TTS 总结再覆盖）
                             if (isCodeFile && relFile.isNotEmpty()) {
                                 val r = results[idx]
-                                sendGlassesProgress(
-                                    link,
-                                    if (r?.startsWith("已生成") == true) "$relFile 生成成功"
-                                    else "生成 $relFile 失败，请换个说法再试",
-                                )
+                                link?.let {
+                                    sendGlassesProgress(
+                                        it,
+                                        if (r?.startsWith("已生成") == true) "$relFile 生成成功"
+                                        else "生成 $relFile 失败，请换个说法再试",
+                                    )
+                                }
                             }
                             latch.countDown()
                         }
@@ -1235,7 +1282,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         // 这里先发一条极短占位，把官方文案的可见时间压到单程链路耗时（约 0.15s）。
         // 注意：入站 `TTS_Result` 只更新 UI、不会触发官方 TTS 播报（播报走我们的 `tts_play`），
         // 所以这条占位是静默的。
-        if (localTakeover) {
+        if (localTakeover && link != null) {
             var shieldResult: Int? = null
             val shieldCaps = Caps()
             shieldCaps.write("TTS_Result")
@@ -1257,7 +1304,11 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         // 表现＝「有声音没文字」，官方自己的答案反而留在原气泡里。已回滚，详见当日日志。
         var keyDownResult: Int? = 0
         var openResult: Int? = 0
-        if (!localTakeover) {
+        if (link == null) {
+            // 本机模式：没有眼镜可下发显示，整段跳过（原 5 条下行全部不做）
+            Log.i(TAG, "local-only: skip KeyDown/open/ASR_Result/ASR_End downlink (no glasses)")
+            session.onStatus("正在获取 AI 回复…（本机模式，未连接眼镜）")
+        } else if (!localTakeover) {
             // 0a. 发送 KeyDown_Client（privacy_level=2）：眼镜端 AIPhoneOpenHandler 在 AI 未运行时
             //     调用 openAiAssistant() -> openSceneWithIgnoreTips("ai_assist")，真正设置 aiIsRunning=true，
             //     这是 ASR_Result / TTS_Result 能显示文字的前置条件
@@ -1342,6 +1393,19 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
 
         // ===== 步骤4: 发送 TTS_Result（AI 回复）到眼镜 =====
         try {
+            // 本机模式：回复已在上方经 onReply 交给聊天窗口，这里没有眼镜可下发。
+            // 必须显式补上「收尾」（busy 复位 + onResult 成功）：否则调用方会一直停在 busy，
+            // 表现为发送按钮转圈不停/后续消息被当成并发而拒绝。
+            if (link == null) {
+                Log.i(TAG, "local-only: skip TTS_Result/tts_play downlink, reply delivered to chat only")
+                session.mainHandler.post {
+                    session.onStatus("AI 回复已生成（本机模式：仅手机端）")
+                    session.connection.completeActiveOperation()
+                    session.onBusyChanged(false)
+                    onResult?.invoke(true, null)
+                }
+                return
+            }
             // join 等待 DeepSeek 期间可能发生 session.cleanup 断开/替换 link，发送前重新校验
             if (!abortAiSendIfLinkInvalid(link, onResult)) return
             // 官方协议: caps[0] = "TTS_Result", caps[1] = 回复文字，

@@ -32,110 +32,121 @@ internal object TimerToolProvider : ToolProvider {
     private const val TAG = "TimerToolProvider"
 
     override val toolNames = setOf(
-        "set_timer",
-        "list_timers",
-        "cancel_timer",
+        "manage_timer",
         "schedule_agent_task",
     )
 
+    /**
+     * 定时任务三合一（原 set_timer / list_timers / cancel_timer）。
+     *
+     * 合并动机：三者是同一批 `TimerTask` 的增/查/删，同一能力域；拆开后模型在
+     * 「取消刚才那个提醒」时容易漏调 list 就直接 cancel 失败。
+     *
+     * 参数语义**逐字沿用旧实现**（`timerAction` = 旧 `set_timer` 的 `action`），
+     * 只把外层意图换成 `action`：旧行为不是被重新设计，而是被换个入口调用。
+     */
     override fun execute(context: Context, name: String, args: JSONObject): String {
         return when (name) {
-            "set_timer" -> {
-                val time = args.optString("time").trim()
-                val content = args.optString("content").trim().ifBlank { "定时提醒" }
-                val action = args.optString("action", "notify")
-                val appName = args.optString("appName").trim()
-                val repeatDaily = args.optBoolean("repeatDaily", false)
-                val m = Regex("^(\\d{1,2}):(\\d{1,2})$").find(time)
-                    ?: return "时间格式不正确，请用 24 小时制 HH:mm，例如 17:00"
-                val hour = m.groupValues[1].toInt()
-                val minute = m.groupValues[2].toInt()
-                if (hour !in 0..23 || minute !in 0..59) return "时间超出范围（00:00 ~ 23:59）"
-                val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
-
-                val actions = mutableListOf<TimerAction>()
-                if (action == "launch") synchronized(ToolRegistry.adbLock) {
-                    val client = ToolRegistry.adbClient(context)
-                        ?: return "眼镜 ADB 连接失败，无法创建打开应用的定时任务"
-                    try {
-                        val pkg = ToolRegistry.matchPackage(appName, client.listPackages(false), context)
-                            ?: return "没有找到应用“$appName”，无法创建定时打开任务"
-                        actions += TimerAction.LaunchApp(pkg)
-                    } finally {
-                        // 常驻复用共享 ADB 连接，不用后即断（原因见 get_glasses_battery）
+            "manage_timer" -> when (args.optString("action").trim().lowercase()) {
+                "list" -> {
+                    val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
+                    val tasks = app.timerScheduler.tasks
+                    if (tasks.isEmpty()) {
+                        "当前没有任何定时任务。需要设置时说「X分钟后提醒我…」即可"
+                    } else {
+                        "你共有 ${tasks.size} 个定时任务：\n" + tasks.mapIndexed { i, t ->
+                            val sched = when (val s = t.schedule) {
+                                is TimerSchedule.FixedTime -> {
+                                    String.format(Locale.CHINA, "%02d:%02d", s.hour, s.minute) +
+                                        if (s.repeatDaily) "（每天）" else ""
+                                }
+                                is TimerSchedule.Interval -> "每 ${s.seconds / 60} 分钟"
+                                is TimerSchedule.Countdown -> "倒计时 ${s.seconds / 60} 分钟"
+                            }
+                            "[${i + 1}] ${t.name}｜$sched｜${if (t.running) "运行中" else "已暂停"}" +
+                                // 自主任务（到点让 Agent 自己跑一轮）与普通提醒在列表里区分开，
+                                // 否则模型会说"这是普通提醒"，用户也会以为到点只念一句话
+                                if (t.actions.any { it is TimerAction.AgentPrompt }) "｜自主任务" else ""
+                        }.joinToString("\n") + "\n如需取消，告诉我任务名称即可"
                     }
                 }
-                actions += TimerAction.TtsSpeak(content)
-                actions += TimerAction.SendNotification("Rokid 定时提醒", content)
 
-                val task = TimerTask(
-                    id = UUID.randomUUID().toString(),
-                    name = content,
-                    schedule = TimerSchedule.FixedTime(hour, minute, repeatDaily),
-                    actions = actions,
-                    running = true,
-                )
-                app.timerScheduler.addTask(task)
-                app.timerScheduler.startTask(task)
-                val now = Calendar.getInstance()
-                val todayTarget = Calendar.getInstance().apply {
-                    set(Calendar.HOUR_OF_DAY, hour)
-                    set(Calendar.MINUTE, minute)
-                    set(Calendar.SECOND, 0)
+                "cancel" -> {
+                    val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
+                    if (args.optBoolean("all", false)) {
+                        val count = app.timerScheduler.tasks.size
+                        app.timerScheduler.stopAll()
+                        app.timerScheduler.tasks.toList().forEach { app.timerScheduler.deleteTask(it.id) }
+                        return if (count > 0) "已取消全部 $count 个定时任务" else "当前没有可取消的定时任务"
+                    }
+                    val name = args.optString("timerName").trim()
+                    if (name.isEmpty()) return "请提供要取消的任务名称（可先用 action=list 查看）"
+                    val tasks = app.timerScheduler.tasks
+                    // 名称精确 → 包含（双向）匹配
+                    val target = tasks.firstOrNull { it.name == name }
+                        ?: tasks.firstOrNull { it.name.contains(name) || name.contains(it.name) }
+                        ?: return "没有找到名为「$name」的定时任务。当前任务：${
+                            if (tasks.isEmpty()) "（无）" else tasks.joinToString("、") { it.name }
+                        }"
+                    app.timerScheduler.stopTask(target.id)
+                    app.timerScheduler.deleteTask(target.id)
+                    "已取消定时任务「${target.name}」"
                 }
-                val dayLabel = when {
-                    repeatDaily -> "每天"
-                    todayTarget.timeInMillis > now.timeInMillis -> "今天"
-                    else -> "明天"
-                }
-                val timeLabel = String.format(Locale.CHINA, "%02d:%02d", hour, minute)
-                val actionLabel = if (action == "launch") "并打开 $appName" else ""
-                "已设置定时任务：$dayLabel $timeLabel $actionLabel，提醒：$content"
-            }
 
-            "list_timers" -> {
-                val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
-                val tasks = app.timerScheduler.tasks
-                if (tasks.isEmpty()) {
-                    "当前没有任何定时任务。需要设置时说「X分钟后提醒我…」即可"
-                } else {
-                    "你共有 ${tasks.size} 个定时任务：\n" + tasks.mapIndexed { i, t ->
-                        val sched = when (val s = t.schedule) {
-                            is TimerSchedule.FixedTime -> {
-                                String.format(Locale.CHINA, "%02d:%02d", s.hour, s.minute) +
-                                    if (s.repeatDaily) "（每天）" else ""
-                            }
-                            is TimerSchedule.Interval -> "每 ${s.seconds / 60} 分钟"
-                            is TimerSchedule.Countdown -> "倒计时 ${s.seconds / 60} 分钟"
+                else -> {
+                    val time = args.optString("time").trim()
+                    val content = args.optString("content").trim().ifBlank { "定时提醒" }
+                    // 旧 set_timer 的 action 参数改名为 timerAction（外层 action 已被意图占用），
+                    // 取值与语义不变：notify=只提醒 / launch=额外在眼镜上打开某应用
+                    val timerAction = args.optString("timerAction", "notify")
+                    val appName = args.optString("appName").trim()
+                    val repeatDaily = args.optBoolean("repeatDaily", false)
+                    val m = Regex("^(\\d{1,2}):(\\d{1,2})$").find(time)
+                        ?: return "时间格式不正确，请用 24 小时制 HH:mm，例如 17:00"
+                    val hour = m.groupValues[1].toInt()
+                    val minute = m.groupValues[2].toInt()
+                    if (hour !in 0..23 || minute !in 0..59) return "时间超出范围（00:00 ~ 23:59）"
+                    val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
+
+                    val actions = mutableListOf<TimerAction>()
+                    if (timerAction == "launch") synchronized(ToolRegistry.adbLock) {
+                        val client = ToolRegistry.adbClient(context)
+                            ?: return "眼镜 ADB 连接失败，无法创建打开应用的定时任务"
+                        try {
+                            val pkg = ToolRegistry.matchPackage(appName, client.listPackages(false), context)
+                                ?: return "没有找到应用“$appName”，无法创建定时打开任务"
+                            actions += TimerAction.LaunchApp(pkg)
+                        } finally {
+                            // 常驻复用共享 ADB 连接，不用后即断（原因见 get_glasses_status）
                         }
-                        "[${i + 1}] ${t.name}｜$sched｜${if (t.running) "运行中" else "已暂停"}" +
-                            // 自主任务（到点让 Agent 自己跑一轮）与普通提醒在列表里区分开，
-                            // 否则模型会说"这是普通提醒"，用户也会以为到点只念一句话
-                            if (t.actions.any { it is TimerAction.AgentPrompt }) "｜自主任务" else ""
-                    }.joinToString("\n") + "\n如需取消，告诉我任务名称即可"
-                }
-            }
+                    }
+                    actions += TimerAction.TtsSpeak(content)
+                    actions += TimerAction.SendNotification("Rokid 定时提醒", content)
 
-            "cancel_timer" -> {
-                val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
-                if (args.optBoolean("all", false)) {
-                    val count = app.timerScheduler.tasks.size
-                    app.timerScheduler.stopAll()
-                    app.timerScheduler.tasks.toList().forEach { app.timerScheduler.deleteTask(it.id) }
-                    return if (count > 0) "已取消全部 $count 个定时任务" else "当前没有可取消的定时任务"
+                    val task = TimerTask(
+                        id = UUID.randomUUID().toString(),
+                        name = content,
+                        schedule = TimerSchedule.FixedTime(hour, minute, repeatDaily),
+                        actions = actions,
+                        running = true,
+                    )
+                    app.timerScheduler.addTask(task)
+                    app.timerScheduler.startTask(task)
+                    val now = Calendar.getInstance()
+                    val todayTarget = Calendar.getInstance().apply {
+                        set(Calendar.HOUR_OF_DAY, hour)
+                        set(Calendar.MINUTE, minute)
+                        set(Calendar.SECOND, 0)
+                    }
+                    val dayLabel = when {
+                        repeatDaily -> "每天"
+                        todayTarget.timeInMillis > now.timeInMillis -> "今天"
+                        else -> "明天"
+                    }
+                    val timeLabel = String.format(Locale.CHINA, "%02d:%02d", hour, minute)
+                    val actionLabel = if (timerAction == "launch") "并打开 $appName" else ""
+                    "已设置定时任务：$dayLabel $timeLabel $actionLabel，提醒：$content"
                 }
-                val name = args.optString("timerName").trim()
-                if (name.isEmpty()) return "请提供要取消的任务名称（可先用 list_timers 查看）"
-                val tasks = app.timerScheduler.tasks
-                // 名称精确 → 包含（双向）匹配
-                val target = tasks.firstOrNull { it.name == name }
-                    ?: tasks.firstOrNull { it.name.contains(name) || name.contains(it.name) }
-                    ?: return "没有找到名为「$name」的定时任务。当前任务：${
-                        if (tasks.isEmpty()) "（无）" else tasks.joinToString("、") { it.name }
-                    }"
-                app.timerScheduler.stopTask(target.id)
-                app.timerScheduler.deleteTask(target.id)
-                "已取消定时任务「${target.name}」"
             }
 
             "schedule_agent_task" -> {
