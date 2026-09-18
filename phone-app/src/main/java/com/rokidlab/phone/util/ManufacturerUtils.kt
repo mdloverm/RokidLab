@@ -263,9 +263,8 @@ object ManufacturerUtils {
     }
 
     /** 打开悬浮窗权限设置页（候选链：系统标准页 → 厂商私有页 → 应用详情页） */
-    fun openOverlaySettings(context: Context) {
+    fun openOverlaySettings(context: Context): Boolean =
         launchFirstAvailable(context, overlaySettingsCandidates(context))
-    }
 
     /**
      * 悬浮窗权限页候选链。
@@ -309,6 +308,71 @@ object ManufacturerUtils {
      */
     fun getOverlaySettingsIntent(context: Context): Intent? =
         overlaySettingsCandidates(context).firstOrNull()
+
+    // ── 应用权限设置页（补齐某个具体运行时权限时用） ──
+
+    /**
+     * 打开「本应用的权限管理」设置页，用于运行时权限被**永久拒绝**后的兜底引导。
+     *
+     * 与 [openOverlaySettings] 的取舍正好相反，原因值得写下来：
+     * - 悬浮窗有 AOSP 标准页（`ACTION_MANAGE_OVERLAY_PERMISSION` + `package:`）能**直接落到那一行开关**，
+     *   所以那边是"标准页优先"；
+     * - 而"某个运行时权限的开关"**没有** AOSP 标准 Action（Android 11 的
+     *   `MANAGE_APP_PERMISSIONS` 要系统权限，普通应用发出去也解不开），厂商权限页反而是更精确的落点，
+     *   所以这里是"厂商页优先"；
+     * - 两者都以 [appDetailsIntent] 收尾 —— 应用详情页是 AOSP 契约、**所有 ROM 必有**，
+     *   于是"厂商页猜错了"最差也只是让用户多点一次「权限」，不会出现"点了没反应"。
+     *
+     * @param permission 清单权限名，仅用于日志（跳转按 ROM 分派，不按权限名）
+     * @return true = 候选链里某一支成功拉起
+     */
+    fun openAppPermissionSettings(context: Context, permission: String): Boolean {
+        Log.i(TAG, "open app permission settings: $permission (${detect().displayName})")
+        return launchFirstAvailable(context, appPermissionCandidates(context))
+    }
+
+    /** 应用权限管理页候选链：厂商权限页 → 应用详情页（见 [openAppPermissionSettings] 的顺序说明） */
+    private fun appPermissionCandidates(context: Context): List<Intent> {
+        val pkg = context.packageName
+        val vendor: List<Intent> = when (detect()) {
+            Manufacturer.XIAOMI -> listOf(
+                // MIUI 的应用权限编辑页（与自启动页同一个 Action，MIUI 内部按 extra 定位）
+                Intent("miui.intent.action.APP_PERM_EDITOR").putExtra("extra_pkgname", pkg),
+            )
+            Manufacturer.HUAWEI, Manufacturer.HONOR -> listOf(
+                Intent().setClassName(
+                    "com.huawei.systemmanager",
+                    "com.huawei.permissionmanager.ui.MainActivity",
+                ),
+                Intent().setClassName(
+                    "com.hihonor.systemmanager",
+                    "com.hihonor.permissionmanager.ui.MainActivity",
+                ),
+            )
+            Manufacturer.OPPO -> listOf(
+                Intent().setClassName(
+                    "com.coloros.safecenter",
+                    "com.coloros.safecenter.permission.PermissionManagerActivity",
+                ),
+                Intent().setClassName(
+                    "com.oppo.safe",
+                    "com.oppo.safe.permission.PermissionAppListActivity",
+                ),
+            )
+            Manufacturer.VIVO -> listOf(
+                Intent().setClassName(
+                    "com.vivo.permissionmanager",
+                    "com.vivo.permissionmanager.activity.PurviewTabActivity",
+                ),
+            )
+            Manufacturer.MEIZU -> listOf(
+                Intent().setClassName("com.meizu.safe", "com.meizu.safe.security.SafeMainActivity"),
+            )
+            // 三星/Google/其它：直接走应用详情页（AOSP 必有），不猜私有组件
+            else -> emptyList()
+        }
+        return vendor + appDetailsIntent(context)
+    }
 
     // ── 通知权限（厂商特殊处理） ──
 

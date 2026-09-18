@@ -319,10 +319,12 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 // ── 全仓「空 catch」预算守护（RULES §12.14，阶段二 #10）──
 // checkKeyPathEmptyCatch 对 6 个关键链路文件零容忍；本任务把扫描扩到双端 src/main 全量，
 // 采用「棘轮预算」：未标注的空 catch 数只允许下降、不允许上升。
-// 为什么不一次清零存量：存量 47 处多为「关句柄 / 消费收尾包 / 读线程正常退出」，逐一补
+// 为什么不一次清零存量：存量多为「关句柄 / 消费收尾包 / 读线程正常退出」，逐一补
 // `// catch-ok:` 属纯注释 churn，收益低于回归风险；先把闸门立起来，新增一处即构建失败，
 // 存量在后续改动该文件时顺手收敛（预算可随之下调）。
-val bareCatchBudget = 47
+// 2026-09-18 收敛：基线 47 → 42（实测全仓 68 处，已标注 26 / 未标注 42），
+// 按 RULES §12.14「只降不升」同步下调基线。
+val bareCatchBudget = 42
 
 val checkNoBareCatch by tasks.registering {
     group = "verification"
@@ -418,13 +420,13 @@ dependencies {
     implementation("androidx.compose.material:material")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
-    // 本地 OCR（PP-OCRv4 模型，ONNX Runtime 推理，无需联网/无 GMS 依赖）
-    implementation("io.github.hzkitty:rapidocr4j-android:1.0.0") {
-        // 覆盖旧版 native 依赖为 16KB 对齐版本（兼容 Android 16 页面大小）
-        // opencv 4.9.0 / onnxruntime 1.18.0 的 so 为 4KB 对齐，16KB 设备上 dlopen 会崩溃
-        exclude(group = "org.opencv", module = "opencv")
-        exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
-    }
+    // 本地 OCR（PP-OCRv4，ONNX Runtime 推理，无需联网/无 GMS 依赖）。
+    // 使用剥除 assets 模型的「薄 AAR」（官方 AAR 内置 3 个 onnx 约 15.4MB，会撑大 APK）：
+    // 模型首次使用时由 LocalOcr 从 Gitee Release 按需下载（见 LocalOcr.MODELS）。
+    // 薄 AAR 仅去掉 assets/*.onnx，classes.jar 与官方 1.0.0 完全一致。
+    implementation(files("libs/rapidocr4j-android-1.0.0-thin.aar"))
+    // 覆盖旧版 native 依赖为 16KB 对齐版本（兼容 Android 16 页面大小）
+    // opencv 4.9.0 / onnxruntime 1.18.0 的 so 为 4KB 对齐，16KB 设备上 dlopen 会崩溃
     implementation("org.opencv:opencv:4.12.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
 

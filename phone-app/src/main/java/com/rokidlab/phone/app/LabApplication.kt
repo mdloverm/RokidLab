@@ -3,8 +3,11 @@ package com.rokidlab.phone.app
 import com.rokidlab.phone.connection.ConnectionRoute
 import com.rokidlab.phone.connection.ConnectionRouteManager
 import com.rokidlab.phone.adb.TimerScheduler
+import com.rokidlab.phone.design.RokidHostApp
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import com.rokidlab.phone.hid.BluetoothHidManager
+import com.rokidlab.phone.permission.AppForegroundTracker
+import com.rokidlab.phone.permission.PermissionBridge
 import com.rokidlab.phone.util.LocalizationManager
 import com.rokidlab.phone.util.LogCollector
 import com.rokidlab.phone.R
@@ -192,6 +195,10 @@ class LabApplication : Application() {
 
         // 创建通知渠道（必须提前创建，否则手机系统设置中通知开关不可用）
         createNotificationChannels()
+
+        // 进程级前台判定：权限/界面拉起相关的逻辑（BAL 豁免判断）依赖"本应用当前有没有界面在前台"，
+        // 而 AOSP 没有公开 API（getRunningAppProcesses 在 Android 11+ 已受限）→ 自建计数。
+        AppForegroundTracker.install(this)
     }
 
     /**
@@ -267,6 +274,16 @@ class LabApplication : Application() {
                 description = getString(R.string.keep_alive_channel_desc)
             }
             nm.createNotificationChannel(keepAliveChannel)
+
+            // 4. 权限提醒渠道：后台且无悬浮窗时，授权入口拉不起界面 —— 只能退通知栏让用户点一下。
+            //    这条渠道是"自举死锁"的破解通道（点通知 = 用户发起 = BAL 放行），必须提前建好。
+            val permissionChannel = NotificationChannel(
+                PermissionBridge.CHANNEL_ID, getString(R.string.permission_channel_name),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = getString(R.string.permission_channel_desc)
+            }
+            nm.createNotificationChannel(permissionChannel)
         } catch (_: Exception) { }
     }
 
@@ -340,6 +357,53 @@ class LabApplication : Application() {
 
     /** 会话是否已创建（跨类访问 lateinit 的 isInitialized） */
     fun hasCxrL(): Boolean = ::cxrL.isInitialized
+
+    /**
+     * 无界面会话自愈：保活服务被 START_STICKY 重建 / 开机自启时，进程内没有 Activity，
+     * 此方法用 Application Context 重建 CXR-L 会话并启动 ASR 双通道（RFCOMM 推送 + ADB 兜底轮询）。
+     *
+     * 背景：SwipeUpClean（最近任务上滑）会绕过 FGS 直接杀进程，系统虽在 ~1s 内重建了保活服务，
+     * 但旧实现只重建了空壳服务 —— CXR-L 会话/ASR 链路只在 MainActivity 创建，导致状态栏图标还在、
+     * 眼镜语音却无响应（"假活"）。
+     *
+     * 策略：
+     *  - token 从 SharedPreferences 自动恢复，无需界面；
+     *  - ASR 文字上行后由对话链路按需自建 CXR CUSTOMAPP 连接，此处不主动 launchApp，
+     *    避免在眼镜上无谓拉起界面；
+     *  - 未授权（无 token）时仅登记会话、不启动 ASR 桥（没有可恢复的语音链路，也省隧道电耗）；
+     *  - 会话已存在（同进程内服务重启）时仅幂等确保 ASR 桥运行。
+     */
+    fun ensureHeadlessSession() {
+        if (!keepAliveEnabled) return
+        try {
+            if (::cxrL.isInitialized) {
+                runCatching { cxrL.asrBridge.start() }
+                return
+            }
+            val hostApp = runCatching {
+                val p = getSharedPreferences("rokidbrew_preferences", MODE_PRIVATE)
+                RokidHostApp.fromId(p.getString("rokid_host_app", null))
+            }.getOrDefault(RokidHostApp.DEFAULT)
+            val session = CxrLHiRokidSession(
+                context = this,
+                onStatus = { msg -> LogCollector.i(TAG, msg) },
+                onBusyChanged = { },
+                onConnectionChanged = { },
+                initialHostApp = hostApp,
+                authLauncher = null,
+                appScope = appScope,
+            )
+            setCxrL(session)
+            if (!session.hasAuthorization()) {
+                Log.i(TAG, "ensureHeadlessSession: no saved token, ASR bridge not started (not authorized yet)")
+                return
+            }
+            runCatching { session.asrBridge.start() }
+            Log.i(TAG, "headless CXR-L session restored, ASR bridge started")
+        } catch (e: Exception) {
+            Log.w(TAG, "ensureHeadlessSession failed: ${e.message}")
+        }
+    }
 
     /** 统一设置眼镜 IP：所有模块共用，写入单一数据源并同步历史键 */
     fun setGlassesIp(ip: String) {

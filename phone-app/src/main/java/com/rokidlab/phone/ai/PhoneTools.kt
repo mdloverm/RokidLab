@@ -14,6 +14,9 @@ import android.provider.ContactsContract
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import android.util.Log
+import com.rokidlab.phone.R
+import com.rokidlab.phone.permission.AppPermission
+import com.rokidlab.phone.permission.PermissionBridge
 import java.util.Calendar
 import java.util.TimeZone
 import java.text.SimpleDateFormat
@@ -39,6 +42,31 @@ object PhoneTools {
 
     private fun missingPermTip(what: String): String =
         "需要$what 权限：请打开手机「设置 → 应用 → RokidLab / 乐奇实验室 → 权限」，开启「$what」后重新试一次"
+
+    // ═══════════════════════════ 权限 / 可拉起性前置 ═══════════════════════════
+
+    /**
+     * 「能不能现在把界面拉起来」的前置校验（拨号 / 闹钟 / 打开应用都要过这一关）。
+     *
+     * 为什么必须校验：Android 10+ 的 BAL 限制下，**后台** `startActivity` 会被系统
+     * **静默丢弃**（不抛异常、不打 error 日志），代码以为成功了 —— 历史现象就是
+     * "AI 说「正在拨打：X」，手机屏幕毫无反应"。普通应用能拿到的豁免只有一个：
+     * 悬浮窗（`SYSTEM_ALERT_WINDOW`）。没有它就如实回报并顺带发起悬浮窗申请
+     * （后台拉不起界面时退通知栏提醒），绝不假成功。
+     *
+     * @return null = 现在拉得起来；非 null = 会被系统丢弃，该文本原样回给模型
+     */
+    private fun ensureCanLaunchUi(context: Context): String? {
+        if (PermissionBridge.canLaunchUi(context)) return null
+        return PermissionBridge.ensure(
+            context,
+            context.getString(R.string.permission_reason_launch),
+            AppPermission.OVERLAY,
+        ) ?: context.getString(
+            R.string.permission_need_manual_open,
+            context.getString(R.string.permission_label_overlay),
+        )
+    }
 
     // ═══════════════════════════ 通讯录 ═══════════════════════════
 
@@ -77,7 +105,7 @@ object PhoneTools {
     /**
      * 拨打电话：参数是手机号直接拨；是姓名则查通讯录（唯一命中拨出，多个命中返回候选）。
      * 已授予 CALL_PHONE → ACTION_CALL **直接拨出**（用户说「给 X 打电话」即授权，无需任何确认层）；
-     * 未授权/被 ROM 限制 → 退回 ACTION_DIAL 打开拨号盘。
+     * 未授权 → **自动拉起系统授权界面**并如实回报（不再静默退回拨号盘制造假成功）。
      */
     fun dialPhone(context: Context, nameOrNumber: String): String {
         val input = nameOrNumber.trim()
@@ -87,7 +115,12 @@ object PhoneTools {
             return launchDialer(context, input, input)
         }
         if (!has(context, Manifest.permission.READ_CONTACTS)) {
-            return missingPermTip("通讯录") + "，或直接告诉我手机号码"
+            // 按姓名拨号必须先查通讯录 → 缺权限就自动申请，别让用户自己去设置里翻
+            return PermissionBridge.ensure(
+                context,
+                context.getString(R.string.permission_reason_contacts),
+                AppPermission.CONTACTS,
+            ) ?: "${missingPermTip("通讯录")}，或直接告诉我手机号码"
         }
         val hits = searchContacts(context, input)
         return when {
@@ -102,18 +135,28 @@ object PhoneTools {
     private fun launchDialer(context: Context, number: String, label: String): String {
         val tel = Uri.parse("tel:${number.replace(" ", "")}")
         val newTask = Intent.FLAG_ACTIVITY_NEW_TASK
-        // 语音指令即授权（call_phone 已降为 LOCAL_SIDE_EFFECT，不再走眼镜确认闸门）：
-        // 只要已授 CALL_PHONE 就 ACTION_CALL 直接拨出；未授权或被 ROM 限制才退回拨号盘。
-        val canCall = has(context, Manifest.permission.CALL_PHONE)
+
+        // 前置 1：没有「电话」权限 → **自动把系统授权框拉起来**并如实回报。
+        // 旧实现在这里静默退回 ACTION_DIAL 并回一句"已打开拨号盘"——那是个假成功：
+        // 后台且无悬浮窗时，这个 startActivity 同样会被 BAL 丢弃（用户什么都看不到），
+        // 而模型已经拿到"打开成功"的结论去答复用户了。
+        if (!has(context, Manifest.permission.CALL_PHONE)) {
+            return PermissionBridge.ensure(
+                context,
+                context.getString(R.string.permission_reason_phone),
+                AppPermission.PHONE_CALL,
+            ) ?: context.getString(
+                R.string.permission_need_manual_open,
+                context.getString(R.string.permission_label_phone),
+            )
+        }
+
+        // 前置 2：有权限，但 ACTION_CALL 要**从后台拉起拨号界面** → 必须持有 BAL 豁免
+        ensureCanLaunchUi(context)?.let { return it }
+
         return try {
-            context.startActivity(Intent(if (canCall) Intent.ACTION_CALL else Intent.ACTION_DIAL, tel).apply {
-                addFlags(newTask)
-            })
-            if (canCall) {
-                "正在拨打：$number（$label）"
-            } else {
-                "已打开拨号盘，号码：$number（$label），请按一下拨出（授予「电话」权限后我可直接拨出去）"
-            }
+            context.startActivity(Intent(Intent.ACTION_CALL, tel).apply { addFlags(newTask) })
+            "正在拨打：$number（$label）"
         } catch (e: Exception) {
             // 部分国产 ROM 对 ACTION_CALL 有额外限制（要求默认拨号器等）→ 兜底退回拨号盘
             val fallbackOk = runCatching {
@@ -179,6 +222,8 @@ object PhoneTools {
     fun openPhoneApp(context: Context, appName: String): String {
         val q = appName.trim()
         if (q.isEmpty()) return "请提供要打开的应用名称"
+        // 打开应用同样是"从后台拉起界面"：没有 BAL 豁免时必然被系统丢弃
+        ensureCanLaunchUi(context)?.let { return it }
         return try {
             val pm = context.packageManager
             val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -289,7 +334,14 @@ object PhoneTools {
      * @param date today（默认）/ tomorrow / YYYY-MM-DD / MM-DD
      */
     fun queryCalendar(context: Context, date: String?): String {
-        if (!has(context, Manifest.permission.READ_CALENDAR)) return missingPermTip("日历")
+        if (!has(context, Manifest.permission.READ_CALENDAR)) {
+            // 缺权限 → 自动拉起系统授权界面（旧实现只回一句"请去设置里开"，用户基本找不到）
+            return PermissionBridge.ensure(
+                context,
+                context.getString(R.string.permission_reason_calendar),
+                AppPermission.CALENDAR_READ,
+            ) ?: missingPermTip("日历")
+        }
         val dayStart = parseDayStart(date) ?: return "日期格式不正确，请用 today/tomorrow 或 YYYY-MM-DD"
         val dayEnd = dayStart.clone() as Calendar
         dayEnd.add(Calendar.DAY_OF_YEAR, 1)
@@ -345,7 +397,13 @@ object PhoneTools {
         note: String? = null,
     ): String {
         if (title.isBlank()) return "请提供日程标题"
-        if (!has(context, Manifest.permission.WRITE_CALENDAR)) return missingPermTip("日历")
+        if (!has(context, Manifest.permission.WRITE_CALENDAR)) {
+            return PermissionBridge.ensure(
+                context,
+                context.getString(R.string.permission_reason_calendar),
+                AppPermission.CALENDAR_WRITE,
+            ) ?: missingPermTip("日历")
+        }
         val dayStart = parseDayStart(date) ?: return "日期格式不正确，请用 today/tomorrow 或 YYYY-MM-DD"
         val m = Regex("^(\\d{1,2}):(\\d{1,2})$").find(startTime.trim())
             ?: return "开始时间格式不正确，请用 24 小时制 HH:mm，例如 14:30"

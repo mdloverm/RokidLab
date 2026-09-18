@@ -100,7 +100,7 @@ class BtTunnelServer {
             val btIn = DataInputStream(btSocket.inputStream)
             val handshakeDone = AtomicBoolean(false)
             var targetPort = 0
-            val handshakeThread = Thread {
+            val handshakeThread = namedThread("bt-tunnel-handshake") {
                 try {
                     targetPort = btIn.readInt()
                 } catch (_: Exception) {
@@ -136,7 +136,7 @@ class BtTunnelServer {
             val done = AtomicBoolean(false)
 
             // 蓝牙 → 本地服务
-            val t1 = Thread {
+            val t1 = namedThread("bt-tunnel-probe1") {
                 try {
                     val buf = ByteArray(IO_BUF)
                     while (!done.get()) {
@@ -151,7 +151,7 @@ class BtTunnelServer {
             }
 
             // 本地服务 → 蓝牙
-            val t2 = Thread {
+            val t2 = namedThread("bt-tunnel-probe2") {
                 try {
                     val buf = ByteArray(IO_BUF)
                     while (!done.get()) {

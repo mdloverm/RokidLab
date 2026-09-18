@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.rokidlab.phone.util.namedThread
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.ConcurrentHashMap
@@ -50,20 +51,20 @@ internal object ChatImageCache {
         // 去重：同一 URL 的并发请求只发一次网络
         if (inflight.putIfAbsent(url, Unit) != null) {
             // 简单轮询等待缓存命中（最长 10s）
-            Thread {
+            namedThread("chat-image-io", start = true) {
                 val deadline = System.currentTimeMillis() + 10_000
                 while (System.currentTimeMillis() < deadline) {
                     memCache[url]?.let {
                         mainHandler.post { onResult(it) }
-                        return@Thread
+                        return@namedThread
                     }
                     Thread.sleep(120)
                 }
                 mainHandler.post { onResult(null) }
-            }.start()
+            }
             return
         }
-        Thread {
+        namedThread("chat-image-clean", start = true) {
             val bmp = runCatching {
                 val req = Request.Builder().url(url).build()
                 http.newCall(req).execute().use { resp ->
@@ -78,7 +79,7 @@ internal object ChatImageCache {
             if (bmp != null) memCache[url] = bmp
             inflight.remove(url)
             mainHandler.post { onResult(bmp) }
-        }.start()
+        }
     }
 
     /**

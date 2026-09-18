@@ -75,7 +75,8 @@ object HttpClient {
         val request = buildRequest(url, "GET", headers)
         clientFor(connectTimeout, readTimeout).newCall(request).execute().use { response ->
             checkResponse(response)
-            return response.body!!.string()
+            val body = response.body ?: throw java.io.IOException("empty response body: $url")
+            return body.string()
         }
     }
 
@@ -92,7 +93,8 @@ object HttpClient {
     ): String {
         val request = buildRequest(url, "POST", headers, body)
         clientFor(connectTimeout, readTimeout).newCall(request).execute().use { response ->
-            val text = response.body!!.string()
+            val body = response.body ?: throw java.io.IOException("empty response body: $url")
+            val text = body.string()
             if (response.code !in 200..299) {
                 throw java.io.IOException("HTTP ${response.code}: $text")
             }
@@ -144,7 +146,8 @@ object HttpClient {
         try {
             clientFor(connectTimeout, readTimeout).newCall(request).execute().use { response ->
                 checkResponse(response)
-                response.body!!.byteStream().use { input ->
+                val body = response.body ?: throw java.io.IOException("empty response body: $url")
+                body.byteStream().use { input ->
                     temp.outputStream().use { out -> input.copyTo(out) }
                 }
             }
@@ -175,7 +178,7 @@ object HttpClient {
         try {
             clientFor(connectTimeout, readTimeout).newCall(request).execute().use { response ->
                 checkResponse(response)
-                val body = response.body!!
+                val body = response.body ?: throw java.io.IOException("empty response body: $url")
                 val total = body.contentLength().takeIf { it > 0L } ?: -1L
                 body.byteStream().use { input ->
                     output.outputStream().use { out ->
@@ -215,7 +218,8 @@ object HttpClient {
             response.close()
             throw java.io.IOException(message)
         }
-        return response.body!!.byteStream()
+        val body = response.body ?: throw java.io.IOException("empty response body: $url")
+        return body.byteStream()
     }
 
     // -- private helpers --

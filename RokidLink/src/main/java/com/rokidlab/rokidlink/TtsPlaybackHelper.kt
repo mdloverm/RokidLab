@@ -88,7 +88,7 @@ object TtsPlaybackHelper {
     private const val STABLE_DELAY_MS = 300L
 
     /** 串行播放执行器：保证 TTS 块逐个播放，杜绝连续 invoke 导致 TtsService 丢块 */
-    private val playExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val playExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "tts-play") }
 
     private val mainHandler = Handler(Looper.getMainLooper())
 

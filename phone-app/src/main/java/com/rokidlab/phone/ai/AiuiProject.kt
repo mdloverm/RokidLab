@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.connection.ConnectionRoute
+import com.rokidlab.phone.util.namedThread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -266,7 +267,7 @@ object AiuiProject {
         val port: Int get() = serverSocket.localPort
 
         private val running = AtomicReference(true)
-        private val thread = Thread {
+        private val thread = namedThread("aiui-project-io") {
             val buf = ByteArray(64 * 1024)
             while (running.get()) {
                 val socket = try {

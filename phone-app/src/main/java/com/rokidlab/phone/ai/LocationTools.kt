@@ -9,6 +9,9 @@ import android.location.LocationManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.rokidlab.phone.R
+import com.rokidlab.phone.permission.AppPermission
+import com.rokidlab.phone.permission.PermissionBridge
 import com.rokidlab.phone.util.HttpClient
 import org.json.JSONObject
 import java.util.Locale
@@ -52,8 +55,17 @@ object LocationTools {
      */
     fun getLocation(context: Context): String {
         if (!hasLocationPermission(context)) {
-            return "没有定位权限，无法获取当前位置。请在手机「设置 → 应用 → RokidLab / 乐奇实验室 → 权限」" +
-                "中开启「位置信息」后重试"
+            // 缺权限时**自动拉起系统授权框**（旧实现只回一句"请去设置里开"）。
+            // 注意 Android 12+ 请求 FINE 必须同时请求 COARSE，否则系统直接判拒绝且不弹窗 ——
+            // 这对伴随权限由 AppPermission.LOCATION 统一声明。
+            return PermissionBridge.ensure(
+                context,
+                context.getString(R.string.permission_reason_location),
+                AppPermission.LOCATION,
+            ) ?: context.getString(
+                R.string.permission_need_manual_open,
+                context.getString(R.string.permission_label_location),
+            )
         }
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
             ?: return "本机不支持定位服务"

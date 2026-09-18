@@ -15,6 +15,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- 保活：前台服务持有 WakeLock 防 CPU 挂起 → 防 HyperOS cgroup 冻结 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 开机自启：BOOT_COMPLETED 后由 BootReceiver 拉起保活服务，眼镜语音随开机恢复 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- 电池优化白名单：请求豁免 Doze / 应用待机限制 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.BLUETOOTH_HID_DEVICE" />
@@ -88,6 +90,17 @@
             android:configChanges="orientation|screenSize"
             android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
 
+        <!-- 统一授权页：AI 工具在后台发现缺权限时，由 PermissionBridge 拉起本页
+             （前台直接弹系统授权框；后台凭悬浮窗豁免拉起；两者都不可用时退通知栏提醒）。
+             noHistory + excludeFromRecents：它只是"授权通道"，不该留在返回栈或最近任务里。 -->
+        <activity
+            android:name=".permission.PermissionRequestActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:noHistory="true"
+            android:theme="@style/Theme.RokidLabPhone.Transparent" />
+
         <receiver
             android:name=".glasses.PhoneInstallResultReceiver"
             android:exported="false" />
@@ -116,6 +129,16 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="keep_alive_background_services" />
         </service>
+
+        <!-- 开机自启 + onTaskRemoved 闹钟重启入口（具体动作见 BootReceiver） -->
+        <receiver
+            android:name=".keepalive.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="com.rokidlab.phone.action.RESTART_KEEPALIVE" />
+            </intent-filter>
+        </receiver>
         <!-- 媒体按键接收器：AVRCP Target 用 getActiveSessions(该组件) 挑选要上报的播放器，
              缺它会导致眼镜「正在播放」/系统歌词页拿不到元数据 -->
         <receiver

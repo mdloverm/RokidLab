@@ -383,6 +383,7 @@ private fun SponsorDialog(onDismiss: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(12.dp))
 
+            val errorMsgText = errorMsg
             if (loading) {
                 Text(
                     text = "加载中...",
@@ -391,9 +392,9 @@ private fun SponsorDialog(onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = TextAlign.Center,
                 )
-            } else if (errorMsg != null) {
+            } else if (errorMsgText != null) {
                 Text(
-                    text = errorMsg!!,
+                    text = errorMsgText,
                     color = BrewWarning,
                     fontSize = 12.sp,
                     modifier = Modifier.fillMaxWidth(),
@@ -681,9 +682,10 @@ private fun SponsorAvatar(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        if (bitmap != null) {
+        val resolvedBitmap = bitmap
+        if (resolvedBitmap != null) {
             Image(
-                bitmap = bitmap!!,
+                bitmap = resolvedBitmap,
                 contentDescription = name,
                 modifier = Modifier.fillMaxSize().clip(CircleShape),
                 contentScale = ContentScale.Crop,

@@ -5,6 +5,7 @@ import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.util.AppConfig
 import com.rokidlab.phone.util.LogCollector
 import com.rokidlab.phone.util.RomFingerprint
+import com.rokidlab.phone.util.namedThread
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -117,13 +118,13 @@ class PhoneMirrorService : Service() {
         }
         compatTier = next
         Log.i(TAG, "Escalating compat tier ${next.name} after $blackFrames black frames (${next.note})")
-        Thread {
+        namedThread("mirror-tier-escalate", start = true) {
             try {
                 rebuildMirrorSession()
             } catch (e: Exception) {
                 Log.e(TAG, "Rebuild after tier escalation failed: ${e.message}", e)
             }
-        }.start()
+        }
     }
 
     /**
@@ -280,7 +281,8 @@ class PhoneMirrorService : Service() {
 
         Log.i(TAG, "Received params: glassesIp=$glassesIp, port=$port, resultCode=$resultCode, BT=$isBluetoothRoute, data=${projectionData != null}")
 
-        if (resultCode != android.app.Activity.RESULT_OK || projectionData == null || glassesIp.isNotEmpty() == false) {
+        val projection = projectionData
+        if (resultCode != android.app.Activity.RESULT_OK || projection == null || glassesIp.isNotEmpty() == false) {
             Log.e(TAG, "Incomplete params, cannot start mirror")
             stopSelf()
             return START_NOT_STICKY
@@ -302,7 +304,7 @@ class PhoneMirrorService : Service() {
 
         try {
             val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            mediaProjection = projectionManager.getMediaProjection(resultCode, projectionData!!)
+            mediaProjection = projectionManager.getMediaProjection(resultCode, projection)
             if (mediaProjection == null) {
                 Log.e(TAG, "getMediaProjection returned null")
                 stopSelf()
@@ -354,7 +356,7 @@ class PhoneMirrorService : Service() {
         isMirrorRunning = true
         reconnectAttempts = 0
 
-        Thread {
+        namedThread("mirror-capture") {
             try {
                 try {
                     // 1. 获取屏幕真实尺寸，按 MIRROR_BASE_SIZE 等比缩放
@@ -446,9 +448,10 @@ class PhoneMirrorService : Service() {
                     }, null)
 
                     // 4. 启动图像监听线程（必须在 createMirrorSession 之前初始化 Handler）
-                    imageHandlerThread = HandlerThread("ImageHandlerThread")
-                    imageHandlerThread?.start()
-                    imageHandler = Handler(imageHandlerThread!!.looper)
+                    val imgThread = HandlerThread("ImageHandlerThread")
+                    imgThread.start()
+                    imageHandlerThread = imgThread
+                    imageHandler = Handler(imgThread.looper)
 
                     // 5. 创建 VirtualDisplay（固定 480x640，不因方向变化重建）
                     createMirrorSession()
@@ -514,9 +517,10 @@ class PhoneMirrorService : Service() {
 
             // 重建路径可能发生在 stopMirror 之后，兜底保证 Handler 可用
             if (imageHandler == null) {
-                imageHandlerThread = HandlerThread("ImageHandlerThread")
-                imageHandlerThread?.start()
-                imageHandler = Handler(imageHandlerThread!!.looper)
+                val imgThread = HandlerThread("ImageHandlerThread")
+                imgThread.start()
+                imageHandlerThread = imgThread
+                imageHandler = Handler(imgThread.looper)
             }
 
             val params = MirrorCompat.paramsFor(compatTier, mirrorBaseWidth, mirrorBaseHeight)
@@ -639,7 +643,7 @@ class PhoneMirrorService : Service() {
             lastFrameTime = now
             isSendingFrame = true
 
-            if (socket == null || !socket!!.isConnected) {
+            if (socket?.isConnected != true) {
                 reconnectSocket()
             }
             val header = byteArrayOf(

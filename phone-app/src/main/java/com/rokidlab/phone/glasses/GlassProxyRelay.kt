@@ -2,6 +2,7 @@ package com.rokidlab.phone.glasses
 
 import android.util.Log
 import com.rokid.cxr.Caps
+import com.rokidlab.phone.util.namedThread
 import org.json.JSONObject
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -198,7 +199,7 @@ class GlassProxyRelay(private val send: (Caps) -> Int) {
     // ═══════════════════════════════════════════════
 
     private fun startReader(session: RelaySession) {
-        Thread {
+        namedThread("glass-proxy-io", start = true) {
             val buf = ByteArray(CHUNK_SIZE)
             try {
                 val ins = session.socket.getInputStream()
@@ -230,7 +231,7 @@ class GlassProxyRelay(private val send: (Caps) -> Int) {
                 Log.i(TAG, "reader eof sid=${session.sessionId}")
                 closeQuiet(session, pushNotify = false)
             }
-        }.start()
+        }
     }
 
     private fun pushDataFrame(session: RelaySession, chunk: ByteArray) {

@@ -390,6 +390,8 @@
     <string name="chat_kb_status">Searching knowledge base...</string>
     <string name="chat_ai_status">Generating answer...</string>
     <string name="chat_ocr_empty">No text recognized. Please adjust the camera angle and retry.</string>
+    <string name="chat_ocr_model_unavailable">OCR models not ready. First use needs an internet download — check your network and retry.</string>
+    <string name="chat_ocr_native_unavailable">Local OCR is not supported on this device.</string>
     <string name="chat_photo_failed">Failed to take photo</string>
     <string name="chat_kb_title">Knowledge Base</string>
     <string name="chat_kb_subtitle">Import txt documents. They will be searched automatically when using Photo &amp; Ask AI.</string>
@@ -1247,4 +1249,38 @@
     <string name="app_list_show_less">Show Less</string>
     <string name="task_in_progress">Another task is in progress, please wait…</string>
     <string name="download_already_running">"%s" is already downloading</string>
+
+    <!-- ══ Permission requests (unified across all vendors: auto-open the system grant UI) ══ -->
+    <string name="permission_label_contacts">Contacts</string>
+    <string name="permission_label_phone">Phone</string>
+    <string name="permission_label_calendar">Calendar</string>
+    <string name="permission_label_location">Location</string>
+    <string name="permission_label_notification">Notifications</string>
+    <string name="permission_label_overlay">Display over other apps (background pop-up)</string>
+    <string name="permission_dialog_title">Permission required</string>
+    <string name="permission_dialog_message">%1$s needs the following permissions:\n%2$s\n\nTap Grant now, then choose Allow in the system dialog.</string>
+    <string name="permission_dialog_allow">Grant now</string>
+    <string name="permission_dialog_open_settings">Open system settings</string>
+    <string name="permission_dialog_later">Later</string>
+    <string name="permission_dialog_granted">Permission granted</string>
+    <string name="permission_dialog_denied_guide">Permission not granted. Opening system settings, please enable it manually</string>
+    <string name="permission_manual_path_hint">No permission settings page is available on this system. Please enable it in Settings → Apps → Rokid Lab → Permissions</string>
+    <string name="permission_auto_requested">Missing the %1$s permission. A grant dialog has been opened on your phone - tap Allow and then ask again</string>
+    <string name="permission_prompt_pending">Waiting for you to grant the %1$s permission on your phone. Ask again once done</string>
+    <string name="permission_need_manual_open">Missing the %1$s permission. Please enable it in Settings → Apps → Rokid Lab → Permissions and retry</string>
+    <string name="permission_notification_title">Permission required</string>
+    <string name="permission_notification_text">Tap to grant %1$s</string>
+    <string name="permission_channel_name">Permission alerts</string>
+    <string name="permission_channel_desc">Reminds you when a feature is unavailable because a system permission is missing</string>
+    <string name="permission_reason_contacts">look up a contact and dial</string>
+    <string name="permission_reason_phone">place the call directly (without it only the dialer can be opened)</string>
+    <string name="permission_reason_calendar">read and create calendar events</string>
+    <string name="permission_reason_location">get the current location</string>
+    <string name="permission_reason_launch">let glasses voice dial, set alarms and open apps while your phone is locked or on the home screen</string>
+    <string name="perm_overlay_title">Background launch permission</string>
+    <string name="perm_overlay_desc">So that glasses voice can still "call / set an alarm / open an app" while your phone is locked or on the home screen, please enable "Display over other apps" (called "background pop-up" or "floating window" on some phones).\n\nWithout it, these commands produce no visible response on the phone.</string>
+    <string name="log_permission_bootstrap_start">Requesting phone permissions (%d)</string>
+    <string name="log_permission_bootstrap_all_granted">All permissions required by AI tools are ready</string>
+    <string name="log_permission_overlay_granted">Overlay permission granted (background activity starts are no longer blocked)</string>
+    <string name="log_permission_overlay_guide">Guiding user to grant overlay permission (otherwise background dialing/alarms/app launches are silently blocked)</string>
 </resources>

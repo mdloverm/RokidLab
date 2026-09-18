@@ -606,13 +606,14 @@ class FileManagerActivity : ComponentActivity() {
             val ctx = LocalContext.current
             RokidLabTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
+                    val connError = connectionError
                     when {
                         isConnecting || (!isConnected && connectionError == null) -> {
                             LoadingScreen(message = ctx.getString(R.string.connecting_glasses))
                         }
-                        connectionError != null -> {
+                        connError != null -> {
                             ErrorScreen(
-                                error = connectionError!!,
+                                error = connError,
                                 onRetry = { 
                                     connectionError = null
                                     isConnecting = true
@@ -694,9 +695,10 @@ class FileManagerActivity : ComponentActivity() {
                                 )
                             }
 
-                            if (showRenameDialog && targetFile != null) {
+                            val renameTarget = targetFile
+                            if (showRenameDialog && renameTarget != null) {
                                 RenameDialog(
-                                    fileName = targetFile!!.name,
+                                    fileName = renameTarget.name,
                                     onConfirm = { name -> renameFile(name) },
                                     onDismiss = { showRenameDialog = false; targetFile = null }
                                 )
@@ -710,16 +712,18 @@ class FileManagerActivity : ComponentActivity() {
                                 )
                             }
 
-                            if (showDetailsDialog && targetFile != null) {
+                            val detailsTarget = targetFile
+                            if (showDetailsDialog && detailsTarget != null) {
                                 DetailsDialog(
-                                    file = targetFile!!,
+                                    file = detailsTarget,
                                     onDismiss = { showDetailsDialog = false; targetFile = null }
                                 )
                             }
 
-                            if (showPreviewDialog && targetFile != null) {
+                            val previewTarget = targetFile
+                            if (showPreviewDialog && previewTarget != null) {
                                 PreviewDialog(
-                                    fileName = targetFile!!.name,
+                                    fileName = previewTarget.name,
                                     content = previewContent,
                                     isLoading = previewLoading,
                                     onDismiss = { showPreviewDialog = false; targetFile = null; previewContent = null }
@@ -940,7 +944,7 @@ fun FileItemRow(
                                     Text(if (isInstalling) {
                                         when {
                                             apkInstallProgress > 0 -> ctx.getString(R.string.installing_with_progress, apkInstallProgress)
-                                            apkInstallStatus != null -> apkInstallStatus!!
+                                            apkInstallStatus != null -> apkInstallStatus ?: ctx.getString(R.string.installing_apk)
                                             else -> ctx.getString(R.string.installing_apk)
                                         }
                                     } else {

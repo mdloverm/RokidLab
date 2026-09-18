@@ -253,7 +253,8 @@ internal fun DeveloperScreen(
             Text(text = ctx.getString(R.string.developer_subtitle), color = BrewDim, fontSize = 12.sp)
 
             // ── 结果提示 ──
-            if (submitResult != null) {
+            val resultText = submitResult
+            if (resultText != null) {
                 Spacer(modifier = Modifier.height(12.dp))
                 val resultColor = if (isSuccess) BrewSuccess else BrewWarning
                 Box(
@@ -262,7 +263,7 @@ internal fun DeveloperScreen(
                         .border(1.dp, resultColor.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
                         .padding(12.dp),
                 ) {
-                    Text(text = submitResult!!, color = resultColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(text = resultText, color = resultColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -653,8 +654,9 @@ internal fun DeveloperScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                if (jsonEditorError != null) {
-                    Text(jsonEditorError!!, color = BrewWarning, fontSize = 11.sp, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp))
+                val editorError = jsonEditorError
+                if (editorError != null) {
+                    Text(editorError, color = BrewWarning, fontSize = 11.sp, modifier = Modifier.padding(start = 4.dp, bottom = 4.dp))
                 }
 
                 BrutalButton(

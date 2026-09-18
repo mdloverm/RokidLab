@@ -82,7 +82,7 @@ class PhoneMirrorServer(
             isRunning = true
             Log.i(TAG, "Socket server started, port: $port, soTimeout=${SOCKET_TIMEOUT_MS}ms")
 
-            receiveThread = Thread {
+            receiveThread = namedThread("mirror-receive") {
                 waitForClient()
             }
             receiveThread?.start()

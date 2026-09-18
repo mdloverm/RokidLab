@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.util.Log
 import com.rokidlab.phone.util.LogCollector
+import com.rokidlab.phone.util.namedThread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.DataInputStream
@@ -486,7 +487,7 @@ class BtTunnelClient(private val context: Context) {
             val done = AtomicBoolean(false)
 
             // TCP → 蓝牙
-            val t1 = Thread {
+            val t1 = namedThread("conn-route-probe1") {
                 try {
                     val buf = ByteArray(IO_BUF)
                     while (!done.get()) {
@@ -501,7 +502,7 @@ class BtTunnelClient(private val context: Context) {
             }
 
             // 蓝牙 → TCP
-            val t2 = Thread {
+            val t2 = namedThread("conn-route-probe2") {
                 try {
                     val buf = ByteArray(IO_BUF)
                     while (!done.get()) {

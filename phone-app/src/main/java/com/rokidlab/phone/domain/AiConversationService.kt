@@ -9,6 +9,7 @@ import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.design.RokidHostApp
 import com.rokidlab.phone.glasses.AiChannel
 import com.rokidlab.phone.glasses.LinkProtocol
+import com.rokidlab.phone.util.namedThread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -534,7 +535,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         // 本地轻量会话标志（catch 分支也要用，故提到 try 外；try 内算出后回填）
         var localLightMode = false
         val replyRef = java.util.concurrent.atomic.AtomicReference<String>("")
-        val deepSeekThread = Thread {
+        val deepSeekThread = namedThread("ai-deepseek-request", start = true) {
             val tGenStart = System.currentTimeMillis()
             try {
                 val cfg = session.getAiConfig()
@@ -771,7 +772,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                                 "被新消息打断（可续做）",
                             )
                         }
-                        return@Thread
+                        return@namedThread
                     }
                     // 流式：实时推送 content 增量给 UI（工具调用轮 content 通常为空，最终回复轮逐字推送）；
                     // isCancelled 使 SSE 行间隙可感知打断并立即停止读取
@@ -886,7 +887,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                     val results = arrayOfNulls<String>(turn.toolCalls.size)
                     val latch = java.util.concurrent.CountDownLatch(turn.toolCalls.size)
                     turn.toolCalls.forEachIndexed { idx, tc ->
-                        Thread {
+                        namedThread("ai-turn-worker", start = true) {
                             // 静默工具：长期记忆维护 + load_skill 系列本地即时读取，均无用户可见进度，跳过推送；
                             // update_plan 无专属 statusText（避免显示"正在执行 update_plan…"这种黑话），
                             // 同样静默执行，完成后自行推送格式化计划文本
@@ -952,7 +953,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                                 )
                             }
                             latch.countDown()
-                        }.start()
+                        }
                     }
                     latch.await()
                     // 按原顺序回填 tool 消息
@@ -1042,7 +1043,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                                 "收尾阶段被新消息打断（可续做）",
                             )
                         }
-                        return@Thread
+                        return@namedThread
                     }
                     var finalTurn: com.rokidlab.phone.ai.ChatTurn? = null
                     // 总结轮里模型给出的正文。不能用「最后一轮的 content」代替 —— 末轮若只调了工具，
@@ -1212,7 +1213,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             "被新消息打断（可续做）",
                         )
                     }
-                    return@Thread
+                    return@namedThread
                 }
                 Log.e(TAG, "DeepSeek API failed", e)
                 // 如实上报 + 记进 App 内日志面板：此前流式 HTTP 报错被静默吞成空轮，
@@ -1221,7 +1222,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 com.rokidlab.phone.util.LogCollector.e(TAG, "AI 生成失败: ${e.message}", e)
                 replyRef.set(com.rokidlab.phone.ai.OpenAiService.aiFailureHint(e))
             }
-        }.apply { start() }
+        }
 
         // 步骤-1 在 AI 线程启动后执行（原位置在 thread 启动前）：打断等待 300ms 与 AI 请求并行
         runOfficialInterrupt()

@@ -29,6 +29,8 @@ com.rokidlab.phone
 ├── model/             # 数据模型
 ├── music/             # 音乐与媒体按键
 ├── network/           # 网络请求（下载、图标加载）
+├── permission/        # 权限申请横切模块（AppPermission 权限总表, AppForegroundTracker 前台判定,
+│                      #    PermissionRequestActivity 统一授权页, PermissionBridge 工具侧桥接）
 ├── settings/          # 设置页面
 └── util/              # 工具类（AppConfig, HttpClient, LocalizationManager, RomFingerprint）
 ```
@@ -42,6 +44,9 @@ com.rokidlab.phone
 - **L4 AI 能力**（`ai/`）：模型调用、工具注册与执行、记忆、知识库、技能
 - **L5 功能与 UI**（`feature/`、`store/`、`settings/`、`app/`）：Composable、状态持有器、DI 装配
 - **依赖方向单向**：L5 → L4 → L3 → L2 → L1 → L0，禁止反向依赖
+- **权限申请横切模块**（`permission/`）：权限总表 / 前台判定 / 统一授权页 / 工具侧桥接。
+  它是**纵切**而非某一层 —— 可被 L4（AI 工具）与 L5（UI）直接调用，但自身只允许依赖
+  android 框架与 `util/ManufacturerUtils`，**禁止**反向依赖 `ai/`、`app/`、`glasses/` 等业务包
 - **UI 层**（`ui/` 子包）：存放 Composable 函数、Dialog、Screen 等界面组件
 - **设计系统层**（`design/`）：存放全局共享的 UI 组件和主题常量
 
@@ -596,3 +601,27 @@ adb/
 - **兼容旧格式**：旧版"整份 JSON 数组"的 `chat_history.json` 必须能在首启被识别并迁移为 JSONL，**迁移不丢历史**（测试已锁）。未迁移完不得改变文件名
 - **`clear()` 必须删文件**（`rewrite(file, emptyList())`），否则重启后历史复活
 - **落盘失败必须落 `LogCollector`**：聊天记录丢失是用户可见问题，不能只写 logcat
+
+### 12.17 手机权限申请约束（全品牌统一）
+
+历史教训（2026-09-18）：`call_phone` / `set_phone_alarm` / `open_phone_app` 在缺权限时**只会回一句"请去设置里开"**，
+用户听到的却是"这功能坏了"；而更隐蔽的一类是 Android 10+ 的 **BAL 静默失败** ——
+后台 `startActivity` 被系统直接丢弃（不抛异常、不打 error 日志），代码以为成功了，
+表现为"AI 说「正在拨打：X」但手机屏幕毫无反应"。根因是 `SYSTEM_ALERT_WINDOW`（AppOps）
+在**卸载重装/换签名**后会被清零（debug ↔ release 签名不同，`adb install -r` 覆盖不了）。
+
+- **需要权限的功能一律走 `PermissionBridge.ensure(context, reason, perm...)`**，不得再自写
+  "请打开手机设置…" 文案：`ensure` 会把缺失权限**自动拉起系统授权界面**并返回一句如实文案
+- **`ensure` 返回非 null 时必须放弃本次实际动作并原样把文案回给模型** —— 否则就是"假成功"
+- **权限登记唯一入口是 `permission/AppPermission`**：新增需要权限的工具 → 先在枚举里登记，
+  再在 `MainActivity.startupPermissionOrder` 补上启动期自检（两条都做，缺一不可）
+- **`OVERLAY` 只能跳设置页**（`requestPermissions` 对它不弹窗），走 `ManufacturerUtils.openOverlaySettings`
+- **"能不能从后台拉起界面"必须用 `PermissionBridge.canLaunchUi()` 判定**，不能靠 try/catch：
+  BAL 拦截既不抛异常也不返回失败。判定依据 = 前台（`AppForegroundTracker`）或持有悬浮窗
+- ⚠️ **禁止用 `isChineseRom()` 过滤 BAL / 权限判定**：BAL 限制与 AppOps 清零在 Pixel / 三星上完全一样
+  （历史遗留：`checkOverlayPermissionForMirror` 曾对非国产 ROM 直接放行）
+- ⚠️ **设置页跳转链必须"AOSP 契约优先、厂商私有页兜底"**：厂商 Action / 组件名在 ROM 版本间**不是稳定契约**，
+  猜错时 `ActivityNotFoundException` 会被静默吞掉，用户看到"点了没反应"。候选链末尾固定兜底到
+  `ACTION_APPLICATION_DETAILS_SETTINGS`（AOSP 必有）
+- **`PermissionRequestActivity` 必须 `exported=false` + `noHistory` + `excludeFromRecents`**：
+  它只是授权通道，且不应暴露给外部应用触发弹窗

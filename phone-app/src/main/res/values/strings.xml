@@ -392,6 +392,8 @@
     <string name="chat_kb_status">正在检索知识库...</string>
     <string name="chat_ai_status">正在生成答案...</string>
     <string name="chat_ocr_empty">未能识别到文字，请调整拍摄角度后重试</string>
+    <string name="chat_ocr_model_unavailable">OCR 模型未就绪，首次使用需联网下载，请检查网络后重试</string>
+    <string name="chat_ocr_native_unavailable">当前设备不支持本地 OCR，无法拍照识题</string>
     <string name="chat_photo_failed">拍照失败</string>
     <string name="chat_kb_title">知识库</string>
     <string name="chat_kb_subtitle">导入 txt 文档，拍照问 AI 时自动检索相关资料</string>
@@ -1249,4 +1251,38 @@
     <string name="app_list_show_less">收起</string>
     <string name="task_in_progress">正在处理其他任务，请稍候…</string>
     <string name="download_already_running">「%s」正在下载中</string>
+
+    <!-- ══ 权限申请（全品牌统一：缺权限时自动拉起系统授权页，而不是只回一句"请去设置里开"） ══ -->
+    <string name="permission_label_contacts">通讯录</string>
+    <string name="permission_label_phone">电话</string>
+    <string name="permission_label_calendar">日历</string>
+    <string name="permission_label_location">位置信息</string>
+    <string name="permission_label_notification">通知</string>
+    <string name="permission_label_overlay">显示在其他应用上层（后台弹出界面）</string>
+    <string name="permission_dialog_title">需要开启权限</string>
+    <string name="permission_dialog_message">「%1$s」需要以下权限：\n%2$s\n\n点「立即开启」后，在系统弹窗里选「允许」即可。</string>
+    <string name="permission_dialog_allow">立即开启</string>
+    <string name="permission_dialog_open_settings">去系统设置</string>
+    <string name="permission_dialog_later">稍后</string>
+    <string name="permission_dialog_granted">权限已开启</string>
+    <string name="permission_dialog_denied_guide">权限未开启，正在打开系统设置页，请手动开启</string>
+    <string name="permission_manual_path_hint">当前系统没有可用的权限设置页，请到「设置 → 应用 → 乐奇实验室 → 权限」中手动开启</string>
+    <string name="permission_auto_requested">缺少「%1$s」权限，已在手机上弹出授权窗口，请在手机上点「允许」后再说一次</string>
+    <string name="permission_prompt_pending">正在等待你在手机上授权「%1$s」，完成后再说一次即可</string>
+    <string name="permission_need_manual_open">缺少「%1$s」权限，请在手机「设置 → 应用 → 乐奇实验室 → 权限」中开启后重试</string>
+    <string name="permission_notification_title">需要开启权限</string>
+    <string name="permission_notification_text">点一下开启「%1$s」</string>
+    <string name="permission_channel_name">权限提醒</string>
+    <string name="permission_channel_desc">功能因缺少系统权限不可用时提醒你开启</string>
+    <string name="permission_reason_contacts">查找联系人并拨号</string>
+    <string name="permission_reason_phone">直接拨出电话（没有它只能打开拨号盘）</string>
+    <string name="permission_reason_calendar">读取与创建日程</string>
+    <string name="permission_reason_location">获取当前位置</string>
+    <string name="permission_reason_launch">让眼镜语音在你锁屏或回到桌面时也能拨号、设闹钟、打开应用</string>
+    <string name="perm_overlay_title">后台运行权限</string>
+    <string name="perm_overlay_desc">为了让眼镜语音在你锁屏或回到桌面时也能「打电话 / 设闹钟 / 打开应用」，需要开启「显示在其他应用上层」（部分手机叫「后台弹出界面」「悬浮窗」）。\n\n未开启时，这些指令手机上不会有任何反应。</string>
+    <string name="log_permission_bootstrap_start">开始补齐手机权限（%d 项）</string>
+    <string name="log_permission_bootstrap_all_granted">AI 工具所需权限已全部就绪</string>
+    <string name="log_permission_overlay_granted">悬浮窗权限已开启（后台启动界面不再被系统拦截）</string>
+    <string name="log_permission_overlay_guide">引导用户开启悬浮窗权限（否则后台拨号/闹钟/打开应用会被系统静默拦截）</string>
 </resources>

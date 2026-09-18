@@ -56,7 +56,7 @@ import org.json.JSONObject
 import kotlinx.coroutines.runBlocking
 
 class CxrLHiRokidSession(
-    activity: AppCompatActivity,
+    context: android.content.Context,
     internal var onStatus: (String) -> Unit,
     internal var onBusyChanged: (Boolean) -> Unit,
     private var onConnectionChanged: (CxrConnectionState) -> Unit,
@@ -72,8 +72,9 @@ class CxrLHiRokidSession(
     // 保活模式下 Activity 销毁后仍被单例钉住无法回收（泄漏整棵 View 树）。
     // 因此：仅持 application 级 Context + Activity 弱引用；
     // 确需 Activity 的场景（授权页跳转/销毁检查）走 activityRef。
-    internal val appContext: android.content.Context = activity.applicationContext
-    private val activityRef = java.lang.ref.WeakReference(activity)
+    internal val appContext: android.content.Context = context.applicationContext
+    /** 弱引用 Activity：无界面恢复（Service/Application 构造）时为 null，activityRef.get() 均有空保护 */
+    private val activityRef = java.lang.ref.WeakReference(context as? AppCompatActivity)
     /** 主线程调度：替代 activity.runOnUiThread（Activity 回收后仍可用） */
     internal val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 

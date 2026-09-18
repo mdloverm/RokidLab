@@ -152,6 +152,57 @@ object ToolGateway {
         }.toString()
 
     /**
+     * 调用前置校验结果（v3.9 抽出为可测纯逻辑）。
+     * [Reject.error] 与 [call] 原有错误消息逐字一致，勿改动（页面侧有按文案分支的逻辑）。
+     */
+    internal sealed class Precheck {
+        /** 校验通过，[normalizedArgs] 为归一化后的 JSON 对象字符串 */
+        data class Ok(val normalizedArgs: String) : Precheck()
+        /** 校验拒绝，[error] 为回给页面的错误消息 */
+        data class Reject(val error: String) : Precheck()
+    }
+
+    /**
+     * 工具调用前置校验（纯函数，无 Android 依赖，可直接单测）。
+     *
+     * 依次校验：空名 → 黑名单 → 未知工具 → 域白名单 → 参数 JSON 合法性。
+     * 注意 [LIST_TOOLS] 能力发现不在此处（它在 [call] 里更早分流）。
+     */
+    internal fun precheckToolCall(
+        toolName: String,
+        arguments: String,
+        allowedDomains: Set<String> = ALLOWED_DOMAINS,
+        denyTools: Set<String> = DENY_TOOLS,
+        knownTools: Set<String> = ToolRegistry.toolList.map { it.name }.toSet(),
+        toolDomain: (String) -> String? = { n -> ToolRegistry.toolList.firstOrNull { it.name == n }?.group },
+    ): Precheck {
+        if (toolName.isEmpty()) {
+            return Precheck.Reject("empty tool name")
+        }
+        if (toolName in denyTools) {
+            return Precheck.Reject("tool '$toolName' is not allowed in AIUI pages")
+        }
+        if (toolName !in knownTools) {
+            return Precheck.Reject("unknown tool: $toolName")
+        }
+        val domain = toolDomain(toolName)
+        if (domain == null) {
+            return Precheck.Reject("unknown tool: $toolName")
+        }
+        if (domain !in allowedDomains) {
+            return Precheck.Reject("domain '$domain' of tool '$toolName' is not allowed in AIUI pages")
+        }
+        // 参数必须是合法 JSON 对象：ToolRegistry.execute 内部直接 JSONObject(arguments)，
+        // 传入非法串会在那里抛异常，页面侧只会看到一个无信息的超时。
+        val normalizedArgs = try {
+            if (arguments.isBlank()) "{}" else JSONObject(arguments).toString()
+        } catch (e: Exception) {
+            return Precheck.Reject("arguments is not valid JSON: ${e.message}")
+        }
+        return Precheck.Ok(normalizedArgs)
+    }
+
+    /**
      * 执行一个工具。同步返回，内部带超时保护。
      *
      * 必须在非主线程调用：[ToolRegistry.execute] 内部有网络/文件 IO。
@@ -166,9 +217,6 @@ object ToolGateway {
         if (!isEnabled(context)) {
             return CallResult(false, toolName, error = "tool gateway is disabled")
         }
-        if (toolName.isEmpty()) {
-            return CallResult(false, toolName, error = "empty tool name")
-        }
         // 能力发现走同一条通道，页面不必额外学一套协议：
         // 结果就是 listAllowedJson，页面 JSON.parse 后得到 {tools:[{name,description}]}
         // 注意：也必须过截断 —— 这条路径原先在 [awaitResult] 之外提前返回，
@@ -177,22 +225,10 @@ object ToolGateway {
         if (toolName == LIST_TOOLS) {
             return CallResult(true, toolName, result = truncateResult(toolName, listAllowedJson(context)))
         }
-        if (toolName in DENY_TOOLS) {
-            return CallResult(false, toolName, error = "tool '$toolName' is not allowed in AIUI pages")
-        }
 
-        val meta = ToolRegistry.toolList.firstOrNull { it.name == toolName }
-            ?: return CallResult(false, toolName, error = "unknown tool: $toolName")
-        if (meta.group !in ALLOWED_DOMAINS) {
-            return CallResult(false, toolName, error = "domain '${meta.group}' of tool '$toolName' is not allowed in AIUI pages")
-        }
-
-        // 参数必须是合法 JSON 对象：ToolRegistry.execute 内部直接 JSONObject(arguments)，
-        // 传入非法串会在那里抛异常，页面侧只会看到一个无信息的超时。
-        val normalizedArgs = try {
-            if (arguments.isBlank()) "{}" else JSONObject(arguments).toString()
-        } catch (e: Exception) {
-            return CallResult(false, toolName, error = "arguments is not valid JSON: ${e.message}")
+        val normalizedArgs: String = when (val pre = precheckToolCall(toolName, arguments)) {
+            is Precheck.Reject -> return CallResult(false, toolName, error = pre.error)
+            is Precheck.Ok -> pre.normalizedArgs
         }
 
         // 幂等闸门必须在风险闸门之前：页面超时重试只是同一次调用的重放，
@@ -291,8 +327,9 @@ object ToolGateway {
      * 从代理对中间切断会留下孤立代理项，下行 JSON 里的结果字符串就变非法，
      * 页面 `JSON.parse` 直接失败，表现为 "bad result: …" 而非工具错误，极难排查。
      * 这里检测切点若落在高代理项之后，就少截一个字符让代理对完整落在截断之外。
+     * （internal 供单测直测；错误文案/截断标记"…(truncated)"被页面按字面感知，勿改动。）
      */
-    private fun truncateResult(toolName: String, result: String): String {
+    internal fun truncateResult(toolName: String, result: String): String {
         val limit = PER_TOOL_MAX_RESULT_CHARS[toolName] ?: MAX_RESULT_CHARS
         if (result.length <= limit) return result
         var end = limit

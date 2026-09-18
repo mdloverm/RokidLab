@@ -404,7 +404,7 @@ class BluetoothHidManager(private val appContext: Context) {
      * 这里统一挪到单线程队列：既保留报告先后顺序，也不会卡 UI。
      */
     @Volatile
-    private var reportExecutor: ExecutorService? = Executors.newSingleThreadExecutor()
+    private var reportExecutor: ExecutorService? = Executors.newSingleThreadExecutor { r -> Thread(r, "hid-report") }
     /** 最近一次被阻塞的原因（缺权限 / 蓝牙未开 / 未配对），供 UI 诊断 */
     @Volatile
     var lastBlockReason: String? = null
@@ -619,13 +619,14 @@ class BluetoothHidManager(private val appContext: Context) {
                         registerAppRetryCount++
                         Log.i(TAG, "Will retry registerApp in 2s (attempt $registerAppRetryCount/3)")
                         registerAppRetryRunnable?.let { mainHandler.removeCallbacks(it) }
-                        registerAppRetryRunnable = Runnable {
+                        val appRetry = Runnable {
                             if (pendingConnectDevice != null) {
                                 Log.i(TAG, "Retrying registerApp...")
                                 registerApp()
                             }
                         }
-                        mainHandler.postDelayed(registerAppRetryRunnable!!, 2000L)
+                        registerAppRetryRunnable = appRetry
+                        mainHandler.postDelayed(appRetry, 2000L)
                     } else {
                         hidProfileCallback?.onProfileNotSupported(manufacturerName)
                     }
@@ -692,7 +693,7 @@ class BluetoothHidManager(private val appContext: Context) {
                             val dev: BluetoothDevice? = device
                             val seqAtDisconnect = connectSequence
                             retryRunnable?.let { mainHandler.removeCallbacks(it) }
-                            retryRunnable = Runnable {
+                            val connRetry = Runnable {
                                 // 如果在此期间用户手动发起过新连接，跳过此次自动重试
                                 if (connectSequence != seqAtDisconnect) {
                                     Log.i(TAG, "Skipping stale retry: user initiated new connection")
@@ -703,7 +704,8 @@ class BluetoothHidManager(private val appContext: Context) {
                                     performConnect(dev)
                                 }
                             }
-                            mainHandler.postDelayed(retryRunnable!!, waitMs)
+                            retryRunnable = connRetry
+                            mainHandler.postDelayed(connRetry, waitMs)
                         }
                     }
                     updateConnectionState(STATE_DISCONNECTED, null)
@@ -720,7 +722,7 @@ class BluetoothHidManager(private val appContext: Context) {
     fun initialize() {
         BtHidCompat.bind(appContext)
         // destroy() 之后允许再次 initialize()，这里重新拉起报告线程
-        if (reportExecutor == null) reportExecutor = Executors.newSingleThreadExecutor()
+        if (reportExecutor == null) reportExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "hid-report") }
         lastBlockReason = null
 
         val hogpNeeded = ManufacturerUtils.needsHogpManualEnablement()
@@ -764,7 +766,7 @@ class BluetoothHidManager(private val appContext: Context) {
                     return
                 }
             }
-            bluetoothAdapter!!.getProfileProxy(appContext, profileListener, BluetoothProfile.HID_DEVICE)
+            adapter.getProfileProxy(appContext, profileListener, BluetoothProfile.HID_DEVICE)
         }
     }
 
@@ -852,7 +854,11 @@ class BluetoothHidManager(private val appContext: Context) {
             registerApp()
             return
         }
-        val ok = hidDevice!!.connect(device)
+        val hid = hidDevice ?: run {
+            Log.w(TAG, "HID device proxy lost before connect")
+            return
+        }
+        val ok = hid.connect(device)
         Log.i(TAG, "connect result: $ok (bond=${device.bondState})")
     }
 
@@ -1041,7 +1047,7 @@ class BluetoothHidManager(private val appContext: Context) {
          if (dirKeys.isNotEmpty()) {
              val idx = if (dirKeys.size > 1 && diagonalToggle) 1 else 0
              diagonalToggle = !diagonalToggle
-             val dirReport = KEY_CONSUMER[dirKeys[idx]]!!
+             val dirReport = KEY_CONSUMER.getValue(dirKeys[idx])
              val ok = sendKbdReport(dev, CONSUMER_REPORT_ID, dirReport)
              if (!ok) Log.w(TAG, "sendButtons: consumer report failed")
          } else {
@@ -1054,7 +1060,7 @@ class BluetoothHidManager(private val appContext: Context) {
  
         // 发送功能键（取第一个，键盘一次只能一个）
         if (actKeys.isNotEmpty()) {
-            val kbdData = KEY_HID[actKeys.first()]!!
+            val kbdData = KEY_HID.getValue(actKeys.first())
             val ok = sendKbdReport(dev, KEYBOARD_REPORT_ID, kbdData, actDelay)
             if (!ok) Log.w(TAG, "sendButtons: keyboard report failed")
         } else {

@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.rokidlab.phone.platform.AvrcpLyricBridge
+import com.rokidlab.phone.util.namedThread
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -367,14 +368,14 @@ object MusicPlayerController {
      * 让眼镜端音乐页 / AVRCP Current Data 刷新封面。
      */
     private fun loadCoverAsync(coverUrl: String) {
-        Thread {
+        namedThread("music-player-io", start = true) {
             val raw = runCatching {
                 val conn = (URL(coverUrl).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 6000
                     readTimeout = 10000
                 }
                 conn.inputStream.use { BitmapFactory.decodeStream(it) }
-            }.onFailure { Log.w(TAG, "cover download failed: ${it.message}") }.getOrNull() ?: return@Thread
+            }.onFailure { Log.w(TAG, "cover download failed: ${it.message}") }.getOrNull() ?: return@namedThread
             // 限到 320px：Bitmap 会随 MediaMetadata 走 Binder 传给 SystemUI/Bluetooth 进程，
             // ARGB_8888 下 600px ≈ 1.44MB 已超 Binder 单事务 ~1MB 上限（会导致元数据/封面双双失效），
             // 320px ≈ 410KB 安全，且足以撑起通知栏/媒体卡片的封面显示。
@@ -402,7 +403,7 @@ object MusicPlayerController {
                 }
                 Log.i(TAG, "cover loaded & re-pushed: ${scaled.width}x${scaled.height}")
             }
-        }.start()
+        }
     }
 
     // ── 歌词模式 ──

@@ -4,6 +4,7 @@ import com.rokidlab.phone.R
 import com.rokidlab.phone.ai.LocalOllamaManager
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.app.MainActivity
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -31,6 +32,8 @@ class LabKeepAliveService : Service() {
         private const val TAG = "LabKeepAliveService"
         private const val NOTIFICATION_ID = 3001
         private const val CHANNEL_ID = "keep_alive_fgs"
+        private const val RESTART_REQUEST_CODE = 3002
+        private const val RESTART_DELAY_MS = 2_000L
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -55,12 +58,40 @@ class LabKeepAliveService : Service() {
                 (application as LabApplication).appScope,
             )
         }.onFailure { Log.w(TAG, "startKeepAlive failed: ${it.message}") }
+        // 无界面会话自愈：START_STICKY 重建/开机自启时进程内没有 Activity，
+        // 用 Application Context 重建 CXR-L 会话 + ASR 双通道，消除"通知在、语音死"的假活状态
+        runCatching {
+            (application as LabApplication).ensureHeadlessSession()
+        }.onFailure { Log.w(TAG, "ensureHeadlessSession failed: ${it.message}") }
         Log.i(TAG, "LabKeepAliveService created (keep-alive active)")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // START_STICKY：系统回收进程后自动重建服务，实现保活自愈
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // SwipeUpClean（最近任务上滑清掉卡片）会绕过 FGS 直接杀进程（实测 am_kill reason=SwipeUpClean）。
+        // START_STICKY 在部分 ROM（MIUI 神隐/一键优化）下重建会被抑制，安排 2s 后由 BootReceiver
+        // 经 AlarmManager 重新拉起本服务作为双保险：alarm 触发时系统授予短暂后台启动豁免，可合法启动 FGS。
+        try {
+            val restartIntent = Intent(applicationContext, BootReceiver::class.java).apply {
+                action = BootReceiver.ACTION_RESTART_KEEPALIVE
+            }
+            val pending = PendingIntent.getBroadcast(
+                this,
+                RESTART_REQUEST_CODE,
+                restartIntent,
+                PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            am.setAndAllowWhileIdle(AlarmManager.RTC, System.currentTimeMillis() + RESTART_DELAY_MS, pending)
+            Log.i(TAG, "onTaskRemoved: restart alarm scheduled in ${RESTART_DELAY_MS}ms")
+        } catch (e: Exception) {
+            Log.w(TAG, "schedule restart alarm failed: ${e.message}")
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

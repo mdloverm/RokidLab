@@ -6,6 +6,7 @@ import androidx.lifecycle.lifecycleScope
 import com.rokidlab.phone.R
 import com.rokidlab.phone.app.MainActivity
 import com.rokidlab.phone.mirror.PhonePackageInstallHelper
+import com.rokidlab.phone.util.namedThread
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.CancellationException
@@ -76,14 +77,14 @@ internal class AppUpdateController(private val activity: MainActivity) {
 
     /** 3 秒后清除本地 APK 安装状态（复位进度与状态文本） */
     internal fun scheduleClearLocalApkInstallState() {
-        Thread {
+        namedThread("local-apk-state-clear", start = true) {
             Thread.sleep(3000)
             activity.runOnUiThread {
                 activity.isInstallingLocalApk = false
                 activity.localApkInstallProgress = 0
                 activity.localApkInstallStatus = ""
             }
-        }.start()
+        }
     }
 
     internal fun performSelfUpdate() {

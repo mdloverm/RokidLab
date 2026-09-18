@@ -685,7 +685,7 @@ internal class SseStreamAccumulator(
         val toolCalls = toolNameParts.entries.sortedBy { it.key }.map { (idx, _) ->
             ToolCallInfo(
                 id = resolveToolId(toolIds[idx] ?: ""),
-                name = toolNameParts[idx]!!.toString(),
+                name = toolNameParts.getValue(idx).toString(),
                 arguments = toolArgParts[idx]?.toString() ?: "",
             )
         }

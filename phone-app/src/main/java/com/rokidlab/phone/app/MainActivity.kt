@@ -68,6 +68,13 @@ private const val PREF_ROKID_HOST_APP = "rokid_host_app"
 private const val PREF_COMPAT_GUIDE_DISMISSED = "compat_guide_dismissed"
 private const val PREF_OVERLAY_GUIDE_DISMISSED = "overlay_guide_dismissed"
 
+/**
+ * 「悬浮窗 / 后台弹出界面」引导是否已被用户点过「不再提示」。
+ * 与 [PREF_OVERLAY_GUIDE_DISMISSED] **分开存**：后者只针对投屏引导（OPPO/vivo 兼容），
+ * 混用会让用户"关掉了投屏提示"顺带把眼镜语音拨号的引导也关掉。
+ */
+private const val PREF_PERM_OVERLAY_GUIDE_DISMISSED = "perm_overlay_guide_dismissed"
+
 class MainActivity : AppCompatActivity() {
     private companion object {
         private const val TAG = "MainActivity"
@@ -218,7 +225,7 @@ class MainActivity : AppCompatActivity() {
             )
             // 异步路由判断：WiFi 可达则直连，否则走蓝牙隧道
             val wifiPort = app.phoneMirrorPort.toIntOrNull() ?: 7654
-            Thread {
+            namedThread("main-permission-io", start = true) {
                 // 首启时眼镜端 IP 上行常晚于本回调：等就绪再探测，否则必然回落到蓝牙隧道
                 val wifiIp = app.awaitGlassesIp(2_000L)
                 val route = kotlinx.coroutines.runBlocking {
@@ -235,7 +242,7 @@ class MainActivity : AppCompatActivity() {
                                 connectionStatus = getString(R.string.mirror_connection_failed)
                             )
                         }
-                        return@Thread
+                        return@namedThread
                     }
                 }
                 Log.i("MainActivity", "PhoneMirror route: $route → $targetIp:$targetPort (BT=$isBT)")
@@ -247,7 +254,7 @@ class MainActivity : AppCompatActivity() {
                     data,
                     isBluetooth = isBT
                 )
-            }.start()
+            }
         } else {
             log(getString(R.string.log_mediaprojection_denied))
             phoneMirrorState = phoneMirrorState.copy(
@@ -296,7 +303,7 @@ class MainActivity : AppCompatActivity() {
             app.cxrL.cleanup()
         }
         cxrL = CxrLHiRokidSession(
-            activity = this,
+            context = this,
             onStatus = ::log,
             onBusyChanged = ::updateBusy,
             onConnectionChanged = { conn ->
@@ -369,25 +376,114 @@ class MainActivity : AppCompatActivity() {
     // ════════════════════════════════════════════════════════════════
     //  AI 工具运行时权限（通讯录/日历/拨号，用于 Agent 的联系人查找、日程与打电话工具）
     // ════════════════════════════════════════════════════════════════
-    /** 独立于蓝牙权限 launcher：拒绝只记日志不弹提示（缺失时对应 AI 工具会返回引导文本） */
-    private val aiToolPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    /**
+     * 启动期按序补齐的运行时权限（AI 工具与眼镜语音共同依赖）。
+     *
+     * 为什么逐个申请而不是 `RequestMultiplePermissions`：一次申请多个时，
+     * 部分国产 ROM 会把整批静默判拒（弹窗都不出现），而用户只拒绝其中一个也会让**整批**返回失败，
+     * 结果"批里其余权限"要等下次启动才会再问。一个一个来最稳，代价只是多几次点击。
+     *
+     * ⚠️ 这里**不包含** `SYSTEM_ALERT_WINDOW` —— 它不是运行时权限，见 [guideOverlayPermissionIfNeeded]。
+     * ⚠️ 这里也**不做 `isChineseRom()` 前置过滤**：这些权限在 Pixel / 三星上一样是缺就不可用。
+     */
+    private val startupPermissionOrder = listOf(
+        Manifest.permission.READ_CONTACTS,
+        Manifest.permission.CALL_PHONE,
+        Manifest.permission.READ_CALENDAR,
+        Manifest.permission.WRITE_CALENDAR,
+        // 只申请 FINE：Android 12+ 系统会在同一个弹窗里让用户选"精确/大致"，
+        // 12 以下同权限组也会一并授予，单独再申请 COARSE 反而多弹一次
+        Manifest.permission.ACCESS_FINE_LOCATION,
+    )
 
+    /** 待申请队列（逐个消费） */
+    private val pendingStartupPermissions = ArrayDeque<String>()
+
+    /** 单权限 launcher：每弹一次都等回调再问下一个，避免弹窗互相覆盖 */
+    private val singlePermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            // 单个结果不影响后续：用户可能只拒绝其中一个，剩下的继续问完
+            requestNextStartupPermission()
+        }
+
+    /**
+     * 启动期权限自检（**全品牌**）：把"缺权限 → 只回一句去设置里开"的历史行为，
+     * 换成"缺权限 → 当场把系统授权框拉起来"。
+     *
+     * 启动期是唯一能可靠补上悬浮窗的机会（前台状态下拉界面不受 BAL 限制），
+     * 而悬浮窗又是运行期一切"自动拉起授权页"的前提 —— 详见 [PermissionBridge]。
+     */
     private fun requestAiToolPermissions() {
-        val needed = listOf(
-            Manifest.permission.READ_CONTACTS,
-            Manifest.permission.READ_CALENDAR,
-            Manifest.permission.WRITE_CALENDAR,
-            // 拨号：首次进入（或未申请过）时随其他权限一起弹窗，否则打电话会一直没权限
-            Manifest.permission.CALL_PHONE,
-        ).filter { !hasPermission(it) }
-        if (needed.isEmpty()) return
+        pendingStartupPermissions.clear()
+        pendingStartupPermissions.addAll(startupPermissionOrder.filter { !hasPermission(it) })
         lifecycleScope.launch {
-            // 延后 4s：先让蓝牙/通知等核心权限弹窗走完，避免一次性轰炸用户
-            delay(4000)
-            if (needed.any { !hasPermission(it) }) {
-                aiToolPermissionLauncher.launch(needed.toTypedArray())
+            // 延后 6s：先让蓝牙/通知等核心权限弹窗走完，避免一次性轰炸用户
+            delay(6000)
+            if (pendingStartupPermissions.isEmpty()) {
+                log(getString(R.string.log_permission_bootstrap_all_granted))
+                guideOverlayPermissionIfNeeded()
+                return@launch
             }
+            log(getString(R.string.log_permission_bootstrap_start, pendingStartupPermissions.size))
+            requestNextStartupPermission()
+        }
+    }
+
+    private fun requestNextStartupPermission() {
+        val next = pendingStartupPermissions.removeFirstOrNull()
+        if (next == null) {
+            guideOverlayPermissionIfNeeded()
+            return
+        }
+        if (hasPermission(next)) {   // 期间可能已被其它路径授予
+            requestNextStartupPermission()
+            return
+        }
+        runCatching { singlePermissionLauncher.launch(next) }
+            .onFailure {
+                // 少数 ROM 的权限管理器会在 launch 阶段抛异常；不能因此卡死整条队列
+                Log.w(TAG, "launch permission request failed: $next", it)
+                requestNextStartupPermission()
+            }
+    }
+
+    /**
+     * 悬浮窗（`SYSTEM_ALERT_WINDOW` / 部分 ROM 叫「后台弹出界面」）引导。
+     *
+     * ★ 为什么它必须单独在启动期出现：它是 Android 10+ 后台启动 Activity（BAL）下
+     * **唯一**普通应用可用的豁免。没有它，眼镜语音让手机"打电话 / 设闹钟 / 打开应用"时，
+     * `startActivity` 会被系统**静默丢弃**（不抛异常、不打 error 日志），代码以为成功了 ——
+     * 现象就是"AI 说「正在拨打：X」但手机屏幕毫无反应"。
+     * 而"申请它"本身又需要能拉起界面：**应用在前台的这一刻是唯一的自举机会**，
+     * 所以放在启动期，且不按品牌过滤（BAL 不区分品牌，Pixel / 三星照样受限）。
+     */
+    private fun guideOverlayPermissionIfNeeded() {
+        if (ManufacturerUtils.canDrawOverlays(this)) {
+            log(getString(R.string.log_permission_overlay_granted))
+            return
+        }
+        if (getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(PREF_PERM_OVERLAY_GUIDE_DISMISSED, false)
+        ) {
+            Log.i(TAG, "overlay guide dismissed by user, skip")
+            return
+        }
+        log(getString(R.string.log_permission_overlay_guide))
+        runOnUiThread {
+            android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle(getString(R.string.perm_overlay_title))
+                .setMessage(getString(R.string.perm_overlay_desc))
+                .setCancelable(false)
+                .setPositiveButton(getString(R.string.overlay_permission_guide)) { _, _ ->
+                    ManufacturerUtils.openOverlaySettings(this@MainActivity)
+                }
+                .setNegativeButton(getString(R.string.overlay_permission_skip)) { _, _ ->
+                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(PREF_PERM_OVERLAY_GUIDE_DISMISSED, true)
+                        .apply()
+                }
+                .show()
         }
     }
 

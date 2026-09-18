@@ -101,12 +101,13 @@ object LongTermMemoryManager {
         if (dbHelper == null) {
             synchronized(lock) {
                 if (dbHelper == null) {
-                    dbHelper = MemoryDb(context)
-                    migrateFromPrefs(context, dbHelper!!)
+                    val helper = MemoryDb(context)
+                    dbHelper = helper
+                    migrateFromPrefs(context, helper)
                 }
             }
         }
-        return dbHelper!!.writableDatabase
+        return requireNotNull(dbHelper) { "memory db helper missing" }.writableDatabase
     }
 
     /** 旧版 SharedPreferences JSON 数组 → SQLite 一次性迁移（保持原顺序） */

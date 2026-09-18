@@ -37,13 +37,13 @@ class ScreenMirrorIntentActivity : Activity() {
         sendBroadcast(Intent(PhoneMirrorActivity.ACTION_FINISH_MIRROR))
 
         // 在后台线程中等待 ADB 连接建立，或超时后自动关闭
-        Thread {
+        namedThread("mirror-intent-io", start = true) {
             val connected = waitForAdbConnection()
             Log.i(TAG, "Adb connection check result: $connected, auto closing")
             Handler(Looper.getMainLooper()).postDelayed({
                 finish()
             }, 500) // 延迟 500ms 确保画面稳定
-        }.start()
+        }
     }
 
     /**

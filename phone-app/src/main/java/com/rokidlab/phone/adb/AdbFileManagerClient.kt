@@ -409,15 +409,7 @@ class AdbFileManagerClient(
             }
 
             // RECV 命令格式: "RECV" + 4字节路径长度(little endian) + 路径
-            val pathBytes = remotePath.toByteArray(Charsets.UTF_8)
-            val recvCmd = ByteArray(8 + pathBytes.size)
-            System.arraycopy("RECV".toByteArray(Charsets.UTF_8), 0, recvCmd, 0, 4)
-            recvCmd[4] = (pathBytes.size and 0xFF).toByte()
-            recvCmd[5] = ((pathBytes.size shr 8) and 0xFF).toByte()
-            recvCmd[6] = ((pathBytes.size shr 16) and 0xFF).toByte()
-            recvCmd[7] = ((pathBytes.size shr 24) and 0xFF).toByte()
-            System.arraycopy(pathBytes, 0, recvCmd, 8, pathBytes.size)
-            sendPacket(CMD_WRTE, sid, remoteId, recvCmd)
+            sendPacket(CMD_WRTE, sid, remoteId, AdbProtocol.buildRecvRequest(remotePath))
 
             // 等待 OKAY
             var waitForOkay = true
@@ -438,12 +430,11 @@ class AdbFileManagerClient(
             var totalReceived = 0L
             var downloadSuccess = false
             try {
-                // sync 消息重组缓冲：ADB 流是**字节流**，WRTE 只是传输层分片，不等于 sync 消息边界。
+                // sync 消息重组：ADB 流是**字节流**，WRTE 只是传输层分片，不等于 sync 消息边界。
                 // adbd 把 DATA 的 8 字节包头与文件负载分两次 write，传输层各成一个 WRTE（大负载还会再拆）。
-                // 旧实现「一个 WRTE = 一条完整消息」→ `payload.size >= 8 + dataLen` 不成立时**静默丢弃**
-                // 整块负载，产出的文件恒为 64KB 整数倍截断（且不报错）。
-                var acc = ByteArray(64 * 1024 + 64)
-                var accLen = 0
+                // 旧实现「一个 WRTE = 一条完整消息」→ 负载被**静默丢弃**，产出的文件恒为
+                // 64KB 整数倍截断（且不报错）。组帧语义现抽至 AdbProtocol.SyncFrameAssembler（可单测）。
+                val assembler = AdbProtocol.SyncFrameAssembler()
                 FileOutputStream(localPath).use { fos ->
                     download@ while (true) {
                         val msg = readPacket()
@@ -452,42 +443,22 @@ class AdbFileManagerClient(
                             CMD_WRTE -> {
                                 // 传输层 ack 必须先回：它只针对本 WRTE，与 sync 消息是否完整无关
                                 sendPacket(CMD_OKAY, sid, msg.arg0, null)
-                                if (accLen + msg.payload.size > acc.size) {
-                                    acc = acc.copyOf(maxOf(acc.size * 2, accLen + msg.payload.size))
-                                }
-                                System.arraycopy(msg.payload, 0, acc, accLen, msg.payload.size)
-                                accLen += msg.payload.size
-                                var pos = 0
-                                while (true) {
-                                    if (accLen - pos < 8) break
-                                    val cmdStr = String(acc, pos, 4, Charsets.UTF_8)
-                                    val size = ((acc[pos + 4].toInt() and 0xFF) or
-                                                ((acc[pos + 5].toInt() and 0xFF) shl 8) or
-                                                ((acc[pos + 6].toInt() and 0xFF) shl 16) or
-                                                ((acc[pos + 7].toInt() and 0xFF) shl 24))
-                                    when (cmdStr) {
-                                        "FAIL" -> {
-                                            if (accLen - pos - 8 < size) break // 报错文案未到齐，等下一片
-                                            val errMsg = if (size > 0) {
-                                                String(acc, pos + 8, size, Charsets.UTF_8)
-                                            } else {
-                                                "Unknown error"
+                                for (frame in assembler.feed(msg.payload)) {
+                                    when (frame) {
+                                        is AdbProtocol.SyncFrame.Data -> {
+                                            if (frame.bytes.isNotEmpty()) {
+                                                fos.write(frame.bytes)
+                                                totalReceived += frame.bytes.size
                                             }
-                                            Log.e(TAG, "Download failed: $errMsg")
-                                            throw Exception("Download failed: $errMsg")
-                                        }
-                                        "DATA" -> {
-                                            if (accLen - pos - 8 < size) break // 负载未到齐，等下一片
-                                            if (size > 0) {
-                                                fos.write(acc, pos + 8, size)
-                                                totalReceived += size
-                                            }
-                                            pos += 8 + size
                                             if (totalReceived % (1024 * 1024) < 64 * 1024) {
                                                 Log.d(TAG, "Download progress: $totalReceived bytes")
                                             }
                                         }
-                                        "DONE" -> {
+                                        is AdbProtocol.SyncFrame.Fail -> {
+                                            Log.e(TAG, "Download failed: ${frame.message}")
+                                            throw Exception("Download failed: ${frame.message}")
+                                        }
+                                        AdbProtocol.SyncFrame.Done -> {
                                             Log.d(TAG, "Download complete: $totalReceived bytes")
                                             sendPacket(CMD_OKAY, sid, msg.arg0, null)
                                             sendPacket(CMD_CLSE, sid, remoteId, null)
@@ -502,12 +473,7 @@ class AdbFileManagerClient(
                                             downloadSuccess = true
                                             break@download
                                         }
-                                        else -> throw Exception("Unexpected sync frame: $cmdStr")
                                     }
-                                }
-                                if (pos > 0) {
-                                    System.arraycopy(acc, pos, acc, 0, accLen - pos)
-                                    accLen -= pos
                                 }
                             }
                             CMD_CLSE -> {
@@ -884,9 +850,9 @@ class AdbFileManagerClient(
                     if (parts.size >= 5) {
                         try {
                             // 解析带单位的值 (如 15G, 2.3G, 100M, 50K)
-                            val total = parseSize(parts[1])
-                            val used = parseSize(parts[2])
-                            val free = parseSize(parts[3])
+                            val total = AdbProtocol.parseStorageSize(parts[1])
+                            val used = AdbProtocol.parseStorageSize(parts[2])
+                            val free = AdbProtocol.parseStorageSize(parts[3])
                             Log.d(TAG, "Parse result: total=$total, used=$used, free=$free")
                             if (total > 0) {
                                 return StorageInfo(total, used, free)
@@ -904,40 +870,7 @@ class AdbFileManagerClient(
             null
         }
     }
-    
-    /**
-     * 解析带单位的文件大小 (如 15G, 2.3G, 100M, 50K)
-     * df 命令输出的是 1K-blocks，所以纯数字直接返回（已经是 KB）
-     */
-    private fun parseSize(sizeStr: String): Long {
-        val trimmed = sizeStr.trim()
-        if (trimmed.isEmpty()) return 0L
-        
-        // 尝试直接解析数字（df 输出的是 1K-blocks）
-        trimmed.toLongOrNull()?.let { return it * 1024 }
-        
-        // 解析带单位的值
-        val regex = Regex("([0-9.]+)([KMGTP]?)", RegexOption.IGNORE_CASE)
-        val match = regex.find(trimmed)
-        if (match != null) {
-            val value = match.groupValues[1].toDoubleOrNull() ?: return 0L
-            val unit = match.groupValues[2].uppercase()
-            
-            val multiplier = when (unit) {
-                "K" -> 1024L
-                "M" -> 1024L * 1024
-                "G" -> 1024L * 1024 * 1024
-                "T" -> 1024L * 1024 * 1024 * 1024
-                "P" -> 1024L * 1024 * 1024 * 1024 * 1024
-                else -> 1024L // 默认按 KB 处理
-            }
-            
-            return (value * multiplier).toLong()
-        }
-        
-        return 0L
-    }
-    
+
     data class StorageInfo(
         val totalBytes: Long,
         val usedBytes: Long,
@@ -1013,16 +946,7 @@ class AdbFileManagerClient(
                 }
             }
 
-            val sendPath = "$remotePath,33188"
-            val sendPathBytes = sendPath.toByteArray(Charsets.UTF_8)
-            val sendCmd = ByteArray(8 + sendPathBytes.size)
-            System.arraycopy("SEND".toByteArray(Charsets.UTF_8), 0, sendCmd, 0, 4)
-            sendCmd[4] = (sendPathBytes.size and 0xFF).toByte()
-            sendCmd[5] = ((sendPathBytes.size shr 8) and 0xFF).toByte()
-            sendCmd[6] = ((sendPathBytes.size shr 16) and 0xFF).toByte()
-            sendCmd[7] = ((sendPathBytes.size shr 24) and 0xFF).toByte()
-            System.arraycopy(sendPathBytes, 0, sendCmd, 8, sendPathBytes.size)
-            sendPacket(CMD_WRTE, sid, remoteId, sendCmd)
+            sendPacket(CMD_WRTE, sid, remoteId, AdbProtocol.buildSendRequest(remotePath))
 
             var waitForOkay = true
             while (waitForOkay) {
@@ -1049,15 +973,7 @@ class AdbFileManagerClient(
                 val buffer = ByteArray(chunkSize)
                 var bytesRead: Int
                 while (fis.read(buffer).also { bytesRead = it } > 0) {
-                    val dataCmd = ByteArray(8 + bytesRead)
-                    System.arraycopy("DATA".toByteArray(Charsets.UTF_8), 0, dataCmd, 0, 4)
-                    dataCmd[4] = (bytesRead and 0xFF).toByte()
-                    dataCmd[5] = ((bytesRead shr 8) and 0xFF).toByte()
-                    dataCmd[6] = ((bytesRead shr 16) and 0xFF).toByte()
-                    dataCmd[7] = ((bytesRead shr 24) and 0xFF).toByte()
-                    System.arraycopy(buffer, 0, dataCmd, 8, bytesRead)
-
-                    sendPacket(CMD_WRTE, sid, remoteId, dataCmd)
+                    sendPacket(CMD_WRTE, sid, remoteId, AdbProtocol.buildDataChunk(buffer, bytesRead))
                     totalSent += bytesRead
                     pendingAcks++
 
@@ -1097,14 +1013,8 @@ class AdbFileManagerClient(
                 }
             }
 
-            val doneCmd = ByteArray(8)
-            System.arraycopy("DONE".toByteArray(Charsets.UTF_8), 0, doneCmd, 0, 4)
-            val timestamp = (System.currentTimeMillis() / 1000).toInt()
-            doneCmd[4] = (timestamp and 0xFF).toByte()
-            doneCmd[5] = ((timestamp shr 8) and 0xFF).toByte()
-            doneCmd[6] = ((timestamp shr 16) and 0xFF).toByte()
-            doneCmd[7] = ((timestamp shr 24) and 0xFF).toByte()
-            sendPacket(CMD_WRTE, sid, remoteId, doneCmd)
+            // DONE 帧负载为 4 字节 LE 时间戳（秒）；adbd 不校验该值，但按协议带上
+            sendPacket(CMD_WRTE, sid, remoteId, AdbProtocol.buildDoneCommand((System.currentTimeMillis() / 1000).toInt()))
 
             var gotFinalClse = false
             var clseRetryCount = 0
@@ -1424,7 +1334,7 @@ class AdbFileManagerClient(
         buf.putInt(arg0)
         buf.putInt(arg1)
         buf.putInt(payloadLen)
-        buf.putInt(checksum(payload))
+        buf.putInt(AdbProtocol.adbChecksum(payload))
         buf.putInt(command.inv())
 
         if (payload != null) {
@@ -1473,13 +1383,6 @@ class AdbFileManagerClient(
 
     /** Shell 路径转义：用单引号包裹，路径内含单引号时用 '\'' 模式 */
     private fun shellEscape(s: String): String = "'${s.replace("'", "'\\''")}'"
-
-    private fun checksum(data: ByteArray?): Int {
-        if (data == null) return 0
-        var sum = 0
-        for (b in data) sum += b.toInt() and 0xFF
-        return sum
-    }
 
     fun isConnected(): Boolean {
         return socket?.isConnected == true && socket?.isClosed == false && adbSessionAlive

@@ -17,6 +17,7 @@ import com.rokidlab.phone.filemanager.*
 import com.rokidlab.phone.model.*
 import com.rokidlab.phone.util.AppConfig
 import com.rokidlab.phone.util.LogCollector
+import com.rokidlab.phone.util.namedThread
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -82,7 +83,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
         activity.connectionError = null
         Log.i(TAG, "Starting connection: ${activity.ipAddress}:${AppConfig.DEFAULT_ADB_PORT}")
 
-        Thread {
+        namedThread("fm-list-io", start = true) {
             try {
                 val route = fileTransfer.resolveRoute(activity.ipAddress, AppConfig.DEFAULT_ADB_PORT)
                 val (targetIp, targetPort) = when (route) {
@@ -93,7 +94,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                             activity.isConnecting = false
                             activity.connectionError = "No route to glasses (WiFi and BT both unavailable)"
                         }
-                        return@Thread
+                        return@namedThread
                     }
                 }
                 Log.i(TAG, "Route: $route, connecting to $targetIp:$targetPort")
@@ -138,7 +139,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                     activity.connectionError = activity.getString(R.string.connection_error_format, e.message)
                 }
             }
-        }.start()
+        }
     }
 
     internal var loadFilesCounter = 0
@@ -275,7 +276,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
         activity.previewLoading = true
         Log.i(TAG, "Previewing file: ${file.path}")
         
-        Thread {
+        namedThread("fm-storage-io", start = true) {
             try {
                 // 通过文件扩展名判断文件类型
                 val textExtensions = setOf("txt", "log", "md", "json", "xml", "html", "js", "css", "java", "kt", "py", "cpp", "h", "c", "sh", "bat")
@@ -303,9 +304,10 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                 } else if (textExtensions.contains(extension)) {
                     // 文本文件可以预览 - 使用 shell cat 命令读取（sync 协议不支持此设备）
                     Log.i(TAG, "Text file, reading content")
-                    val content = if (adbClient != null) {
+                    val client = adbClient
+                    val content = if (client != null) {
                         try {
-                            adbClient!!.executeShellCommand("cat \"${file.path}\"")
+                            client.executeShellCommand("cat \"${file.path}\"")
                         } catch (e: Exception) {
                             Log.e(TAG, "shell cat failed: ${e.message}")
                             null
@@ -332,7 +334,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                     activity.previewContent = activity.getString(R.string.preview_failed_format, e.message)
                 }
             }
-        }.start()
+        }
     }
 
     internal fun downloadFileToUri(file: FileItem, uri: Uri) {
@@ -469,11 +471,17 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                 activity.runOnUiThread { activity.isLoading = false; activity.isConnected = false }
                 return@execute
             }
+            val target = activity.targetFile
+            if (target == null) {
+                LogCollector.e(TAG, "Rename aborted: target file is null")
+                activity.runOnUiThread { activity.isLoading = false; activity.statusMessage = activity.getString(R.string.rename_failed) }
+                return@execute
+            }
             val newPath = buildPath(activity.currentPath, newName)
-            val success = client.renameFile(activity.targetFile!!.path, newPath)
+            val success = client.renameFile(target.path, newPath)
             
             if (!success) {
-                LogCollector.e(TAG, "Rename failed: ${activity.targetFile!!.path} -> $newPath")
+                LogCollector.e(TAG, "Rename failed: ${target.path} -> $newPath")
             }
             
             activity.runOnUiThread {
@@ -605,7 +613,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
         activity.apkInstallProgress = 0
         activity.apkInstallStatus = activity.getString(R.string.preparing_install)
         
-        Thread {
+        namedThread("fm-apk-install", start = true) {
             try {
                 activity.apkInstallStatus = activity.getString(R.string.installing_apk)
                 activity.apkInstallProgress = 50
@@ -629,7 +637,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                     }
                     
                     // 3秒后清除状态
-                    Thread {
+                    namedThread("fm-apk-status-clear", start = true) {
                         Thread.sleep(3000)
                         activity.runOnUiThread {
                             activity.installingApkPath = null
@@ -637,7 +645,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                             activity.apkInstallStatus = null
                             activity.apkInstallSuccess = false
                         }
-                    }.start()
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "APK安装失败: ${e.message}", e)
@@ -647,7 +655,7 @@ internal class FileManagerStateHolder(private val activity: FileManagerActivity)
                     activity.installingApkPath = null
                 }
             }
-        }.start()
+        }
     }
 
     internal fun showFileDetails(file: FileItem) {

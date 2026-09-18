@@ -101,12 +101,15 @@ internal class PhotoQuizFlow(
                         try {
                             Log.i(TAG, "photoAsk: photo received (${jpeg.size}B) after ${System.currentTimeMillis() - askStartMs}ms, starting OCR")
                             mainHandler.post { onStage(R.string.chat_ocr_status) }
-                            // 2) 本地 OCR 识别题目文字
+                            // 2) 本地 OCR 识别题目文字（模型不内置 APK，首次使用先从 Gitee 下载约 15.4MB）
                             val tOcr = System.currentTimeMillis()
                             val text = runCatching {
                                 val bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
                                     ?: return@runCatching ""
                                 try {
+                                    LocalOcr.ensureInit(appContext) { pct ->
+                                        if (pct % 20 == 0) Log.i(TAG, "photoAsk: OCR model downloading $pct%")
+                                    }
                                     LocalOcr.recognize(appContext, bmp)
                                 } finally {
                                     bmp.recycle()
@@ -114,9 +117,15 @@ internal class PhotoQuizFlow(
                             }.getOrDefault("").trim()
                             Log.i(TAG, "photoAsk: OCR done in ${System.currentTimeMillis() - tOcr}ms -> ${text.take(50)}")
                             if (text.isEmpty()) {
-                                Log.w(TAG, "photoAsk: OCR result empty, abort")
+                                // 区分降级原因：设备不支持 native / 模型未就绪（下载失败）/ 确实没识别到文字
+                                val stageRes = when {
+                                    LocalOcr.nativeUnavailable -> R.string.chat_ocr_native_unavailable
+                                    LocalOcr.modelsUnavailable -> R.string.chat_ocr_model_unavailable
+                                    else -> R.string.chat_ocr_empty
+                                }
+                                Log.w(TAG, "photoAsk: OCR result empty, abort (nativeUnavailable=${LocalOcr.nativeUnavailable}, modelsUnavailable=${LocalOcr.modelsUnavailable})")
                                 inProgress = false
-                                mainHandler.post { onStage(R.string.chat_ocr_empty) }
+                                mainHandler.post { onStage(stageRes) }
                                 return@Thread
                             }
                             // 3) 把识别出的文字回调给 UI（作为「用户消息」气泡展示）

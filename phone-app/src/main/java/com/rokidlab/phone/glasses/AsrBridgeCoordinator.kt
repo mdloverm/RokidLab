@@ -11,6 +11,7 @@ import com.rokid.cxr.link.CXRLink
 import com.rokidlab.phone.ai.MusicPlayerController
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.util.LogCollector
+import com.rokidlab.phone.util.namedThread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -314,7 +315,7 @@ internal class AsrBridgeCoordinator(
                     val payload = text.substring(TOOL_CALL_PREFIX.length)
                     Log.i(TAG, "AIUI tool call via push channel: ${payload.take(160)}")
                     // 工具可能走外网耗时数秒，切后台线程，避免阻塞 RFCOMM 读线程
-                    Thread { onToolCall(payload) }.apply { isDaemon = true; start() }
+                    namedThread("asr-tool-call", daemon = true, start = true) { onToolCall(payload) }
                     return@AsrPushClient
                 }
                 // 用户关闭助手标记（眼镜端双击退出对话窗口时推送，新版）：

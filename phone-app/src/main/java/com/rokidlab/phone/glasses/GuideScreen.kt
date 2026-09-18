@@ -872,7 +872,8 @@ private fun ConfigureWifiStep(
             }
         } else {
             // === 已选网络，输入密码 ===
-            val ssid = selectedSsid!!
+            val ssid = selectedSsid
+            requireNotNull(ssid) { "selectedSsid is null in password branch" }
 
             if (ssid.isNotEmpty()) {
                 // 来自扫描列表
@@ -974,7 +975,8 @@ private fun ConfigureWifiStep(
             Spacer(Modifier.height(8.dp))
 
             // 错误提示
-            if (errorMessage != null) {
+            val errorText = errorMessage
+            if (errorText != null) {
                 Box(
                     modifier = Modifier.fillMaxWidth()
                         .background(BrewRed.copy(alpha = 0.1f), shape = RoundedCornerShape(8.dp))
@@ -988,7 +990,7 @@ private fun ConfigureWifiStep(
                             modifier = Modifier.padding(end = 8.dp),
                         )
                         Text(
-                            errorMessage!!,
+                            errorText,
                             color = BrewRed,
                             fontSize = 13.sp,
                         )

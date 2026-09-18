@@ -172,8 +172,9 @@ internal class RokidLinkController(private val activity: MainActivity) {
                                 activity.log(activity.getString(R.string.log_rokidlink_installed))
                                 Toast.makeText(activity, activity.getString(R.string.toast_rokidlink_installed), Toast.LENGTH_SHORT).show()
                             } else {
-                                activity.settingsReinstallError = activity.getString(R.string.log_rokidlink_install_failed)
-                                activity.log(activity.settingsReinstallError!!)
+                                val reinstallError = activity.getString(R.string.log_rokidlink_install_failed)
+                                activity.settingsReinstallError = reinstallError
+                                activity.log(reinstallError)
                                 Toast.makeText(activity, activity.getString(R.string.toast_rokidlink_install_failed), Toast.LENGTH_SHORT).show()
                             }
                             onResult?.invoke(installed)
@@ -184,8 +185,9 @@ internal class RokidLinkController(private val activity: MainActivity) {
                     // 本块已跑在 IO 线程：Toast / 弹窗 / Compose 状态写必须回主线程
                     activity.runOnUiThread {
                         onResult?.invoke(false)
-                        activity.settingsReinstallError = activity.getString(R.string.install_failed_simple, e.message)
-                        activity.log(activity.settingsReinstallError!!)
+                        val reinstallError = activity.getString(R.string.install_failed_simple, e.message)
+                        activity.settingsReinstallError = reinstallError
+                        activity.log(reinstallError)
                         Toast.makeText(activity, activity.getString(R.string.install_failed_simple, e.message), Toast.LENGTH_LONG).show()
                         activity.screenMirrorState = activity.screenMirrorState.copy(isInstallingRokidLink = false)
                         activity.phoneMirrorState = activity.phoneMirrorState.copy(isInstallingRokidLink = false)

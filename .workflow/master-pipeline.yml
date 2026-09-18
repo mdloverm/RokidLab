@@ -1,0 +1,43 @@
+# Gitee Go 流水线配置（学习参考性质）
+# 触发条件：master 分支 push
+# 环境：JDK 17
+# 任务：执行 phone-app 与 RokidLink 两个模块的 Debug 单元测试
+#
+# 注意：本仓库（RokidLab）根目录虽有 gradlew/gradlew.bat wrapper 脚本，
+# 但 Gradle 构建入口（settings.gradle.kts / 根 build.gradle.kts）位于外层
+# 壳仓库 d:\rokidapp，本仓库只是其中的子项目（模块路径 :cxrl:RokidLab:*）。
+# 因此下面的 ./gradlew 命令需在壳仓库根目录运行，或在 CI 中 checkout 整个
+# 壳仓库后执行；若仅 checkout 本仓库，需调整路径或在外层壳根执行。
+# 参考：https://gitee.com/help/articles/4348
+
+version: '1.0'
+name: master-pipeline
+displayName: RokidLab 单元测试
+
+triggers:
+  push:
+    - matchType: PRECISE
+      branch: master
+
+stages:
+  - name: unit-test
+    displayName: 单元测试
+    strategy: NATIVE
+    fp: jdk-17
+    steps:
+      - step: run@shell
+        name: run-unit-tests
+        displayName: 执行 Debug 单元测试
+        commands:
+          # 在外层壳仓库根目录执行（见文件头注释）
+          - ./gradlew --no-daemon :cxrl:RokidLab:phone-app:testDebugUnitTest
+          - ./gradlew --no-daemon :cxrl:RokidLab:RokidLink:testDebugUnitTest
+        # 可选：缓存 Gradle 依赖与 wrapper 分发以加速后续构建
+        caches:
+          - ~/.gradle/caches
+          - ~/.gradle/wrapper
+        artifacts:
+          - name: test-reports
+            path:
+              - cxrl/RokidLab/phone-app/build/test-results
+              - cxrl/RokidLab/RokidLink/build/test-results

@@ -2,6 +2,7 @@ package com.rokidlab.phone.ai
 
 import android.content.Context
 import android.util.Log
+import com.rokidlab.phone.util.namedThread
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -133,7 +134,7 @@ object AiuiAppRegistry {
      * 不影响启动（该 agent 已无法从列表/语音打开，眼镜端残留文件仅占空间）。
      */
     fun purgeObsoleteFiles(context: Context) {
-        Thread {
+        namedThread("aiui-registry-io", start = true) {
             PURGED_AGENT_IDS.forEach { id ->
                 runCatching { AiuiProject.packageFile(context, id).takeIf { it.isFile }?.delete() }
                     .onSuccess { Log.i(TAG, "purged local package: $id.aix") }
@@ -143,7 +144,7 @@ object AiuiAppRegistry {
                     else Log.i(TAG, "glasses purge skipped ($id): $err")
                 }
             }
-        }.start()
+        }
     }
 
     private fun persist(context: Context, records: List<AiuiAppRecord>) {

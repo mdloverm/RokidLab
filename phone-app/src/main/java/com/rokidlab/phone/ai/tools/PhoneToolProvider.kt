@@ -13,10 +13,13 @@ import com.rokidlab.phone.ai.PhoneTools
 import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.ai.WeatherTools
 import com.rokidlab.phone.ai.WebTools
+import com.rokidlab.phone.R
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.adb.ui.TimerAction
 import com.rokidlab.phone.adb.ui.TimerSchedule
 import com.rokidlab.phone.adb.ui.TimerTask
+import com.rokidlab.phone.permission.AppPermission
+import com.rokidlab.phone.permission.PermissionBridge
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -47,12 +50,13 @@ internal object PhoneToolProvider : ToolProvider {
             "search_contacts" -> {
                 val name = args.optString("name").trim()
                 if (name.isEmpty()) return "请提供要查找的联系人姓名"
-                if (androidx.core.content.ContextCompat.checkSelfPermission(
-                        context, android.Manifest.permission.READ_CONTACTS
-                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
-                ) {
-                    return "需要通讯录权限：请打开手机「设置 → 应用 → RokidLab → 权限」，开启「通讯录」后重试"
-                }
+                // 缺权限不再只回一句"请去设置里开"：统一交给 PermissionBridge 自动拉起系统授权界面
+                // （前台直接弹窗；后台有悬浮窗也能拉起；都不可用时退通知栏提醒并如实回报）
+                PermissionBridge.ensure(
+                    context,
+                    context.getString(R.string.permission_reason_contacts),
+                    AppPermission.CONTACTS,
+                )?.let { return it }
                 val hits = PhoneTools.searchContacts(context, name)
                 if (hits.isEmpty()) {
                     "通讯录中没有找到「$name」"

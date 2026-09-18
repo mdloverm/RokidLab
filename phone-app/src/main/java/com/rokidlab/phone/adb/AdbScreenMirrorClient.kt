@@ -614,7 +614,7 @@ class AdbScreenMirrorClient(
     ) {
         isRunning = true
         startTouchThread()
-        Thread {
+        namedThread("scrcpy-audio", start = true) {
             try {
                 continuousStreamId = localId.getAndIncrement()
                 val dest = "shell:while true; do screencap -p; done\u0000"
@@ -754,7 +754,7 @@ class AdbScreenMirrorClient(
             } catch (e: Exception) {
                 Log.e(TAG, "Continuous stream start failed: ${e.message}")
             }
-        }.start()
+        }
     }
 
     fun sendTap(x: Int, y: Int) {
