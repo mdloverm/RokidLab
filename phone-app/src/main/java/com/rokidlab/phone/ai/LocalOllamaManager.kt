@@ -302,7 +302,96 @@ object LocalOllamaManager {
         val supportsThinking: Boolean get() = capabilities.contains("thinking")
     }
 
-    /** 思考能力缓存：listModels() 时写入；供对话层免查询快速判断模型能否传 think 参数 */
+    /**
+     * 模型**自报**能力（本地 Ollama 的权威答案，见 `llm` 接缝的 [com.rokidlab.phone.ai.llm.ModelCapabilities]）。
+     *
+     * 为什么本地模型不需要"探测"就有准确结论：Ollama 从 0.5 起在 `/api/tags`、`/api/show`
+     * 里直接返回 `capabilities`（`tools` / `vision` / `thinking`），并且 `/api/show` 的
+     * `model_info.<arch>.context_length` 给出**真实上下文窗口**。
+     * 这两样对我们都是免费且准确的 —— 比发一次真实推理请求去试探（本地可能是几 GB 模型加载）
+     * 便宜得多，所以本地端点优先信自报、不必探测。
+     */
+    data class OllamaCapabilities(
+        /** 原始能力表；**为空 = 服务端没给**（旧版 Ollama），不是"没有能力" */
+        val capabilities: List<String>,
+        /** 真实上下文窗口（token）；0 = 没读到（旧版没有 model_info） */
+        val contextLength: Int = 0,
+    ) {
+        val supportsTools: Boolean get() = capabilities.contains("tools")
+        val supportsVision: Boolean get() = capabilities.contains("vision")
+    }
+
+    /** 能力缓存：`listModels()` / [refreshCapabilities] 时写入；供上层免网络、可在主线程读取 */
+    private val capsCache = mutableMapOf<String, OllamaCapabilities>()
+
+    /**
+     * 读**已缓存**的自报能力（**绝不发网络请求**，因此可在主线程调用）。
+     *
+     * 缓存为空说明本次进程还没列过模型 / 没显式刷新过 —— 调用方应回落到内置模型表，
+     * 而不是在这里等一个 HTTP 往返：本方法会被设置页的 Compose 重组链路上调用。
+     */
+    fun cachedCapabilitiesOf(model: String): OllamaCapabilities? = capsCache[model]
+
+    /**
+     * 主动拉取某个模型的自报能力（POST /api/show），成功则写入缓存。
+     *
+     * 阻塞方法，须在 IO 线程调用。服务未启动/版本过旧/网络失败一律返回 null
+     * （调用方回落内置表）—— 拉不到能力信息不该让任何功能失败。
+     */
+    fun refreshCapabilities(model: String): OllamaCapabilities? {
+        if (model.isBlank()) return null
+        return runCatching {
+            val body = HttpClient.postString(
+                "$OLLAMA_BASE/api/show",
+                body = JSONObject().put("model", model).toString(),
+                readTimeout = 5000,
+            )
+            val json = JSONObject(body)
+            val capsArr = json.optJSONArray("capabilities")
+            val caps = if (capsArr == null) emptyList()
+            else (0 until capsArr.length()).map { capsArr.optString(it) }.filter { it.isNotBlank() }
+            val ctx = parseContextLength(json)
+            val info = OllamaCapabilities(caps, ctx)
+            capsCache[model] = info
+            Log.i(TAG, "refreshCapabilities($model): caps=$caps ctx=$ctx")
+            info
+        }.onFailure { Log.d(TAG, "refreshCapabilities($model) failed: ${it.message}") }
+            .getOrNull()
+    }
+
+    /**
+     * 从 `/api/show` 响应里取上下文窗口。
+     *
+     * 两个来源按可信度排序：`model_info.<arch>.context_length`（新版的准确值）→
+     * `parameters` 文本里的 `num_ctx N`（用户/模型自带的默认值）。
+     * 都没有就返回 0 = 未知 —— **不要瞎填一个默认值**：这个数字要驱动会话压缩阈值，
+     * 猜大了会让上下文真的溢出（整轮请求 400，用户直接拿不到回复）。
+     */
+    private fun parseContextLength(showJson: JSONObject): Int {
+        val info = showJson.optJSONObject("model_info")
+        if (info != null) {
+            val keys = info.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                if (k.endsWith(".context_length") || k == "context_length") {
+                    val v = info.optInt(k, 0)
+                    if (v > 0) return v
+                }
+            }
+        }
+        val params = showJson.optString("parameters")
+        if (params.isNotBlank()) {
+            val m = Regex("num_ctx\\s+(\\d+)").find(params)
+            val v = m?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+            if (v > 0) return v
+        }
+        return 0
+    }
+
+    /**
+     * 思考能力缓存：listModels() 时写入；供对话层免查询快速判断模型能否传 think 参数。
+     * （与 [capsCache] 同源，[supportsThinking] 只是它的一个便捷视图）
+     */
     private val thinkingCache = mutableMapOf<String, Boolean>()
 
     /**
@@ -337,6 +426,9 @@ object LocalOllamaManager {
                 capabilities = capList,
             )
             thinkingCache[model.name] = model.supportsThinking
+            // 顺手把自报能力灌进缓存：能力表在 tags 里就有，不必再为每个模型发一次 /api/show。
+            // 上下文窗口这里拿不到（tags 不返回 model_info），留给「检测」时用 /api/show 补。
+            capsCache[model.name] = OllamaCapabilities(capList, contextLength = 0)
             out.add(model)
         }
         return out.sortedBy { it.name }

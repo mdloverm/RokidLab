@@ -23,6 +23,16 @@ class HttpStatusException(
 ) : java.io.IOException("HTTP $code: ${body.take(400)}")
 
 /**
+ * 一次 POST 的原始结果（**非 2xx 不抛异常**），见 [HttpClient.postStringRaw]。
+ *
+ * 与 [HttpStatusException] 的分工：这里给的是"想自己看状态码和正文"的正常返回值，
+ * 那里给的是"服务端拒绝了，我处理不了，往上抛"的异常。
+ */
+data class HttpRawResult(val code: Int, val body: String) {
+    val ok: Boolean get() = code in 200..299
+}
+
+/**
  * 统一 HTTP 网络请求工具：OkHttp 连接池实现（替代 HttpURLConnection）。
  *
  * - 连接池复用：商店批量图标下载 / AI 多轮对话等高频同主机请求免去每次 TCP+TLS 重握手
@@ -99,6 +109,34 @@ object HttpClient {
                 throw java.io.IOException("HTTP ${response.code}: $text")
             }
             return text
+        }
+    }
+
+    /**
+     * 发送 POST 但**不把非 2xx 当异常**：把状态码与响应正文原样交还调用方。
+     *
+     * 存在的理由（[postString] 做不到的事）：有调用方需要**按状态码 + 错误正文自行判定**，
+     * 而不是"失败了"这一个事实。典型是模型能力探测 —— 同为 400，
+     * 「服务端说这模型不吃图」和「密钥错了 / 参数不合法」必须区别对待：
+     * 前者可以下"不支持图像"的结论，后者不能（否则用户换个 Wi-Fi 就平白丢一个能力）。
+     *
+     * 为什么不复用 [postString] 再解析 `IOException.message`：那个 message 是
+     * `"HTTP 400: <body>"` 的拼接串，正文里若出现换行/冒号就会解析错位，
+     * 而且把异常当数据流是脆的。这里直接给结构化结果。
+     *
+     * @return [HttpRawResult]：`ok` 表示 2xx；网络层异常仍照常抛出（那是真失败，不是"服务端拒绝"）
+     */
+    fun postStringRaw(
+        url: String,
+        body: String,
+        connectTimeout: Int = 10000,
+        readTimeout: Int = 60000,
+        headers: Map<String, String> = emptyMap(),
+    ): HttpRawResult {
+        val request = buildRequest(url, "POST", headers, body)
+        clientFor(connectTimeout, readTimeout).newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            return HttpRawResult(response.code, text)
         }
     }
 

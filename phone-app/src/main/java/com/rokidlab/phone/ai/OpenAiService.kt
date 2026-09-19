@@ -55,18 +55,35 @@ class OpenAiService(
         /**
          * 该模型是否支持用 `thinking: {"type":"disabled"}` 关闭思考。
          *
-         * 只能对 DeepSeek 系发送（该字段是 DeepSeek 专有，发给 OpenAI 兼容端点会 400），
-         * 且必须排除推理专用模型 —— `deepseek-reasoner` / `deepseek-r1` 设计上不支持关闭思考，
-         * 发了会被服务端拒绝（宁可少关也不要把请求打挂）。
+         * ⚠️ 规则本体已迁到 [com.rokidlab.phone.ai.llm.ModelPresets.supportsThinkingDisabled]
+         * （2026-09-19 `llm` 接缝化）：这本来是**传输层里硬编码的模型名判断**，
+         * 而同一个结论 `ModelCapabilities.supportsThinkingDisable` 也要用（设置页展示、
+         * 能力快照），两处各写一份迟早漂移 —— 现在只有一份，这里只是转发。
          *
-         * 历史坑：曾只认名字里带 `v4` / `v3.2` 的模型，`deepseek-flash` 不匹配 ——
-         * 用户在聊天设置里关掉「长思考」后，请求其实没带关思考字段，服务端照样开思考，
-         * 表现为「开关关了却仍被 reasoning 吃光预算」（2026-09-14 真机日志复现）。
+         * 保留这个私有转发而不是直接内联调用，是为了让两条请求路径
+         * （流式 [streamOnce] / 非流式 [chatTurnOnce]）的调用点读起来不变。
          */
-        private fun supportsThinkingDisabled(model: String): Boolean {
-            val m = model.lowercase()
-            if (!m.contains("deepseek")) return false
-            return !m.contains("reasoner") && !m.contains("-r1") && !m.contains("r1-")
+        private fun supportsThinkingDisabled(model: String): Boolean =
+            com.rokidlab.phone.ai.llm.ModelPresets.supportsThinkingDisabled(model)
+
+        /**
+         * 已知**不接受** `stream_options.include_usage` 的端点（host）。
+         *
+         * 为什么要记：这个字段是拿真实 token 用量的唯一手段（OpenAI 协议要求显式开），
+         * 但它对服务端是**可选**的 —— 一个"严格校验未知字段"的兼容实现会因此整请求 400，
+         * 而 400 的后果是**整轮对话失败**（不是"少个数字"）。所以策略是：
+         * 先带上试一次，被拒就撤掉重试并把这个端点记下来，之后不再带。
+         *
+         * 进程内缓存即可：它只影响"要不要多付一次 400 往返"，丢了大不了重探一次，
+         * 不落盘也就不会出现"换了个服务端却还带着旧结论"这类脏数据。
+         */
+        private val streamUsageUnsupported: MutableSet<String> =
+            java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+        /** 端点标识（host 拿不到时退化成去掉尾斜杠的 baseUrl） */
+        private fun endpointHost(baseUrl: String): String {
+            val base = baseUrl.trimEnd('/')
+            return runCatching { java.net.URI(base).host.orEmpty() }.getOrDefault("").ifBlank { base }
         }
 
         /**
@@ -95,8 +112,18 @@ class OpenAiService(
                 b.contains("insufficient balance") -> "AI 账户余额不足，请先充值后再试"
                 b.contains("invalid schema") ->
                     "AI 工具声明不合法，属本机异常，请到「开发者模式」导出日志反馈"
-                b.contains("context length") || b.contains("too long") || b.contains("max_tokens") ->
-                    "这次内容太长了，换个短一点的问题再试"
+                // 输入侧超长：**与下一支"输出被截断"必须分开**。两者的用户动作完全不同 ——
+                // 前者要"给的内容少一点／开新对话"，后者要"让 AI 少输出一点／把需求拆小"。
+                // 改造前把三类关键词混成一句「这次内容太长了，换个短一点的问题再试」，
+                // 对后者是无意义建议（压缩历史对输出上限毫无帮助，见 ContextOverflow）。
+                // 措辞里点明"压缩后仍放不下"，是因为走到这条提示说明自动恢复也失败了。
+                b.contains("context length") || b.contains("context_length") ||
+                    b.contains("context window") || b.contains("reduce the length") ||
+                    b.contains("too many tokens") || b.contains("too long") ->
+                    "这次内容太长了，压缩历史后仍放不下。请说得短一点，或开个新对话再问"
+                // 输出侧被单轮上限截断（max_tokens）：换更长的历史没用，该拆的是"要它产出的东西"
+                b.contains("max_tokens") ->
+                    "这次要输出的内容超出了单轮上限，请把需求拆小一点再试"
                 b.contains("authentication") || b.contains("invalid api key") ->
                     "AI 密钥无效或已过期，请在乐奇聊天设置里重新填写接口密钥"
                 b.contains("model not exist") || b.contains("model_not_found") ||
@@ -160,6 +187,16 @@ class OpenAiService(
         skills: String? = null,
         budget: String? = null,
         localMode: Boolean = false,
+        /**
+         * **本会话**的附加提示词（用户在会话设置里写的，见 `ChatSessionMeta.systemPrompt`）。
+         *
+         * ⚠️ 是**追加**而不是替换（刻意如此）：全局那段人设与工具准则里装着
+         * "不能编造工具结果""多步任务先 update_plan"这些**功能正确性**规则，
+         * 让一段用户随手写的文字把它们顶掉，代价是模型开始乱来 ——
+         * 而用户想要的多半只是"用中文回答""别啰嗦"这类风格约束。
+         * 因此它放在最后、并明说优先级更高，只覆盖风格与偏好。
+         */
+        sessionPrompt: String? = null,
     ): JSONObject {
         val systemMsg = JSONObject()
         systemMsg.put("role", "system")
@@ -184,6 +221,9 @@ class OpenAiService(
                 append("\n- 结合对话历史理解上下文：用户说「再来一首」「它是什么意思」时，指代的是之前聊到的内容")
                 append("\n- 当用户表达了需要长期记住的个人事实或偏好（如称呼、喜欢的歌手、常用应用、作息习惯）时，调用 manage_memory 工具记住，以便后续对话延续")
                 append("\n- 用户提到「以前聊过的」「上次那个」「我之前问你的」但当前上下文里找不到时，调用 search_past_conversations 检索历史对话，不要反问「我们聊过吗」")
+                append("\n- 需要「过程」而不只是结论时（「上次那个报错最后怎么解决的」「你上一轮到底做了什么」「那个任务卡在哪一步」「我们一共有几个对话」）：先用 list_sessions 找会话，再用 read_session 按发生顺序读事件流，或用 session_trace 看某一轮的工具调用链。这类问题问的是调过什么工具、返回了什么、哪一步失败的 —— 那在普通聊天记录里查不到")
+                append("\n- 引用外部信息时必须**注明出处**：联网结果给出链接（结果里带的「链接」字段），知识库资料给出文档名（结果里带的「来源」字段）；资料里给了抓取/检索时间的要一并保留。**绝不**把自己推断或回忆出来的内容说成「资料里写的」—— 用户核对不到的东西，宁可说「我不确定」")
+                append("\n- 需要翻好几份资料才能回答的问题（对比评测、把多篇文章的要点整理出来、查一个你也不确定的事实）：用 research_subtask 派给**只读子助手**去查，它会把带来源的结论交回来。这比你自己一轮一轮搜更省轮次，也不会让大段网页正文塞满你的上下文。⚠️ 它只有只读能力（做不了设备操作/写文件），也看不到你和用户的对话 —— question 要写全")
                 append("\n- 用户想要「每天/每周固定时间由你主动做点什么再告诉他」（如「每天早上播报天气和日程」）时，不要用 manage_timer 的 create（那只会念一句写死的话），改用 schedule_agent_task 创建自主任务；创建时如实说明该任务执行时只使用只读能力（查资料），不会自动拨号、安装或改设置")
                 append("\n- 当用户让你写代码、生成页面/应用或输出项目文件时：先用 save_code_file 工具把每个文件写入手机「下载/项目名/」目录（一次一个文件、逐个调用），生成每个文件前告知「正在生成 文件名…」，成功后告知「文件名 生成成功」；眼镜端最终只做简短结论播报（如「已生成 4 个文件，保存在下载目录的 xxx 项目」），严禁把大段代码原文直接当作回复发给用户")
             }
@@ -216,6 +256,13 @@ class OpenAiService(
             if (!instruction.isNullOrBlank()) {
                 append("\n\n请遵守以下答题要求：\n")
                 append(instruction)
+            }
+            // 会话附加要求放**最后**：位置本身就是优先级信号（越靠后越贴近本次请求），
+            // 而且它明说了"优先遵守"——否则模型会把它当成与人设并列的一段普通说明而忽略。
+            if (!sessionPrompt.isNullOrBlank()) {
+                append("\n\n【本会话的附加要求】用户为这次对话单独指定，**优先遵守**（仅覆盖表达与偏好，"
+                    + "不得违反上面的工具使用准则）：\n")
+                append(sessionPrompt.trim())
             }
         }
         systemMsg.put("content", systemContent)
@@ -327,10 +374,17 @@ class OpenAiService(
         onReasoning: ((String) -> Unit)? = null,
     ): ChatTurn {
         var lastError: Exception? = null
-        repeat(retryAttempts) { attempt ->
+        // 本端点是否带上 stream_options.include_usage（唯一能拿到真实 token 用量的手段）；
+        // 被这个端点拒过就不再带（见 streamUsageUnsupported 的说明）
+        var usageOptIn = endpointHost(baseUrl) !in streamUsageUnsupported
+        var attempt = 0
+        while (attempt < retryAttempts) {
             val accumulator = SseStreamAccumulator(onDelta, onReasoning)
             try {
-                return streamOnce(messages, tools, accumulator, isCancelled, readTimeout ?: readTimeoutMs)
+                return streamOnce(
+                    messages, tools, accumulator, isCancelled,
+                    readTimeout ?: readTimeoutMs, usageOptIn,
+                )
             } catch (e: Exception) {
                 lastError = e
                 // 服务端明确拒绝（4xx，除 408/429 这类「稍后再试」语义）→ 重试必然同样失败：
@@ -338,6 +392,20 @@ class OpenAiService(
                 // 直接抛出，让上层拿到状态码给出可行动的提示。
                 val hopeless = e is com.rokidlab.phone.util.HttpStatusException &&
                     e.code in 400..499 && e.code != 408 && e.code != 429
+                // ★ 可选字段（stream_options）被拒 ≠ 这轮对话失败：撤掉它**原地重来一次**
+                //   （不计入重试次数），并记住这个端点以后不再带。
+                //   没有这条兜底，一个"严格校验未知字段"的兼容实现就会让整轮对话 400 ——
+                //   那正是「AI 突然不说话、日志里啥异常也没有」最典型的成因。
+                if (hopeless && usageOptIn && !accumulator.hasEmittedContent()) {
+                    streamUsageUnsupported.add(endpointHost(baseUrl))
+                    usageOptIn = false
+                    Log.w(
+                        TAG,
+                        "chatTurnStream: 端点拒绝 stream_options.include_usage" +
+                            "（${e.message}）—— 撤掉该字段重试同一轮（不计重试次数，之后不再带）",
+                    )
+                    continue
+                }
                 val retryable = !hopeless && attempt < retryAttempts - 1
                 // 重放安全判定：只要还没有任何 content 增量推给 UI，整轮重放无副作用
                 if (retryable && !accumulator.hasEmittedContent()) {
@@ -356,6 +424,7 @@ class OpenAiService(
                             throw e
                         }
                     }
+                    attempt++
                 } else {
                     if (hopeless) {
                         Log.e(TAG, "chatTurnStream: 服务端拒绝，不重试，直接上报 —— ${e.message}")
@@ -377,6 +446,8 @@ class OpenAiService(
         isCancelled: (() -> Boolean)?,
         /** 单次 HTTP 读超时（毫秒）；取值与理由见 [chatTurnStream] 的 readTimeout 参数 */
         timeoutMs: Int,
+        /** 是否附带上 `stream_options.include_usage`（拿真实用量）；见 [streamUsageOptIn] */
+        includeStreamUsage: Boolean,
     ): ChatTurn {
         val base = baseUrl.trimEnd('/')
         val endpoint = when {
@@ -396,6 +467,10 @@ class OpenAiService(
             put("max_tokens", if (thinkingEnabled) MAX_TOKENS_THINKING else MAX_TOKENS_DEFAULT)
             put("temperature", 0.7)
             if (!tools.isNullOrEmpty()) put("tools", JSONArray(tools))
+            // 真实 token 用量：OpenAI 协议要求**显式开**这个开关，流末才会带 usage。
+            // ⚠️ 它是个可选字段，少数兼容实现会因为它整请求 400 —— 对此有兜底：
+            //    上层命中 4xx 就撤掉它重试一次，并把这个端点记下来（见 streamUsageOptIn）。
+            if (includeStreamUsage) put("stream_options", JSONObject().put("include_usage", true))
             // 关闭思考：不附加关思考字段时，服务端按默认开启思考（reasoning 会吞掉输出预算）
             if (!thinkingEnabled && supportsThinkingDisabled(model)) {
                 put("thinking", JSONObject().put("type", "disabled"))
@@ -438,7 +513,8 @@ class OpenAiService(
         Log.i(
             TAG,
             "chatTurnStream: toolCalls=${turn.toolCalls.size} content=${turn.content?.take(60)} " +
-                "finish=${accumulator.finishReason ?: "none"} reasoning=${accumulator.reasoningChars}",
+                "finish=${accumulator.finishReason ?: "none"} reasoning=${accumulator.reasoningChars} " +
+                "usage=${turn.usage}",
         )
         return turn
     }
@@ -518,9 +594,20 @@ class OpenAiService(
                 )
             }
         }
-        Log.i(TAG, "chatTurn: toolCalls=${toolCalls.size} content=${content?.take(60)} reasoning=${reasoning?.length ?: 0}")
+        val usage = parseTokenUsage(json)
+        Log.i(
+            TAG,
+            "chatTurn: toolCalls=${toolCalls.size} content=${content?.take(60)} " +
+                "reasoning=${reasoning?.length ?: 0} usage=$usage",
+        )
         // finish_reason 与流式路径对齐（length=被 max_tokens 截断），否则本路径的截断无从诊断
-        return ChatTurn(content, toolCalls, reasoning, choice.optString("finish_reason").ifBlank { null })
+        return ChatTurn(
+            content,
+            toolCalls,
+            reasoning,
+            choice.optString("finish_reason").ifBlank { null },
+            usage,
+        )
     }
 
     /**
@@ -570,6 +657,47 @@ data class ToolCallInfo(
     val arguments: String,   // 工具参数（JSON 字符串）
 )
 
+/**
+ * 一次模型调用服务端返回的**真实** token 用量。
+ *
+ * ★ 存在的理由：改造前这个字段被直接丢掉，于是"这次回答花了多少"只能靠字符数猜
+ *   （`CompactionPolicy` 里那个 1.6 字符/token 的经验系数就是没有真实数字时的替代品）。
+ *   有了它，「成本可观测」才是数字而不是修辞。
+ *
+ * ⚠️ 全部可空 = **服务端没给**。不要兜成 0：面板上"0 token"是错误信息，比"未知"更糟。
+ *   部分兼容实现会忽略流式请求里的 `stream_options.include_usage`，这时确实拿不到。
+ */
+data class TokenUsage(
+    /** 输入（prompt）token。多轮工具循环里它每轮都会重复计入 —— 那正是成本的大头 */
+    val promptTokens: Int,
+    /** 输出（completion）token，含 reasoning 与被 max_tokens 截断前的实际产出 */
+    val completionTokens: Int,
+    val totalTokens: Int = promptTokens + completionTokens,
+)
+
+/**
+ * 从响应 JSON 里读 `usage`。
+ *
+ * 必须**同时被流式与非流式两条路径**使用：OpenAI 协议在流式下把 usage 放在**最后一个**
+ * 独立分片里（`choices` 为空数组、顶层带 `usage`），非流式则与 `choices` 同级 ——
+ * 形态不同但字段名一致，所以解析口径抽在这里一份。
+ *
+ * 判定规则：`prompt_tokens` 与 `completion_tokens` **一个都没有** → 返回 null（服务端没给）。
+ * 刻意不兜成 0：面板上"输入 0 / 输出 0"是错误信息，比"未知"更糟。
+ * 只给 `total_tokens` 的兼容实现同样返回 null —— 我们报不了"输入/输出各多少"，
+ * 与其编一个，不如如实说不知道。
+ */
+internal fun parseTokenUsage(json: JSONObject?): TokenUsage? {
+    val u = json?.optJSONObject("usage") ?: return null
+    val hasPrompt = u.has("prompt_tokens")
+    val hasCompletion = u.has("completion_tokens")
+    if (!hasPrompt && !hasCompletion) return null
+    val prompt = if (hasPrompt) u.optInt("prompt_tokens") else 0
+    val completion = if (hasCompletion) u.optInt("completion_tokens") else 0
+    val total = if (u.has("total_tokens")) u.optInt("total_tokens") else prompt + completion
+    return TokenUsage(prompt, completion, total)
+}
+
 /** 一次对话轮次的结果：要么是纯文本回复（[content]），要么请求调用工具（[toolCalls]） */
 data class ChatTurn(
     val content: String?,
@@ -581,6 +709,8 @@ data class ChatTurn(
      *  stop=正常结束；null=服务端未给出。调用方据此把「被截断」如实告知模型，
      *  避免它以为是格式问题而原样重试同样大的内容。 */
     val finishReason: String? = null,
+    /** 服务端返回的真实 token 用量；null = 服务端没给（见 [TokenUsage]） */
+    val usage: TokenUsage? = null,
 )
 
 /**
@@ -611,6 +741,10 @@ internal class SseStreamAccumulator(
     var finishReason: String? = null
         private set
 
+    /** 服务端返回的真实用量（带 `stream_options.include_usage` 时在独立末包里） */
+    var usage: TokenUsage? = null
+        private set
+
     /** 已收到 [DONE] 或已终止 */
     fun hasFinished(): Boolean = finished
 
@@ -637,6 +771,10 @@ internal class SseStreamAccumulator(
             return false
         }
         val json = try { JSONObject(payload) } catch (_: Exception) { return true }
+        // ★ 必须放在"空 choices 直接跳过"**之前**：带 stream_options.include_usage 时，
+        //   服务端把 usage 放在一个**独立末包**里（该包 choices 是空数组），
+        //   照原逻辑先 `if (choices.length() == 0) return true` 就永远读不到它。
+        parseTokenUsage(json)?.let { usage = it }
         val choices = json.optJSONArray("choices") ?: return true
         if (choices.length() == 0) return true
         val choice = choices.getJSONObject(0)
@@ -694,6 +832,7 @@ internal class SseStreamAccumulator(
             toolCalls,
             reasoning.toString().ifBlank { null },
             finishReason,
+            usage,
         )
     }
 }

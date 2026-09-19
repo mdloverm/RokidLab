@@ -1445,7 +1445,7 @@ lifecycleScope.launch {
 
 **Lab 工具桥 + Agent 核心升级 + ASR 加固 + 构建迁移**
 
-- **AIUI 工具桥**：眼镜端 AIUI 页面可回调手机端 **33 个工具**（`ToolGateway` 统一入口，域全开、仅禁 `open_aiui_app` 防自指递归；结果截断 8000 字符、15s 超时）
+- **AIUI 工具桥**：眼镜端 AIUI 页面可回调手机端 **34 个工具**（`ToolGateway` 统一入口，域全开，仅禁 5 个：`open_aiui_app`（防自指递归）、会话查询三件套 `list_sessions`/`read_session`/`session_trace`（页面是第三方制品，不该能批量枚举并导出用户的全部会话）、`research_subtask`（一次 callTool 会触发若干次模型调用，且页面桥没有取消通道）；结果截断 8000 字符、15s 超时）
 - **启动参数下发**：`open_aiui_app` 的 `params` 随 open 命令一并下发；页面侧需写 `globalThis.Lab.callTool`
 - **Agent 核心升级**：长期记忆改 SQLite（FIFO 200 条 / 90 天过期 / 首启迁移旧 JSON），上下文滚动摘要，BM25/2-gram 检索，SSE 重连指数退避
 - **工具策略闸门**：新增 `ToolRisk` 三级风险 + `ToolPolicy`（按来源限流 AIUI 页面 30/min、对话 120/min；确认通道缺失或超时时降级放行）

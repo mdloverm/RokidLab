@@ -2,6 +2,10 @@ package com.rokidlab.phone.ai
 
 import android.content.Context
 import android.util.Log
+import com.rokidlab.phone.ai.approval.ApprovalGate
+import com.rokidlab.phone.ai.approval.PageScope
+import com.rokidlab.phone.ai.approval.ToolDecision
+import com.rokidlab.phone.ai.approval.ToolSource
 import com.rokidlab.phone.util.LogCollector
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
@@ -23,13 +27,15 @@ import java.util.concurrent.atomic.AtomicReference
  * 设计约束（改代码前请先读）：
  * 1. 域白名单按 DOMAIN 继承而非逐工具配置 —— 后期加工具只改 ToolRegistry 一行注册，
  *    网关/协议/JS/skill 全不动。逐工具配会破坏这个性质。
- * 2. 全部域开放（用户 2026-09-09 拍板）。保留 [ALLOWED_DOMAINS] 是为了想收窄时只改一处。
- * 3. [DENY_TOOLS] 只放会造成技术故障的工具（自指递归），不放"危险"工具——
+ * 2. 全部域开放（用户 2026-09-09 拍板）。收窄时只改 [PageScope.ALLOWED_DOMAINS] 一处；
+ *    **准入判定的逻辑与文案也只在 [PageScope]**（本类的 [precheckToolCall] 与审批链共用它）。
+ * 3. 黑名单只放会造成技术故障的工具（自指递归），不放"危险"工具 ——
  *    安全边界由 [isEnabled] 总开关负责，不做逐工具安全判断。
  * 4. 本类是同步阻塞 API，调用方必须在非主线程调用。
  * 5. 带回调号（cbId）的调用按 cbId 幂等：同一 cbId 在窗口内重复到达时，
  *    进行中则挂到同一个 worker 上等结果、已完成则直接回缓存结果，绝不第二次执行工具 ——
  *    超时后页面重试是常态，重复执行会造成重复拨号/重复安装等真实副作用。
+ * 6. 限流与"要不要用户确认"不在这里判断，统一走 [ApprovalGate]（唯一审批入口）。
  */
 object ToolGateway {
 
@@ -88,18 +94,18 @@ object ToolGateway {
 
     /**
      * 页面可调用的工具域：全部开放。
-     * 想收窄时改这里即可，不用动调用逻辑。
+     * 想收窄时改 [PageScope.ALLOWED_DOMAINS] 即可（这里是别名），不用动调用逻辑。
      */
-    val ALLOWED_DOMAINS: Set<String> = ToolRegistry.DOMAIN_ALL
+    val ALLOWED_DOMAINS: Set<String> = PageScope.ALLOWED_DOMAINS
 
     /**
-     * 例外：不开放给页面的工具。
+     * 例外：不开放给页面的工具（别名，唯一产地在 [PageScope.DENY_TOOLS]）。
      *
      * open_aiui_app 会让页面去打开一个 AIUI 应用 —— 页面很可能打开它自己，
      * 形成「启动 → 页面又启动」的自指递归，属于技术故障，不是安全问题。
      * 其余 AIUI 管理工具（install/stop/list）保留开放。
      */
-    private val DENY_TOOLS: Set<String> = setOf("open_aiui_app")
+    private val DENY_TOOLS: Set<String> = PageScope.DENY_TOOLS
 
     /** 工具摘要：下发给页面，也用于让生成方模型知道当前有什么能力 */
     data class ToolBrief(
@@ -179,19 +185,17 @@ object ToolGateway {
         if (toolName.isEmpty()) {
             return Precheck.Reject("empty tool name")
         }
-        if (toolName in denyTools) {
-            return Precheck.Reject("tool '$toolName' is not allowed in AIUI pages")
-        }
-        if (toolName !in knownTools) {
-            return Precheck.Reject("unknown tool: $toolName")
-        }
-        val domain = toolDomain(toolName)
-        if (domain == null) {
-            return Precheck.Reject("unknown tool: $toolName")
-        }
-        if (domain !in allowedDomains) {
-            return Precheck.Reject("domain '$domain' of tool '$toolName' is not allowed in AIUI pages")
-        }
+        // 准入域判定（黑名单 → 未知工具 → 域白名单）：逻辑与文案的唯一产地是 [PageScope]，
+        // 审批链里的 PageScopeGuard 用的是同一份 —— 「页面安全边界」只有一处可改。
+        // 这里保留调用是为了让网关入口仍能挡住非法请求（避免白白跑一次 dedupe/审批）；
+        // 不传 allowedDomains/denyTools 的默认参数时会与审批链完全一致。
+        PageScope.rejectReason(
+            toolName = toolName,
+            knownTools = knownTools,
+            toolDomain = toolDomain,
+            allowedDomains = allowedDomains,
+            denyTools = denyTools,
+        )?.let { return Precheck.Reject(it) }
         // 参数必须是合法 JSON 对象：ToolRegistry.execute 内部直接 JSONObject(arguments)，
         // 传入非法串会在那里抛异常，页面侧只会看到一个无信息的超时。
         val normalizedArgs = try {
@@ -220,7 +224,7 @@ object ToolGateway {
         // 能力发现走同一条通道，页面不必额外学一套协议：
         // 结果就是 listAllowedJson，页面 JSON.parse 后得到 {tools:[{name,description}]}
         // 注意：也必须过截断 —— 这条路径原先在 [awaitResult] 之外提前返回，
-        // 34 个工具的 name+description 在英文长描述下可能超出 RFCOMM 单帧上限（64KB），
+        // 数十个工具的 name+description 在英文长描述下可能超出 RFCOMM 单帧上限（64KB），
         // 帧超限会被 AsrPushServer 静默丢弃，页面只看到超时。
         if (toolName == LIST_TOOLS) {
             return CallResult(true, toolName, result = truncateResult(toolName, listAllowedJson(context)))
@@ -232,7 +236,7 @@ object ToolGateway {
         }
 
         // 幂等闸门必须在风险闸门之前：页面超时重试只是同一次调用的重放，
-        // 若先过 ToolPolicy 会白白再消耗一次 30/min 限流额度（后续正常调用被误拒）。
+        // 若先过 ApprovalGate 会白白再消耗一次 30/min 限流额度（后续正常调用被误拒）。
         val dedupeKey = cbId.trim()
         if (dedupeKey.isNotEmpty()) {
             val now = System.currentTimeMillis()
@@ -245,11 +249,19 @@ object ToolGateway {
             }
         }
 
-        // Phase 4 风险闸门：限流 + EXTERNAL_SIDE_EFFECT 确认（fail-open：无确认通道/超时→降级放行，见 ToolPolicy doc）
-        when (val policy = ToolPolicy.check(ToolPolicy.SOURCE_AIUI_PAGE, toolName, JSONObject(normalizedArgs))) {
-            is ToolPolicy.Decision.Deny ->
-                return CallResult(false, toolName, error = policy.reason)
-            is ToolPolicy.Decision.Allow -> { /* pass */ }
+        // 审批闸门（唯一判定点，见 ApprovalGate）：per-source 限流 + EXTERNAL_SIDE_EFFECT 眼镜端确认。
+        // fail-open：无确认通道 / 眼镜端旧版 / 用户超时未响应 → 降级放行；
+        // 只有用户在眼镜上显式取消才拒绝。
+        //
+        // 页面域/黑名单在上面的 precheck 已经拦过一遍，这里的 PageScopeGuard 会再判一次 ——
+        // 是幂等的纯判定（读内存表），保留它是为了"绕过网关直接调闸门"时策略仍然生效。
+        val decision = ApprovalGate.preExecute(
+            ToolSource.AIUI_PAGE,
+            toolName,
+            JSONObject(normalizedArgs),
+        )
+        if (decision is ToolDecision.Deny) {
+            return CallResult(false, toolName, error = decision.reason)
         }
 
         val appContext = context.applicationContext

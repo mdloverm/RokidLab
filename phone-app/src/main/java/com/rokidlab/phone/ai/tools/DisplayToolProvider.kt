@@ -1,5 +1,8 @@
 package com.rokidlab.phone.ai.tools
 
+import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.ToolRisk
+
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -34,6 +37,28 @@ internal object DisplayToolProvider : ToolProvider {
     private const val TAG = "DisplayToolProvider"
 
     override val toolNames = setOf("show_image")
+
+    override fun tools(): List<ToolEntry> = listOf(
+        ToolEntry(
+            name = "show_image",
+            group = ToolRegistry.DOMAIN_DISPLAY,
+            displayNameRes = R.string.ai_tool_show_image_name,
+            descriptionRes = R.string.ai_tool_show_image_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            statusText = "正在显示图片…",
+            schema = toolSchema(
+                name = "show_image",
+                description = "显示一张图片：默认渲染在手机端对话气泡里；若眼镜已连接，会同时同步到眼镜端悬浮显示（约 12 秒后自动消失）。当用户说“显示图片”“显示封面”“给我看张图”“把刚才那张图发出来”时调用。若用户给了图片链接就传 imageUrl；若用户只说“显示封面”或想看在播歌曲的封面，可以不传 imageUrl，会自动显示当前播放歌曲的封面。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "imageUrl" to mapOf("type" to "string", "description" to "图片的可访问直链（http/https）。用户没给链接时可省略，仅在播放歌曲时会退回显示当前歌曲封面。"),
+                        "caption" to mapOf("type" to "string", "description" to "图片下方的说明文字（可选），如“这是一只小狗”。"),
+                    ),
+                ),
+            ),
+        ),
+    )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
         return when (name) {

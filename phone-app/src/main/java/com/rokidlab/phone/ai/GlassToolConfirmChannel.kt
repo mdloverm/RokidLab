@@ -2,10 +2,10 @@ package com.rokidlab.phone.ai
 
 import android.util.Log
 import com.rokid.cxr.Caps
+import com.rokidlab.phone.ai.approval.ApprovalGate
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import com.rokidlab.phone.glasses.GlassesHandshake
 import com.rokidlab.phone.glasses.LinkProtocol
-import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -19,12 +19,15 @@ import java.util.concurrent.atomic.AtomicLong
  * 上行：[LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT]（caps = [requestId, "yes"/"no"]），
  *   由 CxrLHiRokidSession.registerGlobalCmdListener 回调 [onResult]。
  *
- * 未连接 / 眼镜端旧版（未订阅确认通道）时 → [isAvailable] 为 false，由 ToolPolicy 降级放行；
- * 已发送但 30s 无回执 → [requestConfirmation] 返回 false 且 [wasCancelled] 为 false，
- * ToolPolicy 同样按「超时降级放行」处理（仅眼镜端显式回 "no" 才算用户取消 → 拒绝）。
+ * 未连接 / 眼镜端旧版（未订阅确认通道）时 → [isAvailable] 为 false，由 [ApprovalGate] 降级放行；
+ * 已发送但 30s 无回执 → [confirm] 返回 false 且 [wasCancelled] 为 false，
+ * 闸门同样按「超时降级放行」处理（仅眼镜端显式回 "no" 才算用户取消 → 拒绝）。
  * 本通道**常驻**（见 [global]），会话上线时 [bind]、下线时 [unbind]，只要求眼镜在线即可用。
+ *
+ * ★ 本类只负责**传输**：给用户看的操作摘要在调用时由闸门传入（[confirm] 的 `prompt` 参数），
+ *   不再自己从 args 拼 —— 摘要的唯一产地是工具自己的 `ToolEntry.summarize`。
  */
-class GlassToolConfirmChannel : ToolPolicy.ConfirmationChannel {
+class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
 
     companion object {
         private const val TAG = "ToolConfirm"
@@ -35,8 +38,8 @@ class GlassToolConfirmChannel : ToolPolicy.ConfirmationChannel {
          * 全局唯一通道（常驻）：**动态绑定当前会话**。
          *
          * 旧实现 = 会话实例 + Session.init 注入 / cleanup 置 null。实测踩坑：
-         * `ToolPolicy: audit: tool=call_phone risk=EXTERNAL_SIDE_EFFECT -> ALLOW (downgraded, no confirmation channel)`
-         * （21:04:42，用户已授予电话权限却只能退回拨号盘）——会话生命周期抖动（重连/重建/cleanup）后
+         * `ApprovalGate: audit: source=conversation tool=call_phone risk=EXTERNAL_SIDE_EFFECT -> ALLOW`
+         * （改造前日志 TAG 为 `ToolPolicy`；21:04:42，用户已授予电话权限却只能退回拨号盘）——会话生命周期抖动（重连/重建/cleanup）后
          * 通道就变成了 null。现在通道常驻，只要眼镜会话在线就可用。
          */
         val global: GlassToolConfirmChannel by lazy { GlassToolConfirmChannel() }
@@ -113,7 +116,7 @@ class GlassToolConfirmChannel : ToolPolicy.ConfirmationChannel {
         // （旧实现额外要求 glassBtConnected，蓝牙链路抖动时会误判「无确认通道」→ 打电话被策略挡）
         if (!(s.cxrlConnected && s.cxrLink != null)) return false
         // 插播 B：眼镜端已明确不支持确认通道（旧版 v1，握手超时判定）时直接判不可用，
-        // 让 ToolPolicy 立刻按「无通道」降级放行，而不是白等 35s 超时。
+        // 让 ApprovalGate 立刻按「无通道」降级放行，而不是白等 35s 超时。
         // 尚未握手（null）时走乐观路径——依赖眼镜端 30s 窗口兜底。
         return GlassesHandshake.supports(LinkProtocol.Cap.TOOL_CONFIRM) != false
     }
@@ -121,8 +124,12 @@ class GlassToolConfirmChannel : ToolPolicy.ConfirmationChannel {
     /**
      * 阻塞等待眼镜端用户确认（调用方均为后台线程：对话 runTool / ToolGateway）。
      * 返回 true = 用户短按允许；false = 双击/长按取消、超时或链路不可用。
+     *
+     * @param prompt 给用户看的操作摘要，由 [ApprovalGate] 传入（其产地是
+     *   [com.rokidlab.phone.ai.tools.ToolEntry.summarize]，与工具定义同源）——
+     *   本类只负责传输，不再自己从 args 拼。
      */
-    override fun requestConfirmation(toolName: String, args: JSONObject): Boolean {
+    override fun confirm(toolName: String, prompt: String): Boolean {
         lastCancelled = false
         val s = session
         val link = s?.cxrLink
@@ -137,7 +144,7 @@ class GlassToolConfirmChannel : ToolPolicy.ConfirmationChannel {
             val caps = Caps()
             caps.write(id)
             caps.write(toolName)
-            caps.write(summarize(toolName, args))
+            caps.write(prompt)
             val r = s.rawSendCustomCmd(link, LinkProtocol.TOPIC_TOOL_CONFIRM, caps)
             Log.i(TAG, "confirm request sent (id=$id tool=$toolName) -> $r")
             if (r < 0) {
@@ -178,18 +185,6 @@ class GlassToolConfirmChannel : ToolPolicy.ConfirmationChannel {
         if (n > 0) Log.w(TAG, "aborted $n pending confirmations")
     }
 
-    /** 生成眼镜端展示/TTS 播报的操作摘要（保守文案，宁可啰嗦不可含糊）。 */
-    private fun summarize(toolName: String, args: JSONObject): String = when (toolName) {
-        "call_phone" -> {
-            val who = args.optString("name").takeIf { it.isNotBlank() }
-                ?: args.optString("number").takeIf { it.isNotBlank() }
-                ?: args.optString("phone_number").takeIf { it.isNotBlank() }
-            if (!who.isNullOrBlank()) "拨打电话给 $who" else "拨打电话"
-        }
-        "set_phone_alarm" -> "设置手机闹钟"
-        "manage_calendar" -> if (args.optString("action").equals("create", true)) "添加日历日程" else "查询日历日程"
-        "install_aiui_project" -> "安装 AIUI 应用"
-        "open_phone_app" -> "打开手机应用 ${args.optString("app_name").takeIf { it.isNotBlank() } ?: ""}".trim()
-        else -> "执行操作 $toolName"
-    }
+    // 操作摘要不再由本类生成：闸门把 ToolEntry.summarize 的产物随 confirm(prompt) 传进来，
+    // 「摘要产地唯一」这条约束由 ApprovalGate 保证（见类注释）。
 }

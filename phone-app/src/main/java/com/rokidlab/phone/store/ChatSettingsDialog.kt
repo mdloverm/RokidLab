@@ -93,6 +93,12 @@ internal fun ChatSettingsDialog(
     var apiKeyFocused by remember { mutableStateOf(false) }
     var model by remember { mutableStateOf(onlineCfg?.model.orEmpty()) }
     var quizEnabled by remember { mutableStateOf(session?.isKeyQuizEnabled() ?: false) }
+    // 图像理解（多模态）：开启后拍照直接把图发给模型，而不是先用本地 OCR 转文字。
+    // 与连续对话同属"行为类开关"——切换即生效、不参与本页「保存」的批量提交。
+    var imageInput by remember { mutableStateOf(app.chatImageInputEnabled) }
+    // 「过程」区块默认展开：同样是行为类开关（切换即落盘、不参与「保存」批量提交）。
+    // 放在「图像理解」下方 —— 两者都是"回答怎么呈现给你"的呈现类开关。
+    var expandTrace by remember { mutableStateOf(app.chatExpandTraceEnabled) }
     // 连续对话（多轮免唤醒）：行为类开关 —— 切换即下发眼镜端并落盘，不参与本页「保存」批量提交
     var continueDialog by remember { mutableStateOf(session?.isContinueDialogEnabled() ?: true) }
     // 拍照答题指令：注入 AI 提示词控制回答方式（如「只显示答案」「给出解题步骤」）
@@ -124,6 +130,76 @@ internal fun ChatSettingsDialog(
     var modelMenuExpanded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    // ── 模型能力（llm 接缝）──────────────────────────────────────────
+    // 「这个模型支不支持看图」改造前完全靠用户自己判断，猜错要等拍照失败一轮才知道
+    // （服务端拒绝 → 回退 OCR，用户白等十几秒）。现在由 LlmRegistry 给结论：
+    // 本机实测 > 本地模型自报 > 内置模型表 > 保守未知。图像理解开关直接读它。
+    //
+    // ⚠️ 配置按**输入框现值**构造（不是已保存的配置）：用户改完模型名/地址应当立刻看到
+    //    新模型的能力，不必先点保存。本地来源用 Ollama 固定端点 + 已选本地模型名。
+    val capabilityCfg = if (useLocal) {
+        com.rokidlab.phone.domain.AiConfig(
+            baseUrl = com.rokidlab.phone.ai.LocalOllamaManager.CHAT_BASE,
+            model = curLocalName,
+        )
+    } else {
+        com.rokidlab.phone.domain.AiConfig(baseUrl = baseUrl, apiKey = apiKey, model = model)
+    }
+    // capabilities() 内部不发网络请求（只读内存缓存 + 内置表），因此可以放在重组链路上直接算
+    var caps by remember {
+        mutableStateOf(com.rokidlab.phone.ai.llm.LlmRegistry.capabilities(capabilityCfg, ctx))
+    }
+    var detecting by remember { mutableStateOf(false) }
+    LaunchedEffect(capabilityCfg) {
+        caps = com.rokidlab.phone.ai.llm.LlmRegistry.capabilities(capabilityCfg, ctx)
+    }
+
+    /**
+     * 实测一次图像能力 —— 把「猜」变成「事实」的入口。
+     *
+     * 必要性：内置模型表按命名匹配，遇到别名、聚合站、自建代理就可能不准；
+     * 而这里发的是**真实请求**（本地模型还会真的加载一次权重），所以只在用户点击时跑，
+     * 绝不放进重组或拍照链路里自动触发。
+     */
+    fun detectImageCapability() {
+        if (detecting) return
+        detecting = true
+        scope.launch {
+            val updated = withContext(Dispatchers.IO) {
+                runCatching {
+                    com.rokidlab.phone.ai.llm.LlmRegistry.probeImage(ctx, capabilityCfg)
+                }.getOrNull()
+            }
+            detecting = false
+            if (updated == null) {
+                Toast.makeText(
+                    ctx,
+                    ctx.getString(R.string.chat_settings_image_detect_unknown),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                return@launch
+            }
+            caps = updated
+            val toast = when (updated.supportsImage) {
+                // 检测这个功能的目的就是"到底能不能用"：测通顺手打开；测不通顺手关掉，
+                // 免得留下"开着但每次拍照都白跑一轮"的状态。
+                true -> {
+                    app.setChatImageInputEnabled(true)
+                    imageInput = true
+                    R.string.chat_settings_image_detect_ok
+                }
+                false -> {
+                    app.setChatImageInputEnabled(false)
+                    imageInput = false
+                    R.string.chat_settings_image_detect_bad
+                }
+                // 探不出结论（超时/限流/鉴权）：**不动开关**，只如实说没结论
+                null -> R.string.chat_settings_image_detect_unknown
+            }
+            Toast.makeText(ctx, ctx.getString(toast), Toast.LENGTH_SHORT).show()
+        }
+    }
+
     /** 拉取当前服务商支持的模型列表（失败仍可手动输入模型名） */
     fun loadModels() {
         val url = baseUrl.trim().ifBlank { "https://api.deepseek.com" }
@@ -136,7 +212,8 @@ internal fun ChatSettingsDialog(
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    com.rokidlab.phone.ai.OpenAiService(key, model.ifBlank { "deepseek-chat" }, url).listModels()
+                    // 构造口径收口在 llm 接缝（这里只是拿模型列表，用后台档位即可）
+                    com.rokidlab.phone.ai.llm.LlmRegistry.listModels(url, key, model)
                 }
             }
             loadingModels = false
@@ -430,7 +507,116 @@ internal fun ChatSettingsDialog(
                 }
             }
 
+            // 模型能力摘要（llm 接缝）：把「这个模型支持什么」从用户脑子里的猜测变成事实。
+            // 上下文窗口这个数字以前在界面上完全没有出口，而它正是会话压缩阈值该用的依据；
+            // 这里先让它可见，压缩接缝落地后两者共用同一个数字。
+            val capCtxText = caps.contextWindowText()
+            val capContextLabel =
+                if (capCtxText != null) stringResource(R.string.chat_settings_cap_context, capCtxText) else null
+            val capToolsLabel =
+                if (caps.supportsTools) stringResource(R.string.chat_settings_cap_tools) else null
+            val capText = listOfNotNull(capContextLabel, capToolsLabel).joinToString(" · ")
+            if (capText.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(text = capText, color = BrewMuted, fontSize = 11.sp)
+            }
+
             } // if (!useLocal && customAiMode)：在线服务（地址/密钥/模型）字段结束
+
+            Spacer(Modifier.height(16.dp))
+            // 图像理解开关（多模态）：放在连续对话上方 —— 两者都是"输入怎么进模型"的形态开关。
+            // 可用性由**模型能力**决定（见上方 capabilityCfg）：只有"已确认不支持"才置灰，
+            // "未知"照旧允许（未知就尝试、失败回退 OCR，与改造前行为一致）。
+            val imageSupported = caps.supportsImage
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.chat_settings_image_input),
+                        color = if (imageSupported == false) BrewMuted else BrewTextBright,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        // 副标题直接说结论：不支持时说明为什么用不了，未知时告诉用户可以去检测
+                        text = when (imageSupported) {
+                            false -> stringResource(R.string.chat_settings_image_unsupported)
+                            null -> stringResource(R.string.chat_settings_image_unknown)
+                            else -> stringResource(R.string.chat_settings_image_input_hint)
+                        },
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                    )
+                }
+                // 只在"没有定论"或"已确认不支持"时给检测入口 —— 已确认支持时它没有可改变的信息
+                if (imageSupported != true) {
+                    TextButton(onClick = { detectImageCapability() }, enabled = !detecting) {
+                        Text(
+                            text = stringResource(
+                                if (detecting) R.string.chat_settings_image_detecting
+                                else R.string.chat_settings_image_detect
+                            ),
+                            color = if (detecting) BrewMuted else BrewChat,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                Switch(
+                    // 已确认不支持时显示为"关"：开关表达的是**实际会不会把图发出去**，
+                    // 而不是用户上一次的偏好值（偏好仍留在 imageInput 里，换回支持图像的模型即恢复）
+                    checked = if (imageSupported == false) false else imageInput,
+                    onCheckedChange = {
+                        imageInput = it
+                        app.setChatImageInputEnabled(it)
+                    },
+                    enabled = imageSupported != false,
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = BrewChat,
+                        uncheckedTrackColor = BrewPanelHi,
+                        checkedThumbColor = BrewBg,
+                        uncheckedThumbColor = BrewMuted,
+                    ),
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+            // 「过程」区块默认展开：AI 回复上方那张卡片（思考 / 工具调用时间线 + 本轮 token 成本）。
+            // 默认开的理由写在 LabApplication.chatExpandTraceEnabled 上；关掉它的典型场景是
+            // "一轮里工具调用很多"——卡片会把对话列表撑得很长。
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.chat_settings_expand_trace),
+                        color = BrewTextBright,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = stringResource(R.string.chat_settings_expand_trace_hint),
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                    )
+                }
+                Switch(
+                    checked = expandTrace,
+                    onCheckedChange = {
+                        expandTrace = it
+                        app.setChatExpandTraceEnabled(it)
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = BrewChat,
+                        uncheckedTrackColor = BrewPanelHi,
+                        checkedThumbColor = BrewBg,
+                        uncheckedThumbColor = BrewMuted,
+                    ),
+                )
+            }
 
             Spacer(Modifier.height(16.dp))
             // 连续对话开关（多轮免唤醒）：切换即时生效（下发眼镜端），不必再点「保存」

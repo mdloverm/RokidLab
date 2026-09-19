@@ -9,7 +9,7 @@ import com.rokidlab.phone.adb.ui.TimerAction
 import com.rokidlab.phone.adb.ui.TimerSchedule
 import com.rokidlab.phone.adb.ui.TimerTask
 import com.rokidlab.phone.app.LabApplication
-import com.rokidlab.phone.ai.tools.buildToolSchema
+import com.rokidlab.phone.ai.tools.toolSchema
 import com.rokidlab.phone.model.BrewIndex
 import org.json.JSONObject
 import java.io.File
@@ -47,11 +47,13 @@ object ToolRegistry {
     const val DOMAIN_FILES = "files"        // 文件产出（总结 txt / 代码落盘）
     const val DOMAIN_AIUI = "aiui"          // AIUI 智能体应用（生成/安装/打开/管理）
     const val DOMAIN_PHONE = "phone"        // 手机端（通讯录/拨号/闹钟/应用/状态/音量/日历）
+    const val DOMAIN_RESEARCH = "research"  // 只读子代理委派（调研）
 
     /** 全部工具域（主 Agent 默认全量装配，未来可拆出子集） */
     val DOMAIN_ALL: Set<String> = setOf(
         DOMAIN_INFO, DOMAIN_KNOWLEDGE, DOMAIN_GLASSES, DOMAIN_TIMER,
         DOMAIN_MEDIA, DOMAIN_DISPLAY, DOMAIN_WEB, DOMAIN_FILES, DOMAIN_AIUI, DOMAIN_PHONE,
+        DOMAIN_RESEARCH,
     )
 
     /** 主 Agent 会话（眼镜语音/手机聊天，在线模型）装配的工具域 */
@@ -76,6 +78,57 @@ object ToolRegistry {
     /** 代码/项目文件读取工具名（读取已生成项目的当前源码，供修改/微调时参考） */
     const val TOOL_READ_CODE_FILE = "read_code_file"
 
+    // ═══════════════════ 工具接缝（capability seam）════════════════════════
+    // 每个 provider 自声明自己的工具清单（元数据 + schema + 风险档 + 文案），见 ToolEntry。
+    // 下面所有"表"（toolList / SIDE_EFFECT_TOOLS / GLASSES_REQUIRED_TOOLS / 风险档 / statusText
+    // / 确认摘要）**全部由 tools() 聚合派生**，不再手工同步。
+    //   ★ 新增工具 = 在对应 provider 的 tools() 与 execute() 各加一条，不需要改本文件的任何名单。
+
+    /**
+     * 域提供者（顺序 = 工具在设置页/下发给模型时的顺序，不要随意重排）。
+     *
+     * ⚠️ 声明位置必须**早于** [entries]：Kotlin object 的属性初始化按文本顺序执行，
+     * 把 providers 放到后面会在 entries 初始化时读到 null。
+     */
+    private val providers: List<com.rokidlab.phone.ai.tools.ToolProvider> = listOf(
+        com.rokidlab.phone.ai.tools.InfoToolProvider,
+        com.rokidlab.phone.ai.tools.KnowledgeToolProvider,
+        com.rokidlab.phone.ai.tools.GlassesToolProvider,
+        com.rokidlab.phone.ai.tools.TimerToolProvider,
+        com.rokidlab.phone.ai.tools.MediaToolProvider,
+        com.rokidlab.phone.ai.tools.DisplayToolProvider,
+        com.rokidlab.phone.ai.tools.WebToolProvider,
+        com.rokidlab.phone.ai.tools.FilesToolProvider,
+        com.rokidlab.phone.ai.tools.AiuiToolProvider,
+        com.rokidlab.phone.ai.tools.PhoneToolProvider,
+        com.rokidlab.phone.ai.tools.StatusToolProvider,
+        com.rokidlab.phone.ai.tools.SubagentToolProvider,
+    )
+
+    /**
+     * 全部工具声明（**唯一登记处的聚合结果**）。
+     *
+     * 这张表就是原来 `toolList` + 5 张手工名单的合并体：任何一处不一致都**不再可能发生**，
+     * 因为六张表都由它派生 —— 结构上排除了「漏登记 → 功能静默失效」这类事故
+     * （`list_glasses_apps` 曾被正则区间替换静默删掉，编译通过、单测全绿）。
+     */
+    private val entries: List<com.rokidlab.phone.ai.tools.ToolEntry> =
+        providers.flatMap { it.tools() }
+
+    /** name → 声明（schema / 风险档 / 文案的唯一检索口） */
+    private val entryByName: Map<String, com.rokidlab.phone.ai.tools.ToolEntry> =
+        entries.associateBy { it.name }
+
+    /** 供 [ToolRiskMap] 审计用：全部工具名（内部使用，不暴露给业务） */
+    internal fun allToolNames(): List<String> = entries.map { it.name }
+
+    /** 供 [ToolRiskMap] 取风险档：结构上必然有值（除非名字不在表里） */
+    internal fun riskOfOrNull(name: String): ToolRisk? = entryByName[name]?.risk
+
+    /** 确认摘要：查 [com.rokidlab.phone.ai.tools.ToolEntry.summarize]，未声明走兜底 */
+    internal fun summarizeToolCall(name: String, args: JSONObject): String =
+        entryByName[name]?.summarize?.invoke(args) ?: "执行操作 $name"
+
     /**
      * ADB 工具串行锁：ADB 工具共享同一常驻 client（app.cxrL.getAdbShellClient()），
      * 不随单次工具调用断开（避免高频重建隧道），故并发执行必须串行走同一条连接。
@@ -88,13 +141,11 @@ object ToolRegistry {
      * 隧道瞬断的典型形态是「命令已送达、回执丢失」，重试此类工具 = 重复拨号/重复建日程等
      * 不可逆副作用。失败如实回报给模型，由 LLM 结合上下文决定是否重来。
      * 只读/查询/文件读写等幂等工具不在此集合，允许瞬时失败重试一次。
+     *
+     * 现在由 [ToolEntry.sideEffect] 派生（登记处 = 各 provider 的 tools()）。
      */
-    val SIDE_EFFECT_TOOLS: Set<String> = setOf(
-        "call_phone", "set_phone_alarm", "manage_calendar",
-        "install_aiui_project", "open_aiui_app", "stop_aiui_app",
-        "launch_glasses_app", "manage_timer", "schedule_agent_task",
-        "set_phone_volume", "open_phone_app", "control_music", "show_lyrics",
-    )
+    val SIDE_EFFECT_TOOLS: Set<String> =
+        entries.filter { it.sideEffect }.map { it.name }.toSet()
 
     /**
      * 设置页的**用户视角**分类（与内部 [group] 域不是一回事：域是装配用的，分类是给人看的）。
@@ -152,7 +203,7 @@ object ToolRegistry {
      * `glasses` 域 5 个（全部要）、`aiui` 域 4 个（生成/装/开/管 AIUI 应用都要落到眼镜上）、
      * 以及 `media` 域的 `show_lyrics`（要把歌词推到眼镜并拉起眼镜系统音乐页）。
      * 按域切要么漏（media 只该摘 1 个，不能整域摘掉 play_song/stop_music）要么多。
-     * 与 [SIDE_EFFECT_TOOLS] / [ToolRiskMap] 同一模式：**显式登记、单一出处、可 grep**。
+     * 因此**显式登记**在工具自己的声明上（而不是按域推导）。
      *
      * ⚠️ 判定口径是「**没有眼镜就做不成**」，不是「和眼镜有关」。以下**故意不在名单里**，
      * 因为它们在手机侧独立完成、且眼镜不可用时已优雅降级（摘掉反而白白损失能力）：
@@ -161,249 +212,34 @@ object ToolRegistry {
      *  - `play_song` / `stop_music`：本地 `MusicPlayerController` 播放，不依赖眼镜。
      *  - `get_now_playing` / `get_cover_image`：读手机侧 MediaSession、在手机侧下载封面。
      *  - `save_code_file` / `read_code_file`：读写手机本地项目文件，离线可写代码。
+     *
+     * 现在由 [ToolEntry.requiresGlasses] 派生（登记处 = 各 provider 的 tools()），
+     * 因此「要眼镜」这件事**跟着工具定义走**，改名/新增时会一起被带上，不会漏。
      */
-    val GLASSES_REQUIRED_TOOLS: Set<String> = setOf(
-        // ── glasses 域：ADB 查询/控制眼镜硬件 ──
-        "get_glasses_status",
-        "list_glasses_apps",
-        "launch_glasses_app",
-        // ── aiui 域：生成/安装/打开/管理 AIUI 应用，最终都要落到眼镜渲染 ──
-        "open_aiui_app",
-        "install_aiui_project",
-        "stop_aiui_app",
-        "list_my_aiui_apps",
-        // ── media 域：只有歌词这一项要把内容推到眼镜并拉起眼镜系统音乐页 ──
-        "show_lyrics",
-    )
+    val GLASSES_REQUIRED_TOOLS: Set<String> =
+        entries.filter { it.requiresGlasses }.map { it.name }.toSet()
 
     /** 取 Schema 里的工具名（`{"function":{"name":…}}`）。解析失败返回空串（调用方按「不在名单」处理）。 */
     private fun functionNameOf(schema: JSONObject): String =
         runCatching { schema.optJSONObject("function")?.optString("name").orEmpty() }.getOrDefault("")
 
     /** 全部工具（含已禁用），按声明顺序 */
-    val toolList: List<ToolMeta> = listOf(
-        ToolMeta(
-            name = "search_knowledge_base",
-            group = DOMAIN_KNOWLEDGE,
-            displayNameRes = R.string.ai_tool_search_knowledge_base_name,
-            descriptionRes = R.string.ai_tool_search_knowledge_base_desc,
-        ),
-        ToolMeta(
-            name = "get_current_time",
-            group = DOMAIN_INFO,
-            displayNameRes = R.string.ai_tool_get_current_time_name,
-            descriptionRes = R.string.ai_tool_get_current_time_desc,
-        ),
-        ToolMeta(
-            name = "get_glasses_status",
-            group = DOMAIN_GLASSES,
-            displayNameRes = R.string.ai_tool_get_glasses_status_name,
-            descriptionRes = R.string.ai_tool_get_glasses_status_desc,
-        ),
-        ToolMeta(
-            name = "list_glasses_apps",
-            group = DOMAIN_GLASSES,
-            displayNameRes = R.string.ai_tool_list_glasses_apps_name,
-            descriptionRes = R.string.ai_tool_list_glasses_apps_desc,
-        ),
-        ToolMeta(
-            name = "launch_glasses_app",
-            group = DOMAIN_GLASSES,
-            displayNameRes = R.string.ai_tool_launch_glasses_app_name,
-            descriptionRes = R.string.ai_tool_launch_glasses_app_desc,
-        ),
-        ToolMeta(
-            name = "manage_timer",
-            group = DOMAIN_TIMER,
-            displayNameRes = R.string.ai_tool_manage_timer_name,
-            descriptionRes = R.string.ai_tool_manage_timer_desc,
-        ),
-        // 自主定时任务（真主动性）：到点让 Agent 自己跑一轮推理（仅只读工具）再播报结果，
-        // 区别于 set_timer 的「到点念一句固定文案」
-        ToolMeta(
-            name = "schedule_agent_task",
-            group = DOMAIN_TIMER,
-            displayNameRes = R.string.ai_tool_schedule_agent_task_name,
-            descriptionRes = R.string.ai_tool_schedule_agent_task_desc,
-        ),
-        ToolMeta(
-            name = "control_music",
-            group = DOMAIN_MEDIA,
-            displayNameRes = R.string.ai_tool_control_music_name,
-            descriptionRes = R.string.ai_tool_control_music_desc,
-        ),
-        ToolMeta(
-            name = "show_lyrics",
-            group = DOMAIN_MEDIA,
-            displayNameRes = R.string.ai_tool_show_lyrics_name,
-            descriptionRes = R.string.ai_tool_show_lyrics_desc,
-        ),
-        // AIUI 页面要渲染「歌名/封面/逐行歌词」时的唯一取数口：上面三个工具只回纯文本摘要，
-        // 页面拿不到任何素材（详见 MediaToolProvider.currentSongJson 的说明）。
-        ToolMeta(
-            name = "get_now_playing",
-            group = DOMAIN_MEDIA,
-            displayNameRes = R.string.ai_tool_get_now_playing_name,
-            descriptionRes = R.string.ai_tool_get_now_playing_desc,
-        ),
-        ToolMeta(
-            name = "get_cover_image",
-            group = DOMAIN_MEDIA,
-            displayNameRes = R.string.ai_tool_get_cover_image_name,
-            descriptionRes = R.string.ai_tool_get_cover_image_desc,
-            hidden = true,   // 系统性/内部工具：设置页不展示（仍会下发给模型）
-        ),
-        ToolMeta(
-            name = "show_image",
-            group = DOMAIN_DISPLAY,
-            displayNameRes = R.string.ai_tool_show_image_name,
-            descriptionRes = R.string.ai_tool_show_image_desc,
-        ),
-        ToolMeta(
-            name = "search_web",
-            group = DOMAIN_WEB,
-            displayNameRes = R.string.ai_tool_search_web_name,
-            descriptionRes = R.string.ai_tool_search_web_desc,
-        ),
-        ToolMeta(
-            name = "fetch_webpage",
-            group = DOMAIN_WEB,
-            displayNameRes = R.string.ai_tool_fetch_webpage_name,
-            descriptionRes = R.string.ai_tool_fetch_webpage_desc,
-        ),
-        ToolMeta(
-            name = "save_summary_txt",
-            group = DOMAIN_FILES,
-            displayNameRes = R.string.ai_tool_save_summary_txt_name,
-            descriptionRes = R.string.ai_tool_save_summary_txt_desc,
-        ),
-        ToolMeta(
-            name = TOOL_CODE_FILE,
-            group = DOMAIN_FILES,
-            displayNameRes = R.string.ai_tool_save_code_file_name,
-            descriptionRes = R.string.ai_tool_save_code_file_desc,
-        ),
-        ToolMeta(
-            name = TOOL_READ_CODE_FILE,
-            group = DOMAIN_FILES,
-            displayNameRes = R.string.ai_tool_read_code_file_name,
-            descriptionRes = R.string.ai_tool_read_code_file_desc,
-        ),
-        ToolMeta(
-            name = "open_aiui_app",
-            group = DOMAIN_AIUI,
-            displayNameRes = R.string.ai_tool_open_aiui_app_name,
-            descriptionRes = R.string.ai_tool_open_aiui_app_desc,
-        ),
-        ToolMeta(
-            name = "install_aiui_project",
-            group = DOMAIN_AIUI,
-            displayNameRes = R.string.ai_tool_install_aiui_project_name,
-            descriptionRes = R.string.ai_tool_install_aiui_project_desc,
-        ),
-        ToolMeta(
-            name = "stop_aiui_app",
-            group = DOMAIN_AIUI,
-            displayNameRes = R.string.ai_tool_stop_aiui_app_name,
-            descriptionRes = R.string.ai_tool_stop_aiui_app_desc,
-        ),
-        ToolMeta(
-            name = "list_my_aiui_apps",
-            group = DOMAIN_AIUI,
-            displayNameRes = R.string.ai_tool_list_my_aiui_apps_name,
-            descriptionRes = R.string.ai_tool_list_my_aiui_apps_desc,
-        ),
-        ToolMeta(
-            name = "get_weather",
-            group = DOMAIN_WEB,
-            displayNameRes = R.string.ai_tool_get_weather_name,
-            descriptionRes = R.string.ai_tool_get_weather_desc,
-        ),
-        ToolMeta(
-            name = "calculate",
-            group = DOMAIN_INFO,
-            displayNameRes = R.string.ai_tool_calculate_name,
-            descriptionRes = R.string.ai_tool_calculate_desc,
-        ),
-        ToolMeta(
-            name = "search_contacts",
-            group = DOMAIN_PHONE,
-            displayNameRes = R.string.ai_tool_search_contacts_name,
-            descriptionRes = R.string.ai_tool_search_contacts_desc,
-        ),
-        ToolMeta(
-            name = "call_phone",
-            group = DOMAIN_PHONE,
-            displayNameRes = R.string.ai_tool_call_phone_name,
-            descriptionRes = R.string.ai_tool_call_phone_desc,
-        ),
-        ToolMeta(
-            name = "set_phone_alarm",
-            group = DOMAIN_PHONE,
-            displayNameRes = R.string.ai_tool_set_phone_alarm_name,
-            descriptionRes = R.string.ai_tool_set_phone_alarm_desc,
-        ),
-        ToolMeta(
-            name = "open_phone_app",
-            group = DOMAIN_PHONE,
-            displayNameRes = R.string.ai_tool_open_phone_app_name,
-            descriptionRes = R.string.ai_tool_open_phone_app_desc,
-        ),
-        ToolMeta(
-            name = "get_phone_status",
-            group = DOMAIN_PHONE,
-            displayNameRes = R.string.ai_tool_get_phone_status_name,
-            descriptionRes = R.string.ai_tool_get_phone_status_desc,
-        ),
-        ToolMeta(
-            name = "get_location",
-            group = DOMAIN_PHONE,
-            displayNameRes = R.string.ai_tool_get_location_name,
-            descriptionRes = R.string.ai_tool_get_location_desc,
-        ),
-        ToolMeta(
-            name = "set_phone_volume",
-            group = DOMAIN_PHONE,
-            displayNameRes = R.string.ai_tool_set_phone_volume_name,
-            descriptionRes = R.string.ai_tool_set_phone_volume_desc,
-        ),
-        ToolMeta(
-            name = "manage_calendar",
-            group = DOMAIN_PHONE,
-            displayNameRes = R.string.ai_tool_manage_calendar_name,
-            descriptionRes = R.string.ai_tool_manage_calendar_desc,
-        ),
-        // 自我认知域：Agent 对「自己」的运行时事实（模型/连接/资料/开关）与运行日志。
-        // 归属 info（基础信息）域，随主 Agent 与会话子集一起装配 —— 自检能力应始终可用。
-        ToolMeta(
-            name = "get_agent_status",
-            group = DOMAIN_INFO,
-            displayNameRes = R.string.ai_tool_get_agent_status_name,
-            descriptionRes = R.string.ai_tool_get_agent_status_desc,
-            hidden = true,   // 系统性/内部工具：设置页不展示（仍会下发给模型）
-        ),
-        ToolMeta(
-            name = "read_recent_logs",
-            group = DOMAIN_INFO,
-            displayNameRes = R.string.ai_tool_read_recent_logs_name,
-            descriptionRes = R.string.ai_tool_read_recent_logs_desc,
-            hidden = true,   // 系统性/内部工具：设置页不展示（仍会下发给模型）
-        ),
-        ToolMeta(
-            name = "clear_agent_task",
-            group = DOMAIN_INFO,
-            displayNameRes = R.string.ai_tool_clear_agent_task_name,
-            descriptionRes = R.string.ai_tool_clear_agent_task_desc,
-            hidden = true,   // 系统性/内部工具：设置页不展示（仍会下发给模型）
-        ),
-        // 跨会话检索：在落盘聊天历史里按关键字找相关轮次，让模型能回答
-        // 「我们上次聊的那个定时任务叫什么」。归 info 域，随各会话子集一起装配。
-        ToolMeta(
-            name = "search_past_conversations",
-            group = DOMAIN_INFO,
-            displayNameRes = R.string.ai_tool_search_past_conversations_name,
-            descriptionRes = R.string.ai_tool_search_past_conversations_desc,
-        ),
+    val toolList: List<ToolMeta> = entries.map { it.toMeta() }
+
+    /**
+     * 声明 → 设置页元数据。
+     *
+     * [ToolMeta] 这个类型**刻意保留不动**：设置页（ToolsManagePage）、AIUI 工具网关（ToolGateway）、
+     * 技能白名单（SkillRegistry）都只认它。接缝化只改"数据从哪来"，不改"长什么样"，
+     * 这样调用方零改动、可以分步迁移。
+     */
+    private fun com.rokidlab.phone.ai.tools.ToolEntry.toMeta(): ToolMeta = ToolMeta(
+        name = name,
+        group = group,
+        displayNameRes = displayNameRes,
+        descriptionRes = descriptionRes,
+        category = category ?: categoryOfGroup(group),
+        hidden = hidden,
     )
 
     /** 已知 AIUI agent（眼镜端 PACKAGE_INDEX 已安装的 .aix 智能体应用），供 open_aiui_app 匹配 */
@@ -547,62 +383,18 @@ object ToolRegistry {
         .toSet()
 
     /** 工具执行中的人性化进度文案（眼镜端显示 + 手机端状态栏共用） */
-    fun statusText(name: String): String = when (name) {
-        "search_knowledge_base" -> "正在检索知识库…"
-        "get_current_time" -> "正在查看时间…"
-        "get_glasses_status" -> "正在查询眼镜状态…"
-        "list_glasses_apps" -> "正在查询应用列表…"
-        "launch_glasses_app" -> "正在打开应用…"
-        "manage_timer" -> "正在处理定时任务…"
-        "get_weather" -> "正在查询天气…"
-        "calculate" -> "正在精确计算…"
-        "search_contacts" -> "正在查找联系人…"
-        "call_phone" -> "正在拨号…"
-        "set_phone_alarm" -> "正在设置手机闹钟…"
-        "open_phone_app" -> "正在打开手机应用…"
-        "get_phone_status" -> "正在查询手机状态…"
-        "get_location" -> "正在获取位置…"
-        "set_phone_volume" -> "正在调节手机音量…"
-        "manage_calendar" -> "正在处理日程…"
-        "control_music" -> "正在处理音乐播放…"
-        "show_lyrics" -> "正在打开歌词…"
-        "get_now_playing" -> "正在读取播放信息…"
-        "get_cover_image" -> "正在获取歌曲封面…"
-        "show_image" -> "正在显示图片…"
-        "search_web" -> "正在搜索网页…"
-        "fetch_webpage" -> "正在读取网页内容…"
-        "save_summary_txt" -> "正在生成并保存总结…"
-        TOOL_CODE_FILE -> "正在生成代码文件…"
-        TOOL_READ_CODE_FILE -> "正在读取项目源码…"
-        "open_aiui_app" -> "正在打开智能体应用…"
-        "install_aiui_project" -> "正在打包并安装 AIUI 项目…"
-        "stop_aiui_app" -> "正在关闭智能体应用…"
-        "list_my_aiui_apps" -> "正在查看我的 AI 应用…"
-        "get_agent_status" -> "正在自检运行状态…"
-        "read_recent_logs" -> "正在读取运行日志…"
-        "clear_agent_task" -> "正在清除任务记录…"
-        "search_past_conversations" -> "正在检索历史对话…"
-        "schedule_agent_task" -> "正在创建自主任务…"
-        else -> "正在执行 $name…"
-    }
+    /** 过程时间线文案：查 [ToolEntry.statusText]；未声明的（伪工具等）走兜底 */
+    fun statusText(name: String): String =
+        entryByName[name]?.statusText ?: "正在执行 $name…"
 
     /** 组装单个工具的 JSON Schema（internal：金标评测单测直接校验声明内容） */
-    internal fun buildSchema(meta: ToolMeta): JSONObject = this.buildToolSchema(meta)
+    internal fun buildSchema(meta: ToolMeta): JSONObject =
+        entryByName[meta.name]?.schema ?: com.rokidlab.phone.ai.tools.toolSchema(
+            name = meta.name,
+            description = "执行 ${meta.name} 工具。",
+            parameters = mapOf("type" to "object", "properties" to mapOf<String, Any>()),
+        )
 
-    /** 域提供者（Phase 4：execute 按域拆分到 tools/ 包，见 ToolProvider） */
-    private val providers: List<com.rokidlab.phone.ai.tools.ToolProvider> = listOf(
-        com.rokidlab.phone.ai.tools.InfoToolProvider,
-        com.rokidlab.phone.ai.tools.KnowledgeToolProvider,
-        com.rokidlab.phone.ai.tools.GlassesToolProvider,
-        com.rokidlab.phone.ai.tools.TimerToolProvider,
-        com.rokidlab.phone.ai.tools.MediaToolProvider,
-        com.rokidlab.phone.ai.tools.DisplayToolProvider,
-        com.rokidlab.phone.ai.tools.WebToolProvider,
-        com.rokidlab.phone.ai.tools.FilesToolProvider,
-        com.rokidlab.phone.ai.tools.AiuiToolProvider,
-        com.rokidlab.phone.ai.tools.PhoneToolProvider,
-        com.rokidlab.phone.ai.tools.StatusToolProvider,
-    )
 
     /**
      * 执行工具，返回给 AI 的结果文本（同步方法）。

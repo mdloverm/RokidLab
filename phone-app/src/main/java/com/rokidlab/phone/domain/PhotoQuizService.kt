@@ -35,7 +35,7 @@ internal class PhotoQuizService(private val session: CxrLHiRokidSession) {
         appScope = session.appScope,
         mainHandler = session.mainHandler,
         takePhoto = { w, h, q, onPhoto, onError -> takeGlassesPhoto(w, h, q, onPhoto, onError) },
-        sendAiQuestion = { question, contextText, instruction, onResult, onReply ->
+        sendAiQuestion = { question, contextText, instruction, imageBase64, onResult, onReply ->
             session.sendAiTextMessage(
                 question,
                 contextText = contextText,
@@ -48,9 +48,23 @@ internal class PhotoQuizService(private val session: CxrLHiRokidSession) {
                 recordHistory = false,
                 onResult = onResult,
                 onReply = onReply,
+                // 多模态：非空时这一轮的 user 消息带 image_url 分片（图像理解开关开启时才有值）
+                imageBase64 = imageBase64,
             )
         },
         quizInstructionProvider = { session.getAiConfig().quizInstruction },
+        // 识别路径决策（llm 接缝）：用户开关 + **当前模型能力**共同决定，每次拍照现读。
+        // 改造前这里只传开关的布尔值，于是"开了但模型不支持"这件事在流程里无从表达，
+        // 用户开了开关却总是走 OCR，还以为是功能坏了（见 ImageInputDecision 的说明）。
+        imageInputDecisionProvider = {
+            val enabledByUser = (session.appContext as? com.rokidlab.phone.app.LabApplication)
+                ?.chatImageInputEnabled == true
+            com.rokidlab.phone.ai.llm.LlmRegistry.imageInputDecision(
+                cfg = session.getAiConfig(),
+                ctx = session.appContext,
+                enabledByUser = enabledByUser,
+            )
+        },
     )
 
     /** 注册「拍照问 AI」流程的 UI 回调（乐奇聊天界面进入时调用，按键触发时复用展示） */

@@ -1,5 +1,8 @@
 package com.rokidlab.phone.ai.tools
 
+import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.ToolRisk
+
 import android.content.Context
 import android.util.Log
 import com.rokidlab.phone.ai.AiuiAppRegistry
@@ -34,6 +37,63 @@ internal object TimerToolProvider : ToolProvider {
     override val toolNames = setOf(
         "manage_timer",
         "schedule_agent_task",
+    )
+
+    override fun tools(): List<ToolEntry> = listOf(
+        ToolEntry(
+            name = "manage_timer",
+            group = ToolRegistry.DOMAIN_TIMER,
+            displayNameRes = R.string.ai_tool_manage_timer_name,
+            descriptionRes = R.string.ai_tool_manage_timer_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在处理定时任务…",
+            schema = toolSchema(
+                name = "manage_timer",
+                description = "管理定时提醒 / 定时任务，一个工具管三种意图。action=\"create\"：创建（「5分钟后提醒我喝水」「明早8点叫我」「17点打开小智」）。action=\"list\"：列出全部（「我有哪些提醒」「几点有提醒」）。action=\"cancel\"：取消（「取消刚才的提醒」「删掉那个闹钟」；全部取消传 all=true）。注意：到点要我自己查资料再汇报的需求请改用 schedule_agent_task，本工具到点只会念一句固定内容（或在眼镜上打开指定应用）。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "action" to mapOf("type" to "string", "enum" to listOf("create", "list", "cancel"), "description" to "create=创建；list=列出全部；cancel=取消"),
+                        "time" to mapOf("type" to "string", "description" to "action=create 时的时间，24 小时制 HH:mm，如 17:00"),
+                        "content" to mapOf("type" to "string", "description" to "action=create 时的提醒内容 / 任务名，如「喝水」「开会」"),
+                        "repeatDaily" to mapOf("type" to "boolean", "description" to "action=create 时是否每天重复，默认 false；用户说「每天」时传 true"),
+                        "timerAction" to mapOf("type" to "string", "enum" to listOf("notify", "launch"), "description" to "action=create 时到点做什么：notify=只提醒（默认）；launch=提醒并在眼镜上打开某应用（需同时给 appName）"),
+                        "appName" to mapOf("type" to "string", "description" to "timerAction=launch 时要打开的眼镜应用名，如「小智」"),
+                        "timerName" to mapOf("type" to "string", "description" to "action=cancel 时要取消的任务名称或提醒内容；不知道就先 action=list 查看"),
+                        "all" to mapOf("type" to "boolean", "description" to "action=cancel 时用户要求全部取消传 true，默认 false"),
+                    ),
+                    "required" to listOf("action"),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "schedule_agent_task",
+            group = ToolRegistry.DOMAIN_TIMER,
+            displayNameRes = R.string.ai_tool_schedule_agent_task_name,
+            descriptionRes = R.string.ai_tool_schedule_agent_task_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在创建自主任务…",
+            schema = toolSchema(
+                name = "schedule_agent_task",
+                description = "创建一个「自主任务」：到点后由我自己去查资料、再主动播报结果 —— 区别于 manage_timer 的 create 只会念一句固定文案。当用户说「每天早上帮我播报天气和日程」「晚上 10 点提醒我总结今天」「每周一提醒我看待办」这类需要我到点先做点事（查询/汇总）再汇报的需求时调用。注意：出于安全，自主任务执行时我只能使用只读工具（查时间/天气/网页/知识库/设备状态等），不会自动拨号、装机或改任何设置；需要写操作时请在任务内容里让我先提醒你确认。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "name" to mapOf("type" to "string", "description" to "任务简短名称，如「早安简报」「睡前总结」"),
+                        "prompt" to mapOf("type" to "string", "description" to "到点要执行的完整指令，写成一句自包含的中文，如「查一下杭州今天的天气和今天的日程，合成一段 80 字以内的早安播报」"),
+                        "schedule_type" to mapOf("type" to "string", "enum" to listOf("fixed", "countdown", "interval"), "description" to "fixed=每天/某天的固定时刻（默认）；countdown=多少秒后执行一次；interval=每 N 秒执行一次，共 M 次"),
+                        "hour" to mapOf("type" to "integer", "description" to "schedule_type=fixed 时的小时，24 小时制 0~23，如 8 表示早上 8 点"),
+                        "minute" to mapOf("type" to "integer", "description" to "schedule_type=fixed 时的分钟 0~59，默认 0"),
+                        "repeat_daily" to mapOf("type" to "boolean", "description" to "schedule_type=fixed 时是否每天重复，默认 false（只执行一次）；用户说「每天」时传 true"),
+                        "seconds" to mapOf("type" to "integer", "description" to "schedule_type=countdown/interval 时的间隔秒数（须 > 0）"),
+                        "count" to mapOf("type" to "integer", "description" to "schedule_type=interval 时的重复次数，默认 1"),
+                    ),
+                    "required" to listOf("name", "prompt", "schedule_type"),
+                ),
+            ),
+        ),
     )
 
     /**

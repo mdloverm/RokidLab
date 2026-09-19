@@ -1,13 +1,16 @@
 package com.rokidlab.phone.store
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -54,6 +57,9 @@ internal fun ChatHeader(
     /** 本机模式（不连眼镜也能聊）当前是否开启；见 [LabApplication.chatLocalOnlyEnabled] */
     localOnly: Boolean,
     onToggleLocalOnly: () -> Unit,
+    /** 当前会话标题（取代固定的「乐奇聊天」：多会话下用户需要知道自己在哪个对话里） */
+    sessionTitle: String,
+    onOpenSessions: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -63,13 +69,32 @@ internal fun ChatHeader(
             .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.chat_title),
-                color = BrewChat,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-            )
+        // 会话列表入口就做在标题区上：标题栏实测可用宽仅 369dp，已被 5 个 IconButton
+        // 占满（每个 40dp），再塞第 6 个必然让副标题折行。点标题开列表是零宽度成本的方案，
+        // 且「标题 = 当前会话名」本身就是用户找列表的心理入口。
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onOpenSessions() }
+                .padding(vertical = 2.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = sessionTitle,
+                    color = BrewChat,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Icon(
+                    imageVector = Icons.Filled.ExpandMore,
+                    contentDescription = stringResource(R.string.chat_sessions_title),
+                    tint = BrewMuted,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
             Text(
                 // 本机模式是一句话就能说清的全局状态，直接写在副标题上 ——
                 // 只靠一个换了的图标容易被忽略，而它会让「眼镜端不再收到回复」，必须显眼

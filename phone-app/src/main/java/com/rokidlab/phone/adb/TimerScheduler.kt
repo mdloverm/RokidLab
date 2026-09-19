@@ -242,9 +242,10 @@ class TimerScheduler(private val appContext: Context) {
                 val app = appContext as? LabApplication ?: return@withContext raw
                 if (!app.hasCxrL()) return@withContext raw
                 val cfg = app.cxrL.getAiConfig()
-                val svc = com.rokidlab.phone.ai.OpenAiService(
-                    cfg.apiKey, cfg.model, cfg.baseUrl,
-                    readTimeoutMs = 8_000,
+                // 后台档位：读超时 8s / 不附加本地调参 / 不开思考 —— 规则收口在 llm 接缝
+                val svc = com.rokidlab.phone.ai.llm.LlmRegistry.newService(
+                    cfg,
+                    com.rokidlab.phone.ai.llm.LlmRegistry.Profile.BACKGROUND,
                 )
                 val messages = org.json.JSONArray().put(
                     org.json.JSONObject().apply {

@@ -64,6 +64,32 @@ class AiFailureHintTest {
     }
 
     @Test
+    fun `输入超长与输出被截断给出不同建议`() {
+        // 这两件事用户该做的动作完全不同：
+        //  - 输入超长 → 给的内容少一点 / 开新对话（历史压缩由 compaction 接缝自动做，走到这条说明也没救回来）
+        //  - 输出被 max_tokens 截断 → 让 AI 少输出一点 / 把需求拆小（换更短的历史毫无帮助）
+        // 改造前两者被压成同一句「这次内容太长了，换个短一点的问题再试」，对后者纯属误导。
+        val outputTruncated = OpenAiService.aiFailureHint(
+            HttpStatusException(
+                400,
+                "{\"error\":{\"message\":\"max_tokens is too large: 8192. " +
+                    "This model supports at most 4096 completion tokens\"}}",
+            ),
+        )
+        assertTrue("应指向输出上限，实际：$outputTruncated", outputTruncated.contains("输出"))
+
+        val inputTooLong = OpenAiService.aiFailureHint(
+            HttpStatusException(
+                400,
+                "{\"error\":{\"message\":\"This model's maximum context length is 65536 tokens. " +
+                    "Please reduce the length of the messages\"}}",
+            ),
+        )
+        assertTrue("应提示内容太长，实际：$inputTooLong", inputTooLong.contains("太长"))
+        assertFalse("输入超长不该被说成输出问题：$inputTooLong", inputTooLong.contains("输出"))
+    }
+
+    @Test
     fun `本机工具声明不合法不得误导为配置问题`() {
         // 2026-09-15 真机事故原文：update_plan 的 steps 被写成 JSON 数组，服务端整体拒绝。
         // 这类错误的正确处置是「导出日志反馈」，而不是让用户去改密钥/模型名/地址。

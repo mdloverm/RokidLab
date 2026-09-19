@@ -1,5 +1,8 @@
 package com.rokidlab.phone.ai.tools
 
+import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.ToolRisk
+
 import android.content.Context
 import android.util.Log
 import com.rokidlab.phone.ai.AiuiAppRegistry
@@ -33,6 +36,29 @@ internal object KnowledgeToolProvider : ToolProvider {
 
     override val toolNames = setOf(
         "search_knowledge_base",
+    )
+
+    override fun tools(): List<ToolEntry> = listOf(
+        ToolEntry(
+            name = "search_knowledge_base",
+            group = ToolRegistry.DOMAIN_KNOWLEDGE,
+            displayNameRes = R.string.ai_tool_search_knowledge_base_name,
+            descriptionRes = R.string.ai_tool_search_knowledge_base_desc,
+            risk = ToolRisk.READ_ONLY,
+            statusText = "正在检索知识库…",
+            schema = toolSchema(
+                name = "search_knowledge_base",
+                description = "在用户的本地知识库中检索资料并返回相关内容。当用户询问已导入文档（说明书、资料、笔记等）中的内容时调用，例如“键盘怎么用”、“说明书里怎么说的”。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "query" to mapOf("type" to "string", "description" to "检索关键词，用最核心的 2~4 个词"),
+                        "topK" to mapOf("type" to "integer", "description" to "返回的资料块数量，默认 3", "minimum" to 1, "maximum" to 5),
+                    ),
+                    "required" to listOf("query"),
+                ),
+            ),
+        ),
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {

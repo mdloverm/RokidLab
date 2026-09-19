@@ -426,7 +426,7 @@ class CxrLHiRokidSession(
     internal val deviceControl = com.rokidlab.phone.domain.DeviceControlService(this)
     internal val aiConversation = com.rokidlab.phone.domain.AiConversationService(this)
 
-    /** L4 工具确认通道（Phase 4：副作用工具的眼镜端用户确认，注入 ToolPolicy） */
+    /** L4 工具确认通道（Phase 4：副作用工具的眼镜端用户确认，注入 ApprovalGate） */
     /** Phase 4：副作用工具确认通道 —— 用全局常驻单例（会话重建/清理都不会让通道消失） */
     internal val toolConfirm = com.rokidlab.phone.ai.GlassToolConfirmChannel.global
 
@@ -480,7 +480,11 @@ class CxrLHiRokidSession(
         readOnlyTools: Boolean = false,
         /** Agent 过程回调（思考 / 工具调用），供手机端聊天窗口的「过程」时间线 */
         onTrace: ((com.rokidlab.phone.ai.AgentStep) -> Unit)? = null,
-    ) = aiConversation.sendAiTextMessage(text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, onTrace, readOnlyTools)
+        /** 多模态图像（base64，不含 `data:` 前缀），见 [com.rokidlab.phone.domain.AiConversationService.sendAiTextMessage] */
+        imageBase64: String? = null,
+        /** 本会话的附加提示词（null = 没设），语义见 [com.rokidlab.phone.domain.AiConversationService.sendAiTextMessage] */
+        sessionPrompt: String? = null,
+    ) = aiConversation.sendAiTextMessage(text, onResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, onTrace, readOnlyTools, imageBase64, sessionPrompt)
 
     fun abortCurrentAi() = aiConversation.abortCurrentAi()
 
@@ -798,9 +802,9 @@ class CxrLHiRokidSession(
         }
         // 初始化时通知连接状态（含授权状态），触发 checkRokidLinkInstallation() 等依赖连接状态的回调
         notifyConnectionChanged()
-        // Phase 4：把常驻确认通道绑定到本会话，并（幂等地）注入 ToolPolicy 风险闸门
+        // Phase 4：把常驻确认通道绑定到本会话，并（幂等地）注入 ApprovalGate 审批闸门
         com.rokidlab.phone.ai.GlassToolConfirmChannel.bind(this)
-        com.rokidlab.phone.ai.ToolPolicy.confirmationChannel = toolConfirm
+        com.rokidlab.phone.ai.approval.ApprovalGate.confirmationResolver = toolConfirm
     }
 
     fun hasAuthorization(): Boolean = !token.isNullOrBlank()
@@ -1017,7 +1021,7 @@ class CxrLHiRokidSession(
         aiuiHost.stopAgentListPushWindow()
         // Phase 4：清空等待中的工具确认并摘除全局通道（Session 销毁后拒绝新确认）
         toolConfirm.abortAll()
-        // 通道常驻：只解绑会话，**不**把 ToolPolicy.confirmationChannel 置 null
+        // 通道常驻：只解绑会话，**不**把 ApprovalGate.confirmationResolver 置 null
         // （置 null 会让重连后的会话里「打电话」等工具再次被判 no confirmation channel）
         com.rokidlab.phone.ai.GlassToolConfirmChannel.unbind(this)
         // 插播 B：复位握手状态，下次连接重新协商眼镜端能力

@@ -1,11 +1,16 @@
 package com.rokidlab.phone.ai
 
+import com.rokidlab.phone.ai.session.AgentSessionStore
+import com.rokidlab.phone.ai.session.MessageSource
+import com.rokidlab.phone.ai.session.SessionLog
+import com.rokidlab.phone.ai.session.TurnEndReason
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * Agent 工具管线金标评测（纯 JVM，无网络/无模型）。
@@ -211,18 +216,17 @@ class GoldenAgentEvalTest {
 
     @Test
     fun `C8 历史消息按序组装进 messages`() {
-        // chatTurn(userMessage, history) 的组装顺序：system → history → user
-        val history = listOf(
-            ChatMessage("user", "第一问"),
-            ChatMessage("assistant", "第一答"),
-        )
-        val service = OpenAiService(apiKey = "test-key")
-        // 无法直接断言内部数组（chatTurn 会发网络请求），改为验证 system 消息组装入口行为：
-        // buildSystemMessage 是 messages[0]，此处锁定「历史由调用方传入且顺序即插入顺序」的契约
-        // 通过 AgentSessionHistory 的 recordTurn 快照间接锁定
-        val store = AgentSessionHistory(clock = { 1000L })
-        store.recordTurn("第一问", "第一答")
-        val h = store.getHistory()
+        // chatTurn(userMessage, history) 的组装顺序：system → history → user。
+        // 改造前这里直接驱动 AgentSessionHistory；现在事件流是唯一权威，
+        // 改由 AgentSessionStore 驱动 —— 锁定的仍是同一条契约：投影出来的历史顺序 = 记录顺序。
+        val tmp = File.createTempFile("golden-agent-eval", ".jsonl")
+        tmp.deleteOnExit()
+        val store = AgentSessionStore(SessionLog(tmp) { 1000L }, clock = { 1000L })
+        val turn = store.beginTurn(MessageSource.TEXT)
+        store.appendUserMessage(turn, "第一问", MessageSource.TEXT)
+        store.finishTurn(turn, "第一答", TurnEndReason.COMPLETED)
+
+        val h = store.history()
         assertEquals("user", h[0].role)
         assertEquals("第一问", h[0].content)
         assertEquals("assistant", h[1].role)

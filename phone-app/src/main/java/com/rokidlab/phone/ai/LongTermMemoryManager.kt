@@ -227,6 +227,39 @@ object LongTermMemoryManager {
         Log.i(TAG, "cleared")
     }
 
+    /**
+     * 按编号（1 起，与 [items] 的顺序一致）改掉一条记忆的正文。
+     *
+     * ★ 为什么必须有这个 API：用户是**唯一**能判断"这条记忆已经不对了"的人
+     *   （"我早就不喜欢周杰伦了"），而在此之前他只能**删掉再让 AI 重新记一遍** ——
+     *   而设置页里根本没有"重新说一遍"的入口。于是记忆一旦记错，用户唯一的救济手段是
+     *   在对话里引导模型调用 `manage_memory`，那是隐私功能最不该有的体验。
+     *
+     * created_at 一并刷新：用户刚亲手确认过这条内容，90 天过期计时理应从这一刻重新算，
+     * 否则改完一条两年没动过的旧记忆，它下次读取就被惰性清理掉了。
+     *
+     * @return 改到了返回 true；编号越界 / 内容为空 / 与另一条重复（`content` 有 UNIQUE 约束）返回 false
+     */
+    fun update(context: Context, index: Int, content: String): Boolean = synchronized(lock) {
+        val text = content.trim().take(MAX_ITEM_CHARS)
+        if (index < 1 || text.isEmpty()) return@synchronized false
+        val d = db(context)
+        try {
+            d.rawQuery("SELECT id FROM memories ORDER BY id ASC LIMIT 1 OFFSET ${index - 1}", null).use { c ->
+                if (!c.moveToFirst()) return@synchronized false
+                d.execSQL(
+                    "UPDATE memories SET content = ?, created_at = ? WHERE id = ?",
+                    arrayOf<String>(text, System.currentTimeMillis().toString(), c.getLong(0).toString()),
+                )
+                true
+            }
+        } catch (e: Exception) {
+            // 重复内容会命中 UNIQUE 约束抛异常 —— 视作"没改成"，由 UI 如实告知
+            Log.w(TAG, "update failed: ${e.message}")
+            false
+        }
+    }
+
     // ──────────────────────────────────────────────
     //  检索式注入
     // ──────────────────────────────────────────────

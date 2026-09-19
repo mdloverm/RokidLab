@@ -94,21 +94,17 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
     /**
      * 判断工具是否为「只读」—— 用于工具循环的轮次预算分账。
      *
-     * 直接复用 [com.rokidlab.phone.ai.ToolRiskMap] 的登记，另补两个 `riskOf` 判不出来的名字：
-     * - `load_skill` / `load_skill_section` 是伪工具，不在 `ToolRegistry.toolList` 中，
-     *   `riskOf` 会把它们当「完全未知的名字」判成 EXTERNAL_SIDE_EFFECT（会被算成动作轮）；
-     * - `long_term_memory` 会写长期记忆库（有副作用），因此**不**算只读，保持动作轮计费。
+     * 判定收口到 approval 接缝（[com.rokidlab.phone.ai.approval.ApprovalGate.isReadOnly]）：
+     * 那里同时管着审批闸门，两者共用同一张风险表 + 同一张伪工具表
+     * （[com.rokidlab.phone.ai.approval.PseudoTools]），不会出现「审批按只读放行、
+     * 分账按动作轮计费」这种自相矛盾。
+     *
+     * ⚠️ 改造前这里复制了一份判定，还硬编码了 `load_skill` / `load_skill_section` /
+     * `update_plan` 三个伪工具名 —— 新增伪工具时极易漏改（漏了就把只读工具算成动作轮，
+     * 让"读多写少"的 AIUI 任务白吃预算，正是当初给只读轮单独分账要解决的问题）。
      */
-    private fun isReadOnlyTool(name: String): Boolean = when (name) {
-        com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME,
-        com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION,
-        // update_plan 只是把计划文本格式化回填，无任何副作用
-        com.rokidlab.phone.ai.AgentPlan.TOOL_NAME,
-        -> true
-        else -> runCatching {
-            com.rokidlab.phone.ai.ToolRiskMap.riskOf(name) == com.rokidlab.phone.ai.ToolRisk.READ_ONLY
-        }.getOrDefault(false)
-    }
+    private fun isReadOnlyTool(name: String): Boolean =
+        com.rokidlab.phone.ai.approval.ApprovalGate.isReadOnly(name)
 
     /**
      * 工具 Schema 本地严格校验（每进程一次，见 [schemaAudited]）。
@@ -243,6 +239,20 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
          * （半夜拨号/装机/改设置）代价远高于「少做一点」，因此物理上不给它副作用工具。
          */
         readOnlyTools: Boolean = false,
+        /**
+         * 多模态图像（base64，**不含** `data:` 前缀）。
+         *
+         * 非空时本轮 user 消息的 content 改成分片数组（text + image_url），
+         * 供支持视觉的模型直接看图 —— 拍照问 AI 的「图像理解」路径用它绕开本地 OCR。
+         */
+        imageBase64: String? = null,
+        /**
+         * **本会话的附加提示词**（用户在会话设置里为该会话单独指定；null = 没设）。
+         *
+         * 加在参数表**末尾**是刻意的：既有调用点大量使用位置参数，插在中间会静默错位。
+         * 语义是**追加**到全局人设之后（见 `OpenAiService.buildSystemMessage`），不是替换。
+         */
+        sessionPrompt: String? = null,
     ) {
         Log.i(TAG, "sendAiTextMessage(\"$text\") called. session.cxrlConnected=${session.cxrlConnected}, session.glassBtConnected=${session.glassBtConnected}, session.cxrLink=${session.cxrLink != null}, session.token=${session.token?.take(8) ?: "null"}, readOnlyTools=$readOnlyTools")
 
@@ -273,7 +283,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             Log.i(TAG, "sendAiTextMessage: local-only mode (no glasses), skip link/prerequisites")
             session.onBusyChanged(true)
             session.appScope.launch(Dispatchers.IO) {
-                sendAiTextViaLink(null, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace)
+                sendAiTextViaLink(null, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace, imageBase64, sessionPrompt)
             }
             return
         }
@@ -282,7 +292,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         val link = session.cxrLink
         if (session.cxrlConnected && session.glassBtConnected && link != null) {
             Log.i(TAG, "sendAiTextMessage: using existing CXRLink (fast path)")
-            sendAiTextViaLink(link, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace)
+            sendAiTextViaLink(link, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace, imageBase64, sessionPrompt)
             return
         }
 
@@ -295,7 +305,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             Log.w(TAG, "sendAiTextMessage: missing glasses prerequisites -> fall back to local-only")
             session.onBusyChanged(true)
             session.appScope.launch(Dispatchers.IO) {
-                sendAiTextViaLink(null, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace)
+                sendAiTextViaLink(null, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace, imageBase64, sessionPrompt)
             }
             return
         }
@@ -319,7 +329,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                     // 必须切后台线程执行，否则慢速路径阻塞主线程导致 ANR/闪退。
                     // session.onStatus/session.onBusyChanged 已线程安全，onReply 由调用方切主线程，onResult 内部 runOnUiThread。
                     session.appScope.launch(Dispatchers.IO) {
-                        sendAiTextViaLink(l, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace)
+                        sendAiTextViaLink(l, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace, imageBase64, sessionPrompt)
                     }
                 },
                 onFailure = {
@@ -329,7 +339,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                     Log.w(TAG, "sendAiTextMessage: glasses connect failed -> fall back to local-only")
                     session.cleanup()
                     session.appScope.launch(Dispatchers.IO) {
-                        sendAiTextViaLink(null, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace)
+                        sendAiTextViaLink(null, text, settledResult, onReply, contextText, interruptOfficialFirst, skipTtsAudioFinished, showAsrResult, localTakeover, instruction, recordHistory, onDelta, myGen, readOnlyTools, trace, imageBase64, sessionPrompt)
                     }
                 },
             ),
@@ -513,6 +523,18 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
          * 放在**最后一个参数**是为了让既有位置调用点无需改动。
          */
         onTrace: ((com.rokidlab.phone.ai.AgentStep) -> Unit)? = null,
+        /**
+         * 多模态图像（base64，不含 `data:` 前缀），语义见 [sendAiTextMessage] 的同名参数。
+         * 同样挂在末尾：既有位置调用点加上它只是多一个尾参。
+         */
+        imageBase64: String? = null,
+        /**
+         * **本会话的附加提示词**（用户在会话设置里为该会话单独指定；null = 没设）。
+         *
+         * 加在参数表**末尾**是刻意的：既有调用点大量使用位置参数，插在中间会静默错位。
+         * 语义是**追加**到全局人设之后（见 `OpenAiService.buildSystemMessage`），不是替换。
+         */
+        sessionPrompt: String? = null,
     ) {
         // 串行化所有 AI 下行发送：聊天发送 / ASR push / 文件轮询 / SDK 上行多个并发入口
         // 在 WiFi 稳定连接时全部命中快速路径，同一 CXRLink 并发 sendCustomCmd 会与
@@ -577,33 +599,69 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         val replyRef = java.util.concurrent.atomic.AtomicReference<String>("")
         val deepSeekThread = namedThread("ai-deepseek-request", start = true) {
             val tGenStart = System.currentTimeMillis()
+            // 本轮的事件流记录句柄（null = 不记录：拍照答题 recordHistory=false / 记忆开关关闭 /
+            // 会话尚未绑定）。提到 try 外是为了让 catch 分支也能收尾本轮 —— 否则被打断/失败的轮
+            // 会永远停在只有 TurnStart 的半轮状态。
+            var agentTurn: com.rokidlab.phone.ai.session.AgentTurn? = null
             try {
                 val cfg = session.getAiConfig()
-                // 本地 Ollama 端点：首次加载大模型/思考模型首字远慢于远程，读超时放宽到 3 分钟
-                val localBase = cfg.baseUrl.contains("127.0.0.1") || cfg.baseUrl.contains("localhost") ||
-                    cfg.baseUrl.contains("11434")
+                // 是否本机 Ollama 端点：判断口径统一走 LlmRegistry（改造前这里另有一份完全相同的
+                // 字符串判断，与构造参数里的口径各写一遍，任何一处漏改都会让本地模型的超时/调参失效）
+                val localBase = com.rokidlab.phone.ai.llm.LlmRegistry.isLocalBase(cfg.baseUrl)
                 // 本地用户自定义请求参数（JSON，替代原「深度思考」布尔开关）：逐字段合并进每次
                 // 本地对话请求体（如 {"think": false, "options": {"num_ctx": 2048}}）；远程服务不附加
-                val extraBody = if (localBase) session.aiConfig.parseLocalChatParams() else null
-                val service = com.rokidlab.phone.ai.OpenAiService(
-                    cfg.apiKey, cfg.model, cfg.baseUrl,
-                    readTimeoutMs = if (localBase) 180000 else 30000,
-                    extraBody = extraBody,
-                    // 发送键旁「思考」开关：仅在线 DeepSeek V4/V3.2 生效；本地模型由 extraBody 自行调参
-                    thinkingEnabled = !localBase && session.isThinkingEnabled(),
+                val localParams = if (localBase) session.aiConfig.parseLocalChatParams() else null
+                // 本轮附带的运行时参数（发送键旁「思考」开关：仅在线 DeepSeek 生效；
+                // 本地模型由 localParams 自行调参）
+                val llmOptions = com.rokidlab.phone.ai.llm.LlmRegistry.Options(
+                    thinkingEnabled = session.isThinkingEnabled(),
+                    localParams = localParams,
+                )
+                // 路由解析 + 打点：这一轮实际打到哪个服务商/模型、它有哪些能力。
+                // 「连续空轮」「工具请求 400」「送图被拒」的第一现场都在这几个数字里 ——
+                // 改造前这些事实在日志里完全看不到（能力根本没有表达，见 ModelCapabilities）。
+                val route = com.rokidlab.phone.ai.llm.LlmRegistry.route(cfg, session.appContext, llmOptions)
+                Log.i(
+                    TAG,
+                    "AI route: provider=${route.provider} model=${route.model} local=${route.isLocal} " +
+                        "ctx=${route.capabilities.contextWindow} tools=${route.capabilities.supportsTools} " +
+                        "image=${route.capabilities.supportsImage} capSrc=${route.capabilities.source}",
+                )
+                // 客户端构造收口到 llm 接缝（超时/本地调参/关思考字段的取值规则只在注册表一份）
+                val service = com.rokidlab.phone.ai.llm.LlmRegistry.newService(
+                    cfg,
+                    com.rokidlab.phone.ai.llm.LlmRegistry.Profile.CHAT,
+                    llmOptions,
                 )
                 // Agent 会话记忆：超时清理 + 注入历史消息（多轮上下文），使 AI 能理解「再来一首」等指代
                 val agentSession = com.rokidlab.phone.ai.AgentSessionManager
                 agentSession.maybeExpire()
+                // 压缩预算跟着这一轮的模型窗口走（compaction 接缝 ← llm 接缝：
+                // ModelCapabilities.contextWindow 就是它的输入）。规则是**只收紧不放宽**，
+                // 大窗口模型与窗口未知时行为与改造前逐字一致（见 CompactionPolicy.forWindow）。
+                agentSession.applyModelCapabilities(route.capabilities)
                 // 同时校验 AgentSessionManager 开关，关闭时本次不注入历史也不记录本轮
                 val memoryEnabled = agentSession.isEnabled(session.appContext)
                 val effectiveRecord = recordHistory && memoryEnabled
+                // 本轮用户输入的来源（"这句是说的、打的、还是拍的"）—— 只为落盘回溯，不参与逻辑
+                val msgSource = when {
+                    imageBase64 != null -> com.rokidlab.phone.ai.session.MessageSource.IMAGE
+                    // 眼镜端已本地接管显示 = KeyButtonService 在 ASR_End 后接管，即语音唤醒链路
+                    localTakeover -> com.rokidlab.phone.ai.session.MessageSource.VOICE
+                    else -> com.rokidlab.phone.ai.session.MessageSource.TEXT
+                }
+                // ★ 开始一轮事件流记录：轮号由事件流唯一分配，用户消息**此刻就落盘** ——
+                //   生成到一半进程被杀，也不至于丢掉"用户问了什么"（改造前只在一轮结束时
+                //   一次性 recordTurn，中途崩溃等于这轮从未存在）。
+                if (effectiveRecord) {
+                    agentTurn = agentSession.beginTurn(msgSource)
+                    agentTurn?.userMessage(text)
+                }
                 // 长期记忆：跨会话记住用户事实/偏好（注入 <memories> + 注册 manage_memory 工具）
                 val longTermMemory = com.rokidlab.phone.ai.LongTermMemoryManager
                 val longTermOn = longTermMemory.isEnabled(session.appContext)
                 // 检索式注入：按当前提问相关性取 top-K 长期记忆（无相关性时回退最近 K 条）
                 val longTermContext = if (longTermOn) longTermMemory.memoriesContext(session.appContext, text) else null
-                val messages = JSONArray()
                 // 本地模型 → 本地轻量会话：不装配工具/技能/长期记忆工具，精简人设，仅闲聊问答。
                 // 本地小模型背不动全部工具 Schema（每轮全量下发拖慢 prefill 且小模型调用工具不可靠），
                 // 设备操作/联网等能力由用户切回在线 Agent 提供（对齐 RikkaHub 按会话装配思路）。
@@ -647,28 +705,76 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 val taskNote = if (localLight) null else {
                     com.rokidlab.phone.ai.AgentTaskStore.pendingContext(session.appContext)
                 }
-                messages.put(
-                    service.buildSystemMessage(
-                        contextText = mergedContext,
-                        instruction = instruction,
-                        memories = longTermContext,
-                        skills = skillsContext,
-                        budget = listOfNotNull(taskNote, budgetNote).joinToString("\n\n").ifBlank { null },
-                        localMode = localLight,
-                    ),
-                )
-                if (effectiveRecord) {
-                    agentSession.getHistory().forEach { msg ->
-                        messages.put(JSONObject().apply {
-                            put("role", msg.role)
-                            put("content", msg.content)
-                        })
-                    }
-                }
+                // 事件流：把本轮**实际注入提示词的上下文**记下来。改造前这些注入是一次性的 ——
+                // 拼进 system、发出去、消失，用户问"它怎么知道这个"时无从回溯。
+                // 超长自动截断并标记（见 AgentSessionStore.appendContextInject）。
+                agentTurn?.contextInject("memory", longTermContext)
+                agentTurn?.contextInject("knowledge", mergedContext)
+                agentTurn?.contextInject("skills", skillsContext)
+                agentTurn?.contextInject("task", taskNote)
+                agentTurn?.contextInject("budget", budgetNote)
+                // 当前提问那条 user 消息（多模态时 content 是 text + image_url 分片数组）。
+                // 独立构造一次：溢出恢复要整体重建 messages，重建时复用同一条提问。
                 val userMsg = JSONObject()
                 userMsg.put("role", "user")
-                userMsg.put("content", text)
-                messages.put(userMsg)
+                if (imageBase64.isNullOrBlank()) {
+                    userMsg.put("content", text)
+                } else {
+                    // 多模态：content 改成分片数组。文本在前、图片在后 —— 先给"要做什么"再给素材，
+                    // 符合模型读取指令+素材的常规顺序。
+                    // data URL 前缀必须带（OpenAI 兼容服务靠它判图片类型），base64 本体不含换行
+                    // （`Base64.NO_WRAP`），否则 JSON 里出现裸换行会直接坏掉请求体。
+                    userMsg.put(
+                        "content",
+                        JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("type", "text")
+                                put("text", text)
+                            })
+                            put(JSONObject().apply {
+                                put("type", "image_url")
+                                put(
+                                    "image_url",
+                                    JSONObject().put("url", "data:image/jpeg;base64,$imageBase64"),
+                                )
+                            })
+                        },
+                    )
+                }
+                // 消息序列的**装配**抽成可重放的 lambda（compaction 接缝的 CONTEXT_OVERFLOW 需要）。
+                //
+                // 溢出恢复**不能**就地删掉 in-flight 里最早的 assistant/tool 段：拆散
+                // assistant(tool_calls) 与它对应的 tool 结果，服务端会直接以 400 拒绝
+                // （这正是 DSH 要求"压缩范围保持 tool-call/result 配对平衡"的那件事）。
+                // 「丢掉本轮已累积的一切、按压缩后的历史重新装配一遍」是唯一协议合法的收敛方式。
+                val buildMessages: () -> JSONArray = {
+                    JSONArray().apply {
+                        put(
+                            service.buildSystemMessage(
+                                contextText = mergedContext,
+                                instruction = instruction,
+                                memories = longTermContext,
+                                skills = skillsContext,
+                                budget = listOfNotNull(taskNote, budgetNote).joinToString("\n\n").ifBlank { null },
+                                localMode = localLight,
+                                sessionPrompt = sessionPrompt,
+                            ),
+                        )
+                        // 本轮**之前**的历史（不含本轮）：本轮用户消息在下面单独构造 ——
+                        // 多模态时它是 text+image_url 分片数组，而事件流里只存文本（base64 不落盘）。
+                        // 这句读的是"当前投影"，所以溢出恢复重跑它时拿到的是**压缩之后**的历史，
+                        // 而不是冻结在轮次开始时的旧快照（否则压完再发一次还是原来那条超长请求）。
+                        agentTurn?.historyForRequest()?.forEach { msg ->
+                            put(JSONObject().apply {
+                                put("role", msg.role)
+                                put("content", msg.content)
+                            })
+                        }
+                        put(userMsg)
+                    }
+                }
+                // var（不是 val）：溢出恢复时整体替换，见下方 callModel 的 catch
+                var messages = buildMessages()
 
                 // 可用工具随会话推进可变：主 Agent 全量域起步；命中 AIUI 生成场景后切到精简
                 // AIUI 子集，每轮少发 ~14 个无关工具 Schema（省 input session.token、加快 prefill）。
@@ -707,7 +813,44 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 // 瞬断等瞬时错误）自动重试一次（500ms 退避）再如实回报模型——瞬时失败直接
                 // 上报会让模型过早放弃或向用户播报失败；业务性失败（"没有找到歌曲"等字符串
                 // 返回值）不重试，语义已经是确定性结果。
-                fun runTool(tc: com.rokidlab.phone.ai.ToolCallInfo): String {
+                fun executeTool(tc: com.rokidlab.phone.ai.ToolCallInfo): String {
+                    // ★ 参数解析 + 审批闸门在**重试循环之外**只过一遍（改造前闸门藏在 else 分支里，
+                    //   每次重试都会重新 `check`）。两个理由：
+                    //   ① 瞬时失败重试是同一次调用的重放，不该重复扣限流配额、
+                    //      更不该重复弹眼镜确认（用户会看到同一个问题被问两次）；
+                    //   ② 伪工具（manage_memory / load_skill / load_skill_section / update_plan）
+                    //      原先走下面 when 的前置分支、**完全绕过任何闸门**，现在与真实工具同一条判定。
+                    //
+                    // 参数 JSON 非法（非空白却解析失败）：多半是模型单次输出被 max_tokens 截断、
+                    // 工具参数在半途断开（少数是模型格式瑕疵）。旧实现沿用 ToolRegistry.execute 的
+                    // 「非法即兜底成空对象」策略，下游只会回「保存失败：项目名不能为空」这类误导性错误
+                    // —— 模型看不出真实原因，往往原样重试同样大的内容，白耗轮次。这里直接告诉它真因，
+                    // 且**不重试**（确定性失败，重试只是白等 500ms）。
+                    // 空白参数仍按空对象处理（国产/本地模型对无参工具常返回 ""）。
+                    val argsObj = if (tc.arguments.isBlank()) {
+                        org.json.JSONObject()
+                    } else {
+                        runCatching { org.json.JSONObject(tc.arguments) }.getOrNull()
+                    }
+                    if (argsObj == null) {
+                        return "工具 ${tc.name} 的参数不是合法 JSON（多半是内容太长被输出长度" +
+                            "截断，也可能是格式有误）。请修正后重发，不要原样重试：内容过长就拆小" +
+                            "——一次只写一个文件、单个文件不超过 120 行、多个文件分多次调用。"
+                    }
+                    // 唯一审批入口：未知名 / per-source 限流 / 本机模式下的眼镜依赖 /
+                    // 外部副作用的眼镜端确认，全在 ApprovalGate 里判（不再有第二条判定路径）。
+                    val decision = com.rokidlab.phone.ai.approval.ApprovalGate.preExecute(
+                        com.rokidlab.phone.ai.approval.ToolSource.CONVERSATION,
+                        tc.name,
+                        argsObj,
+                        // 本机模式（link == null）：用户明确说了不经眼镜 → 眼镜类工具单调拒绝
+                        localOnly = phoneOnly,
+                    )
+                    if (decision is com.rokidlab.phone.ai.approval.ToolDecision.Deny) {
+                        Log.w(TAG, "tool ${tc.name} denied by approval gate: [${decision.origin}] ${decision.reason}")
+                        return "工具 ${tc.name} 被安全策略拦截：${decision.reason}。" +
+                            "请换用其他合适的方式完成任务，或如实告知用户。"
+                    }
                     // A3 修复：带副作用的工具（拨号/短信/日历/安装/打开应用等）失败不重试，
                     // 否则隧道瞬断（命令已送达、回执丢失）会触发重复拨号/重复建日程等不可逆后果。
                     val sideEffecting = com.rokidlab.phone.ai.ToolRegistry.SIDE_EFFECT_TOOLS.contains(tc.name)
@@ -732,36 +875,8 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                                     com.rokidlab.phone.ai.SkillRegistry.executeSection(session.appContext, tc.arguments)
                                 com.rokidlab.phone.ai.AgentPlan.TOOL_NAME ->
                                     com.rokidlab.phone.ai.AgentPlan.execute(tc.arguments)
-                                else -> {
-                                    // 参数 JSON 非法（非空白却解析失败）：多半是模型单次输出被 max_tokens
-                                    // 截断、工具参数在半途断开（少数是模型格式瑕疵）。旧实现沿用 ToolRegistry.execute
-                                    // 的「非法即兜底成空对象」策略，下游只会回「保存失败：项目名不能为空」
-                                    // 这类误导性错误 —— 模型看不出真实原因，往往原样重试同样大的内容，
-                                    // 白耗轮次。这里把真实原因直接告诉它。
-                                    // 空白参数仍按空对象处理（国产/本地模型对无参工具常返回 ""）。
-                                    val argsObj = if (tc.arguments.isBlank()) {
-                                        org.json.JSONObject()
-                                    } else {
-                                        runCatching { org.json.JSONObject(tc.arguments) }.getOrNull()
-                                    }
-                                    if (argsObj == null) {
-                                        "工具 ${tc.name} 的参数不是合法 JSON（多半是内容太长被输出长度" +
-                                            "截断，也可能是格式有误）。请修正后重发，不要原样重试：内容过长就拆小" +
-                                            "——一次只写一个文件、单个文件不超过 120 行、多个文件分多次调用。"
-                                    } else when (
-                                        val policy = com.rokidlab.phone.ai.ToolPolicy.check(
-                                            com.rokidlab.phone.ai.ToolPolicy.SOURCE_CONVERSATION,
-                                            tc.name,
-                                            argsObj,
-                                        )
-                                    ) {
-                                        is com.rokidlab.phone.ai.ToolPolicy.Decision.Deny ->
-                                            "工具 ${tc.name} 被安全策略拦截：${policy.reason}。" +
-                                                "请换用其他合适的方式完成任务，或如实告知用户。"
-                                        is com.rokidlab.phone.ai.ToolPolicy.Decision.Allow ->
-                                            ToolRegistry.execute(session.appContext, tc.name, tc.arguments)
-                                    }
-                                }
+                                // 真实工具：参数合法性与审批已在重试循环外统一处理，这里直接执行
+                                else -> ToolRegistry.execute(session.appContext, tc.name, tc.arguments)
                             }
                         } catch (e: Exception) {
                             lastError = e
@@ -775,13 +890,31 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         "参数是否正确？是否换用其他工具或参数？是否把任务拆小？" +
                         "不要原样重复刚才的调用；若换一种方式仍无法完成，请如实告知用户。"
                 }
+
+                /**
+                 * 工具执行 + **事件流记录**的唯一包装。
+                 *
+                 * 事件流在这里成对落 [ToolCall] / [ToolResult]：一次调用一条、结果一条，
+                 * callId 配对。于是"调了但没回来"（进程被杀 / 工具卡死）第一次可以被观察到
+                 * （`AgentSessionStore.orphanToolCalls()`），而改造前它和"调了并成功"
+                 * 在记录上完全一样（只有一条 `name(args)` 字符串）。
+                 *
+                 * 参数与结果都原样落盘（超长由 store 截断并标记）——"它到底传了什么、返回了什么"
+                 * 是排查工具体系问题时的第一现场。
+                 */
+                fun runTool(tc: com.rokidlab.phone.ai.ToolCallInfo): String {
+                    agentTurn?.toolCall(tc.id, tc.name, tc.arguments)
+                    val out = executeTool(tc)
+                    agentTurn?.toolResult(tc.id, tc.name, out)
+                    return out
+                }
+
                 var activeTools = buildTools(
                     if (localLight) ToolRegistry.SESSION_LOCAL_DOMAINS
                     else ToolRegistry.SESSION_AGENT_DOMAINS,
                 )
 
                 var reply = ""
-                val toolTrace = mutableListOf<String>()
                 // 连续空轮计数：空轮 = 既无工具调用也无正文，说明模型在"只思考不出手"。
                 // 实测每轮空转 60-75s，若放任空轮到预算用尽要数分钟，用户侧表现就是"一直等待回复"。
                 var emptyRounds = 0
@@ -801,11 +934,23 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 var actionRounds = 0
                 // 轮次预算是否已触顶（触顶后收尾引导要如实告知"预算用完"，而不是笼统收尾）
                 var budgetExhausted = false
+                // 上下文溢出是否已恢复过一次（compaction 接缝的 CONTEXT_OVERFLOW 入口）。
+                // 整个请求**只允许一次**：第二次仍溢出就照旧上抛，绝不在这里打转 ——
+                // 宁可能力退化成改造前的"提示用户换个短点的问题"，也不要变成"卡住不动"。
+                var overflowRecovered = false
                 // 工具循环：支持多步任务（先查时间再设定时等），同时防止模型反复请求工具导致死循环
                 for (round in 0 until MAX_TOTAL_ROUNDS) {
                     // 用户打断（有更新代际的请求进入）或链路已被替换：放弃后续生成，尽快让出 aiSendLock
                     if (isSuperseded()) {
                         Log.i(TAG, "AI generation superseded at round=$round (gen=$generation, latest=$aiGenSeq), abort")
+                        // 事件流：本轮被抢占 —— 记一次"被抢占的尝试"，并声明本轮**不算数**
+                        // （本轮用户消息在轮次开始时就落盘了，不收尾的话会留下"有 user 没有
+                        //  assistant"的半轮，下一轮请求就会出现两条连续 user → 部分服务端 400）
+                        agentTurn?.attempt(
+                            com.rokidlab.phone.ai.session.AttemptOutcome.SUPERSEDED,
+                            "round=$round",
+                        )
+                        agentTurn?.finish(com.rokidlab.phone.ai.session.TurnEndReason.INTERRUPTED)
                         // 被打断的长任务标为可续做：下轮用户说「继续」即可接着做
                         if (!localLight) {
                             com.rokidlab.phone.ai.AgentTaskStore.markStatus(
@@ -827,27 +972,73 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                     // 每个都写一次 SnapshotStateList 会让主线程持续重组。
                     val reasoningBuf = StringBuilder()
                     var lastThinkEmitAt = 0L
-                    val turn = service.chatTurnStream(
-                        messages,
-                        tools = activeTools,
-                        onDelta = onDelta,
-                        isCancelled = isSuperseded,
-                        // 本地 Ollama 不重试：首字慢是「加载/思考中」而非抖动，重试只会重复加载翻倍等待；
-                        // 远程 3 次配合指数退避（500ms→1s→2s），重放安全边界=尚无 content 推给 UI
-                        retryAttempts = if (localBase) 1 else 3,
-                        // 代码生成模式（已 load_skill(aiui-dev) / 已开始落盘）才放大读超时：模型产出
-                        // 超大工具参数 JSON 前可能长时间无 SSE 数据，30s 会在首包前超时、白白重放整轮。
-                        // 非代码生成轮保持 30s，让「用户打断」的让出时间有界（见 chatTurnStream doc）。
-                        readTimeout = if (aiuiMode) CODE_GEN_READ_TIMEOUT_MS else null,
-                        onReasoning = if (onTrace == null) null else { delta ->
-                            reasoningBuf.append(delta)
-                            val now = System.currentTimeMillis()
-                            if (now - lastThinkEmitAt >= THINKING_EMIT_INTERVAL_MS) {
-                                lastThinkEmitAt = now
-                                onTrace.invoke(AgentStep.thinking(round, reasoningBuf.toString()))
-                            }
-                        },
-                    )
+                    // 本轮模型请求。抽成局部函数是为了在里面接**一次**上下文溢出恢复：
+                    // 改造前溢出只会整轮失败，给用户一句「这次内容太长了，换个短一点的问题再试」——
+                    // 而真正能修的动作（压掉历史再发一次）代码里根本没有。现在命中"输入超长"
+                    // 就强压历史 + 整体重建消息序列 + 原地重试同一轮（递归一层，受
+                    // overflowRecovered 约束；第二次仍溢出会原样抛出，行为退化成改造前）。
+                    fun callModel(): com.rokidlab.phone.ai.ChatTurn = try {
+                        service.chatTurnStream(
+                            messages,
+                            tools = activeTools,
+                            onDelta = onDelta,
+                            isCancelled = isSuperseded,
+                            // 本地 Ollama 不重试：首字慢是「加载/思考中」而非抖动，重试只会重复加载翻倍等待；
+                            // 远程 3 次配合指数退避（500ms→1s→2s），重放安全边界=尚无 content 推给 UI
+                            retryAttempts = if (localBase) 1 else 3,
+                            // 代码生成模式（已 load_skill(aiui-dev) / 已开始落盘）才放大读超时：模型产出
+                            // 超大工具参数 JSON 前可能长时间无 SSE 数据，30s 会在首包前超时、白白重放整轮。
+                            // 非代码生成轮保持 30s，让「用户打断」的让出时间有界（见 chatTurnStream doc）。
+                            readTimeout = if (aiuiMode) CODE_GEN_READ_TIMEOUT_MS else null,
+                            onReasoning = if (onTrace == null) null else { delta ->
+                                reasoningBuf.append(delta)
+                                val now = System.currentTimeMillis()
+                                if (now - lastThinkEmitAt >= THINKING_EMIT_INTERVAL_MS) {
+                                    lastThinkEmitAt = now
+                                    onTrace.invoke(AgentStep.thinking(round, reasoningBuf.toString()))
+                                }
+                            },
+                        )
+                    } catch (e: Exception) {
+                        // 只认**输入侧**超长（ContextOverflow 特意与"输出被 max_tokens 截断"分开：
+                        // 后者压缩历史毫无用处，重试只是白烧一次请求）
+                        if (overflowRecovered ||
+                            !com.rokidlab.phone.ai.compaction.ContextOverflow.isOverflow(e)
+                        ) {
+                            throw e
+                        }
+                        overflowRecovered = true
+                        Log.w(
+                            TAG,
+                            "context overflow rejected by server " +
+                                "(marker=${com.rokidlab.phone.ai.compaction.ContextOverflow.matchedMarker(e)}, " +
+                                "round=$round): ${e.message} —— 压缩历史后重试同一轮",
+                        )
+                        // 事件流：这次失败尝试也要留痕 —— 改造前它只表现为"这轮特别慢"，
+                        // 日志里连"被服务端以超长拒过"都查不到（不进模型历史，见 AssistantAttempt）
+                        agentTurn?.attempt(
+                            com.rokidlab.phone.ai.session.AttemptOutcome.OVERFLOW,
+                            com.rokidlab.phone.ai.compaction.ContextOverflow.matchedMarker(e),
+                        )
+                        val turnForRecovery = agentTurn
+                        val compacted = if (turnForRecovery != null) {
+                            turnForRecovery.compactNow(com.rokidlab.phone.ai.compaction.CompactionTrigger.CONTEXT_OVERFLOW)
+                        } else {
+                            agentSession.compactNow(com.rokidlab.phone.ai.compaction.CompactionTrigger.CONTEXT_OVERFLOW)
+                        }
+                        messages = buildMessages()
+                        Log.i(
+                            TAG,
+                            "overflow recovery: compact=${compacted ?: "nothing to compact"}, " +
+                                "messages rebuilt (${messages.length()} entries)",
+                        )
+                        callModel()
+                    }
+                    val turn = callModel()
+                    // 成本记账：每次成功的模型调用都把真实用量累进本轮（多轮工具循环 = 多次请求，
+                    // 输入 token 每轮都要重发，那才是成本大头）。服务端没给 usage 时记 null，
+                    // 只累加调用次数 —— 绝不用字符数编一个 token 数冒充真实值。
+                    agentTurn?.recordModelCall(turn.usage)
                     // 本轮思考收束：有推理内容就把预览落到过程卡片上（同一个 key 覆盖）
                     onTrace?.invoke(
                         AgentStep.thinking(round, reasoningBuf.toString(), AgentStep.State.OK),
@@ -919,7 +1110,6 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                                 put("arguments", tc.arguments)
                             })
                         })
-                        toolTrace.add("${tc.name}(${tc.arguments})")
                     }
                     assistantMsg.put("tool_calls", calls)
                     messages.put(assistantMsg)
@@ -1083,6 +1273,11 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                     // 用户已打断或链路已失效：跳过非流式兜底请求，直接放弃
                     if (isSuperseded()) {
                         Log.i(TAG, "AI summary superseded (gen=$generation, latest=$aiGenSeq), skip final chat")
+                        agentTurn?.attempt(
+                            com.rokidlab.phone.ai.session.AttemptOutcome.SUPERSEDED,
+                            "summary",
+                        )
+                        agentTurn?.finish(com.rokidlab.phone.ai.session.TurnEndReason.INTERRUPTED)
                         if (!localLight) {
                             com.rokidlab.phone.ai.AgentTaskStore.markStatus(
                                 session.appContext,
@@ -1141,6 +1336,8 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             Log.w(TAG, "summary chatTurn failed: ${e.message}")
                             null
                         }
+                        // 成本记账：收尾轮也是真实请求（且常是大 prompt），一并累进本轮
+                        agentTurn?.recordModelCall(finalTurn?.usage)
                         // 先留下正文（模型可能一边调工具一边给结论），再判断是否继续
                         finalTurn?.content?.takeIf { it.isNotBlank() }?.let { summaryText = it }
                         // 收尾轮逐轮打点：这一阶段此前没有任何日志，出问题时只能从"没有输出"反推
@@ -1166,7 +1363,6 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                                     put("arguments", tc.arguments)
                                 })
                             })
-                            toolTrace.add("${tc.name}(${tc.arguments})")
                         }
                         assistantMsg.put("tool_calls", calls)
                         messages.put(assistantMsg)
@@ -1235,10 +1431,14 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 // 真机事故（2026-09-17 15:11）：眼镜上直接显示 `<answer>西安明天晴，最高31度…`。
                 reply = com.rokidlab.phone.ai.ReplySanitizer.sanitize(reply)
                 replyRef.set(reply)
-                // 记录本轮到会话记忆（含工具轨迹，catch 分支的失败兜底回复不记录，避免污染上下文）
-                if (effectiveRecord) {
-                    agentSession.recordTurn(text, reply, toolTrace)
-                }
+                // 收尾本轮事件流：落 [AssistantMessage] + [TurnEnd]，并做压力裁剪
+                // （= 改造前 recordTurn 里那一步 trim）。工具轨迹不再单独存一份字符串列表 ——
+                // 它由本轮的 ToolCall 事件派生（同一条事实只留一个出处）。
+                agentTurn?.finish(
+                    if (budgetExhausted) com.rokidlab.phone.ai.session.TurnEndReason.BUDGET_EXHAUSTED
+                    else com.rokidlab.phone.ai.session.TurnEndReason.COMPLETED,
+                    reply,
+                )
                 // 任务终态结算（缺口「长任务可恢复」）：计划步骤全 done 或没有计划 → 完成；
                 // 仍有 pending/in_progress → 标为可续做，下轮注入提示词时模型据此接着做。
                 if (!localLight) {
@@ -1253,6 +1453,14 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 // 前的异常）：静默退出，不覆盖 replyRef（保持空），也避免误播"服务不可用"
                 if (isSuperseded()) {
                     Log.i(TAG, "AI generation aborted (superseded, gen=$generation): ${e.message}")
+                    agentTurn?.attempt(
+                        com.rokidlab.phone.ai.session.AttemptOutcome.SUPERSEDED,
+                        e.message,
+                    )
+                    agentTurn?.finish(
+                        com.rokidlab.phone.ai.session.TurnEndReason.INTERRUPTED,
+                        detail = e.message,
+                    )
                     if (!localLightMode) {
                         com.rokidlab.phone.ai.AgentTaskStore.markStatus(
                             session.appContext,
@@ -1263,6 +1471,16 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                     return@namedThread
                 }
                 Log.e(TAG, "DeepSeek API failed", e)
+                // 事件流收尾：本轮失败（未产出结论）→ 记一次失败尝试并把本轮声明为"不算数"，
+                // 与改造前"失败不写会话记忆"的行为一致，但这次**留下了可归因的事实**。
+                agentTurn?.attempt(
+                    com.rokidlab.phone.ai.session.AttemptOutcome.FAILED,
+                    e.message,
+                )
+                agentTurn?.finish(
+                    com.rokidlab.phone.ai.session.TurnEndReason.FAILED,
+                    detail = e.message,
+                )
                 // 如实上报 + 记进 App 内日志面板：此前流式 HTTP 报错被静默吞成空轮，
                 // 用户只看到「我无法处理这个问题」，在「日志」里也找不到任何原因
                 // （2026-09-15 真机事故：连续空轮、日志只有 toolCalls=0 content=null）。

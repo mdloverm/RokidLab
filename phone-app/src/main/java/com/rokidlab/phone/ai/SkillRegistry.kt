@@ -380,13 +380,15 @@ object SkillRegistry {
         val sb = StringBuilder()
         // 1) 目录型技能：优先展示本宿主运行须知（开发前必读），再给主指南目录与参考文件清单
         if (refFiles.isNotEmpty()) {
-            val runtimeName = "lab-runtime.md"
+            val runtimeName = SkillMarkdown.RUNTIME_FILE
             if (runtimeName in refFiles) {
                 val runtimeText = readSkillFileText(context, name, runtimeName)
                 if (runtimeText != null) {
                     val runtimeDoc = SkillMarkdown.parse(runtimeText)
                     val runtimeBody = runtimeDoc?.body ?: runtimeText
-                    if (runtimeBody.length <= SkillMarkdown.MAX_INLINE_CHARS) {
+                    // 宿主须知用**自己的**预算（比通用阈值更宽）：它是所有页面开发的公共前置，
+                    // 退化成"章节目录"等于让模型先点菜才知道"本宿主没有事件循环"，很可能就不知道了。
+                    if (runtimeBody.length <= SkillMarkdown.MAX_RUNTIME_INLINE_CHARS) {
                         sb.append("【$runtimeName · 本宿主运行须知（开发前必读）】\n\n")
                             .append(runtimeText.trim()).append("\n\n")
                     } else {

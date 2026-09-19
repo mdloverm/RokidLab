@@ -283,6 +283,94 @@
     <string name="nav_settings">设置</string>
 
     <!-- 乐奇聊天 -->
+    <!-- 多会话（2026-09-19）：会话列表 / 重命名 / 删除 -->
+    <string name="chat_sessions_title">对话</string>
+    <string name="chat_sessions_new">新建</string>
+    <string name="chat_sessions_close">关闭</string>
+    <string name="chat_sessions_empty">还没有对话</string>
+    <string name="chat_sessions_rename">重命名</string>
+    <string name="chat_sessions_delete">删除</string>
+    <string name="chat_sessions_count">%1$d 条消息</string>
+    <string name="chat_sessions_rename_title">重命名对话</string>
+    <string name="chat_sessions_rename_hint">对话名称</string>
+    <string name="chat_sessions_delete_title">删除这个对话？</string>
+    <string name="chat_sessions_delete_message">「%1$s」的全部消息将被删除，无法恢复。</string>
+    <string name="chat_sessions_records">对话记录图</string>
+    <string name="chat_sessions_prompt">本会话提示词</string>
+
+    <!-- 对话记录视图（节点连接图） -->
+    <string name="chat_records_title">对话记录</string>
+    <string name="chat_records_search_hint">搜索记录（关键词 / 工具名）</string>
+    <string name="chat_records_summary">%1$d 轮 · %2$d 次工具调用 · %3$d 条记录</string>
+    <string name="chat_records_hidden_note">模型看不到的：%1$d 条已被压缩摘要覆盖、%2$d 条已作废（记录仍在）</string>
+    <string name="chat_records_orphan_note">⚠️ 有 %1$d 次工具调用没有收到结果</string>
+    <string name="chat_records_empty">这个会话还没有记录（聊一句再回来看）。</string>
+    <string name="chat_records_no_match">没有匹配「%1$s」的记录。</string>
+    <string name="chat_records_export">导出 md</string>
+    <string name="chat_records_export_done">已导出：%1$s</string>
+    <string name="chat_records_export_failed">导出失败：%1$s</string>
+    <string name="chat_records_copy">复制</string>
+    <string name="chat_records_edit">编辑重发</string>
+    <string name="chat_records_delete">删除这条</string>
+    <string name="chat_records_close">关闭</string>
+    <string name="chat_records_detail_hide">收起详情</string>
+    <string name="chat_records_detail_show">查看详情</string>
+    <string name="chat_records_no_edit">这条记录没有对应的消息（可能是旧记录或未计入历史的轮），只能复制。</string>
+    <string name="chat_records_copied">已复制</string>
+
+    <!-- 本会话提示词 -->
+    <string name="chat_prompt_title">本会话提示词</string>
+    <string name="chat_prompt_hint">只对这次对话生效，追加在人设之后 —— 不会覆盖工具使用规则。留空表示不附加。</string>
+    <string name="chat_prompt_placeholder">例如：用简短的中文回答；先说结论再解释</string>
+    <string name="chat_prompt_clear">清空</string>
+    <string name="chat_common_cancel">取消</string>
+    <string name="chat_common_confirm">确定</string>
+    <!-- 上下文占用（2026-09-19）：把原本静默的裁剪变成可归因的可见状态 -->
+    <string name="chat_context_title">上下文占用</string>
+    <string name="chat_context_warn">上下文已用 %1$d%%，超出会自动压缩早期对话</string>
+    <string name="chat_context_critical">上下文接近上限，最早几轮对话即将被压缩</string>
+    <string name="chat_context_compressed">更早的对话已压缩为摘要</string>
+    <string name="chat_context_compressed_hint">最早几轮的原话已被压缩成摘要，细节可能记不全。</string>
+    <string name="chat_context_messages">历史消息 %1$d / %2$d</string>
+    <string name="chat_context_chars">字符数 %1$d / %2$d</string>
+    <string name="chat_context_explain">乐奇会把最近几轮对话带给模型。超出上限时，最早的对话会被压缩成要点保留 —— 这就是它偶尔「忘记」的原因。开个新对话可以立刻清空上下文。</string>
+    <string name="chat_context_new_session">新建对话</string>
+    <string name="chat_context_compact">立即压缩上下文</string>
+    <string name="chat_context_compact_nothing">已经是最精简了，没有可压缩的早期对话。</string>
+    <string name="chat_context_window_limited">上限已按当前模型的上下文窗口自动调整 —— 小窗口收紧，大窗口放宽。</string>
+    <string name="chat_events_open">查看执行轨迹</string>
+    <string name="chat_events_title">执行轨迹</string>
+    <string name="chat_events_hint">这是乐奇在这次会话里看到的与做过的每一件事。点任意一条可展开原文。</string>
+    <string name="chat_events_summary">%1$d 轮 · %2$d 次工具调用 · %3$d 次上下文注入</string>
+    <string name="chat_events_empty">这个会话还没有可查看的轨迹（聊一句再回来看）。</string>
+    <string name="chat_events_close">关闭</string>
+    <string name="chat_events_filter_all">全部</string>
+    <string name="chat_events_cat_message">对话</string>
+    <string name="chat_events_cat_tool">工具</string>
+    <string name="chat_events_cat_inject">注入</string>
+    <string name="chat_events_cat_compaction">压缩</string>
+    <string name="chat_events_cat_cut">作废</string>
+    <string name="chat_events_cat_lifecycle">过程</string>
+    <string name="chat_trace_cost_tokens">输入 %1$s / 输出 %2$s</string>
+    <string name="chat_trace_cost_calls">%1$d 次模型调用</string>
+    <string name="chat_trace_cost_elapsed">耗时 %1$s</string>
+    <string name="chat_trace_cost_unknown">本轮用量未知（服务端未返回）</string>
+    <string name="chat_context_tokens">最近一轮 token：输入 %1$d / 输出 %2$d</string>
+    <string name="chat_context_tokens_est">最近一轮输出约 %1$d 字（服务端未返回用量，无法给出 token 数）</string>
+    <string name="chat_context_elapsed">耗时 %1$.1f 秒</string>
+    <string name="chat_context_model_calls">%1$d 次模型调用</string>
+    <string name="chat_context_session_total">本会话累计 token：输入 %1$d / 输出 %2$d（%3$d 轮统计到的真实用量）</string>
+    <!-- 消息级操作（2026-09-19） -->
+    <string name="chat_msg_actions">消息操作</string>
+    <string name="chat_msg_copy">复制</string>
+    <string name="chat_msg_copied">已复制</string>
+    <string name="chat_msg_edit">编辑重发</string>
+    <string name="chat_msg_regenerate">重新生成</string>
+    <string name="chat_msg_delete">删除这条</string>
+    <string name="chat_msg_delete_title">删除这条消息？</string>
+    <string name="chat_msg_delete_message">删除后无法恢复。</string>
+    <string name="chat_msg_edit_title">编辑并重发</string>
+    <string name="chat_msg_edit_hint">修改后将从这条重新提问，其后的对话会被清掉。</string>
     <string name="chat_title">乐奇聊天</string>
     <string name="chat_subtitle">文字对话 · 眼镜播报</string>
     <string name="chat_input_hint">输入消息...</string>
@@ -313,6 +401,20 @@
     <string name="chat_settings_base_url">服务地址</string>
     <string name="chat_settings_api_key">API 密钥</string>
     <string name="chat_settings_model">模型名</string>
+    <string name="chat_settings_image_input">图像理解</string>
+    <string name="chat_settings_image_input_hint">拍照直接发给模型；需模型支持图像，不支持则自动转文字</string>
+    <string name="chat_settings_expand_trace">展开「过程」</string>
+    <string name="chat_settings_expand_trace_hint">显示每一步的思考、工具调用与本轮 token；关掉后只留一行标题</string>
+    <!-- 模型能力（llm 接缝）：图像开关的可用性由能力结论决定，不再让用户自己猜 -->
+    <string name="chat_settings_image_unsupported">当前模型不支持图像输入，拍照将先转成文字</string>
+    <string name="chat_settings_image_unknown">该模型是否支持图像输入尚未确认，可点「检测」实测</string>
+    <string name="chat_settings_image_detect">检测</string>
+    <string name="chat_settings_image_detecting">检测中…</string>
+    <string name="chat_settings_image_detect_ok">检测通过：该模型支持图像输入</string>
+    <string name="chat_settings_image_detect_bad">检测未通过：该模型不支持图像输入</string>
+    <string name="chat_settings_image_detect_unknown">检测没得出结论，请稍后再试</string>
+    <string name="chat_settings_cap_context">上下文窗口 %1$s</string>
+    <string name="chat_settings_cap_tools">支持工具调用</string>
     <string name="chat_settings_continue">连续对话</string>
     <string name="chat_settings_continue_hint">播报结束后自动续听，无需再次唤醒</string>
     <string name="chat_settings_quiz">按键答题</string>
@@ -399,6 +501,9 @@
 
     <!-- 乐奇聊天 - 拍照问 AI -->
     <string name="chat_photo_ask">拍照问 AI</string>
+    <string name="chat_photo_vision_question">请根据这张图片回答</string>
+    <string name="chat_photo_vision_fallback">模型无法识图，改用本地文字识别…</string>
+    <string name="chat_photo_vision_unsupported">该模型不支持看图，已改用文字识别</string>
     <string name="chat_kb">知识库</string>
     <string name="chat_photo_status">正在让眼镜拍照...</string>
     <string name="chat_ocr_status">正在识别题目文字...</string>
@@ -437,6 +542,18 @@
     <string name="agent_longterm_clear">清空长期记忆</string>
     <string name="agent_longterm_clear_confirm">清空全部长期记忆？AI 将忘记已记住的用户偏好与个人信息。</string>
     <string name="agent_longterm_cleared">长期记忆已清空</string>
+    <string name="agent_longterm_manage">查看与编辑</string>
+    <string name="agent_longterm_manage_title">长期记忆</string>
+    <string name="agent_longterm_manage_hint">这些是乐奇跨会话记住的关于你的事实与偏好。发现记错了可以直接改，或者删掉——不需要重新跟它说一遍。</string>
+    <string name="agent_longterm_manage_loading">读取中…</string>
+    <string name="agent_longterm_manage_empty">还没有长期记忆。跟乐奇说「记住我喜欢…」就会出现在这里。</string>
+    <string name="agent_longterm_item_delete">删除这一条</string>
+    <string name="agent_longterm_item_edit">编辑这一条</string>
+    <string name="agent_longterm_save">保存</string>
+    <string name="agent_longterm_updated">已更新</string>
+    <string name="agent_longterm_deleted">已删除</string>
+    <string name="agent_longterm_update_failed">没改成：内容不能为空，也不能与已有记忆完全重复</string>
+    <string name="agent_longterm_close">关闭</string>
 
     <!-- Store main interface -->
     <string name="featured_apps">精选应用</string>
@@ -600,6 +717,14 @@
     <string name="ai_tool_clear_agent_task_desc">放弃未完成任务的续做记录</string>
     <string name="ai_tool_search_past_conversations_name">检索历史对话</string>
     <string name="ai_tool_search_past_conversations_desc">在历史聊天记录里检索</string>
+    <string name="ai_tool_list_sessions_name">列出历史对话</string>
+    <string name="ai_tool_list_sessions_desc">列出已保存的历史会话</string>
+    <string name="ai_tool_read_session_name">读取历史对话</string>
+    <string name="ai_tool_read_session_desc">读取某会话的对话与调用详情</string>
+    <string name="ai_tool_session_trace_name">查看工具调用链</string>
+    <string name="ai_tool_session_trace_desc">查看某轮调过哪些工具</string>
+    <string name="ai_tool_research_subtask_name">派子任务查资料</string>
+    <string name="ai_tool_research_subtask_desc">让子助手多轮查资料并给结论</string>
     <string name="chat_settings_aiui">AIUI 应用管理</string>
     <string name="chat_settings_aiui_hint">管理对话生成或上传的智能体应用</string>
     <string name="aiui_manage_title">AIUI 应用管理</string>

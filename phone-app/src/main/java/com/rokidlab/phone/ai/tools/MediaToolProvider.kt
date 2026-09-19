@@ -1,5 +1,8 @@
 package com.rokidlab.phone.ai.tools
 
+import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.ToolRisk
+
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Base64
@@ -46,6 +49,82 @@ internal object MediaToolProvider : ToolProvider {
         "show_lyrics",
         "get_now_playing",
         "get_cover_image",
+    )
+
+    override fun tools(): List<ToolEntry> = listOf(
+        ToolEntry(
+            name = "control_music",
+            group = ToolRegistry.DOMAIN_MEDIA,
+            displayNameRes = R.string.ai_tool_control_music_name,
+            descriptionRes = R.string.ai_tool_control_music_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在处理音乐播放…",
+            schema = toolSchema(
+                name = "control_music",
+                description = "控制手机上的音乐播放，一个工具管两种意图。action=\"play\"：播放指定歌曲（用户说「播放某某歌」「来一首某歌」「放首某某的歌」）——必须给 songName，会联网搜索并直接播放。action=\"stop\"：停止当前播放（用户说「停止播放」「别放了」「停一下」「不听了」）。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "action" to mapOf("type" to "string", "enum" to listOf("play", "stop"), "description" to "play=播放指定歌曲；stop=停止当前播放"),
+                        "songName" to mapOf("type" to "string", "description" to "action=play 时的歌曲名称，如「晴天」「海阔天空」"),
+                        "artist" to mapOf("type" to "string", "description" to "可选，歌手名，用于同名歌曲消歧，如「周杰伦」"),
+                    ),
+                    "required" to listOf("action"),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "show_lyrics",
+            group = ToolRegistry.DOMAIN_MEDIA,
+            displayNameRes = R.string.ai_tool_show_lyrics_name,
+            descriptionRes = R.string.ai_tool_show_lyrics_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            requiresGlasses = true,
+            statusText = "正在打开歌词…",
+            schema = toolSchema(
+                name = "show_lyrics",
+                description = "在 Rokid 眼镜上显示当前播放歌曲的歌词：会主动打开眼镜上的音乐页并逐行实时刷新歌词。当用户说“显示歌词”“打开歌词”“看歌词”“我要看歌词”时调用，仅在音乐正在播放时有效。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "get_now_playing",
+            group = ToolRegistry.DOMAIN_MEDIA,
+            displayNameRes = R.string.ai_tool_get_now_playing_name,
+            descriptionRes = R.string.ai_tool_get_now_playing_desc,
+            risk = ToolRisk.READ_ONLY,
+            statusText = "正在读取播放信息…",
+            schema = toolSchema(
+                name = "get_now_playing",
+                description = "读取当前播放歌曲的完整信息，返回 JSON 文本：歌名 title、歌手 artist、专辑 album、时长 durationMs、当前进度 positionMs、是否仍在准备 preparing、当前歌词行号 lineIndex、封面图地址 cover、逐行歌词 lyrics（每行含 timeMs 与 text）。play_song 之后**立刻**调它就能拿到 cover 与 lyrics（正在准备中 playing 也为 true，无需等待、无需轮询）；AIUI 播放器页面用它取封面与歌词来渲染；语音场景下用户问“现在放的是什么歌”时也可调用。没有正在播放的音乐时返回 playing=false。不要把本工具放进定时器反复调用——AIUI 页面每分钟上限 30 次，轮询会把额度耗尽导致此后每次调用都被拒。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "get_cover_image",
+            group = ToolRegistry.DOMAIN_MEDIA,
+            displayNameRes = R.string.ai_tool_get_cover_image_name,
+            descriptionRes = R.string.ai_tool_get_cover_image_desc,
+            hidden = true,
+            risk = ToolRisk.READ_ONLY,
+            statusText = "正在获取歌曲封面…",
+            schema = toolSchema(
+                name = "get_cover_image",
+                description = "取当前播放歌曲的封面图，返回可直接放进页面显示的 data URL（image/jpeg + base64 纯文本）。为什么必须有这个工具：眼镜端整机没有网络，AIUI 页面里直接写远程图片地址（https://…）一定加载失败，封面只能由手机侧取好再下发。AIUI 播放器页面拿到 get_now_playing 的曲目信息后可调用本工具拿封面；用户说“显示封面”“看下封面”时也可调用。没有在播歌曲或该曲无封面时返回一句中文说明。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            ),
+        ),
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
@@ -137,7 +216,7 @@ internal object MediaToolProvider : ToolProvider {
      * 若这里只报 `isPlaying()`，页面第一次取数就拿到 `playing:false`（尽管本响应里
      * `cover`/`lyrics` 其实**已经齐全**），于是把这份有效载荷判死、退化成「等起播」轮询
      * （实测生成的页面是每 1.5~2 秒一次、最多 40 次）→ 一分钟内必然撞满
-     * [com.rokidlab.phone.ai.ToolPolicy] 给 AIUI 页面的 30 次/分钟限流 → 此后**每次取数
+     * [com.rokidlab.phone.ai.approval.ApprovalGate] 给 AIUI 页面的 30 次/分钟限流 → 此后**每次取数
      * 都被拒绝**。用户看到的现象就是：歌正常在放（音频走手机端 MediaPlayer，与页面无关），
      * 但页面的歌词与封面**永远是空的**。
      * 把「已选好曲、正在准备/播放」统一算作 `playing=true`，页面第一次取数即拿到素材，

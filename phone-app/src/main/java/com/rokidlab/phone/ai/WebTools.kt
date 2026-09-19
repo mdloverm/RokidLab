@@ -46,6 +46,16 @@ object WebTools {
 
     private data class FetchResult(val title: String, val text: String)
 
+    /**
+     * 抓取时刻的本地时间戳（来源标注用）。
+     *
+     * 存在的理由：联网结果是**那一刻的快照**，而回答里如果不带时间锚点，
+     * 用户就无法判断这个结论今天是否还成立（时效性问题几乎全出在这里）。
+     */
+    private fun stamp(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date())
+
     // ═══════════════════════════════════════════════════
     // 搜索
     // ═══════════════════════════════════════════════════
@@ -71,6 +81,9 @@ object WebTools {
             items.take(MAX_SEARCH_RESULTS).mapIndexed { i, it ->
                 "[${i + 1}] ${it.title}\n    链接：${it.url}\n    摘要：${it.snippet}"
             }.joinToString("\n\n") +
+                // 来源标注（方案 §4.3.3b）：搜索结果是**检索那一刻**的快照，模型拿它回答后
+                // 用户看到的却是一个没有时间锚点的结论 —— 标明时间，用户才能判断它是否还成立。
+                "\n\n（以上为网络搜索结果，抓取时间：${stamp()}）" +
                 "\n\n提示：如需深入了解，请对最相关的链接调用 fetch_webpage 读取正文后总结。"
         } catch (e: Exception) {
             Log.e(TAG, "search failed: $q -> ${e.message}")
@@ -126,6 +139,10 @@ object WebTools {
                 text
             }
             buildString {
+                // 来源标注（方案 §4.3.3b）：只给正文而不给 URL，模型就**无法**在回答里注明出处，
+                // 用户也就无从核对 —— "看起来像真的"和"可被核对"的差别全在这一行。
+                append("来源：").append(u).append('\n')
+                append("抓取时间：").append(stamp()).append('\n')
                 append("网页标题：").append(page.title.ifBlank { "（无标题）" }).append("\n\n")
                 append(truncated)
             }

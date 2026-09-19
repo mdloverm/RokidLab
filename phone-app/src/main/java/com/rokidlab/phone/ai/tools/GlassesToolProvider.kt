@@ -1,5 +1,8 @@
 package com.rokidlab.phone.ai.tools
 
+import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.ToolRisk
+
 import android.content.Context
 import android.util.Log
 import com.rokidlab.phone.ai.AiuiAppRegistry
@@ -35,6 +38,66 @@ internal object GlassesToolProvider : ToolProvider {
         "get_glasses_status",
         "list_glasses_apps",
         "launch_glasses_app",
+    )
+
+    override fun tools(): List<ToolEntry> = listOf(
+        ToolEntry(
+            name = "get_glasses_status",
+            group = ToolRegistry.DOMAIN_GLASSES,
+            displayNameRes = R.string.ai_tool_get_glasses_status_name,
+            descriptionRes = R.string.ai_tool_get_glasses_status_desc,
+            risk = ToolRisk.READ_ONLY,
+            requiresGlasses = true,
+            statusText = "正在查询眼镜状态…",
+            schema = toolSchema(
+                name = "get_glasses_status",
+                description = "查询 Rokid 眼镜的整体状态，一次返回三部分：①电量百分比与充电状态；②存储空间占用（已用/剩余）；③设备系统信息（型号、厂商、Android 版本、SDK 版本、序列号）。凡是问眼镜自身状况的都调用本工具 —— 「眼镜还有多少电」「要充电吗」「存储还剩多少」「内存够不够」「什么型号」「什么版本」「系统信息/设备信息」。数值由设备实时读取，不要凭印象回答。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "list_glasses_apps",
+            group = ToolRegistry.DOMAIN_GLASSES,
+            displayNameRes = R.string.ai_tool_list_glasses_apps_name,
+            descriptionRes = R.string.ai_tool_list_glasses_apps_desc,
+            risk = ToolRisk.READ_ONLY,
+            requiresGlasses = true,
+            statusText = "正在查询应用列表…",
+            schema = toolSchema(
+                name = "list_glasses_apps",
+                description = "列出 Rokid 眼镜上安装的应用。当用户询问眼镜装了哪些应用、有没有某个应用时调用。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "includeSystem" to mapOf("type" to "boolean", "description" to "是否包含系统应用，默认 false"),
+                    ),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "launch_glasses_app",
+            group = ToolRegistry.DOMAIN_GLASSES,
+            displayNameRes = R.string.ai_tool_launch_glasses_app_name,
+            descriptionRes = R.string.ai_tool_launch_glasses_app_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            requiresGlasses = true,
+            statusText = "正在打开应用…",
+            schema = toolSchema(
+                name = "launch_glasses_app",
+                description = "打开眼镜上安装的应用。当用户说“打开某应用”“启动某应用”时调用。传入用户口中的应用名称（如“小智”“Via”“小游戏”），不需要包名。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "appName" to mapOf("type" to "string", "description" to "用户想要打开的应用名称，原样转述用户的话，如“小智”“浏览器”“B站”"),
+                    ),
+                    "required" to listOf("appName"),
+                ),
+            ),
+        ),
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {

@@ -38,6 +38,12 @@ class LabApplication : Application() {
 
         /** 乐奇聊天「本机模式」持久化键（见 [chatLocalOnlyEnabled]） */
         private const val PREFS_CHAT_LOCAL_ONLY = "chat_local_only"
+
+        /** 乐奇聊天「图像理解」持久化键（见 [chatImageInputEnabled]） */
+        private const val PREFS_CHAT_IMAGE_INPUT = "chat_image_input"
+
+        /** 乐奇聊天「过程区块默认展开」持久化键（见 [chatExpandTraceEnabled]） */
+        private const val PREFS_CHAT_EXPAND_TRACE = "chat_expand_trace"
         private const val CHANNEL_KEEP_ALIVE_FGS = "keep_alive_fgs"
     }
     lateinit var cxrL: CxrLHiRokidSession
@@ -144,6 +150,35 @@ class LabApplication : Application() {
     var chatLocalOnlyEnabled: Boolean = false
         private set
 
+    /**
+     * 乐奇聊天「图像理解」开关（**默认关**）。
+     *
+     * - 关：拍照问 AI 走本地 OCR（PP-OCRv4）把图转成文字再交给模型。不依赖模型能力，
+     *   但只留下文字 —— 版式、图形、颜色、空间关系全部丢失（图表/手写/乐谱会失真）。
+     * - 开：照片以 `image_url`（data URL）直接进模型，保留视觉信息。
+     *   **能否生效取决于当前配置的模型是否支持图像输入** —— 不支持时服务端会拒绝，
+     *   我们会自动回退到 OCR 并在气泡里说明，不会让用户卡在失败状态。
+     *
+     * 由「乐奇聊天 AI 设置」页切换（连续对话开关的上方）。
+     */
+    var chatImageInputEnabled: Boolean = false
+        private set
+
+    /**
+     * 乐奇聊天「过程区块默认展开」开关（**默认开**）。
+     *
+     * - 开：AI 回复上方的「过程」卡片（思考 / 工具调用时间线 + 本轮 token 成本）展开显示。
+     * - 关：只显示一行标题，点一下才展开。
+     *
+     * 默认开是有依据的：这张卡片存在的理由就是回答"它到底做了什么"，
+     * 默认收起等于把功能藏起来（`TraceBlock` 的注释里写着这条）。关掉它的场景是
+     * **一轮里工具调用很多**——例如连着放几首歌，过程卡片会把对话列表撑得很长。
+     *
+     * 由「乐奇聊天 AI 设置」页切换（图像理解开关的下方）。
+     */
+    var chatExpandTraceEnabled: Boolean = true
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -167,6 +202,10 @@ class LabApplication : Application() {
                 Log.i(TAG, "tool risk table OK: ${com.rokidlab.phone.ai.ToolRegistry.toolList.size} tools all registered")
             }
         }
+
+        // Agent 会话记忆（事件流落盘）：必须先于 ChatStateHolder —— 后者的 bootstrap
+        // 读完会话索引后会调 AgentSessionManager.bindSession()，那时需要 appContext 已就位
+        com.rokidlab.phone.ai.AgentSessionManager.init(this)
 
         // 加载聊天历史落盘记录（App 重启后恢复对话）
         com.rokidlab.phone.store.ChatStateHolder.init(this)
@@ -196,6 +235,10 @@ class LabApplication : Application() {
         keepAliveEnabled = prefs.getBoolean(PREFS_KEEP_ALIVE, true)
 
         chatLocalOnlyEnabled = prefs.getBoolean(PREFS_CHAT_LOCAL_ONLY, false)
+
+        chatImageInputEnabled = prefs.getBoolean(PREFS_CHAT_IMAGE_INPUT, false)
+
+        chatExpandTraceEnabled = prefs.getBoolean(PREFS_CHAT_EXPAND_TRACE, true)
         
         // 从 SharedPreferences 恢复眼镜 IP（单一数据源 glasses_ip，兼容历史多键与 adb_prefs）
         val adbLegacyIp = getSharedPreferences("adb_prefs", MODE_PRIVATE).getString("ip", "") ?: ""
@@ -330,6 +373,29 @@ class LabApplication : Application() {
         chatLocalOnlyEnabled = enabled
         prefs.edit().putBoolean(PREFS_CHAT_LOCAL_ONLY, enabled).apply()
         Log.i(TAG, "chat local-only mode -> $enabled")
+    }
+
+    /**
+     * 切换乐奇聊天「图像理解」（见 [chatImageInputEnabled]）。
+     *
+     * 与 [setChatLocalOnlyEnabled] 同样是"只落盘 + 改内存标志"，在**每次拍照**时读取，
+     * 因此下一步操作就生效，不需要重连或重启。
+     */
+    fun setChatImageInputEnabled(enabled: Boolean) {
+        chatImageInputEnabled = enabled
+        prefs.edit().putBoolean(PREFS_CHAT_IMAGE_INPUT, enabled).apply()
+        Log.i(TAG, "chat image input -> $enabled")
+    }
+
+    /**
+     * 切换乐奇聊天「过程区块默认展开」（见 [chatExpandTraceEnabled]）。
+     *
+     * 只落盘 + 改内存标志，聊天页每次进入时读取 —— 不需要重启，也不会打断正在进行的对话。
+     */
+    fun setChatExpandTraceEnabled(enabled: Boolean) {
+        chatExpandTraceEnabled = enabled
+        prefs.edit().putBoolean(PREFS_CHAT_EXPAND_TRACE, enabled).apply()
+        Log.i(TAG, "chat expand trace -> $enabled")
     }
 
     /** 启动后台保活前台服务（App 打开时调用；保活开启时后台能力常驻） */

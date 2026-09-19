@@ -271,4 +271,46 @@ class ChatHistoryStoreTest {
         ChatHistoryStore.appendLine(nested, ChatHistoryStore.toLine(msg(1, "a")))
         assertEquals(listOf("a"), ChatHistoryStore.readHistory(nested).map { it.content })
     }
+
+    // ── 本轮 token 成本（「过程」区块右下角）──
+
+    @Test
+    fun `用量往返保留四个字段`() {
+        val src = msg(3, "答").copy(
+            usage = MsgUsage(inputTokens = 19518, outputTokens = 73, modelCalls = 2, elapsedMs = 1968L),
+        )
+        val back = ChatHistoryStore.parse(ChatHistoryStore.toLine(src)).single()
+        assertEquals(19518, back.usage?.inputTokens)
+        assertEquals(73, back.usage?.outputTokens)
+        assertEquals(2, back.usage?.modelCalls)
+        assertEquals(1968L, back.usage?.elapsedMs)
+    }
+
+    @Test
+    fun `拿不到的用量读回 null 而不是 0`() {
+        // 服务端不返回 usage 时 token 数是 null = "不知道"。落盘再读回来必须还是 null：
+        // 面板上写「输入 0 / 输出 0」是**错误信息**，比不显示更糟（用户会拿它当账单）。
+        val src = msg(4, "答").copy(
+            usage = MsgUsage(inputTokens = null, outputTokens = null, modelCalls = 3, elapsedMs = null),
+        )
+        val back = ChatHistoryStore.parse(ChatHistoryStore.toLine(src)).single()
+        assertNull(back.usage?.inputTokens)
+        assertNull(back.usage?.outputTokens)
+        assertEquals(3, back.usage?.modelCalls)
+        assertNull(back.usage?.elapsedMs)
+    }
+
+    @Test
+    fun `没有用量时不落字段且回放为 null`() {
+        val plain = msg(5, "纯文本")
+        assertFalse("无用量不该写字段", ChatHistoryStore.toLine(plain).contains("usage"))
+        assertNull(ChatHistoryStore.parse(ChatHistoryStore.toLine(plain)).single().usage)
+    }
+
+    @Test
+    fun `四个字段全空时整组不落盘`() {
+        val empty = msg(6, "答").copy(usage = MsgUsage(null, null, null, null))
+        assertFalse("全空不该留下一个空对象", ChatHistoryStore.toLine(empty).contains("usage"))
+        assertNull(ChatHistoryStore.parse(ChatHistoryStore.toLine(empty)).single().usage)
+    }
 }

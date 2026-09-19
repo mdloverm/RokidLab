@@ -1,5 +1,8 @@
 package com.rokidlab.phone.ai.tools
 
+import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.ToolRisk
+
 import android.content.Context
 import android.util.Log
 import com.rokidlab.phone.ai.AiuiAppRegistry
@@ -37,6 +40,93 @@ internal object AiuiToolProvider : ToolProvider {
         "stop_aiui_app",
         "install_aiui_project",
         "list_my_aiui_apps",
+    )
+
+    override fun tools(): List<ToolEntry> = listOf(
+        ToolEntry(
+            name = "open_aiui_app",
+            group = ToolRegistry.DOMAIN_AIUI,
+            displayNameRes = R.string.ai_tool_open_aiui_app_name,
+            descriptionRes = R.string.ai_tool_open_aiui_app_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            requiresGlasses = true,
+            statusText = "正在打开智能体应用…",
+            schema = toolSchema(
+                name = "open_aiui_app",
+                description = "在 Rokid 眼镜上打开一个 AIUI 智能体应用（.aix 卡片应用，如“音乐播放”“天气查询”）。当用户说“打开/启动/演示/预览 XXX（智能体名）”“打开智能体”“打开某 AI 应用/小游戏”“用/通过/拿 XXX 智能体去做某事（如“用音乐播放智能体播放七里香”）”等、且该名字命中智能体应用列表时调用；普通应用（小智/浏览器等）请用 launch_glasses_app。本机生成/上传的应用（本地有 .aix）会自动推送到 RokidLink 自托管宿主（官方 ink web 宿主），支持用 Lab 手机蓝牙手柄直接操控页面；内置官方智能体走 AgentStore 打开。注意：不要仅仅口头回复“已经打开/已经在播放”，必须实际调用本工具才能把用户请求交给智能体执行。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "appName" to mapOf("type" to "string", "description" to "用户想要打开或使用的智能体应用名称，原样转述，如“音乐播放”“天气查询”"),
+                        "params" to mapOf("type" to "string", "description" to "传给该应用的启动参数，JSON 对象字符串（如 {\"songName\":\"七里香\"}）。只要用户要求“用/通过/拿某个智能体去做某事”并给出了具体对象/参数，就必须填写并调用本工具；只是“打开某应用”时可不传。传参用页面期望的参数名（如 songName / keyword / city），不确定就留空，让页面用自己的默认值处理。"),
+                    ),
+                    "required" to listOf("appName"),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "stop_aiui_app",
+            group = ToolRegistry.DOMAIN_AIUI,
+            displayNameRes = R.string.ai_tool_stop_aiui_app_name,
+            descriptionRes = R.string.ai_tool_stop_aiui_app_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            requiresGlasses = true,
+            statusText = "正在关闭智能体应用…",
+            schema = toolSchema(
+                name = "stop_aiui_app",
+                description = "关闭 Rokid 眼镜上正在显示的 AIUI 智能体应用（.aix 卡片界面），回到主界面。当用户说“退出/关闭这个 AI 应用”“退出 AIUI”“关掉刚打开的那个应用”“返回”等、画面是 AIUI 智能体卡片时调用；普通应用（小智/浏览器等）请用其他关闭手段而非本工具。无需知道应用名也能关闭当前正在显示的那个。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "appName" to mapOf("type" to "string", "description" to "要关闭的智能体应用名称（可选）。若用户没提名字，说明是刚打开/生成的那个，可不传本参数"),
+                    ),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "install_aiui_project",
+            group = ToolRegistry.DOMAIN_AIUI,
+            displayNameRes = R.string.ai_tool_install_aiui_project_name,
+            descriptionRes = R.string.ai_tool_install_aiui_project_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            requiresGlasses = true,
+            statusText = "正在打包并安装 AIUI 项目…",
+            summarize = { args -> "安装 AIUI 应用" },
+            schema = toolSchema(
+                name = "install_aiui_project",
+                description = "把对话中已通过写文件工具生成的 AIUI 项目打包成 .aix 并推送到 Rokid 眼镜（登记后可语音打开/演示）。当用户说“把这个项目/应用装到眼镜上”“安装我做的 AI 应用”“打包这个 AIUI 项目”时调用；前提是先调用写文件工具生成该项目（须含 app.json 与 pages/index/index.ink）。本工具只负责打包推送，不自动打开（需用户确认后再用 open_aiui_app 演示，避免打断眼镜当前画面）。对已生成的项目做修改后重新安装到眼镜时，同样用本工具（同一 project 覆盖更新，源码有变化眼镜端会自动重新解压加载）。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "project" to mapOf("type" to "string", "description" to "要安装的项目名（与写文件时的 project 参数完全一致），如 aiui-demo"),
+                        "appName" to mapOf("type" to "string", "description" to "安装后在眼镜上显示的应用名（用户之后会说“打开这个名字”），简洁可念，如“记单词助手”"),
+                    ),
+                    "required" to listOf("project", "appName"),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "list_my_aiui_apps",
+            group = ToolRegistry.DOMAIN_AIUI,
+            displayNameRes = R.string.ai_tool_list_my_aiui_apps_name,
+            descriptionRes = R.string.ai_tool_list_my_aiui_apps_desc,
+            risk = ToolRisk.READ_ONLY,
+            requiresGlasses = true,
+            statusText = "正在查看我的 AI 应用…",
+            schema = toolSchema(
+                name = "list_my_aiui_apps",
+                description = "列出用户在本机生成/上传过的 AIUI 智能体应用记录（名称、项目名、最近更新时间、是否已送到眼镜、来源）。当用户问“我生成过哪些 AI 应用/智能体”“我之前做的那个 AIUI”“我有哪些 AI 应用”，或需要再次修改/打开/安装历史 AIUI 项目时先调用本工具拿到项目名（project）；随后要修改代码时先调 read_code_file 读取现网源码，再用 save_code_file 覆盖写回、install_aiui_project 重装。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "keyword" to mapOf("type" to "string", "description" to "可选：按应用名/项目名过滤的关键字，不传则列出全部"),
+                    ),
+                ),
+            ),
+        ),
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {

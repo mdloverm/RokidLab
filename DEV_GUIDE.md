@@ -751,8 +751,9 @@ ToolGateway.call(context, name, arguments)
 | `RokidLink/src/main/assets/ink/lab-page-bridge.js` | **页面 realm 桥**（关键）：在 `AiuiLinkActivity.buildBundleJson` 装配 bundle 时前置注入到 `app.js`，让 ink 沙箱页面也能用 `globalThis.Lab.callTool` |
 | `RokidLink/src/main/java/.../AiuiLinkActivity.kt` | 眼镜端宿主：`@JavascriptInterface callTool` + `__lab/*` 端点拦截 + 同步工具队列 + 启动参数下发 |
 | `RokidLink/src/main/java/.../AsrPushServer.kt` | `CTRL_TOOL_CALL = "__LAB_TOOL__"` 工具调用前缀常量 |
-| `phone-app/src/main/java/.../ai/ToolGateway.kt` | 手机端统一工具网关，单一入口调度 `ToolRegistry.execute`（执行前先过 `ToolPolicy.check`） |
-| `phone-app/src/main/java/.../ai/ToolPolicy.kt` | 工具策略闸门：per-source 限流 + 风险确认 + 审计（详见 §8.2） |
+| `phone-app/src/main/java/.../ai/ToolGateway.kt` | 手机端统一工具网关，单一入口调度 `ToolRegistry.execute`（执行前先过 `ApprovalGate.preExecute(AIUI_PAGE, …)`） |
+| `phone-app/src/main/java/.../ai/approval/ApprovalGate.kt` | **工具调用唯一审批入口**：合成 guard → 解析 Ask → 审计（详见 §8.2）。原 `ToolPolicy.kt` 已并入此类 |
+| `phone-app/src/main/java/.../ai/approval/ToolGuards.kt` | 5 个内置策略源：页面准入 / 未知名 / per-source 限流 / 本机模式眼镜依赖 / 风险确认 |
 | `phone-app/src/main/java/.../glasses/AsrBridgeCoordinator.kt` | `__LAB_TOOL__` 前缀分流到 `onToolCall` 回调 |
 | `phone-app/src/main/java/.../glasses/CxrLHiRokidSession.kt` | `handleAiuiToolCall(payload)` 委派 ToolGateway，结果经 `sendAiuiHostMessage` 下发 |
 
@@ -911,7 +912,7 @@ pushWasDown=true  ── 推送断连 ──> 文件轮询兜底（积压文字�
 
 ```
 L5  app/ · feature/ · store/(UI)   UI 与入口 + 手动 DI 容器 AppContainer
-L4  ai/                            Agent：ToolRegistry + tools/ Provider + ToolPolicy / ToolRisk
+L4  ai/                            Agent：ToolRegistry + tools/ Provider + approval/ + llm/ + compaction/ + ToolRisk
 L3  domain/                        领域服务（Connection / Authorization / DeviceControl /
                                    AiConfig / AiConversation / AiuiHost / MirrorCoordinator /
                                    FileTransfer / PhotoQuiz）
@@ -929,7 +930,7 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 
 ### 8.2 工具按域拆分与风险闸门
 
-**注册（`ToolRegistry`）**：全量 **34 个工具 / 10 个域**（info / knowledge / glasses / timer / media / display / web / files / aiui / phone）。域集合决定会话装配：
+**注册（`ToolRegistry`）**：全量 **39 个工具 / 11 个域**（info / knowledge / glasses / timer / media / display / web / files / aiui / phone / research）。域集合决定会话装配：
 
 | 会话 | 装配域 | 说明 |
 |---|---|---|
@@ -937,7 +938,9 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 | 本地模型 | `SESSION_LOCAL_DOMAINS` = 空集 | 本地小模型背不动数十个 schema |
 | AIUI / 代码生成 | `SESSION_AIUI_DOMAINS` = aiui + files + info | 命中技能后切到子集省 token |
 
-**执行（`ai/tools/`）**：`ToolRegistry.execute` 解析参数后按 `toolNames` 路由到 10 个域 `ToolProvider` 之一（Info / Knowledge / Glasses / Timer / Media / Display / Web / Files / Aiui / Phone；接口 `ToolProvider.kt` + schema `ToolSchemas.kt`，共 11 个文件）。**新增工具只需在 `ToolRegistry` 注册一行 `ToolMeta`，并在对应 Provider 的 `toolNames` 与分支各加一次**，网关 / 协议 / JS / skill 全不动。
+**执行（`ai/tools/`）**：`ToolRegistry.execute` 解析参数后按 `toolNames` 路由到 12 个 `ToolProvider` 之一（Info / Knowledge / Glasses / Timer / Media / Display / Web / Files / Aiui / Phone / Status / **Subagent**；接口 `ToolProvider.kt` + schema `ToolSchemas.kt`）。
+**新增工具 = 在对应 Provider 的 `tools()` 里加一条 `ToolEntry` + 在 `execute` 加一个分支**（风险档/副作用/要眼镜/过程文案都在那条声明里，六张表由它派生）；网关 / 协议 / JS / skill 全不动。
+⚠️ 但**模型可见文案仍是手工同步的**：`OpenAiService` 系统提示词、其他 schema 的交叉引用、`assets/skills/aiui-dev/lab-runtime.md`。漏了这些不会编译错，只会让模型不知道该在什么时候用这个工具。
 
 **风险分级（`ToolRisk` / `ToolRiskMap`）**：
 
@@ -947,17 +950,24 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 | `LOCAL_SIDE_EFFECT` | 本机可控/可撤销副作用 | `set_timer` / `set_phone_volume` / `call_phone` |
 | `EXTERNAL_SIDE_EFFECT` | 触达第三方、不可撤销 | 必须过确认闸门 |
 
-未登记兜底：**真实工具漏登记** → 按 `LOCAL_SIDE_EFFECT` 放行 + 高声告警（历史事故：漏登记曾被当作最保守档，导致 AIUI 代码生成整条链路被确认闸门拦死）；**完全未知的名字**（模型幻觉/攻击构造）→ `EXTERNAL_SIDE_EFFECT`（最保守）。
+未登记兜底：**真实工具的漏登记在结构上已不可能** —— 风险档是每个工具自己声明结构体（`ToolEntry.risk`）里的必填字段，跟工具定义写在一起；**完全未知的名字**（模型幻觉/攻击构造）→ `EXTERNAL_SIDE_EFFECT`（最保守），但它会先被 `UnknownToolGuard` 单调拒绝，不会触发 35 秒确认。
 
-**策略闸门（`ToolPolicy.check`）**：每次工具执行（AIUI 页面路径 / 对话路径）都先过 check：
+**策略闸门（`ApprovalGate.preExecute`，唯一审批入口）**：每次工具执行（AIUI 页面路径 / 对话路径 / 伪工具）都先过它：
 
-1. per-source 滑动窗口限流：AIUI 页面 30/min（防页面死循环刷工具）、对话路径 120/min（兜底失控循环）
-2. 风险闸门：`EXTERNAL_SIDE_EFFECT` 必须经用户确认
-3. 审计：每次决策打一行日志（Allow/Deny + 原因），系统日志面板（`LogCollector`）可观测
+1. 页面准入（仅 AIUI 页面）：域白名单 + 黑名单
+2. 未知名：既不是真实工具也不是伪工具 → 单调拒绝（旧实现会让它走风险兜底、白等一次确认）
+3. per-source 滑动窗口限流：AIUI 页面 30/min（防页面死循环刷工具）、对话路径 120/min（兜底失控循环）—— **被拒的调用不扣配额**
+4. 本机模式（仅对话路径）：用户开了「本机模式」时，需要眼镜的工具单调拒绝
+5. 风险闸门：`EXTERNAL_SIDE_EFFECT` 必须经用户确认（当前无真实工具为此档，见下）
+6. 审计：每次决策打一行日志（ALLOW/DENY + `[ORIGIN]` + 原因），系统日志面板（`LogCollector`）可观测；TAG 为 `ApprovalGate`
 
-**确认通道（`GlassToolConfirmChannel`）**：下行 `LinkProtocol.TOPIC_TOOL_CONFIRM`（caps = [requestId, 工具名, 摘要]），眼镜端显示摘要 + TTS 播报，短按 = 允许 / 双击·长按 = 取消，眼镜端 30s 超时视为取消；上行 `LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT`（caps = [requestId, "yes"/"no"]）。通道**常驻**（`GlassToolConfirmChannel.global`），会话上线 `bind`、下线 `unbind`，`ToolPolicy.confirmationChannel` 指向它。
+合成规则（`ApprovalGate.compose`）：任一 guard 返回 `Deny` **立即短路**（单调最终拒绝，对齐 DSH 的 `ctx.tools.guard()`）；否则取**第一个** `Ask`；都不表态则 `Allow`。
 
-> ⚠️ **降级现状（务必如实理解，勿按旧注释写成「降级为拒绝」）**：确认通道**不可用**（会话不在线，或眼镜端旧版经能力握手判定不支持）或确认**超时未响应**时，`ToolPolicy.check` 返回 **`Allow`**（fail-open，代码注释写作「降级放行」），由工具自身在未获确认时只做**无副作用动作**（如 `call_phone` 只打开拨号盘、绝不自动拨出）；只有用户**显式取消**（`wasCancelled()` 为 true）才返回 `Deny`。`ToolPolicy` / `ToolGateway` 的类注释仍写「降级为拒绝」，与实现不一致，**以 `ToolPolicy.check` 的实际分支为准**。
+**确认通道（`GlassToolConfirmChannel`）**：实现 `ApprovalGate.ConfirmResolver`。下行 `LinkProtocol.TOPIC_TOOL_CONFIRM`（caps = [requestId, 工具名, 摘要]），眼镜端显示摘要 + TTS 播报，短按 = 允许 / 双击·长按 = 取消，眼镜端 30s 超时视为取消；上行 `LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT`（caps = [requestId, "yes"/"no"]）。通道**常驻**（`GlassToolConfirmChannel.global`），会话上线 `bind`、下线 `unbind`，`ApprovalGate.confirmationResolver` 指向它。摘要由闸门随 `confirm(prompt)` 传入，**产地是工具自己的 `ToolEntry.summarize`**。
+
+> ⚠️ **降级语义（务必如实理解）**：确认通道**不可用**（会话不在线，或眼镜端旧版经能力握手判定不支持）或确认**超时未响应**时，`ApprovalGate.resolveAsk` 返回 **`Allow`**（fail-open），由工具自身在未获确认时只做**无副作用动作**（如 `call_phone` 只打开拨号盘、绝不自动拨出）；只有用户**显式取消**（`wasCancelled()` 为 true）才 `Deny`。
+> 这条语义的**唯一产地**是 `ApprovalGate.resolveAsk` 的 KDoc 与其实现（`ToolPolicy` 已删除，旧的「类注释写降级为拒绝、实现却是放行」的矛盾已消除）。
+> ⚠️ 另需知道：**当前没有任何真实工具登记为 `EXTERNAL_SIDE_EFFECT`**（`check_tool_wiring.py` 可核对）—— 确认闸门对真实工具仍处空转。要让某工具真正走眼镜确认，只需在它的 `ToolEntry.risk` 里声明该档。
 
 ### 8.3 通道仲裁 ChannelArbiter
 
@@ -1012,7 +1022,8 @@ $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
 | `adb/AdbFileManagerSyncTest` | 6 | `AdbFileManagerClient` sync 帧编解码 + `drainStalePackets` 陈旧 CLSE 排空 + `parseDateTime` |
 | `hid/HidReportTest` | 12 | `BtHidCompat.normalize` 截断/补零/未声明返 null、`declaredLength` 全矩阵、描述符 Report ID 与 `declaredReportIds` 交叉校验 |
 | `glasses/AiChannelTest` | 21 | `AiChannel` 跨端载荷 v0/v1 矩阵 + 常量名稳定性（改名即断双端） |
-| `ai/ToolRiskMapTest` | 8 | `ToolRiskMap.unregisteredTools()` 必须为空（§12.10）+ `ToolPolicy.check()` 的 fail-open 语义 |
+| `ai/ToolRiskMapTest` | 3 | `ToolRiskMap.unregisteredTools()` 必须为空（§12.10）+ 风险表 / 无人值守只读名单 |
+| `ai/approval/ApprovalGateTest` | 35 | 合成语义（Deny 短路 / 首个 Ask 胜出 / null 不表态）+ 伪工具已知 + fail-open 三态 + per-source 限流 + 页面准入文案 + 风险表三消费者 |
 | `store/ChatHistoryStoreTest` | 14 | 聊天历史 JSONL 落盘格式：同 id 后写覆盖先写、**旧版 JSON 数组迁移不丢历史**、崩溃截断半行不毁历史、`clear()` 删文件 |
 | `RokidLink/AiChannelProtocolTest` | 5 | 眼镜端能解析手机端下发的 v1 载荷（边界矩阵留在 phone-app 侧，避免重复维护） |
 

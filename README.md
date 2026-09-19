@@ -115,8 +115,8 @@ v3.4 全新功能 / v3.5 大幅增强 —— 与乐奇对话，直接在眼镜�
 - **退出 AIUI**：支持主动退出正在运行的 AIUI 程序（stop_aiui_app 工具），而非仅能退出已启动的程序
 - **内容指纹版本控制**：VERSION 字段使用内容指纹，代码有变化时眼镜端自动重新解压渲染，无需手动清缓存
 
-#### v3.5 新增：Lab 工具桥（AIUI 页面可调手机端 33 个工具）
-AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能渲染不能调用外部能力。v3.5 新增 Lab 工具桥，让页面通过 `await globalThis.Lab.callTool(name, args)` 调用手机端工具（ToolRegistry 全量 34 个中除自指递归的 `open_aiui_app` 外全部开放，即 33 个），涵盖音乐 / 天气 / 搜索 / 提醒 / 设备信息 / 电话 / 日历 等，与外部世界交互：
+#### v3.5 新增：Lab 工具桥（AIUI 页面可调手机端 34 个工具）
+AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能渲染不能调用外部能力。v3.5 新增 Lab 工具桥，让页面通过 `await globalThis.Lab.callTool(name, args)` 调用手机端工具（ToolRegistry 全量 39 个中除 `open_aiui_app`（防自指递归）、会话查询三件套（防批量导出历史）与 `research_subtask`（会触发多次模型调用且无取消通道）外全部开放，即 34 个），涵盖音乐 / 天气 / 搜索 / 提醒 / 设备信息 / 电话 / 日历 等，与外部世界交互：
 
 - **页面侧 API**：
   ```js
@@ -205,8 +205,9 @@ AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能
   - 蓝牙隧道（RFCOMM 转发）与 WiFi 直连双线路，`ConnectionRouteManager` 统一路由管理；同设备同 SCN 单通道约束由 `ChannelArbiter` 按优先级租约仲裁
 - **AI**:
   - OpenAI 兼容协议客户端（`OpenAiService`，可切换任意服务商；SSE 重连指数退避 + 远程重试 3 次）
-  - 工具注册与执行（`ToolRegistry` 34 个工具 / 10 个域，执行分支按域拆到 `ai/tools/`：10 个域 `ToolProvider` + `ToolProvider` 接口 + `ToolSchemas`，共 11 个文件）
-  - 工具风险闸门（`ToolPolicy` + `ToolRisk`：READ_ONLY / LOCAL_SIDE_EFFECT / EXTERNAL_SIDE_EFFECT 三档，per-source 限流 + 眼镜端确认通道 `GlassToolConfirmChannel` + 审计日志）
+  - 工具注册与执行（`ToolRegistry` 39 个工具，执行分支按域拆到 `ai/tools/`：12 个 `ToolProvider` + `ToolProvider` 接口 + `ToolEntry` 声明结构体）
+  - 工具审批闸门（`ai/approval/`：`ApprovalGate` 唯一入口 + 5 个 `ToolGuard` 策略源；READ_ONLY / LOCAL_SIDE_EFFECT / EXTERNAL_SIDE_EFFECT 三档风险 + per-source 限流 + 眼镜端确认通道 `GlassToolConfirmChannel` + 审计日志）
+  - 模型能力接缝（`ai/llm/`：`LlmRegistry` 能力解析 + 客户端构造）与上下文压缩接缝（`ai/compaction/`：`CompactionEngine` + `BasicCompactionEngine`）
   - Agent 会话层（`AgentSessionManager`：滚动摘要 ≤800 字 pinned system message；`LongTermMemoryManager`：SQLite + FIFO 200 条 + 90 天过期 + bigram 评分 top-12 检索；`KnowledgeBase`：BM25 IDF + 命中 provenance）
   - 本地 OCR（RapidOCR / PP-OCRv4 + ONNX Runtime，完全离线）
   - 本地知识库 RAG（txt 导入，SQLite 分块检索）
@@ -337,7 +338,7 @@ RokidLab/
 │   │   │   │   └── ScreenMirrorStateHolder.kt 屏幕镜像状态
 │   │   │   ├── ai/          AI 能力（L4 agent）
 │   │   │   │   ├── OpenAiService.kt        OpenAI 兼容服务（可切换任意服务商；SSE 重连指数退避 + 远程重试 3 次）
-│   │   │   │   ├── ToolRegistry.kt         AI 工具注册表（34 个工具 / 10 个域：info / knowledge / glasses / timer / media / display / web / files / aiui / phone；execute 按 toolNames 路由到 tools/ 的 Provider）
+│   │   │   │   ├── ToolRegistry.kt         AI 工具注册表（39 个工具 / 11 个域：info / knowledge / glasses / timer / media / display / web / files / aiui / phone / research；execute 按 toolNames 路由到 tools/ 的 Provider）
 │   │   │   │   ├── tools/                  工具域提供者（Phase 4 拆分巨型 when）
 │   │   │   │   │   ├── ToolProvider.kt             提供者接口（toolNames + execute）
 │   │   │   │   │   ├── ToolSchemas.kt              工具 JSON Schema 声明
@@ -345,10 +346,12 @@ RokidLab/
 │   │   │   │   │   ├── TimerToolProvider.kt        定时 / MediaToolProvider.kt 音乐 / DisplayToolProvider.kt 屏幕展示
 │   │   │   │   │   ├── WebToolProvider.kt          联网 / FilesToolProvider.kt 文件产出 / AiuiToolProvider.kt AIUI 应用
 │   │   │   │   │   └── PhoneToolProvider.kt        手机域
-│   │   │   │   ├── ToolPolicy.kt           工具调用策略闸门（per-source 限流 + 风险闸门 + 审计日志）
+│   │   │   │   ├── approval/               工具审批接缝（ApprovalGate 唯一入口 + ToolGuards 策略源 + PseudoTools + PageScope）
+│   │   │   │   ├── llm/                    模型能力接缝（LlmRegistry + 能力探测/缓存 + ModelPresets）
+│   │   │   │   ├── compaction/             上下文压缩接缝（CompactionEngine + BasicCompactionEngine + CompactionPolicy）
 │   │   │   │   ├── ToolRisk.kt             工具风险分级（READ_ONLY / LOCAL_SIDE_EFFECT / EXTERNAL_SIDE_EFFECT）
 │   │   │   │   ├── GlassToolConfirmChannel.kt 副作用工具眼镜端确认通道（下行 TOPIC_TOOL_CONFIRM / 上行 TOPIC_TOOL_CONFIRM_RESULT）
-│   │   │   │   ├── ToolGateway.kt          AIUI 页面工具网关（v3.5 新增，34 个工具中开放 33 个，15s 超时 + 8000 字截断 + DENY open_aiui_app 防自指递归）
+│   │   │   │   ├── ToolGateway.kt          AIUI 页面工具网关（15s 超时 + 8000 字截断 + DENY open_aiui_app 防自指递归）
 │   │   │   │   ├── Calculator.kt           递归下降表达式解析器（v3.5 新增，供 calculate 工具调用，纯 Kotlin 无依赖）
 │   │   │   │   ├── WeatherTools.kt         天气工具（v3.5 新增，Open-Meteo，免 API Key）
 │   │   │   │   ├── PhoneTools.kt           手机域工具（v3.5 新增，电话/日历/闹钟/音量/打开应用/联系人搜索）

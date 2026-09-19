@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -70,6 +71,7 @@ internal fun AgentSectionPage(
     }
     var showClearConfirm by remember { mutableStateOf(false) }
     var showLongClearConfirm by remember { mutableStateOf(false) }
+    var showMemoryManage by remember { mutableStateOf(false) }
     Dialog(
         onDismissRequest = onBack,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -218,6 +220,27 @@ internal fun AgentSectionPage(
             )
 
             Spacer(Modifier.height(20.dp))
+            // 查看与编辑（方案 §4.3.3a）：记忆此前用户**看不见、改不了、删不掉** ——
+            // 一个"替你记住这些事情"的功能，用户无法核对和纠正，是隐私功能上的硬伤。
+            Button(
+                onClick = { showMemoryManage = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = BrewChat,
+                    contentColor = BrewBg,
+                ),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Edit,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.agent_longterm_manage), fontWeight = FontWeight.Medium)
+            }
+
+            Spacer(Modifier.height(10.dp))
             // 清空长期记忆按钮
             Button(
                 onClick = { showLongClearConfirm = true },
@@ -237,6 +260,15 @@ internal fun AgentSectionPage(
                 Text(stringResource(R.string.agent_longterm_clear), fontWeight = FontWeight.Medium)
             }
         }
+    }
+
+    if (showMemoryManage) {
+        MemoryManageDialog(
+            onDismiss = { showMemoryManage = false },
+            onChanged = {
+                longTermCount = com.rokidlab.phone.ai.LongTermMemoryManager.count(ctx)
+            },
+        )
     }
 
     if (showClearConfirm) {

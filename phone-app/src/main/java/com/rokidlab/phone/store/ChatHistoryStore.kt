@@ -37,7 +37,49 @@ internal object ChatHistoryStore {
         msg.imageUrl?.let { put("imageUrl", it) }
         // 过程步骤：空列表不落字段（老版本读到也不出错；老历史没有该字段=无过程）
         if (msg.trace.isNotEmpty()) put("trace", traceToJson(msg.trace))
+        // 本轮成本：整组全空时不落字段（老历史没有该字段=用量未知）
+        usageToJson(msg.usage)?.let { put("usage", it) }
+        // 轮号（单字母键，理由同 trace 的键名策略）
+        msg.turn?.let { put("t", it) }
     }.toString()
+
+    /**
+     * 本轮成本 → JSON（单字母键，理由同 [traceToJson]）。
+     *
+     * 某个字段为 null 就**不落该键**：文件里出现的数字一律是服务端真给过的，
+     * 读的时候"没有这个键" = 不知道，与"0"是两件事。
+     */
+    private fun usageToJson(u: MsgUsage?): JSONObject? {
+        if (u == null) return null
+        if (u.inputTokens == null && u.outputTokens == null &&
+            u.modelCalls == null && u.elapsedMs == null
+        ) {
+            return null
+        }
+        return JSONObject().apply {
+            u.inputTokens?.let { put("i", it) }
+            u.outputTokens?.let { put("o", it) }
+            u.modelCalls?.let { put("c", it) }
+            u.elapsedMs?.let { put("e", it) }
+        }
+    }
+
+    /** JSON → 本轮成本；缺字段保持 null（"不知道"，不是 0），全空则整组返回 null */
+    private fun usageFromJson(o: JSONObject?): MsgUsage? {
+        if (o == null) return null
+        val u = MsgUsage(
+            inputTokens = if (o.has("i")) o.optInt("i") else null,
+            outputTokens = if (o.has("o")) o.optInt("o") else null,
+            modelCalls = if (o.has("c")) o.optInt("c") else null,
+            elapsedMs = if (o.has("e")) o.optLong("e") else null,
+        )
+        if (u.inputTokens == null && u.outputTokens == null &&
+            u.modelCalls == null && u.elapsedMs == null
+        ) {
+            return null
+        }
+        return u
+    }
 
     /**
      * 过程步骤 → JSON 数组。
@@ -158,6 +200,8 @@ internal object ChatHistoryStore {
             isStatus = o.optBoolean("isStatus", false),
             imageUrl = o.optString("imageUrl", "").ifBlank { null },
             trace = traceFromJson(o.optJSONArray("trace")),
+            usage = usageFromJson(o.optJSONObject("usage")),
+            turn = if (o.has("t")) o.optInt("t") else null,
         )
     }
 }

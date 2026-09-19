@@ -284,6 +284,92 @@
     <string name="nav_settings">Settings</string>
 
     <!-- LeQi Chat -->
+    <!-- Multi-session (2026-09-19): session list / rename / delete -->
+    <string name="chat_sessions_title">Chats</string>
+    <string name="chat_sessions_new">New</string>
+    <string name="chat_sessions_close">Close</string>
+    <string name="chat_sessions_empty">No chats yet</string>
+    <string name="chat_sessions_rename">Rename</string>
+    <string name="chat_sessions_delete">Delete</string>
+    <string name="chat_sessions_count">%1$d messages</string>
+    <string name="chat_sessions_rename_title">Rename chat</string>
+    <string name="chat_sessions_rename_hint">Chat name</string>
+    <string name="chat_sessions_delete_title">Delete this chat?</string>
+    <string name="chat_sessions_delete_message">All messages in \"%1$s\" will be deleted permanently.</string>
+    <string name="chat_sessions_records">Conversation graph</string>
+    <string name="chat_sessions_prompt">Session prompt</string>
+
+    <string name="chat_records_title">Conversation records</string>
+    <string name="chat_records_search_hint">Search records (keyword / tool name)</string>
+    <string name="chat_records_summary">%1$d turns · %2$d tool calls · %3$d records</string>
+    <string name="chat_records_hidden_note">Hidden from the model: %1$d compacted, %2$d invalidated (records are kept)</string>
+    <string name="chat_records_orphan_note">⚠️ %1$d tool call(s) never got a result</string>
+    <string name="chat_records_empty">No records yet (send a message first).</string>
+    <string name="chat_records_no_match">No record matches \"%1$s\".</string>
+    <string name="chat_records_export">Export md</string>
+    <string name="chat_records_export_done">Exported: %1$s</string>
+    <string name="chat_records_export_failed">Export failed: %1$s</string>
+    <string name="chat_records_copy">Copy</string>
+    <string name="chat_records_edit">Edit &amp; resend</string>
+    <string name="chat_records_delete">Delete</string>
+    <string name="chat_records_close">Close</string>
+    <string name="chat_records_detail_hide">Hide details</string>
+    <string name="chat_records_detail_show">Show details</string>
+    <string name="chat_records_no_edit">This record has no matching message (legacy record or an unrecorded turn) — copy only.</string>
+    <string name="chat_records_copied">Copied</string>
+
+    <string name="chat_prompt_title">Session prompt</string>
+    <string name="chat_prompt_hint">Applies to this conversation only and is appended after the persona — it never overrides tool rules. Empty = none.</string>
+    <string name="chat_prompt_placeholder">e.g. Answer in brief Chinese; conclusion first</string>
+    <string name="chat_prompt_clear">Clear</string>
+    <string name="chat_common_cancel">Cancel</string>
+    <string name="chat_common_confirm">OK</string>
+    <!-- Context usage (2026-09-19) -->
+    <string name="chat_context_title">Context usage</string>
+    <string name="chat_context_warn">Context %1$d%% used — older turns get compressed automatically</string>
+    <string name="chat_context_critical">Context nearly full — the earliest turns will be compressed</string>
+    <string name="chat_context_compressed">Earlier turns compressed to a summary</string>
+    <string name="chat_context_compressed_hint">The earliest turns were compressed to a summary, so some details may be lost.</string>
+    <string name="chat_context_messages">History messages %1$d / %2$d</string>
+    <string name="chat_context_chars">Characters %1$d / %2$d</string>
+    <string name="chat_context_explain">LeQi sends the recent turns to the model. Past the limit, the earliest turns are compressed to a summary — that is why it sometimes forgets. Starting a new chat clears the context immediately.</string>
+    <string name="chat_context_new_session">New chat</string>
+    <string name="chat_context_compact">Compact context now</string>
+    <string name="chat_context_compact_nothing">Already minimal — nothing left to compact.</string>
+    <string name="chat_context_window_limited">The limit follows this model\'s context window — tightened for small windows, widened for large ones.</string>
+    <string name="chat_events_open">View execution trace</string>
+    <string name="chat_events_title">Execution trace</string>
+    <string name="chat_events_hint">Everything Leqi saw and did in this session. Tap any row to expand the original text.</string>
+    <string name="chat_events_summary">%1$d turns · %2$d tool calls · %3$d context injections</string>
+    <string name="chat_events_empty">Nothing to show yet (send a message first).</string>
+    <string name="chat_events_close">Close</string>
+    <string name="chat_events_filter_all">All</string>
+    <string name="chat_events_cat_message">Messages</string>
+    <string name="chat_events_cat_tool">Tools</string>
+    <string name="chat_events_cat_inject">Injected</string>
+    <string name="chat_events_cat_compaction">Compacted</string>
+    <string name="chat_events_cat_cut">Invalidated</string>
+    <string name="chat_events_cat_lifecycle">Lifecycle</string>
+    <string name="chat_trace_cost_tokens">in %1$s / out %2$s</string>
+    <string name="chat_trace_cost_calls">%1$d model calls</string>
+    <string name="chat_trace_cost_elapsed">%1$s</string>
+    <string name="chat_trace_cost_unknown">Token usage unknown (server did not report it)</string>
+    <string name="chat_context_tokens">Last turn tokens: in %1$d / out %2$d</string>
+    <string name="chat_context_tokens_est">Last turn output ~%1$d chars (server returned no usage, so no token count)</string>
+    <string name="chat_context_elapsed">Took %1$.1f s</string>
+    <string name="chat_context_model_calls">%1$d model calls</string>
+    <string name="chat_context_session_total">Session total tokens: in %1$d / out %2$d (real usage from %3$d turns)</string>
+    <!-- Message actions (2026-09-19) -->
+    <string name="chat_msg_actions">Message actions</string>
+    <string name="chat_msg_copy">Copy</string>
+    <string name="chat_msg_copied">Copied</string>
+    <string name="chat_msg_edit">Edit and resend</string>
+    <string name="chat_msg_regenerate">Regenerate</string>
+    <string name="chat_msg_delete">Delete message</string>
+    <string name="chat_msg_delete_title">Delete this message?</string>
+    <string name="chat_msg_delete_message">This cannot be undone.</string>
+    <string name="chat_msg_edit_title">Edit and resend</string>
+    <string name="chat_msg_edit_hint">Your edit will be re-sent from this message; everything after it will be cleared.</string>
     <string name="chat_title">LeQi Chat</string>
     <string name="chat_subtitle">Chat · Spoken on Glasses</string>
     <string name="chat_input_hint">Type a message...</string>
@@ -312,6 +398,20 @@
     <string name="chat_settings_base_url">Base URL</string>
     <string name="chat_settings_api_key">API Key</string>
     <string name="chat_settings_model">Model</string>
+    <string name="chat_settings_image_input">Image understanding</string>
+    <string name="chat_settings_image_input_hint">Send photos straight to the model; needs image support, falls back to OCR</string>
+    <string name="chat_settings_expand_trace">Expand process card</string>
+    <string name="chat_settings_expand_trace_hint">Show each step (thinking, tool calls, tokens); off = title only</string>
+    <!-- Model capability (llm seam): the image switch is gated by a capability verdict, not by guesswork -->
+    <string name="chat_settings_image_unsupported">This model has no image input; photos go through OCR first</string>
+    <string name="chat_settings_image_unknown">Image support unverified — tap Detect to test this model</string>
+    <string name="chat_settings_image_detect">Detect</string>
+    <string name="chat_settings_image_detecting">Detecting…</string>
+    <string name="chat_settings_image_detect_ok">Check passed: this model accepts image input</string>
+    <string name="chat_settings_image_detect_bad">Check failed: this model rejects image input</string>
+    <string name="chat_settings_image_detect_unknown">Check was inconclusive, try again later</string>
+    <string name="chat_settings_cap_context">Context %1$s</string>
+    <string name="chat_settings_cap_tools">Tool calling</string>
     <string name="chat_settings_continue">Continuous Chat</string>
     <string name="chat_settings_continue_hint">Auto-listen after speech ends; no wake word needed</string>
     <string name="chat_settings_quiz">Key Quiz Mode</string>
@@ -397,6 +497,9 @@
     <string name="skills_import_summary">Import complete: %1$d/%2$d skills succeeded</string>
 
     <string name="chat_photo_ask">Photo &amp; Ask AI</string>
+    <string name="chat_photo_vision_question">Answer based on this image</string>
+    <string name="chat_photo_vision_fallback">Model cannot read images, falling back to OCR…</string>
+    <string name="chat_photo_vision_unsupported">This model can\'t read images; switched to OCR</string>
     <string name="chat_kb">Knowledge Base</string>
     <string name="chat_photo_status">Asking glasses to take a photo...</string>
     <string name="chat_ocr_status">Recognizing text from photo...</string>
@@ -435,6 +538,18 @@
     <string name="agent_longterm_clear">Clear Long-term Memory</string>
     <string name="agent_longterm_clear_confirm">Clear all long-term memories? AI will forget your saved preferences and personal info.</string>
     <string name="agent_longterm_cleared">Long-term memory cleared</string>
+    <string name="agent_longterm_manage">View &amp; edit</string>
+    <string name="agent_longterm_manage_title">Long-term memory</string>
+    <string name="agent_longterm_manage_hint">These are facts and preferences Leqi remembers about you across chats. Fix or delete any that are wrong — no need to tell it again.</string>
+    <string name="agent_longterm_manage_loading">Loading…</string>
+    <string name="agent_longterm_manage_empty">No long-term memories yet. Say “remember that I like …” and it will show up here.</string>
+    <string name="agent_longterm_item_delete">Delete this one</string>
+    <string name="agent_longterm_item_edit">Edit this one</string>
+    <string name="agent_longterm_save">Save</string>
+    <string name="agent_longterm_updated">Updated</string>
+    <string name="agent_longterm_deleted">Deleted</string>
+    <string name="agent_longterm_update_failed">Not saved: the text cannot be empty or identical to an existing memory</string>
+    <string name="agent_longterm_close">Close</string>
 
     <!-- Store main interface -->
     <string name="featured_apps">Featured Apps</string>
@@ -598,6 +713,14 @@
     <string name="ai_tool_clear_agent_task_desc">Drop the pending task resume record</string>
     <string name="ai_tool_search_past_conversations_name">Search Past Chats</string>
     <string name="ai_tool_search_past_conversations_desc">Search past chat history</string>
+    <string name="ai_tool_list_sessions_name">List Past Chats</string>
+    <string name="ai_tool_list_sessions_desc">List saved conversations</string>
+    <string name="ai_tool_read_session_name">Read Past Chat</string>
+    <string name="ai_tool_read_session_desc">Read one chat\'s events and tool calls</string>
+    <string name="ai_tool_session_trace_name">View Tool Chain</string>
+    <string name="ai_tool_session_trace_desc">See which tools ran in a turn</string>
+    <string name="ai_tool_research_subtask_name">Delegate Research</string>
+    <string name="ai_tool_research_subtask_desc">A sub-agent researches and reports back</string>
     <string name="chat_settings_aiui">AIUI App Manager</string>
     <string name="chat_settings_aiui_hint">Manage chat-created or uploaded agent apps</string>
     <string name="aiui_manage_title">AIUI App Manager</string>

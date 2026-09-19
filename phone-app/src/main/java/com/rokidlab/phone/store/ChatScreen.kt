@@ -1,12 +1,15 @@
 package com.rokidlab.phone.store
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,6 +39,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.outlined.Psychology
@@ -56,16 +60,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.AgentSessionManager
+import com.rokidlab.phone.ai.ContextUsage
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.design.BrewAmber
 import com.rokidlab.phone.design.BrewBg
@@ -107,7 +116,54 @@ internal data class ChatMsg(
      * 用户消息恒为空。空列表 = 该条没有过程可展示（普通闲聊、旧历史记录）。
      */
     val trace: List<com.rokidlab.phone.ai.AgentStep> = emptyList(),
+    /**
+     * 这一轮的 token 成本，展示在「过程」区块右下角（见 `TraceBlock`）。
+     *
+     * ★ 为什么挂在消息上而不是"要用时再查事件流"：过程区块是**逐条消息**渲染的，
+     *   而"最近一轮的用量"只有一个 —— 拿它去填每条历史消息会显示**错误的数字**
+     *   （旧消息被贴上新消息的成本）。成本必须跟着产生它的那一条走。
+     *
+     * ⚠️ 可空，含义是"**服务端没返回用量**"或"这条是旧记录"，不是 0。
+     */
+    val usage: MsgUsage? = null,
+    /**
+     * 这条消息属于**事件流的第几轮**（`null` = 旧记录，或这一轮没进事件流）。
+     *
+     * ★ 为什么需要它：会话记录图（节点连接图）是**事件流**的视图，而"编辑重发 / 删除"
+     *   作用在**UI 消息**上。两边的条数**不天然相等** —— 拍照答题与定时自主任务传
+     *   `recordHistory = false`，UI 有消息但事件流里没有对应轮次。
+     *   ⇒ 按"第几条"去对齐会**错位改错条**（用户改一条、动的是另一条，静默且破坏性强）。
+     *   带上轮号，映射就是精确的；找不到对应轮号时视图只给「复制」，不给编辑/删除。
+     */
+    val turn: Int? = null,
 )
+
+/**
+ * 一轮的 token 成本（面板展示用）。
+ *
+ * 三个字段**都可空**，含义一律是"不知道"：
+ * - 服务端不支持 `stream_options.include_usage` 时不返回 token 数；
+ * - 调用次数是我们自己的事实，通常有值。
+ *
+ * ⇒ 展示侧必须据此换口径（说"用量未知"），**不能兜成 0** —— 面板上写"输入 0 / 输出 0"
+ *   是错误信息，比不显示更糟。
+ */
+internal data class MsgUsage(
+    val inputTokens: Int?,
+    /** 本轮**所有**模型调用的输入 token 合计（工具循环 = 多次请求，输入每轮都要重发，它才是大头） */
+    val outputTokens: Int?,
+    /** 本轮模型调用次数（>1 = 走了工具循环） */
+    val modelCalls: Int?,
+    val elapsedMs: Long?,
+)
+
+/**
+ * 刚收尾那一轮的身份与成本：轮号 + 用量，一起落到那条 AI 消息上。
+ *
+ * 两者必须同源（同一次 `lastTurn` 快照）：分开取两次会在"取完轮号又结束了一轮"时错位，
+ * 而错位的后果是**编辑/删除作用到别的消息上** —— 比数字错更严重。
+ */
+internal data class TurnStamp(val turn: Int, val usage: MsgUsage)
 
 /**
  * 乐奇聊天 — 文字对话界面
@@ -121,6 +177,13 @@ internal fun ChatModule(app: LabApplication) {
 
     // 聊天消息状态由全局 ChatStateHolder 持有，切到其他页面再切回不会清空
     val messages = ChatStateHolder.messages
+    // 会话列表与当前会话标题同源（ChatStateHolder.sessions + currentSessionId 都是可观察状态）：
+    // 切会话、首条消息派生标题、重命名都会让标题栏自动重组
+    val sessions = ChatStateHolder.sessions
+    val currentSessionTitle = sessions
+        .firstOrNull { it.id == ChatStateHolder.currentSessionId }
+        ?.title
+        ?: stringResource(R.string.chat_title)
     var input by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     // 「思考」开关状态：点亮=开启在线模型长思考（DeepSeek V4/V3.2 系生效）。
@@ -132,13 +195,54 @@ internal fun ChatModule(app: LabApplication) {
     var showKbDialog by remember { mutableStateOf(false) }
     // AI 设置弹窗（AI 服务地址/密钥/模型 + 按键答题开关）
     var showSettings by remember { mutableStateOf(false) }
+    // 「过程」区块默认展开（设置页里的「展开过程」，默认开）。
+    // 设成状态而不是每次渲染都读 prefs：进入聊天页读一次，设置页关闭后再读一次即可 ——
+    // 卡片自己的展开状态由 TraceBlock 的 remember 管，用户在设置里改默认值不该把
+    // 他手动折叠过的那几张卡重新弹开。
+    var expandTrace by remember { mutableStateOf(app.chatExpandTraceEnabled) }
+    LaunchedEffect(showSettings) {
+        if (!showSettings) expandTrace = app.chatExpandTraceEnabled
+    }
     // 清空对话确认弹窗
     var showClearConfirm by remember { mutableStateOf(false) }
+    // 会话列表弹窗（多会话：新建 / 切换 / 重命名 / 删除）
+    var showSessions by remember { mutableStateOf(false) }
+    // 对话记录图的目标会话（从会话列表进入；null = 未打开）
+    var recordsTarget by remember { mutableStateOf<ChatSessionMeta?>(null) }
+    // 正在编辑提示词的会话（从会话列表进入）
+    var promptTarget by remember { mutableStateOf<ChatSessionMeta?>(null) }
+    // 消息级操作弹层（点气泡内「···」触发：复制 / 编辑重发 / 重新生成 / 删除）
+    var actionTarget by remember { mutableStateOf<ChatMsg?>(null) }
+    // 正在编辑重发的消息（null = 未进入编辑态）。
+    // 编辑**就地发生在底部输入框**里，不再弹独立窗口 —— 见 startEdit()
+    var editingTarget by remember { mutableStateOf<ChatMsg?>(null) }
+    // 进入编辑前的输入框草稿：取消编辑时原样还回去（用户可能正打到一半去点了气泡）
+    var draftBeforeEdit by remember { mutableStateOf("") }
+    // 进入编辑态时把焦点给输入框（否则键盘不弹，用户还得再点一下输入框）
+    val inputFocus = remember { FocusRequester() }
+
+    // 放在 LaunchedEffect 里而不是 startEdit 里：requestFocus 要等这一帧重组完成才生效
+    LaunchedEffect(editingTarget) {
+        if (editingTarget != null) runCatching { inputFocus.requestFocus() }
+    }
+    // 上下文占用详情弹窗
+    var showContextInfo by remember { mutableStateOf(false) }
+    /** 执行轨迹视图（§4.3.5）：从上下文面板进入 */
+    var showTrace by remember { mutableStateOf(false) }
     // 「本机模式」开关（不连眼镜也能聊）：状态源是 LabApplication（每次发送时读取），
     // 这里只做 UI 镜像，因此首次组合时取当前值即可。
     var localOnly by remember { mutableStateOf(app.chatLocalOnlyEnabled) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // 上下文占用：消息列表变化或「本轮回答结束」时重算 —— recordTurn 发生在回答结束之后，
+    // 所以 sending 由 true 变回 false 也算一个刷新触发点，否则进度条会慢一整轮。
+    // 位置必须在 sending 声明之后（这里），放在消息列表旁边会读不到它。
+    // contextRefresh：上下文面板里点「立即压缩」后手动触发重算 —— 压缩**不改消息列表**，
+    // 前两个 key 都不会变，不补一个计数器的话面板会停在压缩前的数字上。
+    var contextRefresh by remember { mutableStateOf(0) }
+    val contextUsage = remember(messages.size, sending, contextRefresh) {
+        runCatching { AgentSessionManager.contextUsage(ctx) }.getOrNull()
+    }
 
     // 同步 AI 配置到会话（兼容旧版 deepseek_key 迁移：只回填在线槽位 Key，不影响本地模型模式）
     LaunchedEffect(Unit) {
@@ -192,8 +296,8 @@ internal fun ChatModule(app: LabApplication) {
         }
     }
 
-    fun appendMsg(isUser: Boolean, content: String, isStatus: Boolean = false) {
-        ChatStateHolder.add(isUser, content, isStatus)
+    fun appendMsg(isUser: Boolean, content: String, isStatus: Boolean = false, turn: Int? = null) {
+        ChatStateHolder.add(isUser, content, isStatus, turn = turn)
         scope.launch {
             try {
                 listState.animateScrollToItem((ChatStateHolder.messages.size - 1).coerceAtLeast(0))
@@ -213,11 +317,49 @@ internal fun ChatModule(app: LabApplication) {
         Log.i(TAG, "AI thinking mode = $thinking")
     }
 
-    fun send() {
-        val text = input.trim()
-        if (text.isEmpty() || sending) return
-        appendMsg(true, text)
-        input = ""
+    /**
+     * 刚收尾那一轮的**轮号 + token 成本**，一起落到那条 AI 消息上。
+     *
+     * ★ 为什么必须用 [turnBefore] 闸门，而不是直接读"最近一轮"：
+     *   不是每一轮都会进事件流 —— 拍照答题与定时自主任务传 `recordHistory = false`
+     *   （一次性问答，不该挤占主对话上下文），它们**没有轮号**。此时"最近一轮"仍然是
+     *   **上一轮**，直接读到就会把上一轮的东西贴到这条回复上：
+     *   用量变成错误信息（写"输入 0"比不写更糟），**轮号更危险** —— 它会让人在会话记录图里
+     *   点"编辑/删除"时改到**另一条消息**上（用户改一条、动的是别的，静默且不可逆）。
+     *   ⇒ 轮号没涨 = 这一轮不在事件流里 ⇒ 返回 null，视图显示"用量未知"且只给复制。
+     *   闸门的方向是**宁可说不知道，也不给错数字/错映射**。
+     *
+     * 读的是事件流的**缓存投影**（同上方的 `contextUsage`），主线程调用没问题；
+     * 打成聊天记录文件的那次读盘只发生在投影失效后的第一次。
+     *
+     * ⚠️ 声明位置必须在 [dispatchAi] **之前**：Kotlin 的局部函数不能前向引用。
+     */
+    fun currentTurnStamp(turnBefore: Int): TurnStamp? {
+        val snap = runCatching { AgentSessionManager.contextUsage(ctx).lastTurn }.getOrNull() ?: return null
+        if (snap.turn <= turnBefore) return null
+        return TurnStamp(
+            turn = snap.turn,
+            usage = MsgUsage(
+                inputTokens = snap.inputTokens,
+                outputTokens = snap.outputTokens,
+                modelCalls = snap.modelCalls,
+                elapsedMs = snap.elapsedMs,
+            ),
+        )
+    }
+
+    /**
+     * 实际发起一轮 AI 请求（用户气泡与会话记忆的预处理由调用方负责）。
+     *
+     * 从 [send] 里拆出来是因为「重新生成」「编辑重发」要复用整条请求链路，
+     * 但各自的预处理不同：前者不动气泡，后者要先用新内容替换掉旧的那条。
+     *
+     * @param turnBefore 发起**之前**的轮号（调用方在加用户气泡之前取，见 [currentTurnStamp]）。
+     *   由调用方传入而不是在这里取：调用方添加用户消息时需要知道"这一轮会是几号"，
+     *   而 `beginTurn` 是在服务层异步执行的 —— 轮号是 `turnBefore + 1`，只能在派发前定下。
+     */
+    fun dispatchAi(text: String, turnBefore: Int) {
+        if (sending) return
         sending = true
         val session = try {
             app.cxrL
@@ -251,8 +393,10 @@ internal fun ChatModule(app: LabApplication) {
                     },
                     onReply = { reply ->
                         // 流式 onDelta 已边生成边显示，此处用完整回复修正最后一条 AI 消息并落盘；
-                        // 若流式未触发（如兜底路径）则 finalizeLastAi 内部会新增一条
-                        scope.launch { ChatStateHolder.finalizeLastAi(reply) }
+                        // 若流式未触发（如兜底路径）则 finalizeLastAi 内部会新增一条。
+                        // 用量与轮号一起落在这条消息上（onReply 在子线程，读事件流缓存投影即可）
+                        val stamp = currentTurnStamp(turnBefore)
+                        scope.launch { ChatStateHolder.finalizeLastAi(reply, stamp?.usage, stamp?.turn) }
                     },
                     onDelta = { delta ->
                         // 流式增量：边生成边显示（切主线程，SnapshotStateList 写入需 Compose 快照线程）
@@ -261,6 +405,8 @@ internal fun ChatModule(app: LabApplication) {
                     // 不传 onTrace：「过程」（思考中 / 调用了哪个工具 / 结果如何）走 App 级全局
                     // 汇聚点（LabApplication.setCxrL 里注册），与眼镜语音/拍照答题共用同一条通路。
                     // 曾按调用逐条传参，结果漏掉眼镜语音那条入口 —— 过程通道不该靠"记得传"。
+                    // 本会话的附加提示词：每轮现读（用户在设置里改了/切了会话，下一句就生效）
+                    sessionPrompt = ChatStateHolder.currentSessionPrompt(),
                 )
             } catch (e: Exception) {
                 // 异常路径必须复位 sending，否则发送按钮永久卡死
@@ -272,6 +418,107 @@ internal fun ChatModule(app: LabApplication) {
                 }
             }
         }
+    }
+
+    /**
+     * 编辑重发：用新内容替换那条用户消息，并清掉它之后的所有内容（回退重来）。
+     *
+     * 截断后必须 [AgentSessionManager.dropLastTurn]，让记忆与被截断的 UI 历史保持一致 ——
+     * 否则接下来这一轮会把已经不存在的旧对话带给模型。
+     *
+     * ⚠️ 声明位置必须在 [send] **之前**：Kotlin 的局部函数不能前向引用
+     * （同文件里 `send` 要调它、它又要调 `dispatchAi`，所以只能排在 `dispatchAi` 和 `send` 之间）。
+     */
+    fun resendEdited(target: ChatMsg, newText: String) {
+        if (sending) return
+        val text = newText.trim()
+        if (text.isBlank()) return
+        // 轮号同样要在做任何改动**之前**取（它必须反映"派发前的状态"）
+        val turnBefore = AgentSessionManager.currentTurn()
+        ChatStateHolder.truncateFrom(target.id)
+        AgentSessionManager.dropLastTurn()
+        appendMsg(true, text, turn = turnBefore + 1)
+        dispatchAi(text, turnBefore)
+    }
+
+    /** 发送输入框内容（回车 / 发送按钮）。编辑态下发送 = 编辑重发 */
+    fun send() {
+        val text = input.trim()
+        if (text.isEmpty() || sending) return
+        val target = editingTarget
+        if (target != null) {
+            editingTarget = null
+            draftBeforeEdit = ""
+            input = ""
+            resendEdited(target, text)
+            return
+        }
+        // 轮号必须在加气泡**之前**取：这一轮会是 turnBefore + 1（beginTurn 在服务层异步执行）
+        val turnBefore = AgentSessionManager.currentTurn()
+        appendMsg(true, text, turn = turnBefore + 1)
+        input = ""
+        dispatchAi(text, turnBefore)
+    }
+
+    /**
+     * 重新生成：删掉这条 AI 回复，用它上面的那条用户提问重新问一次。
+     *
+     * 同时丢掉会话记忆里的最后一轮 —— 否则模型会在上下文里看到自己**上一版答案**，
+     * 结果要么照抄要么刻意绕开，都不是"重新生成"该有的行为。
+     */
+    fun regenerate(msg: ChatMsg) {
+        if (sending) return
+        val list = ChatStateHolder.messages
+        val idx = list.indexOfFirst { it.id == msg.id }
+        if (idx < 0) return
+        val ask = list.take(idx).lastOrNull { it.isUser && !it.isStatus } ?: return
+        val turnBefore = AgentSessionManager.currentTurn()
+        ChatStateHolder.deleteMessage(msg.id)
+        AgentSessionManager.dropLastTurn()
+        // 复用原来那条用户消息 ⇒ 把它的轮号改成新的一轮：不然记录图里这一轮的用户消息
+        // 永远找不到（它的旧轮号已作废），"编辑/删除"会退化到只给复制。
+        ChatStateHolder.setMessageTurn(ask.id, turnBefore + 1)
+        dispatchAi(ask.content, turnBefore)
+    }
+
+    /**
+     * 进入编辑态：把这条用户消息放进**底部输入框**改。
+     *
+     * ★ 为什么不再弹独立对话框（用户明确要求）：编辑重发与"重新说一遍"是**同一次输入动作**，
+     *   另开一个窗口意味着用户要在两个文本框之间切；更糟的是弹窗会盖住上下文 ——
+     *   而用户恰恰是**看着上下文**才决定要改哪一句的。
+     *
+     * 进入前会暂存当前草稿（[draftBeforeEdit]），取消时原样还回去：用户可能正打到一半
+     * 才去点了气泡，直接清空输入框等于把没发出去的内容弄丢了。
+     */
+    fun startEdit(target: ChatMsg) {
+        if (sending) return
+        if (editingTarget == null) draftBeforeEdit = input
+        editingTarget = target
+        input = target.content
+    }
+
+    /** 退出编辑态并恢复进入前的草稿 */
+    fun cancelEdit() {
+        editingTarget = null
+        input = draftBeforeEdit
+        draftBeforeEdit = ""
+    }
+
+    /** 复制消息正文到剪贴板 */
+    fun copyText(text: String) {
+        if (text.isBlank()) return
+        runCatching {
+            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            cm?.setPrimaryClip(ClipData.newPlainText("leqi", text))
+            Toast.makeText(ctx, ctx.getString(R.string.chat_msg_copied), Toast.LENGTH_SHORT).show()
+        }.onFailure { Log.w(TAG, "copy failed", it) }
+    }
+
+    /** 这条是不是「最后一条 AI 消息」—— 只有它才允许重新生成 */
+    fun isLastAiMessage(msg: ChatMsg): Boolean {
+        val last = ChatStateHolder.messages.lastOrNull { !it.isStatus }
+        return last != null && last.id == msg.id && !msg.isUser
     }
 
     /**
@@ -337,14 +584,29 @@ internal fun ChatModule(app: LabApplication) {
         }
     }
 
+    /**
+     * 眼镜语音这一轮的「派发前轮号」。
+     *
+     * 眼镜语音不是界面发起的，拿不到 [dispatchAi] 里那样的局部变量，所以用一个可变的记住值：
+     * ASR 文字回调（`onText`）发生在 `sendAiTextMessage` **之前**，也就是轮次开始之前
+     * （`AiConversationService.dispatchGlassesAsrText` 的顺序保证了这一点），在那里记下正好。
+     */
+    val glassesTurnMark = remember { java.util.concurrent.atomic.AtomicInteger(0) }
+
     // 注册眼镜端语音对话（唤醒词 ASR）默认 UI 回调：把眼镜上的提问与 Lab 回复同步到聊天窗口。
     LaunchedEffect(Unit) {
         try {
             app.cxrL.setGlassesAiUiCallbacks(
-                onText = { text -> appendMsg(true, text) },
+                onText = { text ->
+                    glassesTurnMark.set(AgentSessionManager.currentTurn())
+                    appendMsg(true, text)
+                },
                 // 合并进本轮那条带「过程」卡片的 AI 消息（而不是另起一条）：眼镜语音的过程
                 // 与回答因此落在同一个气泡组里，和打字路径的观感一致
-                onReply = { reply -> ChatStateHolder.finalizeTraceReply(reply) },
+                onReply = { reply ->
+                    val stamp = currentTurnStamp(glassesTurnMark.get())
+                    ChatStateHolder.finalizeTraceReply(reply, stamp?.usage, stamp?.turn)
+                },
             )
         } catch (e: Exception) {
             Log.e(TAG, "cxrL not ready", e)
@@ -375,6 +637,8 @@ internal fun ChatModule(app: LabApplication) {
                 localOnly = next
                 app.setChatLocalOnlyEnabled(next)
             },
+            sessionTitle = currentSessionTitle,
+            onOpenSessions = { showSessions = true },
         )
 
         if (messages.isEmpty()) {
@@ -402,7 +666,72 @@ internal fun ChatModule(app: LabApplication) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(messages, key = { it.id }) { msg ->
-                    ChatBubble(msg)
+                    ChatBubble(
+                        msg,
+                        onActions = { actionTarget = msg },
+                        // 用户发言**点一下就是编辑重发**（以前要先点「···」再选「编辑重发」）：
+                        // 用户对一条自己说过的话最常做的动作就是"改一下再说一遍"。
+                        // 发送中不给点 —— 编辑重发会截断历史，与在飞的请求冲突。
+                        // 正文在 SelectionContainer 里（长按走"选字"），所以这里只挂单击，不挂长按。
+                        onClickUser = if (msg.isUser && !msg.isStatus && !sending) {
+                            { startEdit(msg) }
+                        } else {
+                            null
+                        },
+                        expandTrace = expandTrace,
+                    )
+                }
+            }
+        }
+
+        // 上下文占用条（常驻细条）：把原本完全静默的上下文裁剪变成可归因的可见状态。
+        // 会话记忆关闭时组件内部自行不渲染（见 ChatContextBar）
+        contextUsage?.let { usage ->
+            ChatContextBar(usage = usage, onClick = { showContextInfo = true })
+        }
+
+        // 编辑态横幅：说明"正在编辑哪一条、其后的对话会被清掉"，并给一个退出口。
+        // ★ 它替代了原来的独立编辑弹窗 —— 编辑就在下面这个输入框里发生（见 startEdit）。
+        editingTarget?.let {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // ⚠️ 不能写 `padding(horizontal = …, top = …)` —— 没有这个重载
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(BrewPanel)
+                    .border(1.dp, BrewBorder, RoundedCornerShape(10.dp))
+                    .padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Edit,
+                    contentDescription = null,
+                    tint = BrewChat,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(7.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.chat_msg_edit_title),
+                        color = BrewTextBright,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = stringResource(R.string.chat_msg_edit_hint),
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                TextButton(onClick = { cancelEdit() }) {
+                    Text(
+                        text = stringResource(R.string.chat_common_cancel),
+                        color = BrewMuted,
+                        fontSize = 12.sp,
+                    )
                 }
             }
         }
@@ -423,7 +752,10 @@ internal fun ChatModule(app: LabApplication) {
             BasicTextField(
                 value = input,
                 onValueChange = { input = it },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    // 进入编辑态时自动聚焦（否则键盘不弹，用户还得再点一下输入框）
+                    .focusRequester(inputFocus),
                 textStyle = TextStyle(color = BrewTextBright, fontSize = 15.sp),
                 cursorBrush = SolidColor(BrewChat),
                 singleLine = false,
@@ -545,6 +877,96 @@ internal fun ChatModule(app: LabApplication) {
 
     if (showKbDialog) {
         KbManageDialog(onDismiss = { showKbDialog = false })
+    }
+
+    if (showSessions) {
+        ChatSessionsDialog(
+            onDismiss = { showSessions = false },
+            onOpenRecords = { recordsTarget = it },
+            onEditPrompt = { promptTarget = it },
+        )
+    }
+
+    // 对话记录图（节点连接图 + 搜索 + 导出 + 逐条复制/编辑/删除）。
+    // 由本页 host 而不是由会话列表 host：里面的「编辑重发」要落到**下面的输入框**上，
+    // 那是本 Composable 的状态（`startEdit`）；会话列表拿不到它。
+    recordsTarget?.let { target ->
+        SessionRecordsDialog(
+            meta = target,
+            isCurrent = target.id == ChatStateHolder.currentSessionId,
+            onCopy = { copyText(it) },
+            onEditMessage = { msg ->
+                // 关掉两层弹层，让用户直接看到输入框里预填好的那条
+                recordsTarget = null
+                showSessions = false
+                startEdit(msg)
+            },
+            onDeleteMessage = { msg ->
+                ChatStateHolder.deleteMessage(msg.id)
+                contextRefresh++
+            },
+            onDismiss = { recordsTarget = null },
+        )
+    }
+
+    // 本会话提示词（见 ChatSessionMeta.systemPrompt）
+    promptTarget?.let { target ->
+        SessionPromptDialog(
+            initial = ChatStateHolder.sessionPrompt(target.id),
+            onConfirm = { text ->
+                ChatStateHolder.setSessionPrompt(target.id, text)
+                promptTarget = null
+            },
+            onDismiss = { promptTarget = null },
+        )
+    }
+
+    // 消息级操作：复制 / 编辑重发 / 重新生成 / 删除
+    actionTarget?.let { target ->
+        ChatMessageActionsDialog(
+            msg = target,
+            canRegenerate = isLastAiMessage(target),
+            onCopy = {
+                copyText(target.content)
+                actionTarget = null
+            },
+            onEdit = {
+                startEdit(target)
+                actionTarget = null
+            },
+            onRegenerate = {
+                regenerate(target)
+                actionTarget = null
+            },
+            onDelete = {
+                ChatStateHolder.deleteMessage(target.id)
+                actionTarget = null
+            },
+            onDismiss = { actionTarget = null },
+        )
+    }
+
+    if (showContextInfo) {
+        contextUsage?.let { usage ->
+            ContextUsageDialog(
+                usage = usage,
+                onCompact = {
+                    val r = runCatching { AgentSessionManager.compactNow() }.getOrNull()
+                    contextRefresh++
+                    r != null
+                },
+                onNewSession = {
+                    ChatStateHolder.newSession()
+                    showContextInfo = false
+                },
+                onOpenTrace = { showTrace = true },
+                onDismiss = { showContextInfo = false },
+            )
+        }
+    }
+
+    if (showTrace) {
+        SessionTraceDialog(onDismiss = { showTrace = false })
     }
 
     // 首次进入乐奇的通知权限说明框

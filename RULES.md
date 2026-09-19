@@ -15,7 +15,11 @@ com.rokidlab.phone
 │                      #    PhotoQuizFlow, GlassesHandshake, LinkProtocol, AiChannel）
 ├── ai/                # L4 AI 能力
 │   ├── tools/         # 工具 Provider（Info/Knowledge/Glasses/Timer/Media/Display/Web/Files/Aiui/Phone）
-│   ├── ToolPolicy.kt  # 工具风险闸门
+│   │                  #    + ToolEntry（工具的完整声明：风险/副作用/域/schema/摘要 一处写全）
+│   ├── approval/      # 工具审批接缝（ApprovalGate 唯一入口、ToolGuard 策略源、
+│   │                  #    PseudoTools 伪工具风险档、PageScope 页面准入域与文案）
+│   ├── llm/           # 模型能力接缝（LlmRegistry 能力解析 + 客户端构造）
+│   ├── compaction/    # 上下文压缩接缝（CompactionEngine + BasicCompactionEngine）
 │   └── ToolRisk.kt    # 工具风险分级表
 ├── domain/            # L3 领域服务（AiConversationService, ConnectionService, DeviceControlService 等）
 ├── feature/           # L5 功能状态与协调（MainScreen, *StateHolder, RokidLinkController）
@@ -529,12 +533,23 @@ adb/
 
 新增 AI 工具必须同时完成三步，缺一不可：
 
-1. 在 `ai/tools/` 下对应域的 `ToolProvider` 中实现，或在 `ToolRegistry` 注册一行
-2. 在 `ai/ToolRisk.kt` 的 `ToolRiskMap` 登记风险档位（`LOCAL_SIDE_EFFECT` / `EXTERNAL_SIDE_EFFECT`）
-   - 未登记的真实工具当前会被兜底为 `LOCAL_SIDE_EFFECT` 并高声告警，属临时放行，**不得依赖该兜底**
-3. `ToolRegistry.unregisteredTools()` 自检必须为空
+1. 在 `ai/tools/` 下对应域的 `ToolProvider` 里实现 `execute`，并在它的 `tools()` 里**声明一个 `ToolEntry`** ——
+   域 / 设置页分类 / 是否隐藏 / 风险档 / 是否副作用 / 是否需要眼镜 / `statusText` / `summarize` / schema
+   全部写在这一个结构体里（接缝化后的**唯一登记面**，不再有六张表需要手工对齐）
+2. 风险档（`ToolEntry.risk`）必须显式声明是 `READ_ONLY` / `LOCAL_SIDE_EFFECT` / `EXTERNAL_SIDE_EFFECT` 中的哪一档。
+   `EXTERNAL_SIDE_EFFECT` = 触达第三方且不可撤销 → 会走眼镜端确认闸门（`ai/approval/ApprovalGate`）
+3. 改完必须跑 `skills/rokidlab-chat-standalone-mode/scripts/check_tool_wiring.py` 双向核对
+   （六张派生表 vs 各 provider 的声明；**禁止再出现手写 `toolList` 字面量**）；
+   `ToolRegistry.unregisteredTools()` 自检必须为空（接缝化后结构上恒成立，用作防回退断言）
 
-> 现状说明（2026-09-12）：`ToolPolicy.check()` 在确认通道不可用或确认超时时实际返回 `Allow`（fail-open），与类注释「降级为拒绝」不一致；且当前没有任何工具被登记为 `EXTERNAL_SIDE_EFFECT`。修改确认策略时必须同步修正注释与文档。
+> 现状说明（2026-09-19 更新）：判定已全部收敛到 `ai/approval/ApprovalGate`（`ToolPolicy.kt` 已删除）。
+> fail-open 是**刻意设计**并写在 `ApprovalGate.resolveAsk` 的 KDoc 里（唯一产地）：
+> 无确认通道 / 眼镜端旧版 / 用户超时未响应 → 降级放行，仅眼镜端显式回 "no"（`wasCancelled()`）才拒绝。
+> 另：风险档的实际兜底是**最保守档** `EXTERNAL_SIDE_EFFECT`，但「完全未知的名字」会先被
+> `UnknownToolGuard` 单调拒绝，因此不会触发确认。<br>
+> 仍然成立的老问题：**当前没有任何真实工具被登记为 `EXTERNAL_SIDE_EFFECT`**
+> （`check_tool_wiring.py` 可核对）—— 确认闸门对真实工具仍处于空转状态。
+> 要让某个工具真正走眼镜确认，只需在它的 `ToolEntry.risk` 里声明 `EXTERNAL_SIDE_EFFECT`。
 
 ### 12.11 通道租约约束
 
@@ -604,7 +619,7 @@ adb/
 - **高价值目标（必须锁）**：ADB sync 帧编解码与 `FAIL`/`CLSE` 分支、HID 描述符字节与 `normalize` 语义、`AiChannel` 跨端载荷 v0/v1 矩阵与常量名、`ToolRiskMap` 完整性（`unregisteredTools()` 必须为空，见 §12.10）、聊天历史落盘格式与迁移（`ChatHistoryStore`）
 - **改字节必须改测试**：任何改动 HID 描述符字节 / sync 帧格式 / 跨端载荷格式 / 聊天历史落盘格式的提交，**必须同步更新对应测试并真机回归**；不得只按注释里的长度或格式假设行事（#8 实测推翻了 `buildQtiCompatibleDescriptor` 注释声称的「≤64 字节」，实为 67 / 121 字节）
 - **行为记录 ≠ 契约**：测试发现生产代码语义不一致时，先以注释登记现象并指向评估文档待办，**不得为了让测试变绿而修改生产行为**。确需变更语义时必须拿到明确授权，并把锁行为的测试一并翻面（先例：`pullFile` 遇 CLSE 返回 true 与 `downloadFile` 返回 false 的分歧，已于 2026-09-13 按用户要求收敛为「按远端字节数对账」，测试同步改为断言 false；见 `CODE_AUDIT.md` C7 与 `ENGINEERING_ASSESSMENT_2026-09-12.md` §[P1-11]）
-- **状态复位**：测试必须复位被测单例的全局状态（`@After` 中 `BtHidCompat.setManualMode(null)` / `ToolPolicy.confirmationChannel = null` 等），避免用例间污染
+- **状态复位**：测试必须复位被测单例的全局状态（`@After` 中 `BtHidCompat.setManualMode(null)` / `ApprovalGate.resetForTest()` 等），避免用例间污染
 - ⚠️ 仍无 `androidTest`；**不建托管 CI**（#10 评估结论：门禁已挂 `preBuild`、本地构建即触发，托管 CI 属重复执行且需复刻 SDK/NDK 环境）；`KeyButtonService` / `ChatStateHolder`（本体）/ `CxrLHiRokidSession` 仍无测试
 
 ### 12.16 聊天历史落盘约束（`ChatStateHolder` / `ChatHistoryStore`）
