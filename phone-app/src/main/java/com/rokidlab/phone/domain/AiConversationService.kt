@@ -1321,14 +1321,19 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             Log.i(TAG, "sendCustomCmd(Ai, KeyDown_Client, privacy_level=2) -> $keyDownResult")
 
             // 对齐官方 App 文字输入时序（2026-09-19 双端抓包实测）：
-            // 官方 App 从不手机端下发 open —— 眼镜收到 KeyDown 后约 500ms 必然自开场景；
-            // 手机只需在该 500ms 窗口内把 ASR_Result/ASR_End 送到（官方眼镜侧 KeyDown→ASR 仅 213ms，
-            // 文字先于场景打开到达）。旧实现 sleep(600) 后补发 open，该包恰在眼镜自开后 4ms 到达，
-            // 导致 AIOpenHandler/startNewTalk 被执行两次（双气泡），且 ASR 晚于场景打开约 400ms，
-            // 正是 2026-09-17 记录的「补发 open 后有声音没文字」竞态根因。
-            // 现节奏：KeyDown → 250ms → ASR_Result → ASR_End 连发（乐奇链路传输约 85ms，
-            // 眼镜侧约 340ms 收到，稳落在 500ms 自开窗口之前）。
-            Thread.sleep(250)
+            // 官方 App 从不手机端下发 open —— 眼镜收到 KeyDown 后约 502ms 必然自开场景。
+            // 但 ASR 不能抢在场景打开之前发：实测早到时 AsrMessageHandler 虽执行，却没有
+            // 会话 item 可写，随后 AIOpenHandler 的 clearData 又把状态清空 → 提问文字丢失，
+            // 只弹出一个空 AI 助手（官方 App 间隔 213ms，官方自己也有这个 bug）。
+            // 旧实现 sleep(600) 后补发 open 则会撞在眼镜自开时刻，startNewTalk 跑两次
+            // ＝双气泡（2026-09-17「有声音没文字」竞态根因）。
+            //
+            // 现节奏（方案 B）：KeyDown → 等眼镜上行 Ai_SceneStatus（场景已开）→ ASR_Result →
+            // ASR_End 连发。实测信号在 KeyDown 后约 718ms 到手机；800ms 超时兜底也已晚于
+            // 502ms 自开 + 链路传输余量（眼镜 ~885ms 收到 ASR，场景已开 383ms），文字必能落
+            // 到会话 item；热场景（状态已知打开）则立即放行，不多等。
+            val sceneReady = session.waitAiSceneOpen(800)
+            Log.i(TAG, "waitAiSceneOpen after KeyDown -> ready=$sceneReady")
 
             // ===== 步骤1: 发送 ASR_Result（用户文字）=====
             // 语音唤醒链路（showAsrResult=false）：官方 ASR 已在眼镜上显示提问，不再重发避免重复显示。

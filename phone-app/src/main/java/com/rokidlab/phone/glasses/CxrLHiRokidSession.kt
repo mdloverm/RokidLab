@@ -43,6 +43,7 @@ import com.rokidlab.phone.domain.CxrAppOperation
 import com.rokidlab.phone.platform.Capability
 import com.rokidlab.phone.platform.CapabilityProbe
 import java.io.File
+import kotlin.concurrent.withLock
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -236,6 +237,57 @@ class CxrLHiRokidSession(
      * 当前所有 aiCmdLock 临界区均在 aiSendLock 持有期间调用，顺序一致，无死锁风险。
      */
     internal val aiCmdLock = Any()
+
+    /**
+     * 眼镜 AI 助手场景（ai_assist）开关状态。
+     *
+     * 来源：眼镜打开/关闭场景时上行 Ai_SceneStatus，CXR-L SDK 经
+     * ICXRLinkCbk.onGlassAiAssistStart/Stop 回调到本类（接线见 ConnectionService）。
+     *
+     * 用途（2026-09-19 双端抓包实测）：冷启动时眼镜收到 KeyDown_Client 后约 502ms
+     * 才自开场景；ASR_Result 若早于场景打开到达，AsrMessageHandler 虽执行但没有会话
+     * item 可写，随后 AIOpenHandler 的 clearData 又清空状态 → 提问文字丢失（只弹空
+     * AI 助手）。故手机端发 KeyDown 后必须等场景真正打开（本状态翻 true）再下发
+     * ASR_Result/ASR_End。
+     *
+     * 注意：App 进程刚启动时该状态未知（默认 false），场景即使本就打开也不会补通知，
+     * 这种情况下首轮消息走超时兜底（见 [waitAiSceneOpen]），收到首次状态变更后即准确。
+     */
+    @Volatile
+    private var aiSceneOpen = false
+    private val aiSceneLock = java.util.concurrent.locks.ReentrantLock()
+    private val aiSceneCondition = aiSceneLock.newCondition()
+
+    /** CXR-L 回调：眼镜 AI 助手场景打开/关闭（回调可能在 binder 线程） */
+    internal fun setAiSceneOpen(open: Boolean) {
+        aiSceneLock.withLock {
+            if (aiSceneOpen != open) {
+                aiSceneOpen = open
+                aiSceneCondition.signalAll()
+            }
+        }
+    }
+
+    /**
+     * 阻塞等待眼镜 AI 场景打开（供 KeyDown 后的下行链路在后台线程调用）。
+     * @return true=收到场景打开通知；false=超时（调用方按兜底节奏继续即可）
+     */
+    internal fun waitAiSceneOpen(timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        aiSceneLock.withLock {
+            while (!aiSceneOpen) {
+                val remain = deadline - System.currentTimeMillis()
+                if (remain <= 0) return false
+                try {
+                    aiSceneCondition.await(remain, java.util.concurrent.TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return false
+                }
+            }
+            return true
+        }
+    }
 
     /** ASR 桥接协调器（双通道接收/去重/控制标记/下行 ping，从本类拆出，职责见其文档） */
     internal val asrBridge = AsrBridgeCoordinator(

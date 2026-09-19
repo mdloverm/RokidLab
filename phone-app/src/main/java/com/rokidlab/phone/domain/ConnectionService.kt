@@ -314,6 +314,17 @@ class ConnectionService(private val session: com.rokidlab.phone.glasses.CxrLHiRo
                         session.notifyConnectionChanged()
                         maybeRunPendingOperation()
                     }
+                },
+                // 眼镜 AI 助手场景开关（Ai_SceneStatus 上行）：下行文字链路据此保证
+                // ASR_Result 不早于场景打开发送（冷启动首条丢文字竞态，详见 waitAiSceneOpen）。
+                // setAiSceneOpen 内部自带同步，可在 binder 回调线程直接调用。
+                onAiAssistStart = {
+                    android.util.Log.i(TAG, "onGlassAiAssistStart: ai_assist scene opened")
+                    session.setAiSceneOpen(true)
+                },
+                onAiAssistStop = {
+                    android.util.Log.i(TAG, "onGlassAiAssistStop: ai_assist scene closed")
+                    session.setAiSceneOpen(false)
                 }
             ))
             session.cxrLink = newLink
