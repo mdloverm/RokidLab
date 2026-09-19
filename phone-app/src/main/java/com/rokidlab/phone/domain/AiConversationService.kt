@@ -1303,15 +1303,14 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         // 更新对话框（只有 `TtsResultHandler` 日志、没有 `showUpdateTTSUI`/`AiAdapter setData`），
         // 表现＝「有声音没文字」，官方自己的答案反而留在原气泡里。已回滚，详见当日日志。
         var keyDownResult: Int? = 0
-        var openResult: Int? = 0
         if (link == null) {
             // 本机模式：没有眼镜可下发显示，整段跳过（原 5 条下行全部不做）
-            Log.i(TAG, "local-only: skip KeyDown/open/ASR_Result/ASR_End downlink (no glasses)")
+            Log.i(TAG, "local-only: skip KeyDown/ASR_Result/ASR_End downlink (no glasses)")
             session.onStatus("正在获取 AI 回复…（本机模式，未连接眼镜）")
         } else if (!localTakeover) {
-            // 0a. 发送 KeyDown_Client（privacy_level=2）：眼镜端 AIPhoneOpenHandler 在 AI 未运行时
-            //     调用 openAiAssistant() -> openSceneWithIgnoreTips("ai_assist")，真正设置 aiIsRunning=true，
-            //     这是 ASR_Result / TTS_Result 能显示文字的前置条件
+            // 0. 发送 KeyDown_Client（privacy_level=2）：眼镜端 AIPhoneOpenHandler 在 AI 未运行时
+            //    约 500ms 后自行 openAiAssistant() -> openSceneWithIgnoreTips("ai_assist") ->
+            //    AIOpenHandler/startNewTalk，这是 ASR_Result / TTS_Result 能显示文字的前置条件。
             val keyDownCaps = Caps()
             keyDownCaps.write("KeyDown_Client")
             keyDownCaps.write("{\"privacy_level\":2}")
@@ -1320,17 +1319,16 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 keyDownResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, keyDownCaps)
             }
             Log.i(TAG, "sendCustomCmd(Ai, KeyDown_Client, privacy_level=2) -> $keyDownResult")
-            Thread.sleep(600)
 
-            // 0b. 发送 Ai + open：眼镜端 AIOpenHandler 调用 startNewTalk()，开启 AI 对话
-            val openCaps = Caps()
-            openCaps.write("open")
-            synchronized(session.aiCmdLock) {
-                if (!abortAiSendIfLinkInvalid(link, onResult)) return
-                openResult = link.sendCustomCmd(LinkProtocol.CXR_CHANNEL_AI, openCaps)
-            }
-            Log.i(TAG, "sendCustomCmd(Ai, open) -> $openResult")
-            Thread.sleep(400)
+            // 对齐官方 App 文字输入时序（2026-09-19 双端抓包实测）：
+            // 官方 App 从不手机端下发 open —— 眼镜收到 KeyDown 后约 500ms 必然自开场景；
+            // 手机只需在该 500ms 窗口内把 ASR_Result/ASR_End 送到（官方眼镜侧 KeyDown→ASR 仅 213ms，
+            // 文字先于场景打开到达）。旧实现 sleep(600) 后补发 open，该包恰在眼镜自开后 4ms 到达，
+            // 导致 AIOpenHandler/startNewTalk 被执行两次（双气泡），且 ASR 晚于场景打开约 400ms，
+            // 正是 2026-09-17 记录的「补发 open 后有声音没文字」竞态根因。
+            // 现节奏：KeyDown → 250ms → ASR_Result → ASR_End 连发（乐奇链路传输约 85ms，
+            // 眼镜侧约 340ms 收到，稳落在 500ms 自开窗口之前）。
+            Thread.sleep(250)
 
             // ===== 步骤1: 发送 ASR_Result（用户文字）=====
             // 语音唤醒链路（showAsrResult=false）：官方 ASR 已在眼镜上显示提问，不再重发避免重复显示。

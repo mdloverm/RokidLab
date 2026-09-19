@@ -202,6 +202,11 @@ internal fun ChatModule(app: LabApplication) {
         }
     }
 
+    /** 原地更新末尾状态气泡（OCR 模型下载百分比等进度），不新增消息 */
+    fun updateStatus(content: String) {
+        ChatStateHolder.updateLastStatus(content)
+    }
+
     fun toggleThinking() {
         thinking = !thinking
         prefs.edit().putBoolean(KEY_AI_THINKING, thinking).apply()
@@ -303,6 +308,7 @@ internal fun ChatModule(app: LabApplication) {
                     ChatStateHolder.finalizeTraceReply(reply)
                 }
             },
+            onStageText = { text -> updateStatus(text) },
         )
     }
 
@@ -324,6 +330,7 @@ internal fun ChatModule(app: LabApplication) {
                         ChatStateHolder.finalizeTraceReply(reply)
                     }
                 },
+                onStageText = { text -> updateStatus(text) },
             )
         } catch (e: Exception) {
             Log.e(TAG, "cxrL not ready", e)

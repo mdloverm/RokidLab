@@ -58,7 +58,8 @@ internal class PhotoQuizService(private val session: CxrLHiRokidSession) {
         onStage: (Int) -> Unit,
         onText: (String) -> Unit,
         onReply: (String) -> Unit,
-    ) = photoQuiz.setUiCallbacks(onStage, onText, onReply)
+        onStageText: (String) -> Unit = {},
+    ) = photoQuiz.setUiCallbacks(onStage, onText, onReply, onStageText)
 
     /**
      * 远程控制眼镜拍照，通过 IImageStreamCbk 回调获取 JPEG 图片字节。
@@ -130,7 +131,8 @@ internal class PhotoQuizService(private val session: CxrLHiRokidSession) {
         onStage: (Int) -> Unit,
         onText: (String) -> Unit,
         onReply: (String) -> Unit,
-    ) = photoQuiz.start(onStage, onText, onReply)
+        onStageText: (String) -> Unit = {},
+    ) = photoQuiz.start(onStage, onText, onReply, onStageText)
 
     private fun requestPhotoFromLink(
         link: CXRLink,

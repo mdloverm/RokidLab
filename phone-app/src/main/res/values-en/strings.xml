@@ -87,7 +87,7 @@
     <string name="language_english">English</string>
     <string name="more_section">More</string>
     <string name="settings_developer_mode">Developer Mode</string>
-    <string name="settings_developer_mode_subtitle">Glasses status, route probe, app submission, logs and diagnostics</string>
+    <string name="settings_developer_mode_subtitle">Dev &amp; troubleshooting tools</string>
     <string name="sponsor">Sponsor</string>
     <string name="sponsor_desc">Support RokidLab</string>
     <string name="developer_app_submit">Submit App</string>
@@ -313,22 +313,22 @@
     <string name="chat_settings_api_key">API Key</string>
     <string name="chat_settings_model">Model</string>
     <string name="chat_settings_continue">Continuous Chat</string>
-    <string name="chat_settings_continue_hint">After each reply finishes playing on the glasses, listening restarts automatically. No wake word needed — just keep talking.</string>
+    <string name="chat_settings_continue_hint">Auto-listen after speech ends; no wake word needed</string>
     <string name="chat_settings_quiz">Key Quiz Mode</string>
-    <string name="chat_settings_quiz_hint">When ON, a short press on the temple button = Photo &amp; Ask AI; short-press shortcut is overridden, long press is unaffected.</string>
+    <string name="chat_settings_quiz_hint">Short-press the temple button to ask AI by photo; long press unaffected</string>
     <string name="chat_settings_quiz_instruction">Quiz Instruction</string>
-    <string name="chat_settings_quiz_instruction_hint">Prompt injected to AI during photo quiz to control the answer style, e.g. \"answer only\" or \"show solution steps\".</string>
+    <string name="chat_settings_quiz_instruction_hint">Control answer style, e.g. \"answer only\" or \"show steps\"</string>
     <string name="chat_settings_quiz_instruction_placeholder">e.g. answer only</string>
     <string name="chat_settings_source_official">Official Leqi</string>
     <string name="chat_settings_source_local">Local Model</string>
     <string name="chat_settings_source_custom">Custom Service</string>
-    <string name="chat_settings_official_hint">Answered by the official Leqi AI on the glasses; no service URL or API key needed.</string>
-    <string name="chat_settings_local_active_hint">Glasses chat will use the on-device model: %1$s</string>
-    <string name="chat_settings_local_none_hint">No local model selected yet: open the manager, pull a model and tap \"Set as chat model\".</string>
-    <string name="chat_settings_local_manage">Manage Local Models</string>
-    <string name="chat_settings_local_save_none">Please pull and select a model in Local Model Manager first</string>
+    <string name="chat_settings_official_hint">Uses the official Leqi AI. No configuration needed.</string>
+    <string name="chat_settings_local_active_hint">Current local model: %1$s</string>
+    <string name="chat_settings_local_none_hint">No local model selected. Tap the button to manage.</string>
+    <string name="chat_settings_local_manage">Manage</string>
+    <string name="chat_settings_local_save_none">Please select a local model first</string>
     <string name="chat_settings_tools">AI Tools</string>
-    <string name="chat_settings_tools_hint">When enabled, Leki can call these local capabilities during chat</string>
+    <string name="chat_settings_tools_hint">Local capabilities usable during chat</string>
     <string name="chat_local_only_on">Phone-only mode ON · tap to turn off</string>
     <string name="chat_local_only_off">Phone-only mode: chat without glasses</string>
     <string name="chat_subtitle_local_only">Phone-only · no glasses</string>
@@ -354,7 +354,7 @@
 
     <!-- LeQi Chat - AI Skills (user-defined) -->
     <string name="chat_settings_skills">AI Skills</string>
-    <string name="chat_settings_skills_hint">Custom skills: when the description matches, LeQi runs the steps automatically</string>
+    <string name="chat_settings_skills_hint">Auto-runs steps when its description matches</string>
     <string name="skills_manage_title">AI Skills</string>
     <string name="skills_manage_hint">A skill is a playbook (SKILL.md). When a skill description matches, LeQi loads its full steps first, then calls the local tools below to run them; multiple skills can be combined in one request</string>
     <string name="skills_enabled_switch">Enable skills</string>
@@ -400,6 +400,7 @@
     <string name="chat_kb">Knowledge Base</string>
     <string name="chat_photo_status">Asking glasses to take a photo...</string>
     <string name="chat_ocr_status">Recognizing text from photo...</string>
+    <string name="chat_ocr_downloading">Downloading OCR model (~15 MB, first time only)… %1$d%%</string>
     <string name="chat_kb_status">Searching knowledge base...</string>
     <string name="chat_ai_status">Generating answer...</string>
     <string name="chat_ocr_empty">No text recognized. Please adjust the camera angle and retry.</string>
@@ -488,10 +489,10 @@
     <string name="reset">Reset</string>
     <string name="reinstall_glasses">Reinstall on Glasses</string>
     <string name="reinstall_glasses_desc">Reinstall RokidLink on glasses</string>
-    <string name="view_glasses_status">View Glasses Status</string>
-    <string name="view_glasses_status_desc">Show glasses IP and ADB status (troubleshooting)</string>
+    <string name="view_glasses_status">Glasses Status</string>
+    <string name="view_glasses_status_desc">View glasses IP and ADB status</string>
     <string name="route_current">Current Route</string>
-    <string name="route_current_desc">WiFi first, Bluetooth tunnel fallback; tap to re-probe</string>
+    <string name="route_current_desc">Tap to re-probe WiFi / Bluetooth tunnel</string>
     <string name="route_probing">Probing…</string>
     <string name="route_unknown">Not probed</string>
     <string name="ready">Ready</string>
@@ -598,7 +599,7 @@
     <string name="ai_tool_search_past_conversations_name">Search Past Chats</string>
     <string name="ai_tool_search_past_conversations_desc">Search past chat history</string>
     <string name="chat_settings_aiui">AIUI App Manager</string>
-    <string name="chat_settings_aiui_hint">Manage chat-generated or locally uploaded agent apps</string>
+    <string name="chat_settings_aiui_hint">Manage chat-created or uploaded agent apps</string>
     <string name="aiui_manage_title">AIUI App Manager</string>
     <string name="aiui_manage_upload_btn">Upload local .aix to glasses</string>
     <string name="aiui_manage_empty">No AIUI apps yet.\nAsk Leqi to generate one, or tap the button above to upload a local .aix</string>
@@ -1149,14 +1150,14 @@
 
     <!-- Developer Tools -->
     <string name="developer_title">Developer Tools</string>
-    <string name="developer_subtitle">Submit your app to the RokidLab App Store</string>
+    <string name="developer_subtitle">Submit apps to the RokidLab Store</string>
     <string name="export_log">Export Log</string>
-    <string name="export_log_desc">Export runtime logs to TXT file for troubleshooting</string>
+    <string name="export_log_desc">Export runtime logs for issue reports</string>
     <string name="save_log">Save Log</string>
     <string name="save_log_done">Log saved</string>
     <string name="save_log_failed">Failed to save log</string>
-    <string name="export_compat_diag">Export Compatibility Diagnostics</string>
-    <string name="export_compat_diag_desc">Export device / ROM / Bluetooth stack / screen-mirror tier, for compatibility issue reports</string>
+    <string name="export_compat_diag">Compatibility Report</string>
+    <string name="export_compat_diag_desc">Export device, ROM and Bluetooth info for reports</string>
     <string name="save_compat_done">Compatibility diagnostics exported</string>
     <string name="save_compat_failed">Failed to export compatibility diagnostics</string>
     <string name="error_log_title">Error Report</string>

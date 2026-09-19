@@ -329,7 +329,8 @@ class CxrLHiRokidSession(
         onStage: (Int) -> Unit,
         onText: (String) -> Unit,
         onReply: (String) -> Unit,
-    ) = photoQuizService.setPhotoAskUiCallbacks(onStage, onText, onReply)
+        onStageText: (String) -> Unit = {},
+    ) = photoQuizService.setPhotoAskUiCallbacks(onStage, onText, onReply, onStageText)
 
 
     /**
@@ -905,7 +906,8 @@ class CxrLHiRokidSession(
         onStage: (Int) -> Unit,
         onText: (String) -> Unit,
         onReply: (String) -> Unit,
-    ) = photoQuizService.startPhotoAsk(onStage, onText, onReply)
+        onStageText: (String) -> Unit = {},
+    ) = photoQuizService.startPhotoAsk(onStage, onText, onReply, onStageText)
 
     /**
      * 安全切回主线程执行 UI 回调：Activity 已销毁（保活后台运行）时直接跳过，

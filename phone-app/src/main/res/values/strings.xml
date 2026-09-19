@@ -87,7 +87,7 @@
     <string name="language_english">English</string>
     <string name="more_section">更多</string>
     <string name="settings_developer_mode">开发者模式</string>
-    <string name="settings_developer_mode_subtitle">眼镜状态、线路探测、应用提交、日志与诊断导出</string>
+    <string name="settings_developer_mode_subtitle">开发与排障工具</string>
     <string name="sponsor">赞助</string>
     <string name="sponsor_desc">支持 RokidLab</string>
     <string name="developer_app_submit">提交应用</string>
@@ -314,22 +314,22 @@
     <string name="chat_settings_api_key">API 密钥</string>
     <string name="chat_settings_model">模型名</string>
     <string name="chat_settings_continue">连续对话</string>
-    <string name="chat_settings_continue_hint">每轮回复在眼镜上播报结束后自动重新开始收听，无需再喊唤醒词，直接接着说下一句</string>
+    <string name="chat_settings_continue_hint">播报结束后自动续听，无需再次唤醒</string>
     <string name="chat_settings_quiz">按键答题</string>
-    <string name="chat_settings_quiz_hint">打开后短按镜腿按键 = 拍照问 AI，原短按功能失效，长按不受影响</string>
+    <string name="chat_settings_quiz_hint">短按镜腿键拍照问 AI，长按不受影响</string>
     <string name="chat_settings_quiz_instruction">答题指令</string>
-    <string name="chat_settings_quiz_instruction_hint">拍照答题时注入 AI 的提示词，控制回答方式，如「只显示答案」「给出解题步骤」</string>
+    <string name="chat_settings_quiz_instruction_hint">控制回答方式，如「只显示答案」「给出解题步骤」</string>
     <string name="chat_settings_quiz_instruction_placeholder">例如：只显示答案</string>
     <string name="chat_settings_source_official">乐奇官方</string>
     <string name="chat_settings_source_local">本地模型</string>
     <string name="chat_settings_source_custom">自定义服务</string>
-    <string name="chat_settings_official_hint">由眼镜端官方乐奇 AI 直接作答，无需在 Lab 配置服务地址与密钥。</string>
-    <string name="chat_settings_local_active_hint">眼镜对话将使用本机本地模型：%1$s</string>
-    <string name="chat_settings_local_none_hint">尚未选择本地模型：点右侧按钮打开管理页，拉取模型后点「设为对话模型」。</string>
-    <string name="chat_settings_local_manage">管理本地模型</string>
-    <string name="chat_settings_local_save_none">请先在本地模型管理中拉取并选择一个模型</string>
+    <string name="chat_settings_official_hint">使用官方乐奇作答，无需配置。</string>
+    <string name="chat_settings_local_active_hint">当前本地模型：%1$s</string>
+    <string name="chat_settings_local_none_hint">尚未选择本地模型，点右侧按钮管理。</string>
+    <string name="chat_settings_local_manage">管理</string>
+    <string name="chat_settings_local_save_none">请先选择一个本地模型</string>
     <string name="chat_settings_tools">AI 工具</string>
-    <string name="chat_settings_tools_hint">开启后，乐奇可在对话中调用以下本地能力</string>
+    <string name="chat_settings_tools_hint">对话中可调用的本地能力</string>
     <string name="chat_local_only_on">本机模式已开启 · 点按关闭</string>
     <string name="chat_local_only_off">本机模式：不连眼镜也能聊</string>
     <string name="chat_subtitle_local_only">本机模式 · 不连眼镜</string>
@@ -355,7 +355,7 @@
 
     <!-- 乐奇聊天 - AI 技能（用户自定义） -->
     <string name="chat_settings_skills">AI 技能</string>
-    <string name="chat_settings_skills_hint">自定义技能：命中描述时乐奇自动按步骤执行</string>
+    <string name="chat_settings_skills_hint">命中描述时自动按步骤执行</string>
     <string name="skills_manage_title">AI 技能</string>
     <string name="skills_manage_hint">技能 = 说明书（SKILL.md）。命中技能描述时乐奇会先加载完整步骤，再调用下方本地工具执行；一次请求可组合多个技能</string>
     <string name="skills_enabled_switch">启用技能</string>
@@ -402,6 +402,7 @@
     <string name="chat_kb">知识库</string>
     <string name="chat_photo_status">正在让眼镜拍照...</string>
     <string name="chat_ocr_status">正在识别题目文字...</string>
+    <string name="chat_ocr_downloading">正在下载 OCR 识别模型（约 15 MB，仅首次使用需要）…%1$d%%</string>
     <string name="chat_kb_status">正在检索知识库...</string>
     <string name="chat_ai_status">正在生成答案...</string>
     <string name="chat_ocr_empty">未能识别到文字，请调整拍摄角度后重试</string>
@@ -490,10 +491,10 @@
     <string name="reset">重置</string>
     <string name="reinstall_glasses">重装眼镜端</string>
     <string name="reinstall_glasses_desc">重装 RokidLink 到眼镜</string>
-    <string name="view_glasses_status">查看眼镜端状态</string>
-    <string name="view_glasses_status_desc">显示眼镜 IP 与 ADB 状态（排障用）</string>
+    <string name="view_glasses_status">眼镜状态</string>
+    <string name="view_glasses_status_desc">查看眼镜 IP 与 ADB 状态</string>
     <string name="route_current">当前线路</string>
-    <string name="route_current_desc">WiFi 优先、蓝牙隧道兜底；点击重新探测</string>
+    <string name="route_current_desc">点击重新探测 WiFi / 蓝牙隧道</string>
     <string name="route_probing">正在探测…</string>
     <string name="route_unknown">未探测</string>
     <string name="ready">就绪</string>
@@ -600,7 +601,7 @@
     <string name="ai_tool_search_past_conversations_name">检索历史对话</string>
     <string name="ai_tool_search_past_conversations_desc">在历史聊天记录里检索</string>
     <string name="chat_settings_aiui">AIUI 应用管理</string>
-    <string name="chat_settings_aiui_hint">管理对话生成或本地上传的智能体应用</string>
+    <string name="chat_settings_aiui_hint">管理对话生成或上传的智能体应用</string>
     <string name="aiui_manage_title">AIUI 应用管理</string>
     <string name="aiui_manage_upload_btn">上传本地 .aix 到眼镜</string>
     <string name="aiui_manage_empty">还没有 AIUI 应用。\n可以让乐奇帮你生成一个，或点上方按钮上传本地 .aix</string>
@@ -1151,14 +1152,14 @@
 
     <!-- 开发者工具 -->
     <string name="developer_title">开发者工具</string>
-    <string name="developer_subtitle">提交你的应用到 RokidLab 应用商店</string>
+    <string name="developer_subtitle">提交应用到 RokidLab 商店</string>
     <string name="export_log">导出日志</string>
-    <string name="export_log_desc">导出运行日志到 TXT 文件，排查问题时使用</string>
+    <string name="export_log_desc">导出运行日志，便于反馈问题</string>
     <string name="save_log">保存日志</string>
     <string name="save_log_done">日志已保存</string>
     <string name="save_log_failed">日志保存失败</string>
-    <string name="export_compat_diag">导出兼容性诊断</string>
-    <string name="export_compat_diag_desc">导出机型 / ROM / 蓝牙栈 / 投屏降级档位，反馈兼容性问题时使用</string>
+    <string name="export_compat_diag">兼容性诊断</string>
+    <string name="export_compat_diag_desc">导出机型、ROM、蓝牙等信息用于反馈</string>
     <string name="save_compat_done">兼容性诊断已导出</string>
     <string name="save_compat_failed">兼容性诊断导出失败</string>
     <string name="error_log_title">错误报告</string>

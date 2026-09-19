@@ -50,6 +50,8 @@ internal class PhotoQuizFlow(
     @Volatile
     private var stageCb: (Int) -> Unit = {}
     @Volatile
+    private var stageTextCb: (String) -> Unit = {}
+    @Volatile
     private var textCb: (String) -> Unit = {}
     @Volatile
     private var replyCb: (String) -> Unit = {}
@@ -58,10 +60,12 @@ internal class PhotoQuizFlow(
         onStage: (Int) -> Unit,
         onText: (String) -> Unit,
         onReply: (String) -> Unit,
+        onStageText: (String) -> Unit = {},
     ) {
         stageCb = onStage
         textCb = onText
         replyCb = onReply
+        stageTextCb = onStageText
     }
 
     /**
@@ -70,12 +74,14 @@ internal class PhotoQuizFlow(
      * → 答案经 Ai 通道发回眼镜显示 + tts_play 语音播报。
      *
      * @param onStage 阶段状态回调（参数为 strings.xml 资源 id，UI 层可展示流程气泡）
+     * @param onStageText 动态文本阶段回调（如 OCR 模型下载百分比），UI 层原地更新同一条状态气泡
      * @param onReply 最终答案回调（同时已发送到眼镜显示+播报）
      */
     fun start(
         onStage: (Int) -> Unit = stageCb,
         onText: (String) -> Unit = textCb,
         onReply: (String) -> Unit = replyCb,
+        onStageText: (String) -> Unit = stageTextCb,
     ) {
         if (inProgress) {
             Log.i(TAG, "start: already in progress, skip")
@@ -107,8 +113,28 @@ internal class PhotoQuizFlow(
                                 val bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
                                     ?: return@runCatching ""
                                 try {
+                                    // 模型缺失时 onProgress 才会回调（模型已存在则静默继续）。
+                                    // 下载不再静默：按 10% 档位把进度推到聊天窗口，原地更新同一条状态气泡，
+                                    // 让用户明确知道「正在下载模型」而不是以为 App 卡死。
+                                    val downloadBucket = java.util.concurrent.atomic.AtomicInteger(-1)
                                     LocalOcr.ensureInit(appContext) { pct ->
-                                        if (pct % 20 == 0) Log.i(TAG, "photoAsk: OCR model downloading $pct%")
+                                        val bucket = (pct / 10) * 10
+                                        if (downloadBucket.getAndSet(bucket) != bucket) {
+                                            Log.i(TAG, "photoAsk: OCR model downloading $bucket%")
+                                            mainHandler.post {
+                                                onStageText(
+                                                    appContext.getString(
+                                                        R.string.chat_ocr_downloading,
+                                                        bucket,
+                                                    ),
+                                                )
+                                            }
+                                        }
+                                    }
+                                    // 发生过下载：上面的「正在识别…」状态气泡已被下载进度覆盖，
+                                    // 下载完成后补回一条识别阶段提示，再开始识别。
+                                    if (downloadBucket.get() >= 0) {
+                                        mainHandler.post { onStage(R.string.chat_ocr_status) }
                                     }
                                     LocalOcr.recognize(appContext, bmp)
                                 } finally {

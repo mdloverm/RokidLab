@@ -136,6 +136,20 @@ internal object ChatStateHolder {
     }
 
     /**
+     * 原地更新末尾状态消息（用于 OCR 模型下载百分比等高频进度）。
+     * 末尾是状态消息就覆盖内容（不新增气泡、不落盘，避免每 1% 刷一条 + 高频写文件）；
+     * 末尾不是状态消息时退化为新增一条状态消息。必须在主线程调用。
+     */
+    fun updateLastStatus(content: String) {
+        val last = messages.lastOrNull()
+        if (last != null && last.isStatus) {
+            messages[messages.size - 1] = last.copy(content = content)
+        } else {
+            add(false, content, isStatus = true)
+        }
+    }
+
+    /**
      * 添加一条图片消息：content = 图片说明（caption），[imageUrl] = 远端图片直链。
      * 由 `show_image` 工具调用，必须在主线程调用（Compose 快照线程）。
      */
