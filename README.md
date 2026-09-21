@@ -565,7 +565,7 @@ D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:assembleRelease
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v3.9-debug.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v4.0-debug.apk
 ```
 
 ### 眼镜端服务
@@ -640,6 +640,29 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
   - 自动清洗模型偶发输出的 `<answer>` 异常包裹标签
 - **AIUI 生成侧渲染规范修正**：统一官方单色绿屏配色规范；修复技能文档同步失效
 - **版本**：手机端 3.9（versionCode 24）/ 眼镜端 RokidLink 3.9（versionCode 17），内嵌眼镜端为 R8 混淆 release 包
+
+## v4.0 更新总览
+
+- **会话架构接缝化重构**（对齐 DeepSeek Harness「能力可插拔 + 全程可回放」）：
+  - 新增 `approval` / `compaction` / `llm` / `session` / `subagent` 能力包，删除硬编码 `ToolPolicy`
+  - 会话事件流全程记录（SessionGraph / SessionTrace / SessionLog），模型可见内容可回放导出
+  - **多会话管理**：新建 / 重命名 / 删除 / 切换 + 持久化；新增对话记录图、执行轨迹、上下文占用栏、本会话提示词与记忆管理 UI
+  - `ModelCapabilityProbe` 按模型上下文窗口动态调整压缩阈值；只读子代理支持历史会话归因查询
+- **IMU 头动规则（v2 规则编程层）**：
+  - 眼镜端 `HeadImuService` 20Hz 上报六轴 + 四元数，全部判定在手机端（`MotionBuffer` 环形缓冲 + `MotionRules` / `MotionRuleEngine`）
+  - 支持点头 / 摇头 / 静止 / 持续抬头等规则，**动作放开为任意工具调用（含 MCP）**，可用语音直接建规则
+  - 审批弹窗支持头动手势应答（点头确认 / 摇头取消）；新增边沿闸门防「保持静止」重复触发，参数越界自动收敛
+  - 新增 `stop_tts` 工具：「别说了」可打断播报，也可作头动规则动作
+- **外部 MCP 工具集**：新增 MCP 客户端（`ai/mcp` + `McpToolProvider` + 设置页「外部 MCP」），MCP 工具与内置工具统一进风险档与审批闸门
+- **知识库混合检索**：BM25 + 向量语义双路召回（RRF 融合，k=60），支持模型自动探测、增量索引与分批回填；语义路失败自动退回纯 BM25
+- **引导与权限收敛**：
+  - 删除启动期通知 / 悬浮窗 / 电池优化 / 自启动弹窗，统一由引导「开启全部权限」步逐项检测并拉起
+  - `AppPermission` 补登记蓝牙（minSdk 门控），日历读 / 写标签拆开，权限步并入电池优化与自启动说明
+  - 「安装眼镜端」「配置眼镜 WiFi」两步改为**每次启动都出现**（不落盘），换网不再被进度挡住
+  - 修复 WiFi 列表在外层滚动容器里被量成 0 高度而不显示；自启动跳转改为应用信息页
+- **AI 回复时序修复**：等眼镜 AI 场景打开后再下发 ASR，修复冷启动首条文字丢失；对齐官方下行时序，消除双气泡竞态
+- **安全与工程**：签名材料出库（去掉明文回退，缺失即中止 release 构建）；调试广播接收器收拢进 debug 源集；工具精简（电量 / 设备信息 / 存储合并为 `get_glasses_status`）；OCR 模型按需下载降低包体
+- **版本**：手机端 4.0（versionCode 25）/ 眼镜端 RokidLink 4.0（versionCode 18），内嵌眼镜端为 R8 混淆 release 包
 
 ## 使用指南
 
