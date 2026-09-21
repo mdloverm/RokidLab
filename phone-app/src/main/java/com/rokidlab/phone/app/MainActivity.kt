@@ -9,6 +9,7 @@ import com.rokidlab.phone.glasses.*
 import com.rokidlab.phone.mirror.*
 import com.rokidlab.phone.model.*
 import com.rokidlab.phone.network.*
+import com.rokidlab.phone.permission.AppPermission
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
@@ -24,7 +25,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.Manifest
 import android.app.Activity
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
@@ -65,15 +65,6 @@ import kotlinx.coroutines.withContext
 
 private const val PREFS_NAME = "rokidbrew_preferences"
 private const val PREF_ROKID_HOST_APP = "rokid_host_app"
-private const val PREF_COMPAT_GUIDE_DISMISSED = "compat_guide_dismissed"
-private const val PREF_OVERLAY_GUIDE_DISMISSED = "overlay_guide_dismissed"
-
-/**
- * 「悬浮窗 / 后台弹出界面」引导是否已被用户点过「不再提示」。
- * 与 [PREF_OVERLAY_GUIDE_DISMISSED] **分开存**：后者只针对投屏引导（OPPO/vivo 兼容），
- * 混用会让用户"关掉了投屏提示"顺带把眼镜语音拨号的引导也关掉。
- */
-private const val PREF_PERM_OVERLAY_GUIDE_DISMISSED = "perm_overlay_guide_dismissed"
 
 class MainActivity : AppCompatActivity() {
     private companion object {
@@ -126,19 +117,15 @@ class MainActivity : AppCompatActivity() {
     internal var localApkInstallProgress by mutableStateOf(0)
     internal var localApkInstallStatus by mutableStateOf("")
 
+    /**
+     * 连接眼镜所需的蓝牙权限名 —— 直接取自 [AppPermission] 总表，不再手写一份名单。
+     *
+     * Android 12 以下 `BLUETOOTH`/`BLUETOOTH_ADMIN` 是 normal 级别、安装即授予，
+     * `runtimeNames` 会按 minSdk 过滤成空数组，`all {}` 恒为 true（申请一个不存在的权限
+     * 会被系统把整批请求拒掉，所以必须过滤）。
+     */
     private val permissions: Array<String>
-        get() = buildList {
-            add(Manifest.permission.BLUETOOTH)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // Android 12+ 需要运行时请求 BLUETOOTH_SCAN（发现设备）和 BLUETOOTH_CONNECT（连接设备）
-                // BLUETOOTH_ADMIN 在 API 31+ 已弃用，不再需要
-                add(Manifest.permission.BLUETOOTH_SCAN)
-                add(Manifest.permission.BLUETOOTH_CONNECT)
-            } else {
-                @Suppress("DEPRECATION")
-                add(Manifest.permission.BLUETOOTH_ADMIN)
-            }
-        }.toTypedArray()
+        get() = AppPermission.runtimeNames(listOf(AppPermission.BLUETOOTH))
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -151,15 +138,6 @@ class MainActivity : AppCompatActivity() {
                 // 关键修复(A1)：权限被拒后必须清空 pendingAction，否则首行
                 // `if (pendingAction != null) return` 会永久拦截后续所有核心操作
                 pendingAction = null
-            }
-        }
-
-    private val notificationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            if (it) {
-                log(getString(R.string.log_notification_permission_granted))
-            } else {
-                log(getString(R.string.log_notification_permission_denied))
             }
         }
 
@@ -286,12 +264,21 @@ class MainActivity : AppCompatActivity() {
         installCache = UserInstallCache(this)
         selectedHostApp = loadSelectedHostApp()
         // 判断是否为首次启动（SharedPreferences 中无保存的 hostApp id）
-        val isFirstRun = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .getString(PREF_ROKID_HOST_APP, null) == null
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val isFirstRun = prefs.getString(PREF_ROKID_HOST_APP, null) == null
         // 初始化前置条件状态：首次用户从步骤1开始，老用户恢复进度
         prerequisitesState = PrerequisitesState(
             hostApp = if (isFirstRun) null else selectedHostApp,
             mirrorSourceSelected = !isFirstRun,
+            // 权限步实测：全部已开 → 这一步不出现（老用户不会被引导拦住）；
+            // 只要有缺项，就在「安装眼镜端应用」之前先过这一步（AppPermission 是唯一事实来源）
+            permissionsReady = AppPermission.missing(this, AppPermission.values().toList()).isEmpty(),
+            // 「安装眼镜端应用」/「配置眼镜 WiFi」两步每次启动都各出现一次，刻意不落盘：
+            //  · 装：两端没有版本比对（眼镜端是旧版只会静默降级，表现为"某些功能不工作"），
+            //    手机端更新后必须重装眼镜端，忘了没人提醒；
+            //  · 网：用户可能就是想换一个 WiFi。
+            rokidLinkInstalled = false,
+            wifiConfigured = false,
         )
         
         // 检查是否有从FileManagerActivity传来的APK安装请求
@@ -360,160 +347,17 @@ class MainActivity : AppCompatActivity() {
         }
         log(getString(R.string.log_ready_authorize, selectedHostApp.displayName))
 
-        // Android 13+ 请求通知权限（用于定时消息推送到眼镜）
-        requestNotificationPermission()
-
-        // AI 工具权限（通讯录/日历，缺失时对应工具会返回引导文本，不阻塞启动）
-        requestAiToolPermissions()
-
-        // 检查国产手机兼容性设置（电池优化白名单、自启动权限等）
-        checkCompatibilitySettings()
+        // 说明：手机侧权限（蓝牙/通讯录/电话/日历/定位/通知/悬浮窗）与兼容性设置（电池优化/自启动）
+        // 一律不在启动期弹窗 —— 全部收敛到引导流程「第四步：开启全部权限」（逐项自动检测 + 点击拉起，
+        // 见 GuideScreen.PermissionsStep）。启动期弹窗的历史问题是"同一个权限在多处各弹一次、
+        // 且弹完还自动跳设置页"，现在的边界：引导步负责"一次性开齐"，运行期
+        // [com.rokidlab.phone.permission.PermissionBridge] 只在工具真的因缺权限失败时兜底拉起 ——
+        // 两者都不会重复打扰。
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  通知权限请求与系统设置
+    //  生命周期
     // ════════════════════════════════════════════════════════════════
-    // ════════════════════════════════════════════════════════════════
-    //  AI 工具运行时权限（通讯录/日历/拨号，用于 Agent 的联系人查找、日程与打电话工具）
-    // ════════════════════════════════════════════════════════════════
-    /**
-     * 启动期按序补齐的运行时权限（AI 工具与眼镜语音共同依赖）。
-     *
-     * 为什么逐个申请而不是 `RequestMultiplePermissions`：一次申请多个时，
-     * 部分国产 ROM 会把整批静默判拒（弹窗都不出现），而用户只拒绝其中一个也会让**整批**返回失败，
-     * 结果"批里其余权限"要等下次启动才会再问。一个一个来最稳，代价只是多几次点击。
-     *
-     * ⚠️ 这里**不包含** `SYSTEM_ALERT_WINDOW` —— 它不是运行时权限，见 [guideOverlayPermissionIfNeeded]。
-     * ⚠️ 这里也**不做 `isChineseRom()` 前置过滤**：这些权限在 Pixel / 三星上一样是缺就不可用。
-     */
-    private val startupPermissionOrder = listOf(
-        Manifest.permission.READ_CONTACTS,
-        Manifest.permission.CALL_PHONE,
-        Manifest.permission.READ_CALENDAR,
-        Manifest.permission.WRITE_CALENDAR,
-        // 只申请 FINE：Android 12+ 系统会在同一个弹窗里让用户选"精确/大致"，
-        // 12 以下同权限组也会一并授予，单独再申请 COARSE 反而多弹一次
-        Manifest.permission.ACCESS_FINE_LOCATION,
-    )
-
-    /** 待申请队列（逐个消费） */
-    private val pendingStartupPermissions = ArrayDeque<String>()
-
-    /** 单权限 launcher：每弹一次都等回调再问下一个，避免弹窗互相覆盖 */
-    private val singlePermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            // 单个结果不影响后续：用户可能只拒绝其中一个，剩下的继续问完
-            requestNextStartupPermission()
-        }
-
-    /**
-     * 启动期权限自检（**全品牌**）：把"缺权限 → 只回一句去设置里开"的历史行为，
-     * 换成"缺权限 → 当场把系统授权框拉起来"。
-     *
-     * 启动期是唯一能可靠补上悬浮窗的机会（前台状态下拉界面不受 BAL 限制），
-     * 而悬浮窗又是运行期一切"自动拉起授权页"的前提 —— 详见 [PermissionBridge]。
-     */
-    private fun requestAiToolPermissions() {
-        pendingStartupPermissions.clear()
-        pendingStartupPermissions.addAll(startupPermissionOrder.filter { !hasPermission(it) })
-        lifecycleScope.launch {
-            // 延后 6s：先让蓝牙/通知等核心权限弹窗走完，避免一次性轰炸用户
-            delay(6000)
-            if (pendingStartupPermissions.isEmpty()) {
-                log(getString(R.string.log_permission_bootstrap_all_granted))
-                guideOverlayPermissionIfNeeded()
-                return@launch
-            }
-            log(getString(R.string.log_permission_bootstrap_start, pendingStartupPermissions.size))
-            requestNextStartupPermission()
-        }
-    }
-
-    private fun requestNextStartupPermission() {
-        val next = pendingStartupPermissions.removeFirstOrNull()
-        if (next == null) {
-            guideOverlayPermissionIfNeeded()
-            return
-        }
-        if (hasPermission(next)) {   // 期间可能已被其它路径授予
-            requestNextStartupPermission()
-            return
-        }
-        runCatching { singlePermissionLauncher.launch(next) }
-            .onFailure {
-                // 少数 ROM 的权限管理器会在 launch 阶段抛异常；不能因此卡死整条队列
-                Log.w(TAG, "launch permission request failed: $next", it)
-                requestNextStartupPermission()
-            }
-    }
-
-    /**
-     * 悬浮窗（`SYSTEM_ALERT_WINDOW` / 部分 ROM 叫「后台弹出界面」）引导。
-     *
-     * ★ 为什么它必须单独在启动期出现：它是 Android 10+ 后台启动 Activity（BAL）下
-     * **唯一**普通应用可用的豁免。没有它，眼镜语音让手机"打电话 / 设闹钟 / 打开应用"时，
-     * `startActivity` 会被系统**静默丢弃**（不抛异常、不打 error 日志），代码以为成功了 ——
-     * 现象就是"AI 说「正在拨打：X」但手机屏幕毫无反应"。
-     * 而"申请它"本身又需要能拉起界面：**应用在前台的这一刻是唯一的自举机会**，
-     * 所以放在启动期，且不按品牌过滤（BAL 不区分品牌，Pixel / 三星照样受限）。
-     */
-    private fun guideOverlayPermissionIfNeeded() {
-        if (ManufacturerUtils.canDrawOverlays(this)) {
-            log(getString(R.string.log_permission_overlay_granted))
-            return
-        }
-        if (getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean(PREF_PERM_OVERLAY_GUIDE_DISMISSED, false)
-        ) {
-            Log.i(TAG, "overlay guide dismissed by user, skip")
-            return
-        }
-        log(getString(R.string.log_permission_overlay_guide))
-        runOnUiThread {
-            android.app.AlertDialog.Builder(this@MainActivity)
-                .setTitle(getString(R.string.perm_overlay_title))
-                .setMessage(getString(R.string.perm_overlay_desc))
-                .setCancelable(false)
-                .setPositiveButton(getString(R.string.overlay_permission_guide)) { _, _ ->
-                    ManufacturerUtils.openOverlaySettings(this@MainActivity)
-                }
-                .setNegativeButton(getString(R.string.overlay_permission_skip)) { _, _ ->
-                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                        .edit()
-                        .putBoolean(PREF_PERM_OVERLAY_GUIDE_DISMISSED, true)
-                        .apply()
-                }
-                .show()
-        }
-    }
-
-    private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        if (hasPermission(Manifest.permission.POST_NOTIFICATIONS)) return
-        log(getString(R.string.log_requesting_notification_permission))
-        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        // MIUI 可能静默拒绝，启动后再次尝试打开设置页引导用户
-        lifecycleScope.launch {
-            delay(2000)
-            if (!hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
-                log(getString(R.string.log_notification_permission_guide))
-                openAppNotificationSettings()
-            }
-        }
-    }
-
-    private fun openAppNotificationSettings() {
-        try {
-            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = android.net.Uri.fromParts("package", packageName, null)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-        } catch (e: Exception) {
-            log(getString(R.string.log_cannot_open_settings, e.message))
-        }
-    }
-
     override fun onStart() {
         super.onStart()
         val filter = IntentFilter(PhoneInstallResultReceiver.ACTION_PHONE_INSTALL_STATUS)
@@ -750,7 +594,7 @@ class MainActivity : AppCompatActivity() {
         // 重置前置条件状态，让用户重新完成引导流程
         // 将 hostApp 和 selectedHostApp 都重置，这样会显示第一步（选择主机应用）
         selectedHostApp = RokidHostApp.DEFAULT
-        // 同时清除持久化存储，确保重启后生效
+        // 同时清除持久化的 host 选择，确保重启后真的从第一步重来
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .edit()
             .remove(PREF_ROKID_HOST_APP)
@@ -759,10 +603,32 @@ class MainActivity : AppCompatActivity() {
             hostApp = null,
             mirrorSourceSelected = false,
             authorized = false,
+            permissionsReady = AppPermission.missing(this, AppPermission.values().toList()).isEmpty(),
+            rokidLinkInstalled = false,
             wifiConfigured = false,
         )
         log(getString(R.string.log_guide_step))
         Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.reset_guide), Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 眼镜端应用：安装成功 或 用户主动跳过 → 让引导往下走。
+     *
+     * 刻意**不落盘**：这一步是每次启动的提醒 —— 两端没有版本比对（眼镜端是旧版时只会静默降级，
+     * 表现为"某些功能不工作"），手机端更新后需重装眼镜端，忘了装没人提醒，所以冷启动一律从这一步开始。
+     */
+    internal fun markRokidLinkInstalled() {
+        prerequisitesState = prerequisitesState.copy(rokidLinkInstalled = true)
+    }
+
+    /**
+     * 眼镜 WiFi：配置下发成功 或 用户主动跳过 → 让引导往下走。
+     *
+     * 同样**不落盘**：这一步每次启动都出现，用户可能就是想换一个网络；
+     * 记住进度反而会挡掉"换 WiFi"这个正当需求（该步自带扫描列表 + 手动输入，随时可换）。
+     */
+    internal fun markWifiConfigured() {
+        prerequisitesState = prerequisitesState.copy(wifiConfigured = true)
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -925,23 +791,21 @@ class MainActivity : AppCompatActivity() {
         // 先提示用户权限用途
         Toast.makeText(this@MainActivity, this@MainActivity.getString(R.string.screen_record_permission), Toast.LENGTH_LONG).show()
         
-        // Android 13+ 先检查通知权限（前台服务需要通知）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (!hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
-                log(getString(R.string.log_requesting_notification_permission))
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
+        // 权限不再在这里单开一套弹窗 —— 通知/悬浮窗都已收进引导流程「开启全部权限」步。
+        // 这里只做一次只读检查：缺悬浮窗（后台拉起界面的豁免）就直接拦下并说明去哪开，
+        // 缺通知只记日志（Android 13+ 前台服务通知没授予也能照常投屏，只是状态栏不显示卡片）。
+        val missingMirrorPerms = AppPermission.missing(this, listOf(AppPermission.OVERLAY))
+        if (missingMirrorPerms.isNotEmpty()) {
+            val labels = AppPermission.labels(this, missingMirrorPerms)
+            log(getString(R.string.log_mirror_permission_missing, labels))
+            Toast.makeText(this, getString(R.string.permission_need_manual_open, labels), Toast.LENGTH_LONG).show()
+            isStartingPhoneMirror = false
+            return
         }
-        
-        // 检查悬浮窗权限（OPPO/vivo 需要额外授权）
-        if (!ManufacturerUtils.canDrawOverlays(this)) {
-            log(getString(R.string.log_overlay_permission_guide))
-            if (!checkOverlayPermissionForMirror()) {
-                isStartingPhoneMirror = false
-                return
-            }
+        if (!AppPermission.isGranted(this, AppPermission.NOTIFICATION)) {
+            log(getString(R.string.log_mirror_notification_missing))
         }
-        
+
         // 通过 CXR-L 启动眼镜端投屏接收页
         cxrL.launchApp("com.rokidlab.rokidlink", activityClass = ".PhoneMirrorActivity") { launched ->
             if (launched) {
@@ -1035,189 +899,7 @@ class MainActivity : AppCompatActivity() {
         startActivity(FileManagerActivity.createIntent(this, useRealInstall = true))
     }
 
-    // ════════════════════════════════════════════════════════════════
-    //  国产手机兼容性设置
-    // ════════════════════════════════════════════════════════════════
-
-    /**
-     * 检查并引导用户完成国产手机兼容性设置
-     * - 电池优化白名单（后台保活）
-     * - 自启动权限（广播接收器可靠触发）
-     */
-    private fun checkCompatibilitySettings() {
-        // 兼容性引导已关闭，不再重复提示
-        if (getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_COMPAT_GUIDE_DISMISSED, false)) {
-            Log.i(TAG, "Compatibility guide already dismissed, skipping")
-            return
-        }
-
-        if (!ManufacturerUtils.isChineseRom()) {
-            // 三星设备特有检测
-            if (ManufacturerUtils.hasSamsungDeepSleepIssue()) {
-                Log.i(TAG, "Samsung device with Deep Sleep issue detected, logging only")
-                log(getString(R.string.log_samsung_deep_sleep))
-            }
-            Log.i(TAG, "Not a Chinese ROM, skipping compatibility checks")
-            return
-        }
-        val manufacturer = ManufacturerUtils.getManufacturerDisplayName()
-        Log.i(TAG, "Chinese ROM detected: $manufacturer")
-
-        // 检查电池优化白名单
-        if (!ManufacturerUtils.isIgnoringBatteryOptimizations(this)) {
-            log(getString(R.string.log_battery_optimization_guide))
-            showBatteryOptimizationDialog()
-            // 同时也弹出自动启动引导（延迟执行，避免同时弹多个对话框）
-            lifecycleScope.launch {
-                delay(5000)
-                showAutoStartDialog()
-            }
-        } else {
-            log(getString(R.string.log_battery_optimization_granted))
-            // 已在白名单中，弹出自动启动引导
-            lifecycleScope.launch {
-                delay(2000)
-                showAutoStartDialog()
-            }
-        }
-        
-        // vivo 特有：提示 10 分钟后台限制
-        if (ManufacturerUtils.hasVivoBackgroundHardLimit()) {
-            lifecycleScope.launch {
-                delay(8000)
-                showVivoBackgroundLimitDialog()
-            }
-        }
-    }
-
-    /**
-     * 弹出自动启动权限引导对话框（使用标准 AlertDialog，避免 Compose 上下文限制）
-     */
-    private var autoStartDialogShown = false
-    
-    private fun showAutoStartDialog() {
-        if (autoStartDialogShown) return
-        autoStartDialogShown = true
-        runOnUiThread {
-            android.app.AlertDialog.Builder(this@MainActivity)
-                .setTitle(getString(R.string.auto_start_title))
-                .setMessage(getString(R.string.auto_start_desc))
-                .setCancelable(false)
-                .setPositiveButton(getString(R.string.auto_start_guide)) { _, _ ->
-                    ManufacturerUtils.openAutoStartSettings(this@MainActivity)
-                    autoStartDialogShown = false
-                    dismissCompatibilityGuide()
-                }
-                .setNegativeButton(getString(R.string.auto_start_skip)) { _, _ ->
-                    log(getString(R.string.log_auto_start_skipped))
-                    autoStartDialogShown = false
-                    dismissCompatibilityGuide()
-                }
-                .show()
-        }
-    }
-    
-    /**
-     * vivo/iQOO 10分钟后台限制引导（使用标准 AlertDialog）
-     */
-    private var vivoLimitDialogShown = false
-    
-    private fun showVivoBackgroundLimitDialog() {
-        if (vivoLimitDialogShown) return
-        vivoLimitDialogShown = true
-        runOnUiThread {
-            android.app.AlertDialog.Builder(this@MainActivity)
-                .setTitle(getString(R.string.vivo_limit_title))
-                .setMessage(getString(R.string.vivo_limit_desc))
-                .setCancelable(false)
-                .setPositiveButton(getString(R.string.dialog_got_it)) { _, _ ->
-                    ManufacturerUtils.openPowerSavingSettings(this@MainActivity)
-                    vivoLimitDialogShown = false
-                    dismissCompatibilityGuide()
-                }
-                .show()
-        }
-    }
-
-    /** 标记兼容性引导已完成，后续启动不再提示 */
-    private fun dismissCompatibilityGuide() {
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putBoolean(PREF_COMPAT_GUIDE_DISMISSED, true)
-            .apply()
-        Log.i(TAG, "Compatibility guide dismissed permanently")
-    }
-
-    /**
-     * 弹出电池优化白名单引导对话框
-     * 解决华为/小米等手机后台服务被强杀的问题
-     */
-    private var batteryOptimizationDialogShown = false
-
-    private fun showBatteryOptimizationDialog() {
-        if (batteryOptimizationDialogShown) return
-        batteryOptimizationDialogShown = true
-        lifecycleScope.launch {
-            delay(2000) // 延迟弹出，避免干扰首次启动流程
-
-            val manufacturer = ManufacturerUtils.getManufacturerDisplayName()
-            val message = getString(R.string.compatibility_settings_desc, manufacturer)
-            val desc = message + "\n\n" + getString(R.string.compatibility_settings_battery)
-
-            runOnUiThread {
-                android.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle(getString(R.string.compatibility_settings_title))
-                    .setMessage(desc)
-                    .setCancelable(false)
-                    .setPositiveButton(getString(R.string.battery_optimization_guide)) { _, _ ->
-                        ManufacturerUtils.requestIgnoreBatteryOptimizations(this@MainActivity)
-                        log(getString(R.string.log_battery_optimization_guide))
-                        lifecycleScope.launch {
-                            delay(1000)
-                            showAutoStartDialog()
-                        }
-                    }
-                    .setNegativeButton(getString(R.string.battery_optimization_skip)) { _, _ ->
-                        log(getString(R.string.log_battery_optimization_skipped))
-                        showAutoStartDialog()
-                    }
-                    .show()
-            }
-        }
-    }
-
-    /**
-     * 检查悬浮窗权限（OPPO/vivo 投屏兼容）
-     * 在启动手机投屏前检查
-     */
-    private fun checkOverlayPermissionForMirror(): Boolean {
-        if (!ManufacturerUtils.isChineseRom()) return true
-        if (ManufacturerUtils.canDrawOverlays(this)) return true
-        if (getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_OVERLAY_GUIDE_DISMISSED, false)) {
-            Log.i(TAG, "Overlay guide already dismissed, skipping")
-            return true
-        }
-
-        log(getString(R.string.log_overlay_permission_guide))
-        runOnUiThread {
-            android.app.AlertDialog.Builder(this@MainActivity)
-                .setTitle(getString(R.string.overlay_permission_title))
-                .setMessage(getString(R.string.overlay_permission_desc))
-                .setCancelable(false)
-                .setPositiveButton(getString(R.string.overlay_permission_guide)) { _, _ ->
-                    ManufacturerUtils.openOverlaySettings(this@MainActivity)
-                    log(getString(R.string.log_overlay_permission_guide))
-                }
-                .setNegativeButton(getString(R.string.overlay_permission_skip)) { _, _ ->
-                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                        .edit()
-                        .putBoolean(PREF_OVERLAY_GUIDE_DISMISSED, true)
-                        .apply()
-                    isStartingPhoneMirror = false
-                    Log.i(TAG, "Overlay guide dismissed permanently")
-                }
-                .show()
-        }
-        return false
-    }
+    // 说明：原先这里有一套「国产手机兼容性设置」启动期引导（电池优化白名单 / 自启动 / vivo 后台限制，
+    // 分别在启动后 2s / 5s / 8s 弹 AlertDialog），现已整体移入引导流程「第四步：开启全部权限」——
+    // 与权限项同页逐项列出、点哪项拉哪项，不再有多组延迟弹窗。见 GuideScreen.PermissionsStep。
 }

@@ -82,4 +82,36 @@ class ToolRiskMapTest {
             assertTrue("查询工具 $name 应在只读名单内", name in allowed)
         }
     }
+
+    /**
+     * 无人值守名单 = 只读名单 ∪ 本地媒体白名单，且白名单**只**放媒体。
+     *
+     * 背景：「16 点帮我放首《断桥残雪》」的定时自主任务原先装配纯只读工具集，
+     * `control_music` 被排除 → 模型看不到播歌工具，只能把歌名念到眼镜上，
+     * 用户侧表现为「明明有播歌工具却只跑到眼镜上」。本测试锁死修复后的边界：
+     *  - 放行本机可撤销的媒体工具（control_music）；
+     *  - 其余副作用工具（拨号/装机/写文件/设定时/开眼镜应用）依旧进不来；
+     *  - `show_lyrics` 仍不放行（它会拉起眼镜系统音乐页，越出"本机可撤销"的边界）。
+     */
+    @Test
+    fun `无人值守名单只比只读名单多放本地媒体`() {
+        val readOnly = ToolRegistry.readOnlyToolNames()
+        val unattended = ToolRegistry.unattendedToolNames()
+
+        assertEquals(
+            "增量必须与白名单完全一致",
+            ToolRegistry.UNATTENDED_MEDIA_ALLOWLIST,
+            unattended - readOnly,
+        )
+        assertTrue("放歌工具必须可用", "control_music" in unattended)
+        assertTrue("只读名单本身仍不含放歌工具（只读子代理不受影响）", "control_music" !in readOnly)
+
+        listOf(
+            "show_lyrics", "call_phone", "set_phone_alarm", "set_phone_volume",
+            "install_aiui_project", "open_aiui_app", "save_code_file",
+            "manage_timer", "schedule_agent_task", "launch_glasses_app", "show_image",
+        ).forEach { name ->
+            assertTrue("$name 不得借白名单之名进入无人值守名单", name !in unattended)
+        }
+    }
 }

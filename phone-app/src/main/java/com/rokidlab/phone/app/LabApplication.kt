@@ -220,6 +220,19 @@ class LabApplication : Application() {
             com.rokidlab.phone.ai.AiuiAppRegistry.purgeObsoleteFiles(this)
         }
 
+        // MCP 服务器自动重连：syncAll 是**同步阻塞**的（每个 server 2 个 HTTP 请求），
+        // 因此必须离开主线程；放在启动末尾异步跑，不拖慢冷启动。
+        //
+        // ★ 不在这里做的话，MCP 工具**只有用户打开「MCP 服务器」设置页那一刻**才会连接 ——
+        // App 重启后直接进对话，模型拿到的 MCP 工具清单是空的，用户侧表现为
+        // 「昨天配好的 MCP 今天不生效，去设置页点一下又好了」。装配侧（DOMAIN_MCP 的
+        // 活跃性过滤）依赖的正是这里建立的连接状态。
+        // 单个 server 失败不影响其它（各自把错误记进自己的 ServerState），故不抛出。
+        com.rokidlab.phone.util.namedThread("mcp-autosync", daemon = true, start = true) {
+            runCatching { com.rokidlab.phone.ai.mcp.McpRegistry.syncAll(this) }
+                .onFailure { Log.w(TAG, "MCP auto-sync failed: ${it.message}") }
+        }
+
         hidManager = BluetoothHidManager(this)
 
         routeManager = ConnectionRouteManager(this)

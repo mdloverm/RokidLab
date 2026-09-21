@@ -36,13 +36,19 @@ object AiuiAppRegistry {
     @Volatile
     private var cache: List<AiuiAppRecord>? = null
 
+    /**
+     * 页面入口（AIUI 工程的默认页）。上传/旧记录不带项目信息，会落到这个默认值 ——
+     * upsert 合并时用它判断"新记录没带页面信息"，避免把 generated 记录的页名冲掉。
+     */
+    const val DEFAULT_PAGE_NAME = "pages/index/index"
+
     /** 一条 AIUI 应用记录 */
     data class AiuiAppRecord(
         val appName: String,
         val agentId: String,
         /** save_code_file 的 project 名（再编辑时复用）；本地上传/旧记录为 null */
         val project: String? = null,
-        val pageName: String = "pages/index/index",
+        val pageName: String = DEFAULT_PAGE_NAME,
         val nativeVersion: String = "0.0.74",
         /** 手机端源码目录绝对路径（generated）；其余为 null */
         val sourceProjectDir: String? = null,
@@ -79,6 +85,17 @@ object AiuiAppRegistry {
                 // 项目名/源码目录：新记录非空才覆盖，避免上传/旧记录把 generated 的关联冲掉
                 project = record.project ?: old.project,
                 sourceProjectDir = record.sourceProjectDir ?: old.sourceProjectDir,
+                // 页名：新记录是默认值说明它没带页面信息（本地上传/旧记录），保留旧值
+                pageName = if (record.pageName == DEFAULT_PAGE_NAME) old.pageName else record.pageName,
+                // 来源只升不降：同一 agentId 的「对话生成」记录被本地同名上传再登记时，
+                // 不能降级成 uploaded —— 管理页的「重装」按钮与语音侧的「可再编辑」提示
+                // 都以 origin==generated 为准，降级会让这条应用从此改不动（而它的
+                // project/sourceProjectDir 明明还在，正是上面两行刻意保全的）。
+                origin = if (old.origin == ORIGIN_GENERATED && record.origin != ORIGIN_GENERATED) {
+                    old.origin
+                } else {
+                    record.origin
+                },
             )
         } else {
             record.copy(

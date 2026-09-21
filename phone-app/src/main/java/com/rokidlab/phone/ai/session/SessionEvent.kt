@@ -332,16 +332,20 @@ internal data class CompactionEnd(
  * 若干事件**退出模型可见历史** —— 不是删除，它们仍在文件里。
  *
  * ★ 为什么需要它：改造前有两个操作会**直接改内存历史**，而事件流是只追加的：
- *  1. **超时清空**（`maybeExpire`，10 分钟无活动视为新会话）—— 清掉全部历史；
+ *  1. **整段清空**（v3.9 及更早版本的「10 分钟无活动自动清空」，以及手动清空）—— 清掉全部历史；
  *  2. **丢弃最后一轮**（`dropLastTurn`，「重新生成 / 编辑重发」）—— 只清末尾那一轮，
  *     否则模型会在上下文里看到自己上一版答案，要么照抄要么刻意绕开。
  *  两者都不能表达成"删行"（那会破坏只追加这条核心不变式），所以改为**追加一条声明**：
  *  "这些 seq 从此不进模型上下文"。
  *
  * ★ [clearDigest] 区分两种语义，这个区别不能省：
- *  - 过期清空 = 真的从头开始，**滚动摘要也是上一段对话的记忆**，必须一起清
+ *  - 整段清空 = 真的从头开始，**滚动摘要也是上一段对话的记忆**，必须一起清
  *    （只清消息不清摘要，模型会带着"更早对话摘要"继续聊，看起来像没清干净）；
  *  - 丢弃最后一轮 = 只是这一轮不算数，**摘要要保留**（它代表更早的、仍然有效的记忆）。
+ *
+ * ⚠️ 2026-09-20：清空改走**真删文件**（`AgentSessionStore.wipe`），生产代码不再构造
+ *    `clearDigest = true` 的声明；但这个字段**必须留着** —— v3.9 及更早版本的安装包里落过
+ *    这类事件，读旧文件时仍要按原语义把摘要一起遮掉（[SessionProjection] 仍在读它）。
  *
  * ⚠️ 与 [CompactionSummary] 的分工：那个说"这些被**摘要覆盖**了"（信息还在，只是换了形态），
  * 这个说"这些**不算数**了"。投影里 [SessionProjection.shadowedSeqs] 与
@@ -355,7 +359,7 @@ internal data class VisibilityCut(
     val seqs: List<Long>,
     /** 连滚动摘要一起清掉（过期清空 / 手动清空 = true；丢弃最后一轮 = false） */
     val clearDigest: Boolean = false,
-    /** 原因（`expire` / `drop_last_turn` / `manual_clear`），落盘供人回溯"这轮为什么不算数" */
+    /** 原因（历史值：`expire` / `drop_last_turn` / `manual_clear`），落盘供人回溯"这轮为什么不算数" */
     val reason: String,
 ) : SessionEvent {
     override val kind: SessionEventKind get() = SessionEventKind.VISIBILITY_CUT

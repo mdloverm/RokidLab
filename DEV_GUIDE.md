@@ -875,9 +875,12 @@ pushWasDown=true  ── 推送断连 ──> 文件轮询兜底（积压文字�
 
 **多轮会话记忆（`AgentSessionManager`）**：
 
-- 跨请求多轮历史，10 分钟无活动自动清空
+- 跨请求多轮历史，**按对话独立保存**（`agent_sessions/<sessionId>.jsonl` 事件流），重启不丢
 - v3.5：超长上下文被裁剪时，前缀折叠为 ≤800 字的 pinned system message `[summary of earlier conversation]`，跨数小时长会话不再失忆
-- 最多 12 条 / 6000 字符，从最旧丢弃
+- 上限随模型上下文窗口浮动（默认 12 条 / 6000 字符，大窗口按份额放宽并受天花板约束），超出时把最旧一轮压进置顶滚动摘要
+- **开关是纯开关**：关 = 不注入也不记录，但**不销毁**已积累的数据，重新开启后仍然生效
+- **没有"空闲自动过期"**：原先的「10 分钟无活动自动清空」（`maybeExpire`）已于 2026-09-20 移除 —— 它与「聊天记录永久保存」的用户心智正面相抵，而且是静默发生的
+- 清空分两级作用域，别混：聊天页「清空对话」= **当前对话**的记录＋记忆（`clear()`）；设置页「清空全部会话记忆」= **全部对话**的记忆（`clearAll()`，一个字节都不碰聊天记录）
 
 **长期记忆（`LongTermMemoryManager`）**：
 
@@ -893,8 +896,18 @@ pushWasDown=true  ── 推送断连 ──> 文件轮询兜底（积压文字�
 
 **知识库（`KnowledgeBase`）**：
 
-- v3.5：BM25-style IDF 评分
-- 命中条目带 provenance（`docName/chunkIdx`），AI 回答可引用来源
+- v3.5：BM25-style IDF 评分；命中条目带 provenance（`docName/chunkIdx`），AI 回答可引用来源
+- **导入必须经 `TextEncoding` 判定编码**（2026-09-20 修）。中文用户的 txt 常是 `ANSI(GBK)` / `Unicode(UTF-16)`，
+  按 UTF-8 硬解会整篇变成 U+FFFD，而**文件名与字节数照旧正确** ⇒ 症状是"导入看着成功、里面的内容永远问不出来"。
+  判定顺序：BOM → 无 BOM 的 UTF-16（NUL 密度 + 奇偶位）→ 严格 UTF-8 试解 → `GB18030` 兜底。
+  ⚠️ 严格 UTF-8 试解必须容忍**样本尾部被切断的多字节字符**，否则会把正常 UTF-8 文件误判成 GB（反向破坏）。
+  ⚠️ `docs` 表 v2 新增的 `charset` 列走 `ALTER TABLE` —— **`onUpgrade` 绝不 drop 重建**（那等于"升级即清空用户资料"）。
+- **双通道检索**：对话主循环**自动检索 top-2** 注入 system 提示词；**未命中时也要把"库里有哪些文档"告诉模型**
+  （否则模型连知识库存在都不知道，更不会去调 `search_knowledge_base`）；`search_knowledge_base` 空结果会返回
+  文档名清单让模型换关键词重试。检索 token 上限 32（每次 token 一次全表 LIKE），评分与 LIKE 同为**大小写不敏感**。
+- **管理弹窗（`KbManageDialog`）显示块数 + 编码，点开预览正文** —— 让"导入到底进去了什么"可见：
+  仅看文件名/大小是**看不出乱码**的，这正是该 bug 能潜伏的原因。
+- 同一套解码也用在 `FileWorkspace.readTextFile`（用户文件同样是 GBK 的高发区）。
 
 **SSE 重连（`OpenAiService`）**：
 
@@ -930,7 +943,7 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 
 ### 8.2 工具按域拆分与风险闸门
 
-**注册（`ToolRegistry`）**：全量 **39 个工具 / 11 个域**（info / knowledge / glasses / timer / media / display / web / files / aiui / phone / research）。域集合决定会话装配：
+**注册（`ToolRegistry`）**：全量 **46 个工具 / 12 个域**（info / knowledge / glasses / timer / media / display / web / files / aiui / phone / research / **vision**；另有 `mcp` 域承载运行期动态工具，见 §8.2.1）。域集合决定会话装配：
 
 | 会话 | 装配域 | 说明 |
 |---|---|---|
@@ -938,9 +951,24 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 | 本地模型 | `SESSION_LOCAL_DOMAINS` = 空集 | 本地小模型背不动数十个 schema |
 | AIUI / 代码生成 | `SESSION_AIUI_DOMAINS` = aiui + files + info | 命中技能后切到子集省 token |
 
-**执行（`ai/tools/`）**：`ToolRegistry.execute` 解析参数后按 `toolNames` 路由到 12 个 `ToolProvider` 之一（Info / Knowledge / Glasses / Timer / Media / Display / Web / Files / Aiui / Phone / Status / **Subagent**；接口 `ToolProvider.kt` + schema `ToolSchemas.kt`）。
+**执行（`ai/tools/`）**：`ToolRegistry.execute` 解析参数后按 `toolNames` 路由到 13 个**静态** `ToolProvider` 之一（Info / Knowledge / Glasses / Timer / Media / Display / Web / Files / Aiui / Phone / Status / **Subagent** / **Vision**；接口 `ToolProvider.kt` + schema `ToolSchemas.kt`），外加 1 个**动态** provider（`McpToolProvider`，工具集运行期才知道，见 §8.2.1）。
 **新增工具 = 在对应 Provider 的 `tools()` 里加一条 `ToolEntry` + 在 `execute` 加一个分支**（风险档/副作用/要眼镜/过程文案都在那条声明里，六张表由它派生）；网关 / 协议 / JS / skill 全不动。
 ⚠️ 但**模型可见文案仍是手工同步的**：`OpenAiService` 系统提示词、其他 schema 的交叉引用、`assets/skills/aiui-dev/lab-runtime.md`。漏了这些不会编译错，只会让模型不知道该在什么时候用这个工具。
+⚠️ **改完必跑** `skills/rokidlab-chat-standalone-mode/scripts/check_tool_wiring.py`：它守住「每个 provider 的 `toolNames` ↔ `tools()` 双向相等」「声明必带 risk/schema/statusText」「字符串资源存在」等自洽性。工具名支持三种写法（字面量 / `接收者.常量` / 同 object 内**裸常量名**）。
+
+**2026-09-20 补齐的三块对话能力**（此前是缺口，不是配置问题）：
+- **`look_at_view`（`vision` 域）**：把眼镜相机暴露成模型可主动调用的工具 —— 此前模型对「看看面前有什么」**无工具可调**，只能编出「没有相机权限」。出图两条路径：确认模型支持看图 ⇒ base64 暂存 `ThreadLocal`，由**对话主循环**补一条带 `image_url` 的 user 消息交给主模型；否则兜底本地 OCR 转文字。⚠️ **不可**在工具内回调 `sendAiTextMessage`（`aiSendLock` 非重入 ⇒ 死锁）。
+- **文件工作区（`ai/FileWorkspace.kt`，新增 6 个文件工具）**：`list_files` / `read_text_file` / `search_files` / `edit_text_file` / `delete_file` / `move_file`。两个边界 —— `project`（`filesDir/aiui_projects/<项目>/` 私有镜像，全能力）与 `downloads`（MediaStore，只列/读/删）。**无 `MANAGE_EXTERNAL_STORAGE` ⇒ 不承诺"读任意文件"**，边界必须写进各工具 schema。
+- **技能管理三件套（伪工具）**：`install_skill` / `list_skills` / `delete_skill`，可在对话里装/看/删技能（此前只能进设置页）。执行体复用既有 `installFromMarkdown` / `installFromZip` / `listSkills` / `delete`。
+
+**外部 MCP（动态工具集，v3.9 新增）**：`ai/mcp/`（`McpClient` 传输 / `McpServerStore` 落盘 / `McpRegistry` 注册与分发）+ `ai/tools/McpToolProvider`；设置页在「乐奇聊天 → 设置 → 外部 MCP」。
+连接链路：`McpClient.initialize`（读 `Mcp-Session-Id`）→ `tools/list`（分页）→ 每个工具过 `ToolSchemaValidator`，**不合规的整个丢弃**（服务端 schema 校验是整请求级，1 个坏节点会让整轮 400、全部工具失效）。
+⚠️ **`McpToolProvider` 不写进 `ToolRegistry.providers` 静态列表**（那是 `object` 初始化时求值的编译期常量，装不下运行期数据），而是由 `McpRegistry.rebuildIndex()` 调 `ToolRegistry.setDynamicProviders()` 注入 —— **漏调的表现是「设置页看得见新工具、模型却永远不调」且不报错**。
+⚠️ 安全**靠准入，不靠审批闸门**（闸门 fail-open，见 §8.2）：地址必须 https（`network_security_config` 禁明文；**唯一例外＝回环 http**，见下）、工具首次出现时显式写 `false`、信任标记由用户显式给出。单 server 上限 30 个工具（每个 schema 都进**每一轮**请求）。
+> ⚠️ **回环例外不要照抄成「按 `BuildConfig.DEBUG` 放开 http」**：debug 变体的 `network_security_config`
+> 被 `src/debug/` 整体覆盖成 `cleartextTrafficPermitted="true"`，那样写就等于「调试能跑、发布才挂」。
+> 判据是**两份变体的白名单交集**：回环（`localhost` / `127.0.0.1` / `::1`）两边都有 ⇒ 行为一致，故只放它。
+> 判定只有一处 —— `McpRegistry.isUrlAllowed()`，UI 必须复用它而不是自己写 `startsWith`。
 
 **风险分级（`ToolRisk` / `ToolRiskMap`）**：
 
@@ -948,7 +976,7 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 |---|---|---|
 | `READ_ONLY` | 纯读取 | `get_weather` / `search_knowledge_base` |
 | `LOCAL_SIDE_EFFECT` | 本机可控/可撤销副作用 | `set_timer` / `set_phone_volume` / `call_phone` |
-| `EXTERNAL_SIDE_EFFECT` | 触达第三方、不可撤销 | 必须过确认闸门 |
+| `EXTERNAL_SIDE_EFFECT` | 不可撤销，必须过确认闸门 | `delete_file`（删除不可恢复） |
 
 未登记兜底：**真实工具的漏登记在结构上已不可能** —— 风险档是每个工具自己声明结构体（`ToolEntry.risk`）里的必填字段，跟工具定义写在一起；**完全未知的名字**（模型幻觉/攻击构造）→ `EXTERNAL_SIDE_EFFECT`（最保守），但它会先被 `UnknownToolGuard` 单调拒绝，不会触发 35 秒确认。
 
@@ -958,7 +986,7 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 2. 未知名：既不是真实工具也不是伪工具 → 单调拒绝（旧实现会让它走风险兜底、白等一次确认）
 3. per-source 滑动窗口限流：AIUI 页面 30/min（防页面死循环刷工具）、对话路径 120/min（兜底失控循环）—— **被拒的调用不扣配额**
 4. 本机模式（仅对话路径）：用户开了「本机模式」时，需要眼镜的工具单调拒绝
-5. 风险闸门：`EXTERNAL_SIDE_EFFECT` 必须经用户确认（当前无真实工具为此档，见下）
+5. 风险闸门：`EXTERNAL_SIDE_EFFECT` 必须经用户确认（内置工具当前**只有** `delete_file` 为此档；外部 MCP 工具默认为此档，但闸门 fail-open ⇒ 不等于真会弹确认，见下）
 6. 审计：每次决策打一行日志（ALLOW/DENY + `[ORIGIN]` + 原因），系统日志面板（`LogCollector`）可观测；TAG 为 `ApprovalGate`
 
 合成规则（`ApprovalGate.compose`）：任一 guard 返回 `Deny` **立即短路**（单调最终拒绝，对齐 DSH 的 `ctx.tools.guard()`）；否则取**第一个** `Ask`；都不表态则 `Allow`。
@@ -967,7 +995,8 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 
 > ⚠️ **降级语义（务必如实理解）**：确认通道**不可用**（会话不在线，或眼镜端旧版经能力握手判定不支持）或确认**超时未响应**时，`ApprovalGate.resolveAsk` 返回 **`Allow`**（fail-open），由工具自身在未获确认时只做**无副作用动作**（如 `call_phone` 只打开拨号盘、绝不自动拨出）；只有用户**显式取消**（`wasCancelled()` 为 true）才 `Deny`。
 > 这条语义的**唯一产地**是 `ApprovalGate.resolveAsk` 的 KDoc 与其实现（`ToolPolicy` 已删除，旧的「类注释写降级为拒绝、实现却是放行」的矛盾已消除）。
-> ⚠️ 另需知道：**当前没有任何真实工具登记为 `EXTERNAL_SIDE_EFFECT`**（`check_tool_wiring.py` 可核对）—— 确认闸门对真实工具仍处空转。要让某工具真正走眼镜确认，只需在它的 `ToolEntry.risk` 里声明该档。
+> ⚠️ 另需知道：**内置工具里只有 `delete_file` 是 `EXTERNAL_SIDE_EFFECT`**（2026-09-20 起，删除不可恢复故走确认闸门；`check_tool_wiring.py` 与 `ApprovalGateTest` 的 E1/E3b 一起钉住这条事实）。要让别的内置工具也走眼镜确认，只需在它的 `ToolEntry.risk` 里声明该档，**并同步补一条 E3b 式的确认用例**。
+> ⚠️ **外部 MCP 工具是唯一会被登记为该档的**（未标「信任」时），但**这不等于多了确认步骤** —— 闸门 fail-open ⇒ 无通道时照样放行。因此第三方工具的保护必须落在**准入**上（https-only + 默认关 + schema 全过校验），详见 §8.2 的「外部 MCP」段。
 
 ### 8.3 通道仲裁 ChannelArbiter
 
@@ -1033,7 +1062,10 @@ $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
 2. **Android 桩**：`phone-app` 已开 `testOptions { unitTests.isReturnDefaultValues = true }`（否则 `Log` 一碰即抛 `RuntimeException("Stub!")`）；ADB 客户端用 `internal fun attachStreamsForTest(input, output)` 注入脚本化对端（`AdbTestPeer.kt`），无需真机与 socket。
 3. **改字节必改测试**：动 HID 描述符 / sync 帧格式 / 跨端载荷格式的提交必须同步更新测试；#8 实测已推翻 `buildQtiCompatibleDescriptor` 旧注释声称的「≤ 64 字节」，实为 **67（无 Mouse）/ 121（含 Mouse）** 字节。
 
-> 尚未覆盖：`KeyButtonService` / `ChatStateHolder`（本体，本次只测了抽出的 `ChatHistoryStore`）/ `CxrLHiRokidSession`；`androidTest` 为 0。
+> 尚未覆盖：`KeyButtonService` / `CxrLHiRokidSession`；`androidTest` 为 0。
+> ⚠️ `ChatStateHolder` **本体现在可测**（见 `store/ChatStateHolderTraceTest`）：`isReturnDefaultValues = true`
+> ⇒ `Looper.myLooper()` 与 `getMainLooper()` 同为 null、`runOnMain` 走内联分支；`appContext` 为 null ⇒ 落盘静默跳过。
+> 写这类测试要在 `@Before`/`@After` 清 `messages` 并 `finishTrace()` 释放锚点（单例跨用例复用）。
 
 **构建期门禁（四道，挂 `preBuild`，本地构建即触发）**：`checkProtocolSynced`（双端协议同源 + 禁裸协议字面量）、`checkI18nKeysSynced`（两模块 zh↔en key 集合相等）、`checkKeyPathEmptyCatch`（6 个关键链路文件空 catch 零容忍）、`checkNoBareCatch`（全仓空 catch 棘轮预算 47，只降不升）。
 
@@ -1067,5 +1099,27 @@ init(context)（Application.onCreate）
 - **迁移**：旧版"整份 JSON 数组"的 `chat_history.json`（首字符 `[`）在首启被识别并重写为 JSONL，**不丢历史**。
 - **容错**：崩溃留下的半行 / 非法行被跳过，其余历史照常恢复。
 - **不变量**：`SnapshotStateList` 只在主线程读写；后台任务只碰字符串；`clear()` 必须删文件。
+- ⚠️ **一轮的「过程」落在哪条消息上由 `ChatStateHolder` 内部的 `traceAnchorId` 锚点决定，不看位置**。
+  历史教训（2026-09-20 真机 bug「图片已经显示出来了，过程里还在思考」）：原先按"列表末尾那条
+  非用户非状态消息"定位，而**位置不是身份** —— 一轮进行中只要**别的**消息被追加，"末尾"就换人，
+  同一个 `tool:<call_id>` 的 `RUNNING` 留在旧气泡、`OK/FAILED` 写进新气泡；`AgentStep` 的
+  「同 key 覆盖」只在单条消息内生效 ⇒ 覆盖失效，旧气泡**永久转圈**。
+  两条**互相独立**的插入路径都踩过（与调用了哪个工具无关）：① `show_image` 的图片气泡；
+  ② 拍照流程的状态气泡（`onStage` → `add` / `onStageText` → `updateLastStatus` 在末尾不是状态气泡时会**新增**一条）。
+  ⇒ 现在新增"轮中途插消息"的能力不必再动过程代码，但**禁止**把落点改回"取末尾那条"。
+- ⚠️ **收尾只结清锚点那一条**（`finishTrace`）。**不要**改成"扫全表把见到 `RUNNING` 的都标 OK" ——
+  那是拿兜底盖症状（会把"这里为什么会有残留"一起抹掉）。锚点制让残留**结构上不再产生**。
+- ⚠️ **回放时的 `RUNNING` 归一是崩溃修复，不是本 bug 的解法**：正常收尾必写终态，所以盘上
+  还留着 `RUNNING` 只可能是那一轮被杀进程（`addImage` 会在轮中途带着 `RUNNING` 落一次盘，
+  之后才被终态覆盖）。别拿"读的时候会兜住"当理由省掉收尾。
+- ⚠️ **「过程」卡片显示的是用户视角的名字，落盘的仍是标识符**：`AgentStep.title` 对工具步骤存的是
+  模型的 wire name（`get_current_time` / `mcp__<serverId>__<工具名>`），**禁止把显示名写进去**
+  （会污染历史数据：改名/换语言后旧消息不跟着变，也断掉与日志的对应）。显示名由 UI 在渲染时查表：
+  `ChatBubble.stepText()` → `ToolRegistry.displayNameOf()` —— 就是**工具设置页那一套名字**
+  （静态工具取 `ai_tool_*_name`、MCP 取 `"服务器名 · 原始工具名"`），查不到**原样回退**。
+  ⇒ 旧历史消息无需迁移即自动变成友好名；代价是界面名 ≠ 日志名，要原始标识符排查走 `SessionTraceDialog`。
+  思考行的两态文案（"正在思考" / "思考完毕"）在 `ChatBubble.stepLabel()` 本地化，服务层只发语义。
 
-> 约束详见 `RULES.md` §12.16；回归测试见 `store/ChatHistoryStoreTest`（14 例）。
+> 约束详见 `RULES.md` §12.16；回归测试见 `store/ChatHistoryStoreTest`（24 例）+ `store/ChatStateHolderTraceTest`（6 例）。
+> ⚠️ `ChatStateHolder` 本体可测（`isReturnDefaultValues = true` ⇒ `runOnMain` 内联、`appContext` 为 null ⇒ 落盘跳过）；
+> 写这类测试必须在 `@Before`/`@After` 清 `messages` 并 `finishTrace()` 释放锚点（单例跨用例复用）。

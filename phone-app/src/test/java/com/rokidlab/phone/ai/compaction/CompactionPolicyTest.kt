@@ -29,7 +29,6 @@ class CompactionPolicyTest {
         assertEquals(12, p.maxMessages)
         assertEquals(6000, p.maxChars)
         assertEquals(800, p.digestMaxChars)
-        assertEquals(10 * 60 * 1000L, p.expireMs)
         assertEquals(2, p.keepRecentTurns)
         assertFalse("默认策略不算被窗口调整过", p.windowAdjusted)
         assertFalse(p.tightenedFromDefault)

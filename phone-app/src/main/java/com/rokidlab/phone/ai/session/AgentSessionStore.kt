@@ -14,7 +14,7 @@ import com.rokidlab.phone.ai.compaction.CompactionTrigger
  *  - [SessionLog]：字节层 —— 只追加地写、容错地读；
  *  - [SessionProjection]：语义层 —— 纯函数地把事件折叠成"模型看到的历史"；
  *  - **本类**：动作层 —— 把 `recordTurn` 那种"一步到位"的写，拆成与事件一一对应的动作，
- *    并把**会改变历史的动作**（压缩 / 过期 / 丢弃一轮 / 清空）统一翻译成"追加一条声明"。
+ *    并把**会改变历史的动作**（压缩 / 丢弃一轮 / 清空）统一翻译成"追加一条声明"。
  *
  * ★ 改造前这些动作全都直接改内存里的 `MutableList<ChatMessage>`：`history.clear()`、
  *   `removeAt(size-1)`、就地折进摘要。**删了就永远回不来**，于是"AI 忘了前面的"
@@ -22,14 +22,16 @@ import com.rokidlab.phone.ai.compaction.CompactionTrigger
  *   现在只有两种动作：追加事件（正常记录）与追加**声明**（[CompactionSummary] / [VisibilityCut]）。
  *   原文永远留在文件里，只有"模型当前看不看得见"会变。
  *
- * ★ 只有一处动作是**真删**：用户显式清空（[wipe]）与会话被删除。那是用户的明确意图，
- *   不该被"审计留痕"绑架；而**自动**发生的事（10 分钟过期）一律走声明式裁剪，轨迹保留。
+ * ★ 只有一处动作是**真删**：用户显式清空（[wipe]，以及 `AgentSessionManager.clearAll` 的全量清空）
+ *   与会话被删除。那是用户的明确意图，不该被"审计留痕"绑架；而**局部**裁剪（丢弃最后一轮）
+ *   走声明式，轨迹保留。
+ *   （原先还有"10 分钟无活动自动过期"，2026-09-20 已移除 —— 它与"记忆随对话持久保存"的用户
+ *   心智正面相抵，而且是静默发生的：满屏对话还在、AI 却不认了。）
  *
  * 纯 JVM（无 Android 依赖），可被 JVM 单测直接驱动。
  */
 internal class AgentSessionStore(
     private val log: SessionLog,
-    private val clock: () -> Long = System::currentTimeMillis,
     private val onTrim: (String) -> Unit = {},
 ) {
 
@@ -222,22 +224,6 @@ internal class AgentSessionStore(
     // ═══════════════════════ 改变可见性（全部是"追加声明"）═══════════════════════
 
     /**
-     * 超时自动清空（每轮开始前调用）。
-     *
-     * 10 分钟无活动 = 用户开启了新对话：把当前可见的一切（**含滚动摘要**）声明为不算数。
-     * 用声明而不是删文件，是因为这只是一种**推断**（用户也许只是离开了一会儿又回来），
-     * 而轨迹本身有回溯价值（`session_trace` 要能查到"清空之前聊过什么"）。
-     *
-     * @return 本次是否触发了过期清空
-     */
-    fun maybeExpire(nowMs: Long = clock()): Boolean {
-        val last = projection().lastActivityTs()
-        if (last <= 0L || nowMs - last <= engine.policy.expireMs) return false
-        cutVisible(clearDigest = true, reason = "expire")
-        return true
-    }
-
-    /**
      * 丢弃最后一轮（「重新生成 / 编辑重发」）。
      *
      * 判据取"最后一次真正产出过 assistant 消息的轮"而不是"最大轮号"：用户在生成过程中点
@@ -262,16 +248,6 @@ internal class AgentSessionStore(
         val seqs = allRecords().filter { it.event.turn == turn }.map { it.seq }
         if (seqs.isEmpty()) return
         append(VisibilityCut(turn = null, seqs = seqs, clearDigest = false, reason = reason))
-    }
-
-    /** 把当前**可见**的一切声明为"不算数"；[clearDigest] = 是否连滚动摘要一起清 */
-    private fun cutVisible(clearDigest: Boolean, reason: String) {
-        val proj = projection()
-        val seqs = proj.visibleRecords().map { it.seq }
-        // 不可见的事件本来就不进历史，不必逐个列进声明（声明数组会随会话长度线性膨胀）；
-        // 但要清摘要时即便一条可见记录都没有也必须落下这条声明（摘要是独立于消息存在的）
-        if (seqs.isEmpty() && !(clearDigest && proj.hasDigest())) return
-        append(VisibilityCut(turn = null, seqs = seqs, clearDigest = clearDigest, reason = reason))
     }
 
     // ═══════════════════════ 压缩 ═══════════════════════

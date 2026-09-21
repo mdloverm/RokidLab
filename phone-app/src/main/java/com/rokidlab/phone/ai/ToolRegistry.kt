@@ -44,16 +44,32 @@ object ToolRegistry {
     const val DOMAIN_MEDIA = "media"        // 音乐播放/歌词
     const val DOMAIN_DISPLAY = "display"    // 屏幕展示（图片等，仅手机端显示）
     const val DOMAIN_WEB = "web"            // 联网搜索/读网页
-    const val DOMAIN_FILES = "files"        // 文件产出（总结 txt / 代码落盘）
+    const val DOMAIN_FILES = "files"        // 文件产出与文件工作区（列/读/搜/改/删/移）
     const val DOMAIN_AIUI = "aiui"          // AIUI 智能体应用（生成/安装/打开/管理）
     const val DOMAIN_PHONE = "phone"        // 手机端（通讯录/拨号/闹钟/应用/状态/音量/日历）
     const val DOMAIN_RESEARCH = "research"  // 只读子代理委派（调研）
+    /**
+     * 视觉域：用眼镜摄像头看真实世界（`look_at_view`）。
+     *
+     * 单独成域而不是塞进 [DOMAIN_GLASSES]：眼镜域是"查设备/开应用"这类**管理**能力，
+     * 而这一条是"替用户看"，用户在设置页想关掉它时的心智是「别让它拍」而不是「别看眼镜状态」。
+     * 也正因为独立成域，未来若要接手机相机（另一条取图源）可以落在同一个域里。
+     */
+    const val DOMAIN_VISION = "vision"
+    /**
+     * 外部 MCP 服务器提供的工具（动态：连上 server 才知道有哪些）。
+     *
+     * ⚠️ 与其它域的本质区别：**这个域的工具集在运行时会变**。因此它虽然列在 [DOMAIN_ALL] 里，
+     * 但 `schemasFor` 对它额外做一道「活跃性过滤」—— server 没连上时该域产出**空集**，
+     * 否则模型会去调一个不存在的工具（白耗一轮，且报了错还不能重试）。
+     */
+    const val DOMAIN_MCP = "mcp"
 
     /** 全部工具域（主 Agent 默认全量装配，未来可拆出子集） */
     val DOMAIN_ALL: Set<String> = setOf(
         DOMAIN_INFO, DOMAIN_KNOWLEDGE, DOMAIN_GLASSES, DOMAIN_TIMER,
         DOMAIN_MEDIA, DOMAIN_DISPLAY, DOMAIN_WEB, DOMAIN_FILES, DOMAIN_AIUI, DOMAIN_PHONE,
-        DOMAIN_RESEARCH,
+        DOMAIN_RESEARCH, DOMAIN_VISION, DOMAIN_MCP,
     )
 
     /** 主 Agent 会话（眼镜语音/手机聊天，在线模型）装配的工具域 */
@@ -65,12 +81,18 @@ object ToolRegistry {
     val SESSION_LOCAL_DOMAINS: Set<String> = emptySet()
 
     /**
-     * AIUI/代码生成会话装配的工具域：AIUI + 文件产出 + 基础信息。
+     * AIUI/代码生成会话装配的工具域：AIUI + 文件产出 + 基础信息 + 联网 + 知识库。
      * 模型命中 aiui-dev 技能（或开始写代码）后，主循环把 tools 从全量域切换为本子集，
-     * 每轮少发 ~14 个无关工具 Schema，显著降低 input token 与 prefill 耗时；
+     * 每轮少发十来个无关工具 Schema，显著降低 input token 与 prefill 耗时；
      * load_skill/load_skill_section 属技能伪工具，切换后由调用方单独保留。
+     *
+     * 为什么保留 [DOMAIN_WEB] 与 [DOMAIN_KNOWLEDGE]：页面生成常以「素材」开头 ——
+     * 「把知识库里《X》做成卡片页」「照这个链接做一个页面」「页面默认显示某城市的天气」。
+     * 这两个域都是**只读输入侧**能力（不写文件、不控设备），砍掉它们会让这类请求
+     * 在切进子集后的下一轮突然失去素材来源，模型只能凭印象编数据；保留成本只有 4 个 Schema。
      */
-    val SESSION_AIUI_DOMAINS: Set<String> = setOf(DOMAIN_AIUI, DOMAIN_FILES, DOMAIN_INFO)
+    val SESSION_AIUI_DOMAINS: Set<String> =
+        setOf(DOMAIN_AIUI, DOMAIN_FILES, DOMAIN_INFO, DOMAIN_WEB, DOMAIN_KNOWLEDGE)
 
     /** 代码/项目文件落盘工具名（把生成的文件写入手机下载目录的对应项目文件夹） */
     const val TOOL_CODE_FILE = "save_code_file"
@@ -89,6 +111,8 @@ object ToolRegistry {
      *
      * ⚠️ 声明位置必须**早于** [entries]：Kotlin object 的属性初始化按文本顺序执行，
      * 把 providers 放到后面会在 entries 初始化时读到 null。
+     * （2026-09-20 改为惰性派生后该约束**依然成立**：首次访问时机推迟了，
+     *  但 `providers` 仍是 [allProviders] 的读取目标，位置不要下移。）
      */
     private val providers: List<com.rokidlab.phone.ai.tools.ToolProvider> = listOf(
         com.rokidlab.phone.ai.tools.InfoToolProvider,
@@ -103,7 +127,73 @@ object ToolRegistry {
         com.rokidlab.phone.ai.tools.PhoneToolProvider,
         com.rokidlab.phone.ai.tools.StatusToolProvider,
         com.rokidlab.phone.ai.tools.SubagentToolProvider,
+        com.rokidlab.phone.ai.tools.VisionToolProvider,
+        com.rokidlab.phone.ai.tools.MotionToolProvider,
     )
+
+    // ═══════════════════ 动态提供者（MCP）════════════════════════
+    /**
+     * **运行时**才知道工具清单的 provider（目前只有 MCP）。
+     *
+     * 为什么不直接塞进 [providers]：那个列表是编译期常量，而 MCP 的工具要**连上 server**才存在。
+     * 由 `ai/mcp/McpRegistry` 在工具集变化时调用 [setDynamicProviders]，使所有派生表失效重算。
+     */
+    @Volatile
+    private var dynamicProviders: List<com.rokidlab.phone.ai.tools.ToolProvider> = emptyList()
+
+    /** 静态 + 动态 provider 的全集（**唯一的工具来源**） */
+    private val allProviders: List<com.rokidlab.phone.ai.tools.ToolProvider>
+        get() = providers + dynamicProviders
+
+    /**
+     * 工具集版本号：任何一次 [refreshTools] 都 +1，用于使 [derivedCache] 与 [schemaCache] 失效。
+     *
+     * ⚠️ 这是「动态工具集」能正确工作的**唯一支点**。尤其是 [schemaCache]：它原本只以 `domains`
+     * 为 key，若不带版本，MCP 工具连上后 schema 会一直命中旧缓存 —— 表现为
+     * 「设置页看得见新工具，模型却永远不调」，且**不报错**
+     * （与 `list_glasses_apps` 被正则区间静默删掉是同一类事故）。
+     */
+    @Volatile
+    private var tableVersion: Int = 0
+
+    /**
+     * 派生视图缓存（版本相等即复用）。
+     *
+     * 为什么需要缓存而不是每次现算：[entries] / [entryByName] 被设置页、风险闸门、子代理、
+     * AIUI 网关在**每轮对话**里反复读取，现算会让 `flatMap { it.tools() }` 每次重组都跑一遍。
+     * 静态工具场景下，版本不变 ⇒ 等价于改造前的「只算一次」。
+     */
+    private class DerivedTables(
+        val version: Int,
+        val entries: List<com.rokidlab.phone.ai.tools.ToolEntry>,
+        val byName: Map<String, com.rokidlab.phone.ai.tools.ToolEntry>,
+    )
+
+    @Volatile
+    private var derivedCache: DerivedTables? = null
+
+    private fun derived(): DerivedTables =
+        derivedCache?.takeIf { it.version == tableVersion } ?: run {
+            val list = allProviders.flatMap { it.tools() }
+            DerivedTables(tableVersion, list, list.associateBy { it.name })
+                .also { derivedCache = it }
+        }
+
+    /**
+     * 工具集发生变化后调用（MCP server 连上/断开/工具清单刷新）。
+     *
+     * 调用方**必须**在改完动态 provider 之后再调，否则派生表与 [schemaCache] 都还是旧的。
+     * 刻意收成内部方法：只有本包内的注册表该动它。
+     */
+    internal fun refreshTools() {
+        tableVersion++
+    }
+
+    /** 注册/替换动态 provider（MCP）。内部已调用 [refreshTools]，调用方不必再调一次。 */
+    internal fun setDynamicProviders(list: List<com.rokidlab.phone.ai.tools.ToolProvider>) {
+        dynamicProviders = list
+        refreshTools()
+    }
 
     /**
      * 全部工具声明（**唯一登记处的聚合结果**）。
@@ -111,19 +201,71 @@ object ToolRegistry {
      * 这张表就是原来 `toolList` + 5 张手工名单的合并体：任何一处不一致都**不再可能发生**，
      * 因为六张表都由它派生 —— 结构上排除了「漏登记 → 功能静默失效」这类事故
      * （`list_glasses_apps` 曾被正则区间替换静默删掉，编译通过、单测全绿）。
+     *
+     * 改造（2026-09-20）：由 `val`（object 初始化时算一次）改为**惰性派生**，
+     * 以容纳运行时才知道的 MCP 工具。**对外类型不变，调用方零改动**。
      */
-    private val entries: List<com.rokidlab.phone.ai.tools.ToolEntry> =
-        providers.flatMap { it.tools() }
+    private val entries: List<com.rokidlab.phone.ai.tools.ToolEntry>
+        get() = derived().entries
 
     /** name → 声明（schema / 风险档 / 文案的唯一检索口） */
-    private val entryByName: Map<String, com.rokidlab.phone.ai.tools.ToolEntry> =
-        entries.associateBy { it.name }
+    private val entryByName: Map<String, com.rokidlab.phone.ai.tools.ToolEntry>
+        get() = derived().byName
 
     /** 供 [ToolRiskMap] 审计用：全部工具名（内部使用，不暴露给业务） */
     internal fun allToolNames(): List<String> = entries.map { it.name }
 
     /** 供 [ToolRiskMap] 取风险档：结构上必然有值（除非名字不在表里） */
     internal fun riskOfOrNull(name: String): ToolRisk? = entryByName[name]?.risk
+
+    /**
+     * 取工具结果的内容信任级别（注入隔离用）。
+     *
+     * 查不到名字（伪工具/未知工具）一律按 [ToolContentTrust.TRUSTED]：
+     * 伪工具（update_plan / manage_memory / load_skill…）的产出是本地确定性文本，
+     * 未知工具根本不会被执行，二者都没有包装必要。
+     */
+    internal fun contentTrustOf(name: String): ToolContentTrust =
+        entryByName[name]?.contentTrust ?: ToolContentTrust.TRUSTED
+
+    /**
+     * 伪工具的显示名（唯一产地）。
+     *
+     * 伪工具没有 [com.rokidlab.phone.ai.tools.ToolEntry]（它们不进 [entries]），
+     * 但**会出现在聊天的「过程」时间线**。少了这条兜底，过程卡片会把它们渲染成
+     * `install_skill` 这种标识符 —— 与静态工具刚刚统一好的"设置页里那个名字"再次分叉。
+     */
+    private val PSEUDO_DISPLAY_RES: Map<String, Int> = mapOf(
+        com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME to R.string.ai_tool_load_skill_name,
+        com.rokidlab.phone.ai.SkillRegistry.TOOL_NAME_SECTION to R.string.ai_tool_load_skill_section_name,
+        com.rokidlab.phone.ai.SkillRegistry.TOOL_INSTALL to R.string.ai_tool_install_skill_name,
+        com.rokidlab.phone.ai.SkillRegistry.TOOL_LIST to R.string.ai_tool_list_skills_name,
+        com.rokidlab.phone.ai.SkillRegistry.TOOL_DELETE to R.string.ai_tool_delete_skill_name,
+        com.rokidlab.phone.ai.AgentPlan.TOOL_NAME to R.string.ai_tool_update_plan_name,
+        com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME to R.string.ai_tool_manage_memory_name,
+    )
+
+    /**
+     * 模型实际调用的 wire name → **面向用户的显示名**（就是工具设置页里那一套名字）。
+     * 查不到时**原样回退**，绝不返回空串。
+     *
+     * 为什么需要它：聊天窗口的「过程」卡片原先直接渲染 `AgentStep.title`（= wire name），
+     * 于是用户看到的是 `get_current_time`、`mcp__7f3a9c__baidu_image_search` 这种标识符，
+     * 与他在设置页里见过（静态工具）或自己填过（MCP 服务器名）的名字**对不上**。
+     *
+     * 为什么放在这里而不是 UI 层自己查：取值必须**只有一处**，理由同
+     * [ToolMeta.displayName] —— 调用点自己写 `dynamicName ?: getString(...)` 的话，
+     * 漏一处就会显示成某个无关的资源名，而且**不报错**。
+     *
+     * ⚠️ 本函数**只用于渲染**：落盘的 `AgentStep.title` 必须继续是 wire name —— 那是
+     * 排查时与日志对得上的标识符。也因此，历史消息**无需迁移**就会跟着显示成友好名。
+     *
+     * @param name 模型发来的工具名（也可传任意字符串：查不到即原样返回）
+     */
+    internal fun displayNameOf(name: String, ctx: Context): String =
+        entryByName[name]?.displayName(ctx)
+            ?: PSEUDO_DISPLAY_RES[name]?.let { ctx.getString(it) }
+            ?: name
 
     /** 确认摘要：查 [com.rokidlab.phone.ai.tools.ToolEntry.summarize]，未声明走兜底 */
     internal fun summarizeToolCall(name: String, args: JSONObject): String =
@@ -143,9 +285,12 @@ object ToolRegistry {
      * 只读/查询/文件读写等幂等工具不在此集合，允许瞬时失败重试一次。
      *
      * 现在由 [ToolEntry.sideEffect] 派生（登记处 = 各 provider 的 tools()）。
+     *
+     * ⚠️ 必须是 `get()` 而不能是 `val`：MCP 工具会在运行时报到，
+     * 用 `val` 会在 object 初始化时就把集合固定住，之后新增的工具永远进不来。
      */
-    val SIDE_EFFECT_TOOLS: Set<String> =
-        entries.filter { it.sideEffect }.map { it.name }.toSet()
+    val SIDE_EFFECT_TOOLS: Set<String>
+        get() = entries.filter { it.sideEffect }.map { it.name }.toSet()
 
     /**
      * 设置页的**用户视角**分类（与内部 [group] 域不是一回事：域是装配用的，分类是给人看的）。
@@ -159,6 +304,13 @@ object ToolRegistry {
         TIMER(R.string.ai_tool_cat_timer),
         AIUI(R.string.ai_tool_cat_aiui),
         FILES(R.string.ai_tool_cat_files),
+        /**
+         * 外部 MCP 服务器提供的工具。
+         *
+         * 位置在 [FILES] 之后、[SYSTEM] 之前 —— **枚举声明顺序 = 设置页分组顺序**，
+         * 放在中间会让用户在「文件」与「系统」之间看到它，符合"由本地能力 → 外部能力"的阅读顺序。
+         */
+        MCP(R.string.ai_tool_cat_mcp),
         /** 系统性/内部工具（自检、日志、任务续做记账等），设置页不展示 */
         SYSTEM(R.string.ai_tool_cat_system),
     }
@@ -171,6 +323,7 @@ object ToolRegistry {
         DOMAIN_MEDIA, DOMAIN_DISPLAY -> ToolCategory.MEDIA
         DOMAIN_AIUI -> ToolCategory.AIUI
         DOMAIN_FILES -> ToolCategory.FILES
+        DOMAIN_MCP -> ToolCategory.MCP
         // info / web / knowledge 对用户都是「查信息」
         else -> ToolCategory.INFO_WEB
     }
@@ -181,6 +334,15 @@ object ToolRegistry {
         val group: String,
         val displayNameRes: Int,
         val descriptionRes: Int,
+        /**
+         * 动态显示名（MCP 等运行时发现的工具）；null = 走资源 ID [displayNameRes]。
+         *
+         * 取值一律走 [displayName]，不要在调用点自己写 `dynamicName ?: getString(...)` ——
+         * 漏一处就会出现"设置页显示成某个无关资源名"的怪现象，而且不报错。
+         */
+        val dynamicName: String? = null,
+        /** 动态描述；null = 走资源 ID [descriptionRes]。取值走 [description] */
+        val dynamicDescription: String? = null,
         /** 设置页分类（用户视角）；默认由 [group] 推导 */
         val category: ToolCategory = categoryOfGroup(group),
         /**
@@ -191,7 +353,17 @@ object ToolRegistry {
          * 摆进设置页只会让用户困惑「这个关了会怎样」，且它默认开启、几乎没人会去关。
          */
         val hidden: Boolean = false,
-    )
+    ) {
+        /**
+         * 设置页显示名：**动态优先、资源兜底**。
+         *
+         * 静态工具的 [dynamicName] 恒为 null ⇒ 等价于原来的 `ctx.getString(displayNameRes)`，行为不变。
+         */
+        fun displayName(ctx: Context): String = dynamicName ?: ctx.getString(displayNameRes)
+
+        /** 设置页描述：动态优先、资源兜底（同 [displayName]） */
+        fun description(ctx: Context): String = dynamicDescription ?: ctx.getString(descriptionRes)
+    }
 
     /** 设置页要展示的工具（按分类分组前先过滤掉系统性工具） */
     val visibleTools: List<ToolMeta> get() = toolList.filterNot { it.hidden }
@@ -215,16 +387,30 @@ object ToolRegistry {
      *
      * 现在由 [ToolEntry.requiresGlasses] 派生（登记处 = 各 provider 的 tools()），
      * 因此「要眼镜」这件事**跟着工具定义走**，改名/新增时会一起被带上，不会漏。
+     * ⚠️ 同样必须是 `get()`（理由见 [SIDE_EFFECT_TOOLS]）。
      */
-    val GLASSES_REQUIRED_TOOLS: Set<String> =
-        entries.filter { it.requiresGlasses }.map { it.name }.toSet()
+    val GLASSES_REQUIRED_TOOLS: Set<String>
+        get() = entries.filter { it.requiresGlasses }.map { it.name }.toSet()
 
     /** 取 Schema 里的工具名（`{"function":{"name":…}}`）。解析失败返回空串（调用方按「不在名单」处理）。 */
     private fun functionNameOf(schema: JSONObject): String =
         runCatching { schema.optJSONObject("function")?.optString("name").orEmpty() }.getOrDefault("")
 
-    /** 全部工具（含已禁用），按声明顺序 */
-    val toolList: List<ToolMeta> = entries.map { it.toMeta() }
+    /**
+     * Schema 列表 → 工具名集合。
+     *
+     * 这是**装配侧的唯一投影**：`AiConversationService` 把它连同工具清单一并交给
+     * `OpenAiService.buildSystemMessage`，让系统提示里那些"可选能力"条款
+     * （update_plan / manage_memory / 技能三件套 …）按**真实下发的**工具做闸门 ——
+     * 静态说明与动态 schema 必须同源，否则模型会照着提示去调一个没下发的工具
+     * （无人值守下更糟：白耗一轮 + 拿到一句"被安全策略拦截"）。
+     */
+    internal fun namesOf(schemas: List<JSONObject>): Set<String> =
+        schemas.mapNotNull { functionNameOf(it).takeIf { n -> n.isNotEmpty() } }.toSet()
+
+    /** 全部工具（含已禁用），按声明顺序。⚠️ 必须是 `get()`：MCP 工具会在运行时报到 */
+    val toolList: List<ToolMeta>
+        get() = entries.map { it.toMeta() }
 
     /**
      * 声明 → 设置页元数据。
@@ -238,6 +424,8 @@ object ToolRegistry {
         group = group,
         displayNameRes = displayNameRes,
         descriptionRes = descriptionRes,
+        dynamicName = dynamicName,
+        dynamicDescription = dynamicDescription,
         category = category ?: categoryOfGroup(group),
         hidden = hidden,
     )
@@ -257,9 +445,31 @@ object ToolRegistry {
         val aixOnGlasses: Boolean = false,
     )
 
+    /**
+     * 最近一次打开 AIUI 用的是哪条**宿主链路**。
+     *
+     * 关闭时必须知道这个：两条链路对应两个完全不同的关闭命令 ——
+     * [LOCAL_HOST] → `closeAiuiHost()`（关 RokidLink 里渲染 .aix 的 AiuiLinkActivity），
+     * [OFFICIAL] → `Sys_AIUI_Stop`（关眼镜系统渲染层）。
+     * ⚠️ 不能靠"本地有没有这个 .aix"反推：对话生成的包**本地一定有** .aix，
+     * 但它完全可能是走官方渲染层打开的（比如用户紧接着打开了另一个官方智能体）——
+     * 反推会发错命令，表现为"说了关掉，眼镜上还亮着"。
+     */
+    internal enum class AiuiHost {
+        /** 自托管宿主：.aix 推给 RokidLink 的 AiuiLinkActivity 渲染（对话生成 / 本地上传的包） */
+        LOCAL_HOST,
+
+        /** 眼镜官方渲染层：Sys_AIUI_Start / Ai_RenderPayload */
+        OFFICIAL,
+    }
+
     /** 最近一次成功下发打开（Sys_AIUI_Start）的 agentId，供 stop_aiui_app 不带名称时作占位/日志 */
     @Volatile
     internal var lastStartedAiuiAgentId: String? = null
+
+    /** 最近一次成功打开的宿主链路；null = 本进程还没打开过（App 重启后的兜底见 stop_aiui_app） */
+    @Volatile
+    internal var lastStartedAiuiHost: AiuiHost? = null
 
     /** 当前可打开的 AIUI agent 列表（统一由 [AiuiAppRegistry] 持久化事实源派生，含迁移记录） */
     fun aiuiAgents(context: Context): List<AiuiAgentDef> =
@@ -304,6 +514,25 @@ object ToolRegistry {
         schemaCache.clear()
     }
 
+    /**
+     * 某工具**首次出现**时把开关默认写成关（运行时才有的工具 ⇒ 目前是 MCP —— 的准入控制）。
+     *
+     * 为什么需要单独一个口：[isEnabled] 的兜底是 `true`，这对静态工具是对的（它们几乎都该默认可用），
+     * 但第三方 MCP 工具按「默认不信任」必须默认关。同一个兜底值表达不了两种意图，
+     * 于是这里在工具首次报到时落一个**显式的 false**。
+     *
+     * 只在该 key **不存在**时写入 ⇒ 用户此后的任何显式选择（哪怕又开回来）都不会被覆盖。
+     *
+     * ⚠️ 不要改成"每次连接都写 false"：那会把用户已经开好的工具在重连后强行关掉，
+     * 表现为「我的设置自己变回去了」——这类"设置不生效"的抱怨极难排查。
+     */
+    internal fun ensureDisabledByDefault(context: Context, name: String) {
+        val prefs = context.getSharedPreferences(TOOL_PREFS, Context.MODE_PRIVATE)
+        if (!prefs.contains(KEY_PREFIX + name)) {
+            prefs.edit().putBoolean(KEY_PREFIX + name, false).apply()
+        }
+    }
+
     /** 工具声明列表（仅已开启的工具），直接传给 OpenAI 兼容协议的 tools 参数（默认全量域） */
     fun schemas(context: Context): List<JSONObject> = schemasFor(context, DOMAIN_ALL)
 
@@ -313,12 +542,20 @@ object ToolRegistry {
      * 后续新增会话/场景（如商店助手、答题、生图）时在此声明自己的域子集，无需改执行逻辑。
      */
     /**
-     * schemasFor 结果缓存：key = domains 集合，value = (全量工具开关快照, Schema 列表)。
+     * schemasFor 结果缓存：key = (domains 集合, 工具集版本号)，value = (全量工具开关快照, Schema 列表)。
      * 每次调用读一遍开关快照（SharedPreferences 首载后为内存读，开销极小）做双重校验，
      * 命中即跳过 ~30 个工具的 JSONObject 重建；[setEnabled] 写入后清空。
      * 调用方仅对返回的 List 做 add/remove，不修改 JSONObject 本身，共享实例安全。
+     *
+     * ⚠️ **key 里的版本号 [tableVersion] 不是保险而是必需品**（2026-09-20 接 MCP 时加）：
+     *  - 开关快照**能**覆盖"工具名集合变化"（新工具 → snapshot 多一个 key → 不等 → 重算）；
+     *  - 但它**覆盖不了**「工具名不变、schema 内容变了」：MCP server 更新了工具定义、
+     *    或用户把配置指向了另一个同名不同实现的 server —— 此时 snapshot 完全相等，
+     *    缓存会一直命中旧 schema，表现是「模型调用参数始终是老版本的」，且不报错。
+     *  - 因此工具集一变就必须让版本号跟着变（[refreshTools]），双方一起参与缓存键。
      */
-    private val schemaCache = java.util.concurrent.ConcurrentHashMap<Set<String>, Pair<Map<String, Boolean>, List<JSONObject>>>()
+    private val schemaCache =
+        java.util.concurrent.ConcurrentHashMap<Pair<Set<String>, Int>, Pair<Map<String, Boolean>, List<JSONObject>>>()
 
     /**
      * @param excludeGlassesTools true = 摘掉 [GLASSES_REQUIRED_TOOLS]（乐奇聊天「本机模式」：
@@ -327,15 +564,18 @@ object ToolRegistry {
      */
     fun schemasFor(context: Context, domains: Set<String>, excludeGlassesTools: Boolean = false): List<JSONObject> {
         val prefs = context.getSharedPreferences(TOOL_PREFS, Context.MODE_PRIVATE)
-        val snapshot = HashMap<String, Boolean>(toolList.size)
-        toolList.forEach { snapshot[it.name] = prefs.getBoolean(KEY_PREFIX + it.name, true) }
-        val cached = schemaCache[domains]?.let { (cachedSnapshot, cachedSchemas) ->
+        val tools = toolList
+        val snapshot = HashMap<String, Boolean>(tools.size)
+        tools.forEach { snapshot[it.name] = prefs.getBoolean(KEY_PREFIX + it.name, true) }
+        // 版本号也参与 key：单靠 snapshot 捕获不了"工具名不变但 schema 变了"（见 schemaCache 注释）
+        val cacheKey = domains to tableVersion
+        val cached = schemaCache[cacheKey]?.let { (cachedSnapshot, cachedSchemas) ->
             if (cachedSnapshot == snapshot) cachedSchemas else null
         }
-        val result = cached ?: toolList
+        val result = cached ?: tools
             .filter { it.group in domains && snapshot[it.name] == true }
             .map { buildSchema(it) }
-            .also { schemaCache[domains] = snapshot to it }
+            .also { schemaCache[cacheKey] = snapshot to it }
         return if (excludeGlassesTools) {
             result.filterNot { functionNameOf(it) in GLASSES_REQUIRED_TOOLS }
         } else {
@@ -346,7 +586,9 @@ object ToolRegistry {
     /**
      * 只读工具声明：全域 ∩ 已开启 ∩ 风险档 = [ToolRisk.READ_ONLY]。
      *
-     * 供**无人值守**场景装配工具（定时触发的自主任务 `TimerAction.AgentPrompt`）。
+     * 供**只读**场景装配工具（只读子代理 `ReadOnlySubagent`）。
+     * ⚠️ 定时自主任务**不再**用它，改用 [schemasUnattended]（只读 ∪ 本地媒体白名单，原因见那里）。
+     *
      * 为什么不复用「按域装配」：多个域里混杂副作用工具 —— `glasses` 域含 `launch_glasses_app`、
      * `phone` 域含 `call_phone`/`set_phone_alarm`、`timer` 域含 `set_timer`、
      * `media` 域含 `play_song`、`files` 域含 `save_code_file`。**按域切不干净，
@@ -373,8 +615,8 @@ object ToolRegistry {
     /**
      * 只读工具名集合（纯函数，可单测）：全域工具中风险档为 [ToolRisk.READ_ONLY] 的那些。
      *
-     * 这是无人值守路径（[schemasReadOnly]）的**唯一准入名单**，也是「自主任务绝不改状态」
-     * 这条安全承诺的实际落点。抽成不依赖 Context 的纯函数，是为了让回归测试能直接断言
+     * 这是「绝不改状态」这条安全承诺的实际落点，也是 [unattendedToolNames] 的基线。
+     * 抽成不依赖 Context 的纯函数，是为了让回归测试能直接断言
      * 「拨号/装机/写文件/设定时都不在名单里」—— 新增工具若登记错了风险档，测试立刻失败。
      */
     internal fun readOnlyToolNames(): Set<String> = toolList
@@ -382,10 +624,61 @@ object ToolRegistry {
         .map { it.name }
         .toSet()
 
+    /**
+     * 无人值守场景**额外放行**的本地媒体工具（白名单，逐个显式登记）。
+     *
+     * 为什么必须有这张白名单：`control_music` 的风险档是 [ToolRisk.LOCAL_SIDE_EFFECT]
+     * （调用即真的开始播放），因此被只读名单物理排除 —— 于是「16 点帮我放首《断桥残雪》」
+     * 这类定时任务到点后，模型在工具列表里**看不到播歌工具**，只能生成一段文字，
+     * 那段文字又被播到眼镜上，用户侧的表现就是「明明有播歌工具，却只跑到眼镜上念了一句」。
+     *
+     * 放行判据是「误触发代价低、且完全可撤销」：放歌只是本机出声，用户一句「停」或按暂停即可中止，
+     * 与拨号/装机/改设置这类不可撤销动作不是一档。由此也划出边界：
+     *  - 只登记**本机、可撤销**的媒体工具，不做「整个 `media` 域都放行」的推导
+     *    （域内 `show_lyrics` 会拉起眼镜系统音乐页，属越界，仍不放行）；
+     *  - 拔高工具本身的 [ToolRisk] 档来「放行」是禁止的 —— 那会一并击穿
+     *    只读准入、只读子代理等所有按档判定的地方。
+     */
+    internal val UNATTENDED_MEDIA_ALLOWLIST: Set<String> = setOf("control_music")
+
+    /**
+     * 无人值守工具名集合（纯函数，可单测）：[readOnlyToolNames] ∪ [UNATTENDED_MEDIA_ALLOWLIST]。
+     *
+     * 除白名单外的副作用工具（拨号/装机/写文件/设定时/开眼镜应用）依旧不在名单里，
+     * 即「自主任务绝不会自己拨号或改设置」这条承诺不变。
+     */
+    internal fun unattendedToolNames(): Set<String> = readOnlyToolNames() + UNATTENDED_MEDIA_ALLOWLIST
+
+    /**
+     * 无人值守工具声明：全域 ∩ 已开启 ∩ [unattendedToolNames]。
+     *
+     * 定时触发的自主任务（`TimerAction.AgentPrompt`）的**唯一装配入口**：
+     * 既要守住「无人监管时不改状态」，又要让「到点放首歌」这类低风险本地媒体需求真的能执行。
+     *
+     * @param excludeGlassesTools true = 一并摘掉 [GLASSES_REQUIRED_TOOLS]（本机模式下的自主任务：
+     *   无人值守 + 没眼镜，更需要把注定失败的工具排除干净）
+     */
+    fun schemasUnattended(context: Context, excludeGlassesTools: Boolean = false): List<JSONObject> {
+        val allowed = unattendedToolNames()
+        val schemas = schemasFor(context, DOMAIN_ALL)
+            .filter { functionNameOf(it) in allowed }
+        return if (excludeGlassesTools) {
+            schemas.filterNot { functionNameOf(it) in GLASSES_REQUIRED_TOOLS }
+        } else {
+            schemas
+        }
+    }
+
     /** 工具执行中的人性化进度文案（眼镜端显示 + 手机端状态栏共用） */
     /** 过程时间线文案：查 [ToolEntry.statusText]；未声明的（伪工具等）走兜底 */
     fun statusText(name: String): String =
-        entryByName[name]?.statusText ?: "正在执行 $name…"
+        entryByName[name]?.statusText
+            // 伪工具的文案归各自的定义者（技能系列的"正在加载/安装技能…"写在 SkillRegistry）
+            ?: if (name in com.rokidlab.phone.ai.approval.PseudoTools.names()) {
+                com.rokidlab.phone.ai.SkillRegistry.statusText(name)
+            } else {
+                "正在执行 $name…"
+            }
 
     /** 组装单个工具的 JSON Schema（internal：金标评测单测直接校验声明内容） */
     internal fun buildSchema(meta: ToolMeta): JSONObject =
@@ -414,7 +707,8 @@ object ToolRegistry {
                 JSONObject()
             }
         }
-        val provider = providers.firstOrNull { name in it.toolNames }
+        // 走 allProviders（静态 + 动态）：MCP 这类运行时注册的 provider 也要能命中
+        val provider = allProviders.firstOrNull { name in it.toolNames }
             ?: throw IllegalArgumentException("未知工具: $name")
         return provider.execute(context, name, args)
     }

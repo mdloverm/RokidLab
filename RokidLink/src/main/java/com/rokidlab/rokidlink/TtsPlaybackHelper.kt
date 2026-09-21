@@ -104,6 +104,19 @@ object TtsPlaybackHelper {
     @Volatile
     private var activeLatch: CountDownLatch? = null
 
+    /**
+     * **已经 invoke 进 TtsService、正在发声的那一块**的 uuid（没有则为 null）。
+     *
+     * 这是 [stop] 能真正静音的唯一凭据：`playEpoch`/`activeLatch` 只作用于
+     * "还没进 TtsService 的分块"与"正在等待回调的分块"，已 invoke 出去的音频
+     * 仍会在 `:tts` 进程里播到自然结束（80 字块约 16s）——用户按"停止"还要听完
+     * 当前块，就是这么来的。只有 `ITtsServer.stopTtsPlay(本 uuid)` 能停它。
+     *
+     * 仅 playExecutor 线程写入（见 [invokePlayTtsMsg]），故 volatile 读写足够。
+     */
+    @Volatile
+    private var playingUuid: String? = null
+
     @Volatile
     private var bound = false
     @Volatile
@@ -193,13 +206,25 @@ object TtsPlaybackHelper {
     }
 
     /**
-     * 立即停止播放（如用户退出对话窗口/新一轮提问）：作废所有排队分块，
-     * 并释放当前分块正在等待的播放完成闩锁，让播放线程快速退出，不再继续播后续分块。
+     * 立即停止播放（用户停止 / 退出对话窗口 / 眼镜端「关闭助手」）。
+     *
+     * 两步都要，缺一不可：
+     *  1. `playEpoch++` + 释放闩锁 —— 作废"排队中/正在等待的分块"，让播放线程立刻退出循环；
+     *  2. `ITtsServer.stopTtsPlay(playingUuid)` —— **真正静音已经在响的那一块**。
+     *     第 1 步只管我们自己的状态，对已经 invoke 进 TtsService 的音频无效（它会照播到底）。
+     *
+     * 第 2 步提交到 [playExecutor] 执行：与 `invokePlayTtsMsg` 天然串行、不会与新的 play
+     * 交错；且此刻闩锁刚被释放、播放循环马上返回，轮到它几乎是立即的。
      */
     fun stop() {
         synchronized(this) { playEpoch++ }
         activeLatch?.countDown()
-        Log.i(TAG, "stop requested (epoch=$playEpoch)")
+        val uuid = playingUuid
+        Log.i(TAG, "stop requested (epoch=$playEpoch, playingUuid=$uuid)")
+        if (uuid != null) {
+            runCatching { playExecutor.execute { stopTtsPlay(uuid) } }
+                .onFailure { Log.w(TAG, "stop: submit stopTtsPlay failed: ${it.message}") }
+        }
     }
 
     /**
@@ -354,6 +379,40 @@ object TtsPlaybackHelper {
     }
 
     /**
+     * 调 `ITtsServer.stopTtsPlay(String uuid)`（transaction 2）**真正停止音频播放**。
+     *
+     * 为什么需要它：`playEpoch`/`activeLatch` 只是本进程的状态，作用范围是"还没进
+     * TtsService 的分块"与"正在等待回调的分块"。已经 invoke 出去的那一块音频在 `:tts`
+     * 进程里继续发声 —— 用户按"停止"仍要听完当前块（80 字块 ≈ 16s），根因就在这里。
+     *
+     * 安全性：`TtsService.stopTtsPlay` 的实现是
+     * `if (ttsData == null || uuid 为空) return;` → `if (!ttsData.uuid.equals(arg)) return;`
+     * → `audioPlayer.stop(false)` ⇒ **只传我们自己刚发出的 uuid**：即便该条已被新播放顶掉，
+     * 服务端也只会安全返回，不可能误停别人的音频（官方各调用方也是"自己记自己那份 uuid"）。
+     */
+    private fun stopTtsPlay(uuid: String) {
+        val binder = ttsServer
+        if (binder == null) {
+            Log.w(TAG, "stopTtsPlay($uuid): binder is null, skipped")
+            return
+        }
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        try {
+            data.writeInterfaceToken(TTS_INTERFACE_DESCRIPTOR)
+            data.writeString(uuid)
+            binder.transact(2, data, reply, 0)
+            reply.readException()
+            Log.i(TAG, "stopTtsPlay(uuid=$uuid) invoked")
+        } catch (e: Exception) {
+            Log.e(TAG, "stopTtsPlay($uuid) failed", e)
+        } finally {
+            reply.recycle()
+            data.recycle()
+        }
+    }
+
+    /**
      * 调用 ITtsServer.playTtsMsg(String msg, String uuid, ITtsListener listener)，
      * 携带 listener 后**阻塞等待 onTtsStop 完成回调**（真实播放结束），再返回让
      * playExecutor 继续播下一块——块间零估算延时、自然连贯。
@@ -393,6 +452,8 @@ object TtsPlaybackHelper {
                 binder.transact(1, data, reply, 0)
                 reply.readException()
                 success = true
+                // 记下"正在发声的那一块"，供 stop() 调 stopTtsPlay 真正静音（见字段注释）
+                playingUuid = uuid
                 Log.i(TAG, "playTtsMsg invoked (uuid=$uuid): \"${text.take(30)}...\" waiting onTtsStop")
             } catch (e: Exception) {
                 Log.e(TAG, "playTtsMsg failed (attempt=${attempt + 1})", e)
@@ -411,6 +472,8 @@ object TtsPlaybackHelper {
         activeLatch = latch
         val finished = latch.await(TTS_PLAY_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         activeLatch = null
+        // 这一块已经结束（自然播完 / 被 stop 静音 / 超时兜底）⇒ 别再把陈旧 uuid 留给下一次 stop
+        if (playingUuid == uuid) playingUuid = null
         if (!finished) {
             Log.w(TAG, "onTtsStop timeout after ${TTS_PLAY_TIMEOUT_MS}ms: \"${text.take(30)}...\"")
         }

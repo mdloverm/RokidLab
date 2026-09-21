@@ -28,9 +28,39 @@ class HttpStatusException(
  * 与 [HttpStatusException] 的分工：这里给的是"想自己看状态码和正文"的正常返回值，
  * 那里给的是"服务端拒绝了，我处理不了，往上抛"的异常。
  */
-data class HttpRawResult(val code: Int, val body: String) {
+data class HttpRawResult(
+    val code: Int,
+    val body: String,
+    /** 响应头（小写键名，同名头取第一个）。默认空 = 不关心头的调用方行为不变 */
+    val headers: Map<String, String> = emptyMap(),
+) {
     val ok: Boolean get() = code in 200..299
 }
+
+/**
+ * 流式 POST 的**头部结果**：正文通过 [HttpClient.postStreamWithHeaders] 的回调逐行交付，
+ * 这里只回状态码与响应头。
+ *
+ * 存在的理由：MCP 的 Streamable HTTP 必须在 `initialize` 的响应里读 `Mcp-Session-Id`
+ * 并在后续请求回填 —— 只有头能提供它，正文给不了。
+ */
+data class HttpStreamResult(val code: Int, val headers: Map<String, String>) {
+    val ok: Boolean get() = code in 200..299
+
+    /** 按小写键名取响应头；缺失返回 null */
+    fun header(name: String): String? = headers[name.lowercase()]
+}
+
+/**
+ * OkHttp [okhttp3.Headers] → **小写键名** Map（同名头取第一个）。
+ *
+ * 为什么统一转小写：HTTP 头本就不区分大小写，而 `Mcp-Session-Id` 在各 server 实现里的
+ * 写法并不一致（有写成 `mcp-session-id`、也有 `Mcp-Session-ID`）—— 调用方按小写查即可，
+ * 不必关心对端怎么写。
+ */
+private fun okhttp3.Headers.toHeaderMap(): Map<String, String> =
+    names().associateWith { name -> values(name).firstOrNull().orEmpty() }
+        .entries.associate { (k, v) -> k.lowercase() to v }
 
 /**
  * 统一 HTTP 网络请求工具：OkHttp 连接池实现（替代 HttpURLConnection）。
@@ -136,7 +166,7 @@ object HttpClient {
         val request = buildRequest(url, "POST", headers, body)
         clientFor(connectTimeout, readTimeout).newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
-            return HttpRawResult(response.code, text)
+            return HttpRawResult(response.code, text, response.headers.toHeaderMap())
         }
     }
 
@@ -175,6 +205,47 @@ object HttpClient {
                     if (!onLine(line)) break
                 }
             }
+        }
+    }
+
+    /**
+     * POST 并**同时暴露响应头与逐行正文**（MCP Streamable HTTP 专用入口）。
+     *
+     * 为什么 [postSse] 不够用：
+     *  ① `initialize` 的会话 ID 只在**响应头** `Mcp-Session-Id` 里，正文拿不到；
+     *  ② MCP 的同一次请求既可能返回 `application/json`（一次性 JSON-RPC），
+     *     也可能返回 `text/event-stream`（SSE 分包）—— [postSse] 假定后者，
+     *     对前者只会把 JSON 当行流一行行喂下去，而调用方**看不到 Content-Type，无从分流**。
+     *
+     * 所以这里把「状态码 + 响应头」与「正文行」分开交付：调用方先看头，再决定怎么解析。
+     *
+     * ⚠️ 与 [postSse] 不同，**这里非 2xx 不抛异常**：MCP 的错误按 JSON-RPC 规范是正常
+     * 响应体（`{"error":{…}}`），当成传输层失败会让上层丢掉错误码语义。
+     * 真正的网络异常（连不上/超时）仍照常抛出。
+     *
+     * @param onLine 逐行回调，**含空行** —— SSE 用空行分隔事件，跳过空行会把事件粘在一起解析错；
+     *   返回 false 提前停止读取（拿到目标响应即停，避免长连接挂到超时）
+     */
+    fun postStreamWithHeaders(
+        url: String,
+        body: String,
+        connectTimeout: Int = 10000,
+        readTimeout: Int = 20000,
+        headers: Map<String, String> = emptyMap(),
+        onLine: (String) -> Boolean,
+    ): HttpStreamResult {
+        val request = buildRequest(url, "POST", headers, body)
+        clientFor(connectTimeout, readTimeout).newCall(request).execute().use { response ->
+            val result = HttpStreamResult(response.code, response.headers.toHeaderMap())
+            val stream = response.body?.byteStream()
+                ?: throw java.io.IOException("HTTP ${response.code}: ${response.message}")
+            stream.bufferedReader().use { reader ->
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (!onLine(line)) break
+                }
+            }
+            return result
         }
     }
 

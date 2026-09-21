@@ -50,7 +50,7 @@ internal object TimerToolProvider : ToolProvider {
             statusText = "正在处理定时任务…",
             schema = toolSchema(
                 name = "manage_timer",
-                description = "管理定时提醒 / 定时任务，一个工具管三种意图。action=\"create\"：创建（「5分钟后提醒我喝水」「明早8点叫我」「17点打开小智」）。action=\"list\"：列出全部（「我有哪些提醒」「几点有提醒」）。action=\"cancel\"：取消（「取消刚才的提醒」「删掉那个闹钟」；全部取消传 all=true）。注意：到点要我自己查资料再汇报的需求请改用 schedule_agent_task，本工具到点只会念一句固定内容（或在眼镜上打开指定应用）。",
+                description = "管理定时提醒 / 定时任务，一个工具管三种意图。action=\"create\"：创建（「5分钟后提醒我喝水」「明早8点叫我」「17点打开小智」）。action=\"list\"：列出全部（「我有哪些提醒」「几点有提醒」）。action=\"cancel\"：取消（「取消刚才的提醒」「删掉那个闹钟」；全部取消传 all=true）。注意：到点要我自己查资料再汇报，或到点要**播放某首歌**的需求，请改用 schedule_agent_task —— 本工具到点只会念一句固定内容（或在眼镜上打开指定应用），放不了音乐。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -77,7 +77,7 @@ internal object TimerToolProvider : ToolProvider {
             statusText = "正在创建自主任务…",
             schema = toolSchema(
                 name = "schedule_agent_task",
-                description = "创建一个「自主任务」：到点后由我自己去查资料、再主动播报结果 —— 区别于 manage_timer 的 create 只会念一句固定文案。当用户说「每天早上帮我播报天气和日程」「晚上 10 点提醒我总结今天」「每周一提醒我看待办」这类需要我到点先做点事（查询/汇总）再汇报的需求时调用。注意：出于安全，自主任务执行时我只能使用只读工具（查时间/天气/网页/知识库/设备状态等），不会自动拨号、装机或改任何设置；需要写操作时请在任务内容里让我先提醒你确认。",
+                description = "创建一个「自主任务」：到点后由我自己去查资料、再主动播报结果 —— 区别于 manage_timer 的 create 只会念一句固定文案。当用户说「每天早上帮我播报天气和日程」「晚上 10 点提醒我总结今天」「每周一提醒我看待办」，以及「X 点播放某首歌」「半小时后放首歌」这类**到点要真的放音乐**的需求时调用。注意：出于安全，自主任务执行时我只有查询类只读工具，外加一项手机上播放/停止音乐的能力（control_music），不会自动拨号、装机或改任何设置；其他写操作请在任务内容里让我先提醒你确认。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -263,8 +263,8 @@ internal object TimerToolProvider : ToolProvider {
                 app.timerScheduler.addTask(task)
                 app.timerScheduler.startTask(task)
                 "已创建自主任务「$name」：$label。到时我会先自己去查资料，再把结果告诉你。" +
-                    "为安全起见那一轮只使用只读能力（查时间/天气/网页/知识库/设备状态等），" +
-                    "不会自动拨号、安装或修改任何设置。"
+                    "为安全起见那一轮只有查询类只读能力（查时间/天气/网页/知识库/设备状态等），" +
+                    "外加在手机上播放/停止音乐；不会自动拨号、安装或修改任何设置。"
             }
 
         else -> throw IllegalArgumentException("未知工具: $name")

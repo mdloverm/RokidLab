@@ -201,7 +201,10 @@ data class CompactionEnd(val turn: Int?, val error: String?) : SessionEvent
 
 #### 4.1.3 新增 `ai/session/SessionProjection.kt`，替换 `AgentSessionHistory` 的内部实现
 
-**关键：保持对外接口不变**，`AgentSessionManager` 的公开方法签名一个都不改（`recordTurn` / `getHistory` / `contextUsage` / `dropLastTurn` / `clear` / `maybeExpire`）。这样调用方零改动，可分步迁移。
+**关键：保持对外接口不变**，`AgentSessionManager` 的公开方法签名一个都不改（`recordTurn` / `getHistory` / `contextUsage` / `dropLastTurn` / `clear`）。这样调用方零改动，可分步迁移。
+
+> ⚠️ 2026-09-20 修订：`maybeExpire` 已随「空闲自动过期」一起**移除**（理由见 `RULES.md` §12.6），
+> 其余签名确实一个都没改；另新增 `clearAll(context)`（清空全部对话的记忆）。
 
 内部改为从事件流折叠：
 
@@ -267,7 +270,7 @@ class SessionProjection(private val log: SessionLog) {
 **1b 的六处设计决策**（都是落地时才暴露出来的，逐条都有真机症状兜底）：
 
 1. **第 12 个事件类型 `VisibilityCut`**（设计稿只列了 11 个）。改造前有两个动作**直接改内存历史**，
-   而事件流只能追加：10 分钟无活动清空（`maybeExpire`）与丢弃最后一轮（`dropLastTurn`）。
+   而事件流只能追加：丢弃最后一轮（`dropLastTurn`），以及整段清空（原先的「10 分钟无活动清空」`maybeExpire`，**已于 2026-09-20 移除**）。
    它们的追加式表达就是"声明这些 seq 从此不进模型上下文"。`clearDigest` 区分两种语义：
    过期必须连滚动摘要一起清（否则模型带着"更早对话摘要"继续聊，看起来像没清干净），
    丢弃最后一轮则保留摘要（更早的记忆仍然有效）。
@@ -337,6 +340,7 @@ data class ToolEntry(
 **收益**：
 - `check_tool_wiring.py` 从"防漏检查"降级为"回归测试"（检查仍然保留，但不再有人需要靠它救火）
 - **MCP 只需再加一个 `McpToolProvider`**，不影响任何现有文件
+  （⚠️ 后半句成立的前提是先把 `ToolRegistry` 的派生表动态化 —— 见 [MCP-INTEGRATION-PLAN.md](./MCP-INTEGRATION-PLAN.md) §4.2）
 - 工具 schema 从 `ToolSchemas.kt`（一个 900+ 行的巨型 `when`）分散到各 provider，就近维护
 
 **迁移策略**（重要）：**逐域迁移，每迁一域编译 + 跑一次 `check_tool_wiring.py`**。不要一次性搬完 —— 你之前被 `list_glasses_apps` 静默删掉的事故说明这个文件的回归风险很高。
@@ -707,7 +711,7 @@ fun preExecute(tool: ToolEntry, args: JSONObject, ctx: ToolContext): PreToolDeci
 | 项 | 结论 | 理由 |
 |---|---|---|
 | **代码执行沙箱** | **不做** | DSH 在桌面上有 landlock / sandbox-exec；Android 无等价强隔离。而 RokidLab 已有的 ADB shell 通道**语义上比沙箱更危险**。正确做法是**风险分级 + 审批**（§4.2.4），而不是再套一层假沙箱 |
-| **MCP 客户端** | **缓做** | 价值在接第三方生态，但要在手机上跑 stdio/http MCP 涉及网络 + 权限 + 存活，收益不确定。**等阶段二完成后再评估** —— 届时只需加一个 `McpToolProvider`，成本极低 |
+| **MCP 客户端** | **缓做** | 价值在接第三方生态，但要在手机上跑 stdio/http MCP 涉及网络 + 权限 + 存活，收益不确定。**等阶段二完成后再评估** —— 届时只需加一个 `McpToolProvider`，成本极低<br>⚠️ **该"成本极低"判断已被 [MCP-INTEGRATION-PLAN.md](./MCP-INTEGRATION-PLAN.md)（2026-09-20）修正**：provider 只是外壳，主体工作量在 `ToolRegistry` 六张派生表要静态→动态化 |
 | **Computer / Browser use** | **不做** | 眼镜场景无意义（DSH 的 `stagehand_*` 是桌面浏览器自动化） |
 | **插件热重载（HMR）** | **不做** | Android 上不现实。用"设置页开关 + 域装配"（`SESSION_AGENT_DOMAINS` / `SESSION_AIUI_DOMAINS` 机制）已达到同样目的 |
 | **32 个接缝全抄** | **不做** | 见 §0。只需 4 个 |

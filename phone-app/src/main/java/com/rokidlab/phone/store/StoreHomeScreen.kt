@@ -183,6 +183,8 @@ internal fun BrewPhoneApp(
                 onAuthorize = actions.onAuthorize,
                 onInstallLink = actions.onInstallLink,
                 onSendWifiConfig = actions.onSendWifiConfig,
+                // 权限步的「下一步」与「跳过」是同一个动作：离开本步（逐项拉起已在步内自闭环）
+                onPermissionsDone = actions.onSkipGuideStep,
                 onSkip = actions.onSkipGuideStep,
             )
         } else {

@@ -145,17 +145,27 @@ object ToolGateway {
     fun listAllowed(context: Context): List<ToolBrief> =
         ToolRegistry.toolList
             .filter { it.group in ALLOWED_DOMAINS && it.name !in DENY_TOOLS }
-            .map { ToolBrief(it.name, context.getString(it.descriptionRes), it.group) }
+            .map { ToolBrief(it.name, it.description(context), it.group) }
 
-    /** 清单的紧凑 JSON（页面 Lab.listTools() 用），避免页面自己拼装 */
-    fun listAllowedJson(context: Context): String =
-        JSONObject().apply {
-            val arr = org.json.JSONArray()
-            for (t in listAllowed(context)) {
-                arr.put(JSONObject().put("name", t.name).put("description", t.description))
-            }
-            put("tools", arr)
-        }.toString()
+    /**
+     * 清单的紧凑 JSON（页面 Lab.listTools() 用），避免页面自己拼装。
+     *
+     * ⚠️ 超长时**按条丢弃尾部工具**，绝不截断字符串：这条路径原先也过 [truncateResult]，
+     * 而「截断 + …(truncated)」会把 JSON 变成非法串，页面 `JSON.parse` 直接失败 ——
+     * 表现为整个工具清单不可用（比少列几个工具糟糕得多）。宁可少列，也必须保持合法 JSON。
+     */
+    fun listAllowedJson(context: Context): String {
+        val arr = org.json.JSONArray()
+        var used = "{\"tools\":[]}".length
+        for (t in listAllowed(context)) {
+            val obj = JSONObject().put("name", t.name).put("description", t.description)
+            val cost = obj.toString().length + 1
+            if (used + cost > MAX_RESULT_CHARS) break
+            used += cost
+            arr.put(obj)
+        }
+        return JSONObject().put("tools", arr).toString()
+    }
 
     /**
      * 调用前置校验结果（v3.9 抽出为可测纯逻辑）。
@@ -223,11 +233,10 @@ object ToolGateway {
         }
         // 能力发现走同一条通道，页面不必额外学一套协议：
         // 结果就是 listAllowedJson，页面 JSON.parse 后得到 {tools:[{name,description}]}
-        // 注意：也必须过截断 —— 这条路径原先在 [awaitResult] 之外提前返回，
-        // 数十个工具的 name+description 在英文长描述下可能超出 RFCOMM 单帧上限（64KB），
-        // 帧超限会被 AsrPushServer 静默丢弃，页面只看到超时。
+        // 超长由 listAllowedJson 自己按条截断（保证仍是合法 JSON），**不要**再过 truncateResult ——
+        // 那会在 JSON 中间切断并追加 "…(truncated)"，页面解析必然失败。
         if (toolName == LIST_TOOLS) {
-            return CallResult(true, toolName, result = truncateResult(toolName, listAllowedJson(context)))
+            return CallResult(true, toolName, result = listAllowedJson(context))
         }
 
         val normalizedArgs: String = when (val pre = precheckToolCall(toolName, arguments)) {
@@ -259,6 +268,8 @@ object ToolGateway {
             ToolSource.AIUI_PAGE,
             toolName,
             JSONObject(normalizedArgs),
+            // 读工具开关：页面调用的工具同样受设置页开关约束（否则关掉的工具仍能从页面被调起）
+            context = context.applicationContext,
         )
         if (decision is ToolDecision.Deny) {
             return CallResult(false, toolName, error = decision.reason)

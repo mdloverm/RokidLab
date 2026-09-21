@@ -115,9 +115,11 @@ object ManufacturerUtils {
         val pkg = context.packageName
         val vendor: List<Intent> = when (detect()) {
             Manufacturer.XIAOMI -> listOf(
-                // MIUI 自启动管理（extra key 在不同版本间不一致，逐个试）
-                Intent("miui.intent.action.APP_PERM_EDITOR").putExtra("extra_pkgname", pkg),
-                Intent("miui.intent.action.APP_PERM_EDITOR_2").putExtra("extra_pkgname", pkg),
+                // 「自启动」开关在**应用信息页**里 —— 真机实测（HyperOS 2）跳 APP_PERM_EDITOR
+                // 落到的是权限编辑页，那一页**没有**自启动开关，用户白跑一趟。应用信息页 MIUI/HyperOS 必有，故排第一。
+                appDetailsIntent(context),
+                // 安全中心的自启动专用页（小米开发者文档给的 action，实测在 HyperOS 上仍可用），
+                // 但它是**全局列表页**（允许/禁止各一大串应用，要自己找本应用），只作兜底。
                 Intent("miui.intent.action.OP_AUTO_START").putExtra("extra_package_name", pkg),
                 Intent().setClassName(
                     "com.miui.securitycenter",

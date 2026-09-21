@@ -63,7 +63,10 @@ internal fun ToolsManagePage(
     var toolStates by remember {
         mutableStateOf(ToolRegistry.toolList.associate { it.name to ToolRegistry.isEnabled(ctx, it.name) })
     }
-    val grouped = remember { ToolRegistry.visibleTools.groupBy { it.category } }
+    // ⚠️ 这里**不能**用 remember 缓存：MCP 工具是运行时才有（连上 server 才知道），
+    // 缓存住会让"刚连上 server、回到本页却看不到新工具"。每次进入本页重算一次的代价
+    // 只有 ~40 次 groupBy，远低于它带来的困惑。
+    val grouped = ToolRegistry.visibleTools.groupBy { it.category }
     // 本机模式开启时，给「需眼镜」的工具换个颜色提示 —— 否则用户会以为开关坏了
     val phoneOnly = app.chatLocalOnlyEnabled
     Dialog(
@@ -136,7 +139,7 @@ internal fun ToolsManagePage(
                             Column(modifier = Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        text = stringResource(tool.displayNameRes),
+                                        text = tool.displayName(ctx),
                                         color = BrewTextBright,
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.Medium,
@@ -157,7 +160,7 @@ internal fun ToolsManagePage(
                                 }
                                 Spacer(Modifier.height(2.dp))
                                 Text(
-                                    text = stringResource(tool.descriptionRes),
+                                    text = tool.description(ctx),
                                     color = BrewMuted,
                                     fontSize = 11.sp,
                                 )

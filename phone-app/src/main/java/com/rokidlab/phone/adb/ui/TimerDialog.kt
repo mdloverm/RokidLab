@@ -40,8 +40,8 @@ sealed class TimerAction {
      * 与 [TtsSpeak] 的本质区别：TtsSpeak 念的是创建任务时就写死的文案（"该喝水了"），
      * 而本动作念的是**到点那一刻现查现算**的结果（"今天杭州 18~26 度有阵雨，9 点有周会"）。
      *
-     * 安全边界：执行时只装配只读工具（见 [com.rokidlab.phone.ai.ToolRegistry.schemasReadOnly]），
-     * 无人监管下绝不改任何状态。
+     * 安全边界：执行时只装配只读工具 + 本地媒体白名单（见 [com.rokidlab.phone.ai.ToolRegistry.schemasUnattended]），
+     * 无人监管下绝不改状态（放歌是唯一的例外：本机出声、随时可停）。
      */
     data class AgentPrompt(val prompt: String) : TimerAction()
 }

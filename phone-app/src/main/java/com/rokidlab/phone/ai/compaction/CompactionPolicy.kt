@@ -17,17 +17,20 @@ package com.rokidlab.phone.ai.compaction
  *    而历史只给 6000 字符（≈6 轮）—— 模型明明装得下，却每聊几轮就开始"忘了"前面。
  *    ⇒ 现在按同一个份额推导放宽，并给绝对天花板（[MAX_CHARS_CEIL]）防止窗口很大时单请求失控。
  *
+ * ⚠️ 2026-09-20 **移除 `expireMs`**：原设计是"10 分钟无活动视为新会话，自动清空上下文"。
+ *    多会话落地后这条与用户心智正面相抵 —— 满屏对话还在、AI 却不认了，而且是**静默**发生的
+ *    （界面没有任何提示）。记忆现在随对话持久保存，清空只由用户显式操作触发
+ *    （聊天页「清空对话」/ 设置页「清空全部会话记忆」）。
+ *
  * @param maxMessages 历史消息条数上限（user+assistant 合计）
  * @param maxChars 历史总字符数上限
  * @param digestMaxChars 滚动摘要自身的字符上限（防止摘要随对话无限膨胀）
- * @param expireMs 无活动多久算新会话（自动清空）
  * @param keepRecentTurns [CompactionEngine.compactNow] 强制压缩时保留的最近轮数
  */
 internal data class CompactionPolicy(
     val maxMessages: Int = DEFAULT_MAX_MESSAGES,
     val maxChars: Int = DEFAULT_MAX_CHARS,
     val digestMaxChars: Int = DEFAULT_DIGEST_MAX_CHARS,
-    val expireMs: Long = DEFAULT_EXPIRE_MS,
     val keepRecentTurns: Int = DEFAULT_KEEP_RECENT_TURNS,
 ) {
     companion object {
@@ -37,9 +40,6 @@ internal data class CompactionPolicy(
         const val DEFAULT_MAX_CHARS = 6000
 
         const val DEFAULT_DIGEST_MAX_CHARS = 800
-
-        /** 语音场景：10 分钟无人说话即视为新会话 */
-        const val DEFAULT_EXPIRE_MS = 10 * 60 * 1000L
 
         const val DEFAULT_KEEP_RECENT_TURNS = 2
 

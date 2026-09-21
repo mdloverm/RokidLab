@@ -273,13 +273,16 @@ class TimerScheduler(private val appContext: Context) {
     /**
      * 执行「自主任务」（[TimerAction.AgentPrompt]）—— 真主动性的落地动作。
      *
-     * 链路：到点 → 让 Agent 带着**只读工具**跑一轮推理（现查现算）→ 把结果播报出来。
+     * 链路：到点 → 让 Agent 带着**只读工具 + 本地媒体白名单**跑一轮推理（现查现算）→ 把结果播报出来。
      * 与 [TimerAction.TtsSpeak] 的本质区别：念的是**此刻的真实结果**（今天天气、今天的日程），
      * 而不是创建任务时写死的文案。
      *
      * 无人值守的安全边界（已与用户确认）：
-     *  - **只读域**：本轮工具集 = [com.rokidlab.phone.ai.ToolRegistry.schemasReadOnly]，
-     *    模型物理上拿不到拨号/装机/写文件/打开应用等副作用工具；
+     *  - **只读 + 本地媒体**：本轮工具集 = [com.rokidlab.phone.ai.ToolRegistry.schemasUnattended]，
+     *    模型物理上拿不到拨号/装机/写文件/打开应用等副作用工具；唯一例外是白名单里
+     *    「本机可撤销」的媒体工具（`control_music` 放歌/停止），见
+     *    [com.rokidlab.phone.ai.ToolRegistry.UNATTENDED_MEDIA_ALLOWLIST]。
+     *    （原先只给纯只读档，导致「到点放首歌」的任务没有工具可用、只能把歌名念给眼镜听。）
      *  - **不写会话记忆**：`recordHistory=false`，不挤占用户主对话的上下文；
      *  - **失败绝不静默**：拿不到回复时发一条本地通知说明，而不是到点什么都不发生
      *    （"以为设了提醒其实根本没响"最伤信任）。

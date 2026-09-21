@@ -218,7 +218,7 @@
     <string name="guide_authorize_step">Authorize</string>
     <string name="guide_ready_step">Done</string>
     <string name="guide_install_link_step">Install</string>
-    <string name="guide_install_link_title">Step 4: Install Glasses App</string>
+    <string name="guide_install_link_title">Step 5: Install Glasses App</string>
     <string name="guide_install_link_desc">Install the glasses companion app to enable Rokid Link features</string>
     <string name="guide_install_link_hint">Ensure the glasses are connected via Bluetooth</string>
     <string name="guide_install_link_btn">Install on Glasses</string>
@@ -237,7 +237,15 @@
     <string name="guide_step3_title_local">Step 3: Authorize Glasses</string>
     <string name="guide_step3_desc">Authorization is required on the glasses</string>
     <string name="guide_wifi_step">WiFi</string>
-    <string name="guide_step4_title_local">Step 5: Configure Glasses WiFi</string>
+    <string name="guide_permissions_title">Step 4: Enable Permissions</string>
+    <string name="guide_permissions_desc">Tap each item to enable; missing ones are obvious</string>
+    <string name="guide_permissions_granted">Enabled</string>
+    <string name="guide_permissions_tap">Tap to enable</string>
+    <string name="guide_permissions_go_settings">Open settings</string>
+    <string name="guide_permissions_manual">Enable manually</string>
+    <string name="guide_permissions_next">All set, next</string>
+    <string name="guide_permissions_pending">%1$d still disabled</string>
+    <string name="guide_step4_title_local">Step 6: Configure Glasses WiFi</string>
     <string name="guide_step4_desc">Configure WiFi network for glasses</string>
     <string name="wifi_ssid_label">WiFi Name</string>
     <string name="wifi_password_label">WiFi Password</string>
@@ -386,9 +394,11 @@
     <!-- Chat - AI process (thinking / tool calls) timeline -->
     <string name="chat_trace_title">Steps</string>
     <string name="chat_trace_steps">%1$d steps</string>
-    <string name="chat_trace_thinking">Thinking…</string>
-    <string name="chat_trace_thought">Thought</string>
+    <string name="chat_trace_thinking">Thinking</string>
+    <string name="chat_trace_thought">Done thinking</string>
     <string name="chat_trace_tool_running">Running…</string>
+    <string name="chat_trace_kb_running">Searching knowledge base</string>
+    <string name="chat_trace_kb_done">Searched knowledge base</string>
     <string name="chat_trace_collapse">Collapse steps</string>
     <string name="chat_trace_expand">Expand steps</string>
     <string name="chat_trace_more">%1$d more steps</string>
@@ -399,9 +409,9 @@
     <string name="chat_settings_api_key">API Key</string>
     <string name="chat_settings_model">Model</string>
     <string name="chat_settings_image_input">Image understanding</string>
-    <string name="chat_settings_image_input_hint">Send photos straight to the model; needs image support, falls back to OCR</string>
-    <string name="chat_settings_expand_trace">Expand process card</string>
-    <string name="chat_settings_expand_trace_hint">Show each step (thinking, tool calls, tokens); off = title only</string>
+    <string name="chat_settings_image_input_hint">Send photos to the model; OCR fallback if unsupported</string>
+    <string name="chat_settings_expand_trace">Expand process</string>
+    <string name="chat_settings_expand_trace_hint">Show thinking, tool calls and tokens; off = title only</string>
     <!-- Model capability (llm seam): the image switch is gated by a capability verdict, not by guesswork -->
     <string name="chat_settings_image_unsupported">This model has no image input; photos go through OCR first</string>
     <string name="chat_settings_image_unknown">Image support unverified — tap Detect to test this model</string>
@@ -441,6 +451,37 @@
     <string name="ai_tool_cat_timer">Reminders &amp; Tasks</string>
     <string name="ai_tool_cat_aiui">AI Apps</string>
     <string name="ai_tool_cat_files">Files</string>
+    <string name="ai_tool_cat_mcp">External MCP</string>
+    <string name="chat_settings_mcp">External MCP</string>
+    <string name="chat_settings_mcp_hint">Connect third-party MCP servers to extend AI</string>
+    <string name="mcp_connecting">Connecting…</string>
+    <string name="mcp_add">Add server</string>
+    <string name="mcp_reconnect_all">Reconnect all</string>
+    <string name="mcp_empty">No servers yet. Tap "Add server" and enter an MCP URL (must be https).</string>
+    <string name="mcp_state_disabled">Disabled</string>
+    <string name="mcp_state_connected">Connected</string>
+    <string name="mcp_state_unknown">Not connected</string>
+    <string name="mcp_tools_count">%1$d tools</string>
+    <string name="mcp_ignored">%1$d tool(s) ignored</string>
+    <string name="mcp_tools_expand">Show %1$d tools</string>
+    <string name="mcp_tools_collapse">Hide %1$d tools</string>
+    <string name="mcp_reconnect">Reconnect</string>
+    <string name="mcp_edit">Edit</string>
+    <string name="mcp_delete">Delete</string>
+    <string name="mcp_dialog_add_title">Add MCP server</string>
+    <string name="mcp_dialog_edit_title">Edit MCP server</string>
+    <string name="mcp_field_name">Name (optional)</string>
+    <string name="mcp_field_url">Server URL</string>
+    <string name="mcp_field_url_hint">e.g. https://example.com/mcp (local servers may use http://127.0.0.1:8181/mcp)</string>
+    <string name="mcp_url_must_be_https">https only (cleartext http is blocked; plain http works for loopback only: localhost / 127.0.0.1)</string>
+    <string name="mcp_field_token">Access token (optional)</string>
+    <string name="mcp_field_token_hint">Sent as the Authorization header</string>
+    <string name="mcp_trusted_label">Trust this server</string>
+    <string name="mcp_trusted_hint">Its tools count as local capabilities, with no per-call confirmation</string>
+    <string name="mcp_save">Save</string>
+    <string name="mcp_cancel">Cancel</string>
+    <string name="mcp_delete_confirm_title">Delete this server?</string>
+    <string name="mcp_delete_confirm_body">Tools from "%1$s" will be removed from the AI tool list immediately.</string>
     <string name="ai_tool_cat_system">System</string>
     <string name="chat_settings_save">Save</string>
     <string name="chat_settings_saved">Saved</string>
@@ -511,32 +552,58 @@
     <string name="chat_ocr_native_unavailable">Local OCR is not supported on this device.</string>
     <string name="chat_photo_failed">Failed to take photo</string>
     <string name="chat_kb_title">Knowledge Base</string>
-    <string name="chat_kb_subtitle">Import txt documents. They will be searched automatically when using Photo &amp; Ask AI.</string>
+    <string name="chat_kb_subtitle">Import txt docs; they are searched automatically when you ask AI</string>
     <string name="chat_kb_import">Import Document</string>
     <string name="chat_kb_empty">Knowledge base is empty. Please import documents first.</string>
     <string name="chat_kb_delete">Delete</string>
-    <string name="chat_kb_import_failed">Import failed (only txt supported)</string>
+    <string name="chat_kb_import_failed">Import failed (txt only, and content must not be empty)</string>
     <string name="chat_kb_imported">Imported %1$s</string>
     <string name="chat_kb_confirm_delete">Delete "%1$s"? This cannot be undone.</string>
+    <string name="chat_kb_doc_meta">%1$s · %2$d chunks ›</string>
+    <string name="chat_kb_view_loading">Loading…</string>
+    <string name="chat_kb_view_no_content">This document has no content</string>
+    <string name="chat_kb_view_too_long">Too long: showing the first %1$d characters; editing unavailable</string>
+    <string name="chat_kb_view_edit">Edit</string>
+    <string name="chat_kb_view_save">Save</string>
+    <string name="chat_kb_view_saving">Saving…</string>
+    <string name="chat_kb_view_saved">Saved</string>
+    <string name="chat_kb_view_save_failed">Save failed, please retry</string>
+
+    <!-- Knowledge base - semantic vector retrieval -->
+    <string name="chat_kb_semantic_title">Semantic Search</string>
+    <string name="chat_kb_semantic_hint">Uses embeddings to understand paraphrased questions, fused automatically with keyword search. Requires an embeddings-capable model endpoint.</string>
+    <string name="chat_kb_semantic_model">Embedding model (blank = auto-detect)</string>
+    <string name="chat_kb_semantic_detect">Auto-detect</string>
+    <string name="chat_kb_semantic_rebuild">Rebuild Index</string>
+    <string name="chat_kb_semantic_index_now">Index Now</string>
+    <string name="chat_kb_semantic_indexing">Indexing %1$d/%2$d chunks…</string>
+    <string name="chat_kb_semantic_status_ready">%1$d/%2$d chunks indexed · %3$s</string>
+    <string name="chat_kb_semantic_status_pending">%1$d/%2$d chunks indexed. Tap \"Rebuild Index\" to complete.</string>
+    <string name="chat_kb_semantic_status_off">Off (keyword-only search)</string>
+    <string name="chat_kb_semantic_detect_failed">No embedding model detected: the current provider may not support embeddings. You can enter a model name manually.</string>
+    <string name="chat_kb_semantic_no_config">No online model config found. Configure a model in LeQi Chat → AI Settings first.</string>
+    <string name="chat_kb_semantic_index_done">Indexing complete: %1$d chunks</string>
+    <string name="chat_kb_semantic_index_failed">Indexing failed: %1$s</string>
 
     <!-- LeQi Chat - Clear Chat -->
     <string name="chat_clear">Clear Chat</string>
-    <string name="chat_clear_confirm">Clear all chat messages? This cannot be undone, and AI multi-turn context will be reset.</string>
+    <string name="chat_clear_confirm">Clear messages of this conversation? This cannot be undone. The AI context memory of this conversation is cleared too.</string>
 
     <!-- LeQi Chat - Agent Memory -->
-    <string name="agent_section_title">Agent Memory</string>
-    <string name="agent_section_subtitle">Multi-turn context memory</string>
+    <string name="agent_section_title">Session Memory</string>
+    <string name="agent_section_subtitle">Session memory is kept per conversation; long-term memory is shared by all conversations</string>
     <string name="agent_memory_switch">Enable Session Memory</string>
-    <string name="agent_memory_switch_hint">When ON, AI understands context references (e.g. \"play another\", \"what is it\"). When OFF, each turn is independent.</string>
-    <string name="agent_memory_info">Last 6 turns (max 12 messages / 6000 chars), auto-cleared after 10 min idle</string>
-    <string name="agent_memory_clear">Clear Memory</string>
-    <string name="agent_memory_clear_confirm">Clear all Agent multi-turn context memory? Current chat messages are kept.</string>
-    <string name="agent_memory_cleared">Session memory cleared</string>
+    <string name="agent_memory_switch_hint">When ON, AI understands references such as \"play another\" or \"what is it\". Turning it OFF only pauses it — accumulated context is kept and takes effect again once re-enabled.</string>
+    <string name="agent_memory_info">When the context limit is exceeded, older turns are compressed and their key points kept in a summary</string>
+    <string name="agent_memory_clear">Clear All Session Memory</string>
+    <string name="agent_memory_clear_confirm">This clears the context memory of all conversations (%1$d currently hold memory). Chat messages are not affected. This cannot be undone.</string>
+    <string name="agent_memory_cleared">All session memory cleared</string>
+    <string name="agent_memory_none">No session memory yet</string>
     <string name="agent_longterm_switch">Enable Long-term Memory</string>
-    <string name="agent_longterm_switch_hint">When ON, AI remembers your preferences and personal info (e.g. nickname, favorite singers, common apps) across sessions.</string>
+    <string name="agent_longterm_switch_hint">When ON, AI remembers your preferences and personal info (e.g. nickname, favorite singers, common apps), across all conversations.</string>
     <string name="agent_longterm_info">%1$d long-term memories saved</string>
     <string name="agent_longterm_clear">Clear Long-term Memory</string>
-    <string name="agent_longterm_clear_confirm">Clear all long-term memories? AI will forget your saved preferences and personal info.</string>
+    <string name="agent_longterm_clear_confirm">Clear all long-term memories? AI will forget your saved preferences and personal info. Chat messages are not affected.</string>
     <string name="agent_longterm_cleared">Long-term memory cleared</string>
     <string name="agent_longterm_manage">View &amp; edit</string>
     <string name="agent_longterm_manage_title">Long-term memory</string>
@@ -655,6 +722,8 @@
     <string name="ai_tool_launch_glasses_app_desc">Open an app on the glasses</string>
     <string name="ai_tool_control_music_name">Music control</string>
     <string name="ai_tool_control_music_desc">Play a song or stop playback</string>
+    <string name="ai_tool_stop_tts_name">Stop speaking</string>
+    <string name="ai_tool_stop_tts_desc">Make the glasses stop the current speech immediately</string>
     <string name="ai_tool_manage_timer_name">Timers</string>
     <string name="ai_tool_manage_timer_desc">Create, view or cancel reminders</string>
     <string name="ai_tool_manage_calendar_name">Calendar</string>
@@ -677,6 +746,37 @@
     <string name="ai_tool_save_code_file_desc">Write code or page files</string>
     <string name="ai_tool_read_code_file_name">Read Project Source</string>
     <string name="ai_tool_read_code_file_desc">Read back generated project source</string>
+    <string name="ai_tool_list_files_name">List Files</string>
+    <string name="ai_tool_list_files_desc">Browse project workspace and Downloads</string>
+    <string name="ai_tool_read_text_file_name">Read File</string>
+    <string name="ai_tool_read_text_file_desc">Read a text file from project or Downloads</string>
+    <string name="ai_tool_search_files_name">Search Files</string>
+    <string name="ai_tool_search_files_desc">Find files by name keyword</string>
+    <string name="ai_tool_edit_text_file_name">Edit File</string>
+    <string name="ai_tool_edit_text_file_desc">Append to or overwrite a project file</string>
+    <string name="ai_tool_delete_file_name">Delete File</string>
+    <string name="ai_tool_delete_file_desc">Delete a file, folder or whole project (irreversible)</string>
+    <string name="ai_tool_move_file_name">Move/Rename File</string>
+    <string name="ai_tool_move_file_desc">Rename or move files inside a project</string>
+    <string name="ai_tool_look_at_view_name">Look Ahead</string>
+    <string name="ai_tool_look_at_view_desc">See what is in front of you via the glasses camera</string>
+    <!-- Head motion sensing: glasses IMU data query (v1) -->
+    <string name="ai_tool_get_head_pose_name">Head Pose</string>
+    <string name="ai_tool_get_head_pose_desc">Read the current head pose from the glasses IMU (pitch/yaw/roll and angular velocity); use for questions like: am I looking up? Or whenever head orientation matters</string>
+    <string name="ai_tool_get_motion_history_name">Motion History</string>
+    <string name="ai_tool_get_motion_history_desc">Get the recent head motion series to tell whether the user nodded, shook their head, or stayed still</string>
+    <!-- Head motion rules: bind gestures to actions (v2 rule layer) -->
+    <string name="ai_tool_set_motion_rule_name">Set Motion Rule</string>
+    <string name="ai_tool_set_motion_rule_desc">Bind head gestures to tools: nod/shake/still/hold pitch triggers a chosen phone-side tool (MCP tools included)</string>
+    <string name="ai_tool_remove_motion_rule_name">Remove Motion Rule</string>
+    <string name="ai_tool_remove_motion_rule_desc">Remove a configured head motion rule; call without arguments to list all rules</string>
+    <string name="ai_tool_load_skill_name">Load Skill</string>
+    <string name="ai_tool_load_skill_section_name">Read Skill Section</string>
+    <string name="ai_tool_install_skill_name">Install Skill</string>
+    <string name="ai_tool_list_skills_name">List Skills</string>
+    <string name="ai_tool_delete_skill_name">Delete Skill</string>
+    <string name="ai_tool_update_plan_name">Plan Task</string>
+    <string name="ai_tool_manage_memory_name">Remember Preference</string>
     <string name="ai_tool_open_aiui_app_name">Open Agent App</string>
     <string name="ai_tool_open_aiui_app_desc">Open an AIUI app on the glasses</string>
     <string name="ai_tool_install_aiui_project_name">Install Chat-Generated AIUI Project</string>
@@ -838,30 +938,11 @@
     <string name="reconnect">Reconnect</string>
     <string name="reconnecting">Reconnecting...</string>
 
-    <!-- Compatibility -->
+    <!-- Compatibility (battery/auto-start guidance now lives in the guide's permission step, no startup dialog) -->
     <string name="battery_optimization_title">Battery Optimization</string>
-    <string name="battery_optimization_desc">To ensure stable glasses connection and background casting service, it is recommended to add this app to the battery optimization whitelist to prevent the system from killing the app process in the background.</string>
-    <string name="battery_optimization_guide">Go to Settings</string>
-    <string name="battery_optimization_skip">Later</string>
-    <string name="auto_start_title">Auto-Start Permission</string>
-    <string name="auto_start_desc">Some phone systems (e.g. Xiaomi, Huawei, OPPO, vivo) restrict app auto-start. Please enable auto-start permission to ensure background features like APK installation result reporting and scheduled messages work properly.</string>
-    <string name="auto_start_guide">Enable Now</string>
-    <string name="auto_start_skip">Not Now</string>
-    <string name="overlay_permission_title">Overlay Permission</string>
-    <string name="overlay_permission_desc">Some phones (OPPO/vivo) require additional overlay permission for stable screen casting.</string>
-    <string name="overlay_permission_guide">Enable Now</string>
-    <string name="overlay_permission_skip">Don\'t show again</string>
-    <string name="compatibility_settings_title">Compatibility Settings</string>
-    <string name="compatibility_settings_desc">Detected your device as %s, which has additional background power-saving policies. Completing the following settings is recommended for the best experience.</string>
-    <string name="compatibility_settings_battery">☐ Add to battery optimization whitelist</string>
-    <string name="compatibility_settings_auto_start">☐ Enable auto-start permission</string>
-    <string name="compatibility_settings_done">Done</string>
-    <string name="log_battery_optimization_guide">Guiding user to enable battery optimization whitelist</string>
-    <string name="log_battery_optimization_granted">Already in battery optimization whitelist</string>
-    <string name="log_battery_optimization_skipped">User skipped battery optimization guide</string>
-    <string name="log_auto_start_guide">Guiding user to enable auto-start permission</string>
-    <string name="log_auto_start_skipped">User skipped auto-start guide</string>
-    <string name="log_overlay_permission_guide">Guiding user to enable overlay permission</string>
+    <string name="auto_start_title">Auto-start</string>
+    <string name="log_mirror_permission_missing">Mirroring missing permission: %1$s</string>
+    <string name="log_mirror_notification_missing">Mirroring lacks notification permission; status-bar card will not show</string>
 
     <!-- UpdateDialog -->
     <string name="download_in_progress">Downloading...</string>
@@ -1208,16 +1289,11 @@
 
     <!-- Log Messages -->
     <string name="log_bluetooth_permission_denied">Bluetooth permission denied</string>
-    <string name="log_notification_permission_granted">Notification permission granted</string>
-    <string name="log_notification_permission_denied">Notification permission denied, can be enabled in system settings</string>
     <string name="log_bluetooth_not_enabled">Bluetooth still not enabled</string>
     <string name="log_mediaprojection_denied">Screen recording permission denied</string>
     <string name="log_mediaprojection_granted">Screen recording permission granted, starting mirror service</string>
     <string name="log_loaded_apps">Loaded %d apps (with offline cache)</string>
     <string name="log_ready_authorize">Ready. Please authorize %s before installing glasses apps.</string>
-    <string name="log_requesting_notification_permission">Requesting notification permission...</string>
-    <string name="log_notification_permission_guide">Notification permission not granted, guiding user to settings</string>
-    <string name="log_cannot_open_settings">Cannot open notification settings: %s</string>
     <string name="log_refreshing_registry">Refreshing store registry...</string>
     <string name="log_registry_updated">Store registry updated (%d apps)</string>
     <string name="log_registry_unavailable">Remote registry unavailable: %s</string>
@@ -1341,11 +1417,7 @@
     <string name="developer_error_no_token">❌ Gitee Token not configured. Contact the developer to set it in the code and rebuild</string>
     <string name="developer_error_duplicate_id">❌ App ID \"%s\" already exists. Please use a different ID</string>
 
-    <!-- Compatibility - new -->
-    <string name="dialog_got_it">Got it</string>
-    <string name="vivo_limit_title">vivo Background Limit Notice</string>
-    <string name="vivo_limit_desc">Detected your device as vivo/iQOO. The system imposes a 10-minute background service hard limit for non-whitelisted apps.\n\nLong-running operations like screen casting may be interrupted.\n\nIt is recommended to add this app to the \"Protected Apps\" list (Settings → Security → More security settings → Protected apps) for stable background operation.</string>
-    <string name="log_samsung_deep_sleep">Samsung device detected: Casting may be demoted to background after 15 minutes without user interaction</string>
+    <string name="vivo_limit_title">vivo background limit</string>
     <string name="phone_mirror_notification_channel_fgs">Phone Cast Foreground Service</string>
     <string name="phone_mirror_notification_channel_fgs_desc">Displays phone cast foreground service status</string>
     <string name="category_utility">Utility</string>
@@ -1376,12 +1448,14 @@
     <string name="download_already_running">"%s" is already downloading</string>
 
     <!-- ══ Permission requests (unified across all vendors: auto-open the system grant UI) ══ -->
+    <string name="permission_label_bluetooth">Bluetooth</string>
     <string name="permission_label_contacts">Contacts</string>
     <string name="permission_label_phone">Phone</string>
-    <string name="permission_label_calendar">Calendar</string>
+    <string name="permission_label_calendar_read">Read calendar</string>
+    <string name="permission_label_calendar_write">Write calendar</string>
     <string name="permission_label_location">Location</string>
     <string name="permission_label_notification">Notifications</string>
-    <string name="permission_label_overlay">Display over other apps (background pop-up)</string>
+    <string name="permission_label_overlay">Display over other apps</string>
     <string name="permission_dialog_title">Permission required</string>
     <string name="permission_dialog_message">%1$s needs the following permissions:\n%2$s\n\nTap Grant now, then choose Allow in the system dialog.</string>
     <string name="permission_dialog_allow">Grant now</string>
@@ -1402,10 +1476,4 @@
     <string name="permission_reason_calendar">read and create calendar events</string>
     <string name="permission_reason_location">get the current location</string>
     <string name="permission_reason_launch">let glasses voice dial, set alarms and open apps while your phone is locked or on the home screen</string>
-    <string name="perm_overlay_title">Background launch permission</string>
-    <string name="perm_overlay_desc">So that glasses voice can still "call / set an alarm / open an app" while your phone is locked or on the home screen, please enable "Display over other apps" (called "background pop-up" or "floating window" on some phones).\n\nWithout it, these commands produce no visible response on the phone.</string>
-    <string name="log_permission_bootstrap_start">Requesting phone permissions (%d)</string>
-    <string name="log_permission_bootstrap_all_granted">All permissions required by AI tools are ready</string>
-    <string name="log_permission_overlay_granted">Overlay permission granted (background activity starts are no longer blocked)</string>
-    <string name="log_permission_overlay_guide">Guiding user to grant overlay permission (otherwise background dialing/alarms/app launches are silently blocked)</string>
 </resources>

@@ -11,6 +11,7 @@ import com.rokidlab.phone.ai.session.AgentTurn
 import com.rokidlab.phone.ai.session.MessageSource
 import com.rokidlab.phone.ai.session.SessionLog
 import com.rokidlab.phone.ai.session.SessionRecord
+import java.io.File
 
 /**
  * AI Agent 会话记忆管理器（**会话级**，事件流驱动）。
@@ -25,7 +26,7 @@ import com.rokidlab.phone.ai.session.SessionRecord
  *
  * ★ 现在：会话记忆 = `agent_sessions/<sessionId>.jsonl` 的事件流（[SessionLog]），
  *   "模型看到的 messages"是它的**投影**（`SessionProjection`），本对象只负责三件事 ——
- *  开关持久化、**当前绑定哪个会话**、以及日志包装。历史裁剪/过期/压缩的语义在
+ *  开关持久化、**当前绑定哪个会话**、以及日志包装。历史裁剪/压缩的语义在
  *   [AgentSessionStore]（纯 JVM，可单测）。
  *
  * 会话绑定由 [com.rokidlab.phone.store.ChatStateHolder] 驱动：bootstrap / 新建 / 切换会话
@@ -127,13 +128,19 @@ internal object AgentSessionManager {
             .getBoolean(KEY_ENABLED, true)
     }
 
+    /**
+     * 会话记忆总开关。
+     *
+     * **纯开关**：关 = 不再注入历史、不再记录本轮，但**不销毁已积累的数据** —— 重新打开后
+     * 之前聊过的上下文仍然生效。销毁是另一件事，只由用户显式操作触发
+     * （聊天页「清空对话」= 当前对话的记录＋记忆；设置页「清空全部会话记忆」= 全部对话的记忆）。
+     *
+     * ⚠️ 2026-09-20 之前这里在关闭时会 `clear()`（真删当前会话的事件流）。那让"关一下"变成
+     *    一次不可逆的销毁，而且只销毁当前会话 —— 一个全局开关做出了按会话分布不均的副作用。
+     */
     fun setEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_ENABLED, enabled).apply()
-        if (!enabled) {
-            // 关闭时立即清空已存历史
-            clear()
-        }
         Log.i(TAG, "set enabled=$enabled")
     }
 
@@ -160,18 +167,63 @@ internal object AgentSessionManager {
      */
     fun currentTurn(): Int = runCatching { storeOrNull()?.maxTurn() ?: 0 }.getOrDefault(0)
 
-    /** 超时自动清空（每轮对话开始时调用） */
-    fun maybeExpire() {
-        if (storeOrNull()?.maybeExpire() == true) {
-            Log.i(TAG, "session expired (10min idle), cleared")
-        }
-    }
-
-    /** 手动清空当前会话记忆（用户点「清空对话」→ 真删；见 [AgentSessionStore.wipe]） */
+    /** 手动清空**当前会话**记忆（聊天页「清空对话」→ 真删；清全部对话见 [clearAll]） */
     fun clear() {
         storeOrNull()?.wipe()
         Log.i(TAG, "cleared")
     }
+
+    /**
+     * 清空**全部对话**的会话记忆（设置页「清空全部会话记忆」）。
+     *
+     * 与 [clear] 的分工是**作用域**：那个只管当前绑定会话（与聊天页"这条对话"同域），
+     * 这个是全局的 —— 按钮文案写"全部"，行为就必须是全部，否则用户以为清干净了、
+     * 换个会话一切照旧。每个对话的记忆就是 `agent_sessions/<sessionId>.jsonl`，
+     * 所以"全部" = 遍历删除。
+     *
+     * ★ 为什么不走声明式（`VisibilityCut`）：那是"不进模型上下文、但轨迹留着可回溯"的语义，
+     *   适合"也许只是离开了一会儿"这种**推断**；而这里是用户**显式**说不要了 —— 删干净才是它
+     *   该有的意思，隐私上也更干净（不然数据还躺在文件里）。
+     *
+     * ⚠️ 删完必须**重建**内存门面：它抓的是刚被删掉的那个文件，不重建的话下一次 append 会把
+     *   文件又写回来（用户看到"清了还在"）。注意与 [forgetSession] 的差别 —— 那里会话本身
+     *   已经没了所以解绑，这里会话还在（用户只清了记忆），解绑会让"清完接着聊"的若干轮
+     *   静默不进记忆（重新绑定要等下一次切会话，而用户马上就会继续说话）。
+     *
+     * 聊天记录不受影响：那是另一套存储（`ChatHistoryStore`），本方法一个字节都不碰。
+     *
+     * @return 实际清掉的对话数（0 = 本来就没有记忆，UI 可据此给不同反馈）
+     */
+    fun clearAll(context: Context): Int {
+        val files = sessionLogFiles(context)
+        var cleared = 0
+        files.forEach { f ->
+            runCatching { f.delete() }
+                .onSuccess { if (it) cleared++ }
+                .onFailure { Log.w(TAG, "delete session log failed: ${f.name}", it) }
+        }
+        val ctx = appContext
+        val id = boundSessionId
+        store = if (ctx != null && id.isNotBlank()) newStore(ctx, id) else null
+        Log.i(TAG, "clearAll: deleted $cleared of ${files.size} session log(s)")
+        return cleared
+    }
+
+    /** 当前**存有记忆的对话数**（= `agent_sessions` 下的文件数），供设置页在清空前告知范围 */
+    fun memorySessionCount(context: Context): Int = sessionLogFiles(context).size
+
+    /**
+     * `agent_sessions` 目录下的 `.jsonl` 文件（⚠️ 别在 KDoc 里写带星号的路径通配：
+     * Kotlin 注释**可嵌套**，`斜杠+星号` 会开一个永不闭合的注释，把整个文件吞掉）。
+     *
+     * ⚠️ 它数的是"**有记忆的**对话"，不是"全部对话" —— 新建但没聊过的会话不会落文件。
+     *    文案因此不能说"共 N 个对话"，只能说"全部对话"（见 `agent_memory_clear_confirm`）。
+     */
+    private fun sessionLogFiles(context: Context): List<File> =
+        File(context.filesDir, SessionLog.DIR_NAME)
+            .listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }
+            ?.toList()
+            .orEmpty()
 
     /** 丢弃最后一轮对话上下文（用户点「重新生成 / 编辑重发」时调用） */
     fun dropLastTurn() {

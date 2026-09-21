@@ -173,7 +173,7 @@ internal class SessionProjection(private val records: List<SessionRecord>) {
     /** 是否已产生滚动摘要（= 早期对话已被压缩） */
     fun hasDigest(): Boolean = digest != null
 
-    /** 最后一次活动时间（过期判定用）。为空时返回 0 */
+    /** 最后一条事件的时间戳（诊断用；原先的"过期判定"已随空闲过期一起移除）。为空时返回 0 */
     fun lastActivityTs(): Long = records.maxOfOrNull { it.ts } ?: 0L
 
     /** 轮完整性（user/assistant 严格交替、偶数长度、以 assistant 结尾） */

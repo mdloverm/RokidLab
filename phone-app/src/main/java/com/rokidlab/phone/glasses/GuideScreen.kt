@@ -8,6 +8,7 @@ import com.rokidlab.phone.glasses.*
 import com.rokidlab.phone.mirror.*
 import com.rokidlab.phone.model.*
 import com.rokidlab.phone.network.*
+import com.rokidlab.phone.permission.AppPermission
 import com.rokidlab.phone.settings.*
 import com.rokidlab.phone.store.*
 import com.rokidlab.phone.util.*
@@ -24,12 +25,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -52,7 +53,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 
 /**
@@ -70,6 +70,7 @@ internal fun GuideScreen(
     onAuthorize: () -> Unit,
     onInstallLink: ((onComplete: (Boolean) -> Unit) -> Unit)? = null,
     onSendWifiConfig: ((String, String, (Boolean, String?) -> Unit) -> Unit)? = null,
+    onPermissionsDone: (() -> Unit)? = null,
     onSkip: (() -> Unit)? = null,
 ) {
     val ctx = LocalContext.current
@@ -77,6 +78,8 @@ internal fun GuideScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(BrewBg)
+            // 权限步有 7 行 + 两个按钮，小屏会超出视口；滚动兜底（内容装得下时行为与原来一致）
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -120,6 +123,10 @@ internal fun GuideScreen(
                 onAuthorize = onAuthorize,
                 ctx = ctx,
             )
+            GuideStep.PERMISSIONS -> PermissionsStep(
+                onDone = onPermissionsDone,
+                ctx = ctx,
+            )
             GuideStep.INSTALL_LINK -> InstallLinkStep(
                 onInstallLink = onInstallLink,
                 onSkip = onSkip,
@@ -156,6 +163,7 @@ private fun GuideProgressIndicator(currentStep: GuideStep) {
                     GuideStep.SELECT_HOST_APP -> BrewCoral
                     GuideStep.SELECT_MIRROR_SOURCE -> BrewCyan
                     GuideStep.AUTHORIZE -> BrewMagenta
+                    GuideStep.PERMISSIONS -> BrewWarning
                     GuideStep.INSTALL_LINK -> BrewPurple
                     GuideStep.CONFIGURE_WIFI -> BrewInfo
                     GuideStep.READY -> BrewSuccess
@@ -364,6 +372,220 @@ private fun AuthorizeStep(
     }
 }
 
+/**
+ * 权限步（第四步）：把手机侧权限一次性开齐，**装在眼镜端应用之前**。
+ *
+ * 为什么要有这一步：装机依赖蓝牙、装完的语音功能又依赖通话/联系人/日历/定位/通知/悬浮窗，
+ * 而此前这些权限散落在启动期自动弹窗与各功能点各自的「请去设置里开启」里 ——
+ * 用户装到一半才发现某功能不可用，也说不清到底缺什么。
+ *
+ * 唯一事实来源是 [AppPermission] 总表：**新增权限只要登记进那张表，这里自动多出一行**，
+ * 不需要改本文件（规则见 project_rules.md「权限登记」）。
+ * 表外的两个系统项（电池优化 / 自启动）跟在权限项后面一起过 —— 它们不是运行时权限，
+ * 但同样是"装完才发现后台被系统杀掉"的隐性缺项，原本在启动后 2 秒弹窗，现统一收敛到这里。
+ */
+@Composable
+private fun PermissionsStep(
+    onDone: (() -> Unit)?,
+    ctx: android.content.Context,
+) {
+    val items = remember { AppPermission.values().toList() }
+    var refreshTick by remember { mutableStateOf(0) }
+
+    // 从系统授权框回来有 launcher 回调，但从「悬浮窗设置页」回来没有任何回调可挂，
+    // 本页也不是宿主 Activity 视角、拿不到 onResume —— 用 1s 轻量轮询兜住这两种返回路径；
+    // 离开本步即随 LaunchedEffect 取消（7 次 checkSelfPermission 的代价可忽略）。
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            refreshTick++
+        }
+    }
+
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { refreshTick++ }
+
+    val granted = remember(refreshTick) { items.associateWith { AppPermission.isGranted(ctx, it) } }
+    val missing = granted.count { !it.value }
+
+    // 系统设置项（不是运行时权限，所以不进 [AppPermission] 总表）—— 放在权限项之后一起过一遍。
+    // 只有电池优化能查状态（AOSP `isIgnoringBatteryOptimizations`），它计入「全绿」判定；
+    // 自启动 / vivo 后台限制各 ROM 都没有公开查询接口，标「需手动开启」且**不**参与判定 ——
+    // 否则用户会永远卡在"还差 1 项"点不动下一步。
+    val batteryOk = remember(refreshTick) { ManufacturerUtils.isIgnoringBatteryOptimizations(ctx) }
+    val chineseRom = remember { ManufacturerUtils.isChineseRom() }
+    val vivoLimit = chineseRom && ManufacturerUtils.hasVivoBackgroundHardLimit()
+    val totalMissing = missing + if (batteryOk) 0 else 1
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = ctx.getString(R.string.guide_permissions_title),
+            color = BrewText,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold,
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        items.forEach { permission ->
+            val ok = granted[permission] == true
+            PermissionRowItem(
+                label = ctx.getString(permission.labelRes),
+                ok = ok,
+                statusText = ctx.getString(
+                    when {
+                        ok -> R.string.guide_permissions_granted
+                        permission.runtimeRequestable -> R.string.guide_permissions_tap
+                        else -> R.string.guide_permissions_go_settings
+                    },
+                ),
+                onClick = if (ok) {
+                    null
+                } else {
+                    {
+                        if (permission.runtimeRequestable) {
+                            runCatching {
+                                launcher.launch(AppPermission.runtimeNames(listOf(permission)))
+                            }.onFailure {
+                                // 少数 ROM 的权限管理器会在 launch 阶段抛异常，重算状态即可，不中断本步
+                                refreshTick++
+                            }
+                        } else {
+                            // 悬浮窗是 AppOps 而非运行时权限：requestPermissions 对它不弹窗，
+                            // 只能跳系统设置页（这也是后台拉起界面的唯一豁免，见 AppPermission）
+                            ManufacturerUtils.openOverlaySettings(ctx)
+                        }
+                    }
+                },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        PermissionRowItem(
+            label = ctx.getString(R.string.battery_optimization_title),
+            ok = batteryOk,
+            statusText = ctx.getString(
+                if (batteryOk) R.string.guide_permissions_granted else R.string.guide_permissions_go_settings,
+            ),
+            onClick = if (batteryOk) null else { { ManufacturerUtils.requestIgnoreBatteryOptimizations(ctx) } },
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (chineseRom) {
+            PermissionRowItem(
+                label = ctx.getString(R.string.auto_start_title),
+                ok = false,
+                statusText = ctx.getString(R.string.guide_permissions_manual),
+                onClick = { ManufacturerUtils.openAutoStartSettings(ctx) },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        if (vivoLimit) {
+            PermissionRowItem(
+                label = ctx.getString(R.string.vivo_limit_title),
+                ok = false,
+                statusText = ctx.getString(R.string.guide_permissions_manual),
+                onClick = { ManufacturerUtils.openPowerSavingSettings(ctx) },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 主按钮仅在「全绿」时可点：缺权限不影响装机、但会让对应功能不可用，
+        // 半吊子状态下直接放行等于把问题推到用户第一次用某功能的时候
+        val allDone = totalMissing == 0
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .clip(BrewShapeStandard)
+                .background(if (allDone) BrewSuccess else BrewPanel, BrewShapeStandard)
+                .then(if (allDone && onDone != null) Modifier.clickable { onDone() } else Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (allDone) {
+                    ctx.getString(R.string.guide_permissions_next)
+                } else {
+                    ctx.getString(R.string.guide_permissions_pending, totalMissing)
+                },
+                color = if (allDone) BrewBg else BrewMuted,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // 跳过：与「安装 / WiFi」两步一致，允许先过（权限可随时在设置里补）
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .clip(BrewShapeStandard)
+                .background(BrewPanel, BrewShapeStandard)
+                .then(if (onDone != null) Modifier.clickable { onDone() } else Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = ctx.getString(R.string.guide_skip_btn),
+                color = BrewText,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+    }
+}
+
+/**
+ * 权限步里的单项：权限项与电池优化/自启动等系统项共用同一套样式。
+ *
+ * [onClick] 为 null 表示不可点（已开，或不需处理）。
+ * [ok] 只对**可检测**的项有意义；自启动这类无法查询状态的项恒传 false，
+ * 由 [statusText] 说明「需手动开启」，且不计入「全绿」判定。
+ */
+@Composable
+private fun PermissionRowItem(
+    label: String,
+    ok: Boolean,
+    statusText: String,
+    onClick: (() -> Unit)?,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(BrewShapeStandard)
+            .background(if (ok) BrewPanel else BrewBg, BrewShapeStandard)
+            .border(1.dp, if (ok) BrewSuccess else BrewBorder, BrewShapeStandard)
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (ok) "✓" else "○",
+            color = if (ok) BrewSuccess else BrewMuted,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = label,
+            color = BrewText,
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = statusText,
+            color = if (ok) BrewSuccess else BrewWarning,
+            fontSize = 13.sp,
+        )
+    }
+}
+
 @Composable
 private fun InstallLinkStep(
     onInstallLink: ((onComplete: (Boolean) -> Unit) -> Unit)?,
@@ -544,17 +766,19 @@ private fun ConfigureWifiStep(
         ctx.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? WifiManager
     }
 
-    // 权限状态
+    // 权限状态 —— 走 [AppPermission] 总表，不再自己写 checkSelfPermission。
+    // WiFi 扫描依赖定位权限，且 Android 12+ 必须与 COARSE 一起申请（只求 FINE 会被静默拒绝）。
     var hasLocationPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.ACCESS_FINE_LOCATION)
-                == android.content.pm.PackageManager.PERMISSION_GRANTED
-        )
+        mutableStateOf(AppPermission.isGranted(ctx, AppPermission.LOCATION))
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted -> hasLocationPermission = granted }
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { hasLocationPermission = AppPermission.isGranted(ctx, AppPermission.LOCATION) }
+
+    fun requestLocationPermission() {
+        permissionLauncher.launch(AppPermission.runtimeNames(listOf(AppPermission.LOCATION)))
+    }
 
     // WiFi 扫描状态
     var selectedSsid by remember { mutableStateOf<String?>(null) }
@@ -585,12 +809,9 @@ private fun ConfigureWifiStep(
     var wifiEnabled by remember { mutableStateOf(wifiManager?.isWifiEnabled == true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    // 请求定位权限
-    LaunchedEffect(Unit) {
-        if (!hasLocationPermission && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            permissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-    }
+    // 进本步不再自动弹定位授权框 —— 上一步「开启全部权限」已把它开齐；
+    // 若用户是「跳过」过来的，本页有明确的提示 + 授权按钮（见下方 !hasLocationPermission 分支），
+    // 不给第二次不请自来的系统弹窗。
 
     // 从扫描列表选中网络：有保存的密码就回填，没有则清空（防止沿用上一个网络的密码）
     LaunchedEffect(selectedSsid) {
@@ -771,7 +992,7 @@ private fun ConfigureWifiStep(
                             modifier = Modifier.clip(BrewShapeStandard)
                                 .background(BrewInfo, BrewShapeStandard)
                                 .clickable {
-                                    permissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                                    requestLocationPermission()
                                 }
                                 .padding(horizontal = 24.dp, vertical = 12.dp),
                         ) {
@@ -806,9 +1027,11 @@ private fun ConfigureWifiStep(
                         )
                     }
                 } else {
-                    // 网络列表
-                    LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) {
-                        items(scanResults, key = { it.SSID }) { network ->
+                    // 网络列表：**必须用普通 Column**。本页根容器是 `verticalScroll`（高度约束无上限），
+                    // 在其中放 LazyColumn 会被量成 0 高度 → 扫描明明成功、列表却一片空白，
+                    // 用户看到的正是"进了这一步没扫出网络"。页面本身已能滚动，无需懒加载。
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        scanResults.forEach { network ->
                             WifiNetworkItem(
                                 ssid = network.SSID,
                                 level = network.level,
@@ -1187,6 +1410,7 @@ private fun StepInstructions(currentStep: GuideStep, ctx: android.content.Contex
         GuideStep.SELECT_HOST_APP -> ctx.getString(R.string.guide_step1_desc)
         GuideStep.SELECT_MIRROR_SOURCE -> ctx.getString(R.string.guide_step2_desc)
         GuideStep.AUTHORIZE -> ctx.getString(R.string.guide_step3_desc)
+        GuideStep.PERMISSIONS -> ctx.getString(R.string.guide_permissions_desc)
         GuideStep.INSTALL_LINK -> ctx.getString(R.string.guide_install_link_desc)
         GuideStep.CONFIGURE_WIFI -> ctx.getString(R.string.guide_step4_desc)
         GuideStep.READY -> ""

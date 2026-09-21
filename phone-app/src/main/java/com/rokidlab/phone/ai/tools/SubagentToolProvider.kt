@@ -1,6 +1,7 @@
 package com.rokidlab.phone.ai.tools
 
 import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.ToolContentTrust
 import com.rokidlab.phone.ai.ToolRisk
 
 import android.content.Context
@@ -28,6 +29,8 @@ internal object SubagentToolProvider : ToolProvider {
             displayNameRes = R.string.ai_tool_research_subtask_name,
             descriptionRes = R.string.ai_tool_research_subtask_desc,
             risk = ToolRisk.READ_ONLY,
+            // 子助手的结论整理自网页/知识库等外部内容，同样按不可信数据隔离
+            contentTrust = ToolContentTrust.UNTRUSTED_EXTERNAL,
             statusText = "正在派子任务查资料…",
             schema = toolSchema(
                 name = ReadOnlySubagent.TOOL_NAME,

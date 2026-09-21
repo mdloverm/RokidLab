@@ -132,6 +132,19 @@ internal class AsrBridgeCoordinator(
          */
         private const val ASR_HANDLING_MAX_MS = 90_000L
 
+        /**
+         * 「上一条同文刚处理完」的回声抑制窗（毫秒）。
+         *
+         * 覆盖「同一次语音经不同入口重复到达、且上一次已处理完」的场景：
+         * 手机端输入与眼镜 ASR 推送同文并发（2026-09-21 实测：手机 07.96 处理完成，
+         * 眼镜对同一次识别的推送被 RFCOMM 下行拥塞缓冲 3.5s，11.43 才送达 —— 仅隔 160ms，
+         * 旧的「处理中」判定与 1500ms 接收回声窗全部失效，导致同一句出现两轮问答）。
+         * 上条同文刚答完 [ASR_DONE_ECHO_MS] 内又来同文按回声丢弃；
+         * 用户真实重试（同指令再说一遍）通常间隔更久或发生在上条无响应时（已被
+         * asrHandling 判定覆盖），不受影响。
+         */
+        private const val ASR_DONE_ECHO_MS = 5_000L
+
         /** start() 重入防抖窗口：连接建立期 onConnected 与显式调用会连着调两次 start()，
          *  两次都会新建 AsrPushClient 抢同一条 RFCOMM 通道，反而把通道搞断。 */
         private const val START_DEBOUNCE_MS = 1500L
@@ -165,6 +178,9 @@ internal class AsrBridgeCoordinator(
     /** 上一条 ASR 是否仍在由会话层处理（AI 下行耗时数秒）：处理中又来同文才吞 */
     @Volatile private var asrHandling = false
     @Volatile private var asrHandlingSince = 0L
+
+    /** 上一条 ASR 处理结束时刻（[ASR_DONE_ECHO_MS] 同文回声抑制窗的起点） */
+    @Volatile private var lastHandledAtMs = 0L
 
     /** start() 防抖：记录上次真正执行 start 的时刻 */
     private var lastStartAtMs = 0L
@@ -211,6 +227,13 @@ internal class AsrBridgeCoordinator(
                     Log.i(TAG, "onAsrText: same text while previous still handling, skip (last=${lastAsrTextAt})")
                     return
                 }
+                // 处理完成后的同文回声抑制：上条同文刚答完数秒内又到同文，
+                // 是同一次识别经拥塞缓冲/其他入口的迟到回声，不是用户的新指令
+                if (text == lastAsrText && lastHandledAtMs > 0 && (now - lastHandledAtMs) < ASR_DONE_ECHO_MS) {
+                    Log.i(TAG, "onAsrText: same text ${now - lastHandledAtMs}ms after previous handled, skip as echo")
+                    lastAsrTextAt = now
+                    return
+                }
                 lastAsrText = text
                 lastAsrTextAt = now
             }
@@ -229,7 +252,11 @@ internal class AsrBridgeCoordinator(
      */
     fun markAsrHandling(busy: Boolean) {
         asrHandling = busy
-        if (busy) asrHandlingSince = System.currentTimeMillis()
+        if (busy) {
+            asrHandlingSince = System.currentTimeMillis()
+        } else {
+            lastHandledAtMs = System.currentTimeMillis()
+        }
     }
 
     /**

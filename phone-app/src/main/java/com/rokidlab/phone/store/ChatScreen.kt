@@ -50,6 +50,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -196,13 +197,11 @@ internal fun ChatModule(app: LabApplication) {
     // AI 设置弹窗（AI 服务地址/密钥/模型 + 按键答题开关）
     var showSettings by remember { mutableStateOf(false) }
     // 「过程」区块默认展开（设置页里的「展开过程」，默认开）。
-    // 设成状态而不是每次渲染都读 prefs：进入聊天页读一次，设置页关闭后再读一次即可 ——
-    // 卡片自己的展开状态由 TraceBlock 的 remember 管，用户在设置里改默认值不该把
-    // 他手动折叠过的那几张卡重新弹开。
+    // 设成状态而不是每次渲染都读 prefs：进入聊天页读一次，设置页关闭后再读一次即可。
+    // ★ 它传下去的是**默认值**（不是快照）：卡片里"没被用户单独折过"的那些会实时跟随它，
+    //   用户手动折过的那几张保持原样 —— 见 ChatBubble/TraceBlock 的两层状态。
+    //   早先 TraceBlock 把这值当初始快照，导致"设置页改了、聊天窗口纹丝不动"（两处控件各说各的）。
     var expandTrace by remember { mutableStateOf(app.chatExpandTraceEnabled) }
-    LaunchedEffect(showSettings) {
-        if (!showSettings) expandTrace = app.chatExpandTraceEnabled
-    }
     // 清空对话确认弹窗
     var showClearConfirm by remember { mutableStateOf(false) }
     // 会话列表弹窗（多会话：新建 / 切换 / 重命名 / 删除）
@@ -243,6 +242,17 @@ internal fun ChatModule(app: LabApplication) {
     val contextUsage = remember(messages.size, sending, contextRefresh) {
         runCatching { AgentSessionManager.contextUsage(ctx) }.getOrNull()
     }
+    // 设置页关闭后重读一次：
+    //  ①「展开过程」是设置页里的开关，改完回来要立刻生效；
+    //  ② 设置页里的「清空全部会话记忆」**不改消息列表** —— 上面 remember 的三个 key 一个都不变，
+    //    不补这次重算，进度条会停在清空前的数字上（用户会以为没清干净）。
+    // ⚠️ 必须写在 contextRefresh 声明之后：Kotlin 局部变量不能前向引用。
+    LaunchedEffect(showSettings) {
+        if (!showSettings) {
+            expandTrace = app.chatExpandTraceEnabled
+            contextRefresh++
+        }
+    }
 
     // 同步 AI 配置到会话（兼容旧版 deepseek_key 迁移：只回填在线槽位 Key，不影响本地模型模式）
     LaunchedEffect(Unit) {
@@ -254,6 +264,25 @@ internal fun ChatModule(app: LabApplication) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "cxrL not ready", e)
+        }
+    }
+
+    // 离开乐奇聊天页（切换页签 / 系统返回）＝ 退出助手：停眼镜端播报 + 取消在跑的 Lab 请求。
+    //
+    // 为什么补这一处：本页是助手的唯一入口，而页面由 StoreHomeScreen 的
+    // AnimatedContent(targetState = currentPage) 承载 —— 切走即销毁本组合。
+    // 此前只有「停止按钮 / 眼镜端双击 / 会话 cleanup」三条路会停播报，
+    // 从本页退出（页签切换、系统返回）**一条都不走**：2026-09-21 实测用户在播报中途退出，
+    // 眼镜侧既无 `Received tts_stop` 也无 ABORT 标记，语音一路播到自然结束。
+    //
+    // 与「停止按钮」同语义：abortCurrentAi() = bump 代际（在跑的请求自弃）+ 下发 tts_stop。
+    // 必须放后台线程：sendCustomCmd 是跨进程调用，主线程里做会卡帧。
+    DisposableEffect(Unit) {
+        onDispose {
+            runCatching {
+                val sess = app.cxrL
+                scope.launch(Dispatchers.IO) { sess.abortCurrentAi() }
+            }.onFailure { Log.w(TAG, "onDispose stop glasses speech failed", it) }
         }
     }
 

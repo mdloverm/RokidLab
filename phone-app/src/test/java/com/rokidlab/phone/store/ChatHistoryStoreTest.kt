@@ -200,6 +200,24 @@ class ChatHistoryStoreTest {
     }
 
     @Test
+    fun `落盘里残留的进行中步骤回放时收为终态`() {
+        // 依据：正常收尾一定写终态（ChatStateHolder.finishTrace / finalizeTraceReply），
+        // 所以磁盘上还有 RUNNING 只可能是那一轮没跑完就结束了（进程被杀 / 强退）。
+        val src = msg(1, "", trace = steps()) // steps()[0] 的 state 默认就是 RUNNING
+        assertEquals(AgentStep.State.RUNNING, src.trace[0].state)
+
+        val back = ChatHistoryStore.parse(ChatHistoryStore.toLine(src)).single()
+        assertTrue(
+            "回放后不应再有 RUNNING，否则「过程」卡片重启后会永远转圈",
+            back.trace.none { it.state == AgentStep.State.RUNNING },
+        )
+        assertEquals(AgentStep.State.OK, back.trace[0].state)
+        // 原本已是终态的步骤不受影响
+        assertEquals(AgentStep.State.OK, back.trace[1].state)
+        assertEquals(AgentStep.State.FAILED, back.trace[2].state)
+    }
+
+    @Test
     fun `无过程的消息落盘不含 trace 字段且回放为空列表`() {
         val src = msg(1, "普通闲聊")
         assertFalse("空过程不应写入字段", ChatHistoryStore.toLine(src).contains("trace"))

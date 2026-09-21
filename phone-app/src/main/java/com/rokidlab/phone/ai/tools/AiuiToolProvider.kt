@@ -150,6 +150,9 @@ internal object AiuiToolProvider : ToolProvider {
                         Log.i(TAG, "open_aiui_app(${agent.name}) with launch params: $launchParams")
                     }
                     val ack = app.cxrL.pushAixToRokidLinkHost(localAix, launchParams = launchParams)
+                    // 只有真的推成功才算"当前显示的是自托管宿主" —— 否则记成 LOCAL 会让
+                    // 随后的 stop 发一条注定无效的 close 命令（关不掉，用户看到的是没反应）
+                    if (ack?.trim() == "OK") ToolRegistry.lastStartedAiuiHost = ToolRegistry.AiuiHost.LOCAL_HOST
                     return when (ack?.trim()) {
                         "OK" ->
                             "好的，正在眼镜上演示「${agent.name}」（手柄可控宿主），可用 Lab 蓝牙手柄操作"
@@ -170,6 +173,7 @@ internal object AiuiToolProvider : ToolProvider {
                 if (result == 0) {
                     // 记住最近成功打开的包，供 stop_aiui_app 无名称时兜底关闭
                     ToolRegistry.lastStartedAiuiAgentId = agent.agentId
+                    ToolRegistry.lastStartedAiuiHost = ToolRegistry.AiuiHost.OFFICIAL
                     if (agent.aixOnGlasses) {
                         "好的，正在眼镜上打开「${agent.name}」，请看向眼镜"
                     } else {
@@ -190,15 +194,25 @@ internal object AiuiToolProvider : ToolProvider {
                 // 故即使 App 重启、内存无最近记录、或眼镜上跑的是别的 AIUI，也下发占位包名关闭“当前正在显示”的那个，
                 // 不再因“不知道是哪个”而放弃（修复“只能退出启动过的”）。
                 val targetId = agent?.agentId ?: ToolRegistry.lastStartedAiuiAgentId ?: "current"
-                // 本机有 .aix（宿主演示链路打开过/可打开）→ 关闭 AiuiLinkActivity 宿主；
-                // 无本地包（官方链路启动的内置/直传应用）→ Sys_AIUI_Stop 关官方渲染层。
-                val localAix = AiuiProject.packageFile(context, targetId)
-                val result = if (localAix.isFile) {
-                    app.cxrL.closeAiuiHost()
-                } else {
-                    app.cxrL.stopAiuiPackage(targetId)
+                // 关哪条链路：优先用**打开时记录的宿主**（唯一可靠依据）。
+                // 记录不到（App 重启过）才退回"本地有没有这个 .aix"的启发式 —— 它是旧实现的
+                // 全部依据，但只对"最近打开的就是这个包"成立。
+                val host = ToolRegistry.lastStartedAiuiHost
+                    ?: if (AiuiProject.packageFile(context, targetId).isFile) {
+                        ToolRegistry.AiuiHost.LOCAL_HOST
+                    } else {
+                        ToolRegistry.AiuiHost.OFFICIAL
+                    }
+                val result = when (host) {
+                    // 自托管宿主：关 RokidLink 里渲染 .aix 的 AiuiLinkActivity
+                    ToolRegistry.AiuiHost.LOCAL_HOST -> app.cxrL.closeAiuiHost()
+                    // 官方渲染层（内置 / 直传 cxr 目录的包）：Sys_AIUI_Stop
+                    ToolRegistry.AiuiHost.OFFICIAL -> app.cxrL.stopAiuiPackage(targetId)
                 }
                 if (result == 0) {
+                    // 已经关掉了，"当前显示的是哪条链路"随之失效 —— 置空，避免下次"关掉"
+                    // 照旧发一条发给已关闭页面的命令（无害但会产生误导性的日志）
+                    ToolRegistry.lastStartedAiuiHost = null
                     if (agent != null) "好的，已关闭「${agent.name}」的智能体界面"
                     else "好的，已关闭眼镜上正在显示的智能体应用"
                 } else {

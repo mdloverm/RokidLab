@@ -360,6 +360,31 @@ class DeviceControlService(private val session: com.rokidlab.phone.glasses.CxrLH
     }
 
     /**
+     * 下发 IMU 头动采集启停到眼镜端（v1 查询层）。
+     *
+     * 轻量信令：链路就绪时复用现有连接直发（与 [sendKeyQuizConfig] 同一模式），
+     * 失败仅返回错误码，**不走全链路重建** —— IMU 开流不值得付出 3~5s 的链路重建代价
+     * （重建期间 ASR 推送 + ADB 隧道均不可用）；调用方（工具查询侧）可稍后重试。
+     *
+     * @return 0=成功；-2=链路未就绪；-3/其他=SDK 发送失败
+     */
+    fun sendImuControl(start: Boolean): Int {
+        val link = session.cxrLink ?: return -2
+        if (!session.cxrlConnected || !session.glassBtConnected) return -2
+        return try {
+            val caps = Caps()
+            AiChannel.encodeImuControl(start).forEach { caps.write(it) }
+            // 与 sendKeyQuizConfig 同一发送路径：自定义 topic 名不在 SDK 黑名单内，公网 API 直发
+            val r = synchronized(session.aiCmdLock) { link.sendCustomCmd(AiChannel.TOPIC_IMU_CTRL, caps) } ?: -3
+            Log.i(TAG, "sendImuControl(start=$start) -> $r")
+            r
+        } catch (e: Exception) {
+            Log.e(TAG, "sendImuControl(start=$start) failed", e)
+            -3
+        }
+    }
+
+    /**
      * 下发「按键答题」开关到眼镜端。
      * 开关打开后：短按镜腿按键 = 拍照问AI（覆盖原自定义按键短按），长按不受影响。
      */

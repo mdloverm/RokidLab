@@ -119,4 +119,50 @@ class AgentStepTest {
             cut.isNotEmpty() && Character.isHighSurrogate(cut[cut.length - 1]),
         )
     }
+
+    // ── 知识库自动检索（不是模型调的工具） ──
+
+    @Test
+    fun `知识库检索键固定且标题留给 UI 本地化`() {
+        val step = AgentStep.knowledge(hitCount = 2, sources = listOf("《问.txt》第1块"), docCount = 1)
+        assertEquals("一轮最多一条，不需要区分轮次", "kb:auto", step.key)
+        assertEquals(AgentStep.Kind.KNOWLEDGE, step.kind)
+        // 与 thinking 同规矩：服务层不产出面向用户的文案
+        assertEquals("", step.title)
+        assertEquals(AgentStep.State.OK, step.state)
+    }
+
+    @Test
+    fun `知识库检索必须如实标为 KNOWLEDGE 而不是 TOOL`() {
+        // 复用 TOOL 会让"模型为什么没调检索工具"这种排查被误导（两者语义不同）
+        assertFalse(AgentStep.knowledge(1, listOf("《a》第1块"), 1).kind == AgentStep.Kind.TOOL)
+    }
+
+    @Test
+    fun `命中时把全部来源标注写进 detail 供用户核对出处`() {
+        val step = AgentStep.knowledge(
+            hitCount = 3,
+            sources = listOf("《问.txt》第1块", "《问.txt》第15块", "《手册.txt》第2块"),
+            docCount = 2,
+        )
+        assertTrue(step.detail.contains("《问.txt》第1块"))
+        assertTrue("第二份文档的来源也要在，否则用户核对不到", step.detail.contains("《手册.txt》第2块"))
+        assertFalse(step.detail.contains('\n'))
+    }
+
+    @Test
+    fun `未命中时说明库里有多少份文档`() {
+        // 用户最需要区分的是"库里没有"还是"有但没匹配上" —— 这句话就是那个区分
+        val step = AgentStep.knowledge(hitCount = 0, sources = emptyList(), docCount = 3)
+        assertTrue(step.detail.contains("3"))
+        assertTrue(step.detail.contains("未匹配"))
+    }
+
+    @Test
+    fun `来源过多时压成一行并截断`() {
+        val many = (1..200).map { "《很长的文档名$it》第${it}块" }
+        val step = AgentStep.knowledge(hitCount = many.size, sources = many, docCount = 1)
+        assertFalse("换行会让过程卡片高度失控", step.detail.contains('\n'))
+        assertTrue(step.detail.endsWith("…"))
+    }
 }

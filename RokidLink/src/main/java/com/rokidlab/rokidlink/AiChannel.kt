@@ -262,4 +262,85 @@ object AiChannel {
         val activity = fields[3]?.takeIf { it.isNotBlank() } ?: return null
         return pkg to activity
     }
+
+    // ── IMU 头动数据通道（v1 查询层，双端同源）──
+    // 眼镜端按手机指令启停（默认关）：~20Hz 采样加速度计 + 陀螺仪 + 游戏旋转向量，
+    // 500ms 批量打包上行；手机端写入 MotionBuffer 环形缓冲（60s 窗口），
+    // 供 get_head_pose / get_motion_history 工具与 v2 规则引擎消费。
+    // 样本字段：t(毫秒 epoch) + 加速度 ax/ay/az(m/s²，含重力) + 角速度 gx/gy/gz(rad/s)
+    // + 姿态四元数 qw/qx/qy/qz（游戏旋转向量，不含地磁 → 无绝对朝向，只有相对变化）。
+    // float 以字符串承载：延续本文件「纯 Kotlin 编解码（List<String?>）」的可单测设计。
+    const val TOPIC_IMU_DATA = "rokidlab_imu"
+    const val CMD_IMU_DATA = "imu_data"
+    /** 采集控制（手机端 → 眼镜端）：载荷 [imu_start | imu_stop, version] */
+    const val TOPIC_IMU_CTRL = "rokidlab_imu_ctrl"
+    const val CMD_IMU_START = "imu_start"
+    const val CMD_IMU_STOP = "imu_stop"
+
+    /** 单个 IMU 采样点（时间戳 + 3 轴加速度 + 3 轴角速度 + 姿态四元数） */
+    data class ImuSample(
+        val t: Long,
+        val ax: Float, val ay: Float, val az: Float,
+        val gx: Float, val gy: Float, val gz: Float,
+        val qw: Float, val qx: Float, val qy: Float, val qz: Float,
+    )
+
+    /** 编码 imu_data：[cmd, version, sampleCount, 每样本 11 字段…] */
+    fun encodeImuData(samples: List<ImuSample>): List<String> {
+        val out = ArrayList<String>(3 + samples.size * 11)
+        out.add(CMD_IMU_DATA)
+        out.add(SCHEMA_VERSION.toString())
+        out.add(samples.size.toString())
+        for (s in samples) {
+            out.add(s.t.toString())
+            out.add(s.ax.toString()); out.add(s.ay.toString()); out.add(s.az.toString())
+            out.add(s.gx.toString()); out.add(s.gy.toString()); out.add(s.gz.toString())
+            out.add(s.qw.toString()); out.add(s.qx.toString()); out.add(s.qy.toString()); out.add(s.qz.toString())
+        }
+        return out
+    }
+
+    /**
+     * 解析 imu_data 载荷。
+     * @return null = cmd 不符 / 版本不受支持 / 字段数不符（接收端整体丢弃）；个别非数值样本跳过
+     */
+    fun decodeImuData(fields: List<String?>): List<ImuSample>? {
+        if (fields.size < 3 || fields[0] != CMD_IMU_DATA) return null
+        if (fields[1]?.toIntOrNull() != SCHEMA_VERSION) return null
+        val count = fields[2]?.toIntOrNull() ?: return null
+        if (count < 0 || fields.size < 3 + count * 11) return null
+        val samples = ArrayList<ImuSample>(count)
+        var i = 3
+        fun fl(idx: Int) = fields[idx]?.toFloatOrNull()
+        repeat(count) {
+            val t = fields[i]?.toLongOrNull()
+            val ax = fl(i + 1); val ay = fl(i + 2); val az = fl(i + 3)
+            val gx = fl(i + 4); val gy = fl(i + 5); val gz = fl(i + 6)
+            val qw = fl(i + 7); val qx = fl(i + 8); val qy = fl(i + 9); val qz = fl(i + 10)
+            if (t != null && ax != null && ay != null && az != null &&
+                gx != null && gy != null && gz != null &&
+                qw != null && qx != null && qy != null && qz != null) {
+                samples.add(ImuSample(t, ax, ay, az, gx, gy, gz, qw, qx, qy, qz))
+            }
+            i += 11
+        }
+        return samples
+    }
+
+    /** 编码 IMU 采集控制：[imu_start | imu_stop, version] */
+    fun encodeImuControl(start: Boolean): List<String> =
+        listOf(if (start) CMD_IMU_START else CMD_IMU_STOP, SCHEMA_VERSION.toString())
+
+    /**
+     * 解析 IMU 采集控制载荷。
+     * @return true=开始采集 false=停止采集；null = cmd 不符 / 版本不受支持（忽略）
+     */
+    fun decodeImuControl(fields: List<String?>): Boolean? {
+        if (fields.size < 2 || fields[1]?.toIntOrNull() != SCHEMA_VERSION) return null
+        return when (fields[0]) {
+            CMD_IMU_START -> true
+            CMD_IMU_STOP -> false
+            else -> null
+        }
+    }
 }

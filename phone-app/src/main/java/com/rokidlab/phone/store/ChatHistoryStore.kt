@@ -133,8 +133,29 @@ internal object ChatHistoryStore {
     fun parse(text: String, maxHistory: Int = MAX_HISTORY): List<ChatMsg> {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return emptyList()
-        val all = if (isLegacyFormat(trimmed)) parseLegacyArray(trimmed) else parseJsonLines(trimmed)
+        val all = (if (isLegacyFormat(trimmed)) parseLegacyArray(trimmed) else parseJsonLines(trimmed))
+            .map { it.settleStaleTrace() }
         return if (all.size > maxHistory) all.subList(all.size - maxHistory, all.size).toList() else all
+    }
+
+    /**
+     * 落盘里残留的 [AgentStep.State.RUNNING] 一律按「上一轮没来得及收尾」处理。
+     *
+     * ⚠️ 这里修的是**损坏数据**，不是某个 bug 的解法 —— 别拿"反正读的时候会兜住"当理由省掉收尾。
+     * 正常收尾（`ChatStateHolder.finishTrace` / `finalizeTraceReply`）一定会把本轮锚点那条消息里
+     * 的 RUNNING 全部写成终态；而 `ChatStateHolder.addImage` 会在**轮中途**带着 RUNNING 落一次盘
+     * （之后由收尾那行覆盖 —— 同 id 后写覆盖先写）。
+     * ⇒ **盘上最终仍留着 RUNNING，只可能是那一轮被杀进程 / 强退**。不清掉的话重启后
+     * 「过程」卡片会永远转圈（"那一轮没结束"这件事不会自己变好）。
+     * 归为 OK 而非 FAILED：我们并不知道那一步到底失败没有，标 FAILED 等于凭空编一个错误。
+     */
+    private fun ChatMsg.settleStaleTrace(): ChatMsg {
+        if (trace.none { it.state == AgentStep.State.RUNNING }) return this
+        return copy(
+            trace = trace.map {
+                if (it.state == AgentStep.State.RUNNING) it.copy(state = AgentStep.State.OK) else it
+            },
+        )
     }
 
     /** 读取历史文件；文件不存在或不可读时返回空列表 */

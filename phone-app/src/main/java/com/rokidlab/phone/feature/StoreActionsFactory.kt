@@ -139,7 +139,7 @@ internal fun MainActivity.buildStoreActions(): StoreActions = StoreActions(
                 cxrL.sendWifiConfig(ssid, password) { success, errorMsg ->
                     runOnUiThread {
                         if (success) {
-                            prerequisitesState = prerequisitesState.copy(wifiConfigured = true)
+                            markWifiConfigured()
                             autoStartRokidLink()
                         }
                         onDone(success, errorMsg)
@@ -154,7 +154,7 @@ internal fun MainActivity.buildStoreActions(): StoreActions = StoreActions(
             runWithPrerequisites {
                 installRokidLinkForGuide { success ->
                     if (success) {
-                        prerequisitesState = prerequisitesState.copy(rokidLinkInstalled = true)
+                        markRokidLinkInstalled()
                     }
                     onDone(success)
                 }
@@ -162,11 +162,15 @@ internal fun MainActivity.buildStoreActions(): StoreActions = StoreActions(
         },
         onSkipGuideStep = {
             when (prerequisitesState.currentGuideStep) {
+                GuideStep.PERMISSIONS -> {
+                    // 与「安装 / WiFi」两步同规：允许先过，缺的权限可随时在设置里补
+                    prerequisitesState = prerequisitesState.copy(permissionsReady = true)
+                }
                 GuideStep.INSTALL_LINK -> {
-                    prerequisitesState = prerequisitesState.copy(rokidLinkInstalled = true)
+                    markRokidLinkInstalled()
                 }
                 GuideStep.CONFIGURE_WIFI -> {
-                    prerequisitesState = prerequisitesState.copy(wifiConfigured = true)
+                    markWifiConfigured()
                     autoStartRokidLink()
                 }
                 else -> {

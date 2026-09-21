@@ -73,6 +73,63 @@ internal object ChatStateHolder {
     /** 自增消息 id，避免 LazyColumn key 冲突（原子操作，防并发重复 key） */
     private val msgIdCounter = AtomicLong(0L)
 
+    /**
+     * 本轮「过程」（思考 / 工具调用）落在**哪一条消息**上（[ChatMsg.id]；0 = 本轮还没有过程）。
+     *
+     * ★ 为什么必须是显式锚点，而不能像原先那样「每次取列表末尾那条非用户非状态消息」：
+     *   **位置不是身份**。一轮对话在进行中，任何**别的**消息被追加，都会让"末尾"指向另一条
+     *   消息 —— 于是同一个 `tool:<call_id>` 的 RUNNING 写进旧气泡、OK/FAILED 写进新气泡，
+     *   [AgentStep] 约定的「同 key 覆盖」失效（覆盖只在单条消息内生效），旧气泡永远转圈。
+     *   2026-09-20 真机复现两条**互相独立**的插入路径（都不是 show_image 独有）：
+     *     1. `show_image` 的图片气泡（[addImage]）；
+     *     2. 拍照答题流程的状态气泡（`onStage` → [add] / `onStageText` → [updateLastStatus]
+     *        在末尾不是状态气泡时会**新增**一条）—— 所以它跟"调用了哪个工具"无关，
+     *        任何工具只要落在这条时间线里就会中招。
+     *   ⇒ 一轮的过程必须**认出自己的那条消息**，与它在列表里的位置无关。
+     *
+     * 生命周期：本轮第一次 [upsertTrace] 时锚定 → [finishTrace] 收尾时清除 →
+     * 会话被换掉/清空时由 [forgetTraceAnchor] 作废。
+     * 只在主线程读写（与 [messages] 同一约束）。
+     */
+    private var traceAnchorId: Long = 0L
+
+    /** 本轮过程消息在 [messages] 里的下标；无锚点、或锚点已被删除/裁掉时返回 -1 */
+    private fun traceAnchorIndex(): Int =
+        if (traceAnchorId > 0L) messages.indexOfFirst { it.id == traceAnchorId } else -1
+
+    /**
+     * 把一组过程步骤里仍处于 [AgentStep.State.RUNNING] 的置为终态。
+     *
+     * @return 有改动时返回新列表；**本来就没有 RUNNING 时返回 null**（调用方据此跳过落盘）
+     */
+    private fun settledSteps(steps: List<AgentStep>, failed: Boolean): List<AgentStep>? {
+        if (steps.none { it.state == AgentStep.State.RUNNING }) return null
+        return steps.map {
+            if (it.state != AgentStep.State.RUNNING) it
+            else it.copy(state = if (failed) AgentStep.State.FAILED else AgentStep.State.OK)
+        }
+    }
+
+    /** 同 key 覆盖（[AgentStep] 的覆盖约定：同 key 的后发步骤替换先前步骤） */
+    private fun mergeStep(msg: ChatMsg, step: AgentStep): ChatMsg {
+        val pos = msg.trace.indexOfFirst { it.key == step.key }
+        val merged = if (pos >= 0) msg.trace.toMutableList().also { it[pos] = step } else msg.trace + step
+        return msg.copy(trace = merged)
+    }
+
+    /**
+     * 作废本轮的过程锚点（换会话 / 清空 / 删除会话时调用）。
+     *
+     * 为什么只清锚点、不做"结清残留"：这三个调用点后面**紧跟** `messages.clear()`，
+     * 被结清的那条消息马上就没了，结清它没有任何可观察效果。
+     * 真正需要的是**别留着旧锚点** —— 新会话消息 id 从 `resetIdCounter` 重新开始，
+     * 一旦撞上旧锚点的 id，[traceAnchorIndex] 就会把新会话里某条同 id 的消息
+     * 误认成"本轮过程消息"，让在途的那一轮把过程写进别人的气泡。
+     */
+    private fun forgetTraceAnchor() {
+        traceAnchorId = 0L
+    }
+
     @Volatile
     private var appContext: Context? = null
 
@@ -197,6 +254,8 @@ internal object ChatStateHolder {
         sessions.add(0, meta)
         settleOrder()
         loadGen++ // 作废进行中的加载，防止旧结果覆盖空会话
+        // 换会话 = 放弃本轮：旧锚点必须作废（新会话消息 id 重排，撞上就会被误认成本轮过程）
+        forgetTraceAnchor()
         currentSessionId = id
         messages.clear()
         msgIdCounter.set(0L)
@@ -283,6 +342,7 @@ internal object ChatStateHolder {
     fun clear() {
         val ctx = appContext ?: return
         val id = currentSessionId
+        forgetTraceAnchor()
         messages.clear()
         msgIdCounter.set(0L)
         submit("clear session") { ChatHistoryStore.rewrite(sessionFile(ctx, id), emptyList()) }
@@ -293,6 +353,8 @@ internal object ChatStateHolder {
     private fun loadSessionMessages(id: String) {
         val ctx = appContext ?: return
         val gen = ++loadGen
+        // 切会话 = 放弃本轮：旧锚点作废（见 forgetTraceAnchor），再换掉整个列表
+        forgetTraceAnchor()
         messages.clear()
         msgIdCounter.set(0L)
         submit("load session") {
@@ -442,8 +504,45 @@ internal object ChatStateHolder {
     /**
      * 添加一条图片消息：content = 图片说明（caption），[imageUrl] = 远端图片直链。
      * 由 `show_image` 工具调用，必须在主线程调用（Compose 快照线程）。
+     *
+     * ⚠️ **本轮还在进行时就地挂到本轮那条 AI 气泡上，不要另起一条**。
+     *
+     * 理由不是"少一条气泡"这么表面：图片是本轮回答的一部分，另起一条会把它和
+     * 过程 / 正文拆开；更要紧的是[upsertTrace]以前按"末尾"定位目标，新气泡会把后续
+     * 过程步骤从旧气泡上顶走（那条 bug 的根因已在 [upsertTraceOnMain] 用锚点解决，
+     * 这里保持"就地挂"是为了让图片、过程、正文落在同一个气泡里）。
+     *
+     * 落点顺序：① 本轮锚点（[traceAnchorIndex]）→ ② 末尾那条"看起来属于本轮的 AI 气泡"
+     * （非用户/非状态，且**带过程**或**正文还空**）。都不满足说明这是历史回复之外的一次
+     * 独立展示 ⇒ 另起一条（保留旧行为，如"再给我看张图"）。
      */
     fun addImage(isUser: Boolean, imageUrl: String, caption: String): ChatMsg {
+        val anchorAt = if (isUser) -1 else traceAnchorIndex()
+        val idx = if (anchorAt >= 0) {
+            anchorAt
+        } else {
+            val lastIdx = messages.size - 1
+            val last = messages.getOrNull(lastIdx)
+            if (!isUser && last != null && !last.isUser && !last.isStatus &&
+                (last.trace.isNotEmpty() || last.content.isEmpty())
+            ) {
+                lastIdx
+            } else {
+                -1
+            }
+        }
+        if (idx >= 0) {
+            val old = messages[idx]
+            // 正文已有内容（本轮已流出一段）就保留，不拿 caption 覆盖
+            val merged = old.copy(
+                content = old.content.ifEmpty { caption },
+                imageUrl = imageUrl,
+            )
+            messages[idx] = merged
+            persist(merged)
+            touchSession()
+            return merged
+        }
         val id = msgIdCounter.incrementAndGet()
         val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
         val msg = ChatMsg(id, isUser, caption, time, isStatus = false, imageUrl = imageUrl)
@@ -463,50 +562,67 @@ internal object ChatStateHolder {
 
     /**
      * Agent 过程步骤合并（思考 / 工具调用），按 [AgentStep.key] 覆盖。
-     * 合并进**当前这轮** AI 消息（列表末尾那条非用户、非状态消息）的 [ChatMsg.trace]。
      * **不落盘**：过程事件频率高，统一由 [finishTrace] 或 [finalizeTraceReply] 收尾时持久化。
      * 可在任意线程调用（内部自动切主线程，见 [runOnMain]）。
      */
     fun upsertTrace(step: AgentStep) = runOnMain { upsertTraceOnMain(step) }
 
     private fun upsertTraceOnMain(step: AgentStep) {
-        val last = messages.lastOrNull()
-        if (last != null && !last.isUser && !last.isStatus) {
-            val at = messages.size - 1
-            val pos = last.trace.indexOfFirst { it.key == step.key }
-            val merged = if (pos >= 0) {
-                last.trace.toMutableList().also { it[pos] = step }
-            } else {
-                last.trace + step
-            }
-            messages[at] = last.copy(trace = merged)
+        // ① 锚点优先：本轮的过程只认这一条消息 —— 中途插入的图片 / 状态气泡不再把它劈开
+        val at = traceAnchorIndex()
+        if (at >= 0) {
+            messages[at] = mergeStep(messages[at], step)
+            return
+        }
+        // ② 本轮还没有锚点（第一条步骤）：末尾若已经是"本轮的过程占位"就复用它，
+        //    否则新建一条并锚定它
+        val lastIdx = messages.size - 1
+        val last = messages.getOrNull(lastIdx)
+        if (last != null && !last.isUser && !last.isStatus &&
+            (last.trace.isNotEmpty() || last.content.isEmpty())
+        ) {
+            messages[lastIdx] = mergeStep(last, step)
+            traceAnchorId = last.id
             return
         }
         val id = msgIdCounter.incrementAndGet()
         val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
         messages.add(ChatMsg(id, false, "", time, false, trace = listOf(step)))
+        traceAnchorId = id
         trimIfNeeded()
     }
 
     /**
-     * 眼镜语音一轮的回复落地：**合并进本轮那条带「过程」的 AI 消息**，而不是另起一条。
-     * 仅当**末尾那条就是本轮的过程消息**（非用户、非状态、trace 非空）才合并。
+     * 眼镜语音 / 拍照答题一轮的回复落地：**合并进本轮那条带「过程」的 AI 消息**，
+     * 而不是另起一条。落点认 [traceAnchorId] 锚点；锚点缺失时退回旧判据
+     * （末尾那条非用户、非状态、trace 非空的）。
      */
     fun finalizeTraceReply(reply: String, usage: MsgUsage? = null, turn: Int? = null) =
         runOnMain { finalizeTraceReplyOnMain(reply, usage, turn) }
 
     private fun finalizeTraceReplyOnMain(reply: String, usage: MsgUsage?, turn: Int?) {
-        val last = messages.lastOrNull()
-        if (last != null && !last.isUser && !last.isStatus && last.trace.isNotEmpty()) {
-            val merged = last.copy(
+        val anchorAt = traceAnchorIndex()
+        val lastIdx = messages.size - 1
+        val at = if (anchorAt >= 0) {
+            anchorAt
+        } else if (lastIdx >= 0) {
+            val last = messages[lastIdx]
+            // ⚠️ 只认"末尾那条"，**不要**整表倒序找"最近一条带过程的" —— 那会捞到上一轮的
+            //    回复，把这一轮的答案写进历史消息里（用户改一条、动的是别的）。
+            if (!last.isUser && !last.isStatus && last.trace.isNotEmpty()) lastIdx else -1
+        } else {
+            -1
+        }
+        if (at >= 0) {
+            val old = messages[at]
+            val merged = old.copy(
                 content = reply,
-                usage = usage ?: last.usage,
-                turn = turn ?: last.turn,
-                trace = last.trace.map {
-                    if (it.state == AgentStep.State.RUNNING) it.copy(state = AgentStep.State.OK) else it
-                },
+                usage = usage ?: old.usage,
+                turn = turn ?: old.turn,
+                // 正常收尾：残留的 RUNNING 视为已完成（不知道那步失败没，标 FAILED 等于编造错误）
+                trace = settledSteps(old.trace, failed = false) ?: old.trace,
             )
-            messages[messages.size - 1] = merged
+            messages[at] = merged
             persist(merged)
             touchSession()
             return
@@ -522,27 +638,30 @@ internal object ChatStateHolder {
     }
 
     /**
-     * 收尾本轮过程：把仍处于 [AgentStep.State.RUNNING] 的步骤置为终态并落盘。
+     * 收尾本轮过程：把**本轮过程消息**里仍处于 [AgentStep.State.RUNNING] 的步骤置为终态并落盘。
      *
-     * @param failed true = 本轮整体失败（失败气泡场景），残留步骤标 FAILED；false = 正常收尾标 OK
+     * @param failed true = 本轮整体失败/被打断（失败气泡场景），残留步骤标 FAILED；false = 正常收尾标 OK
      */
     fun finishTrace(failed: Boolean = false) = runOnMain { finishTraceOnMain(failed) }
 
     private fun finishTraceOnMain(failed: Boolean) {
-        for (i in messages.size - 1 downTo 0) {
-            val m = messages[i]
-            if (m.isUser || m.isStatus) continue
-            if (m.trace.none { it.state == AgentStep.State.RUNNING }) return
-            val updated = m.copy(
-                trace = m.trace.map {
-                    if (it.state != AgentStep.State.RUNNING) it
-                    else it.copy(state = if (failed) AgentStep.State.FAILED else AgentStep.State.OK)
-                }
-            )
-            messages[i] = updated
-            persist(updated)
-            return
+        // 只结清**本轮锚定的那一条**消息（[traceAnchorId]）。一轮的过程只落在一条消息上
+        // （由 [upsertTraceOnMain] 的锚点保证），所以"这一条"就是"本轮全部过程"。
+        //
+        // 为什么刻意**不**扫全表、见到 RUNNING 就统统标 OK：那是拿兜底盖住症状 —— 它会把
+        // "这里为什么会有残留"一起抹掉。历史消息里若真有残留，它应该被看见、被查，
+        // 而不是被顺手改成绿色的。锚点制让"残留"在结构上不再产生，收尾就不需要兜底。
+        val at = traceAnchorIndex()
+        if (at >= 0) {
+            val old = messages[at]
+            settledSteps(old.trace, failed)?.let {
+                val updated = old.copy(trace = it)
+                messages[at] = updated
+                persist(updated)
+            }
         }
+        // 本轮到此结束：锚点失效，下一轮的过程必须落到它自己那条消息上
+        traceAnchorId = 0L
     }
 
     /**
@@ -562,10 +681,22 @@ internal object ChatStateHolder {
     }
 
     /**
-     * 流式结束（或失败兜底）后，用完整回复修正最后一条 AI 消息内容并落盘。
-     * 若没有 AI 消息则直接新增（兜底路径，如流式未触发直接 onReply）。
+     * 流式结束（或失败兜底）后，用完整回复修正**本轮那条 AI 消息**内容并落盘。
+     * 锚点优先（提问/回复/过程必须落在同一条）；锚点缺失时退回"从末尾找第一条非用户非状态
+     * 消息" —— 该判据会跳过末尾的状态气泡，所以仍是安全的。
+     * 一条 AI 消息都没有时直接新增（兜底路径，如流式未触发直接 onReply）。
      */
     fun finalizeLastAi(fullContent: String, usage: MsgUsage? = null, turn: Int? = null) {
+        val anchorAt = traceAnchorIndex()
+        if (anchorAt >= 0) {
+            val m = messages[anchorAt]
+            // 已经有了的就别抹掉：新值缺失只说明"这次没拿到"，不代表之前那条是错的
+            val updated = m.copy(content = fullContent, usage = usage ?: m.usage, turn = turn ?: m.turn)
+            messages[anchorAt] = updated
+            persist(updated)
+            touchSession()
+            return
+        }
         for (i in messages.size - 1 downTo 0) {
             val m = messages[i]
             if (!m.isUser && !m.isStatus) {

@@ -16,7 +16,8 @@ import org.junit.Test
  * 审批接缝（[ApprovalGate] / [ToolGuards] / [PageScope]）回归测试。
  *
  * 改造前这套判定长在 `ToolPolicy` 里，测试只有 6 条、且必须借"不存在的工具名"来触发确认闸门
- * （因为**没有任何真实工具标 EXTERNAL_SIDE_EFFECT**）。现在判定被拆成可独立求值的 guard，
+ * （当时**没有任何真实工具标 EXTERNAL_SIDE_EFFECT**；2026-09-20 起 `delete_file` 成为首个，
+ * 于是 E3b 可以用真实工具名做确认用例了）。现在判定被拆成可独立求值的 guard，
  * 每条策略可以单独锁住 —— 这正是接缝化想换来的东西。
  *
  * 本文件锁住的四类不变式：
@@ -55,7 +56,9 @@ class ApprovalGateTest {
         name: String = "get_current_time",
         source: ToolSource = ToolSource.CONVERSATION,
         localOnly: Boolean = false,
-    ): ToolCallContext = ToolCallContext(source, name, JSONObject(), localOnly)
+        unattended: Boolean = false,
+        enabled: Boolean? = null,
+    ): ToolCallContext = ToolCallContext(source, name, JSONObject(), localOnly, unattended, enabled)
 
     @Test
     fun `A1 任一 Deny 立即短路 后续 guard 不再求值`() {
@@ -130,11 +133,16 @@ class ApprovalGateTest {
         PseudoTools.names().forEach { name ->
             assertNull(
                 "伪工具 $name 不在 toolList 里，但绝不能因此被判未知 —— " +
-                    "否则它一接上闸门就会被拒，load_skill / update_plan / manage_memory 全线失效",
+                    "否则它一接上闸门就会被拒，load_skill / update_plan / manage_memory / " +
+                    "install_skill / list_skills / delete_skill 全线失效",
                 unknownGuard.evaluate(ctxOf(name)),
             )
         }
-        assertEquals("伪工具应恰为 4 个（新增/删除都要同步这里）", 4, PseudoTools.names().size)
+        assertEquals(
+            "伪工具应恰为 7 个（4 个原有 + 2026-09-20 新增的技能管理三件套；新增/删除都要同步这里）",
+            7,
+            PseudoTools.names().size,
+        )
     }
 
     @Test
@@ -257,12 +265,21 @@ class ApprovalGateTest {
     private val riskGuard = RiskApprovalGuard()
 
     @Test
-    fun `E1 无工具标为外部副作用（确认闸门当前只服务未知名）`() {
-        // ★ 这条不是"设计如此"，而是**现状事实**：真实工具全部标的是 READ_ONLY / LOCAL_SIDE_EFFECT。
-        // 一旦有人把某工具标成 EXTERNAL_SIDE_EFFECT，E3 会自动为它生效，
-        // 而这条断言会失败 —— 那正是提醒"新增了走确认闸门的工具，请同步回归用例"的信号。
-        val external = ToolRegistry.toolList.filter { ToolRegistry.riskOfOrNull(it.name) == ToolRisk.EXTERNAL_SIDE_EFFECT }
-        assertEquals("若此项不为空，说明有工具启用了确认闸门，请补对应的端到端用例", emptyList<String>(), external.map { it.name })
+    fun `E1 走确认闸门的内置工具恰为 delete_file`() {
+        // ★ 2026-09-20 起这条断言不再是"空集"。文件工作区把**删除**标成了 EXTERNAL_SIDE_EFFECT：
+        // 删除不可恢复，用户明确要求"删除走确认闸门"（对照 edit_text_file / move_file 只是
+        // LOCAL_SIDE_EFFECT，直接执行不打扰）。所以本断言的职责从"守住闸门空转"变成
+        // "守住闸门只服务被显式选中的那一个" —— 任何人新增 EXTERNAL_SIDE_EFFECT 工具，
+        // 都必须回到这里同步，并补一条像 E3b 那样的确认用例。
+        val external = ToolRegistry.toolList
+            .filter { ToolRegistry.riskOfOrNull(it.name) == ToolRisk.EXTERNAL_SIDE_EFFECT }
+            .map { it.name }
+            .sorted()
+        assertEquals(
+            "若此项变化，说明确认闸门的服务对象变了，请同步回归用例（见 E3b）",
+            listOf("delete_file"),
+            external,
+        )
     }
 
     @Test
@@ -270,6 +287,9 @@ class ApprovalGateTest {
         assertNull(riskGuard.evaluate(ctxOf("get_current_time")))
         assertNull(riskGuard.evaluate(ctxOf("call_phone")))
         assertNull(riskGuard.evaluate(ctxOf("install_aiui_project")))
+        // 文件工作区里只有「删除」走确认；改/移是同机就地操作，不该弹确认框打扰用户
+        assertNull(riskGuard.evaluate(ctxOf("edit_text_file")))
+        assertNull(riskGuard.evaluate(ctxOf("move_file")))
     }
 
     @Test
@@ -279,6 +299,25 @@ class ApprovalGateTest {
         assertTrue(r is ToolDecision.Ask)
         assertEquals(DecisionOrigin.RISK_CONFIRMATION, (r as ToolDecision.Ask).origin)
         assertTrue("摘要必须非空（否则眼镜端会弹一个空白确认框）", r.prompt.isNotBlank())
+    }
+
+    @Test
+    fun `E3b delete_file 的确认摘要读出被删对象`() {
+        // 回归 2026-09-20：delete_file 是当前**唯一**走确认闸门的内置工具（见 E1）。
+        // 它支持三种语义（删整个项目 / 删项目内文件 / 删下载目录文件），摘要必须把它们区分开，
+        // 否则用户在眼镜上只会看到一句"删除文件"，根本不知道要删掉什么。
+        fun ask(args: JSONObject): String =
+            (riskGuard.evaluate(ToolCallContext(ToolSource.CONVERSATION, "delete_file", args, false))
+                as ToolDecision.Ask).prompt
+
+        val wholeProject = ask(JSONObject().put("project", "aiui-demo"))
+        assertTrue("删整个项目要写明项目名，实际：$wholeProject", wholeProject.contains("aiui-demo"))
+
+        val insideProject = ask(JSONObject().put("project", "aiui-demo").put("path", "pages/index/index.ink"))
+        assertTrue("删项目内文件要写出路径，实际：$insideProject", insideProject.contains("index.ink"))
+
+        val fromDownloads = ask(JSONObject().put("scope", "downloads").put("path", "note.txt"))
+        assertTrue("删下载目录文件要写出路径，实际：$fromDownloads", fromDownloads.contains("note.txt"))
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -435,5 +474,145 @@ class ApprovalGateTest {
     @Test
     fun `H5 已知工具在开放域下通过`() {
         assertNull(PageScope.rejectReason("get_current_time", PageScope.pageVisibleTools(), PageScope::domainOf))
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // I. ToolEnabledGuard —— 用户开关的**执行侧**落点
+    // ════════════════════════════════════════════════════════════════════
+
+    private val enabledGuard = ToolEnabledGuard()
+
+    @Test
+    fun `I1 开关关掉的工具被拒绝`() {
+        val r = enabledGuard.evaluate(ctxOf("show_image", enabled = false))
+        assertTrue(r is ToolDecision.Deny)
+        assertEquals(DecisionOrigin.TOOL_DISABLED, (r as ToolDecision.Deny).origin)
+        assertTrue("文案要指出哪个工具被关", r.reason.contains("show_image"))
+        assertTrue("文案要告诉用户去哪打开（否则只看到被拒，无从下手）", r.reason.contains("设置"))
+    }
+
+    @Test
+    fun `I2 开关开着放行 开关状态未知不表态`() {
+        assertNull(enabledGuard.evaluate(ctxOf("show_image", enabled = true)))
+        assertNull(
+            "没带开关状态（单测/无 Context 的调用路径）必须不表态 —— " +
+                "把 null 读成「已关闭」会让整条判定链在没有 Context 时全线拒绝",
+            enabledGuard.evaluate(ctxOf("show_image")),
+        )
+    }
+
+    @Test
+    fun `I3 开关闸门排在未知工具之后`() {
+        // 顺序反了会出现「被关掉的伪工具报 unknown tool」，排查会指向完全错误的地方；
+        // 而且限流必须排在纯判定之后（被拒的调用不该白扣配额）
+        val order = ToolGuards.default().map { it.id }
+        assertTrue("未知工具必须先于开关闸门", order.indexOf("unknown-tool") < order.indexOf("tool-disabled"))
+        assertTrue("开关闸门必须早于限流", order.indexOf("tool-disabled") < order.indexOf("rate-limit"))
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // J. UnattendedScopeGuard —— 无人值守的执行侧白名单
+    // ════════════════════════════════════════════════════════════════════
+
+    private val unattendedGuard = UnattendedScopeGuard()
+
+    @Test
+    fun `J1 无人值守下名单外的工具被拒绝`() {
+        // 装配侧（schemasUnattended）压根不下发这些；本 guard 防的是"模型凭历史复述出工具名"
+        listOf("call_phone", "install_aiui_project", ToolRegistry.TOOL_CODE_FILE, "manage_timer").forEach { name ->
+            val r = unattendedGuard.evaluate(ctxOf(name, unattended = true))
+            assertTrue("无人监管时 $name 绝不能被跑", r is ToolDecision.Deny)
+            assertEquals(DecisionOrigin.UNATTENDED_SCOPE, (r as ToolDecision.Deny).origin)
+            assertTrue("文案要说明为什么不让跑", r.reason.contains("本人"))
+        }
+    }
+
+    @Test
+    fun `J2 无人值守下名单内的工具照常放行`() {
+        assertNull("只读查询类必须可用", unattendedGuard.evaluate(ctxOf("get_current_time", unattended = true)))
+        assertNull("到点放歌是唯一被放行的副作用工具", unattendedGuard.evaluate(ctxOf("control_music", unattended = true)))
+    }
+
+    @Test
+    fun `J3 非无人值守时一条都不拒`() {
+        listOf("call_phone", "install_aiui_project", "manage_timer").forEach { name ->
+            assertNull("$name 在正常对话里必须放行", unattendedGuard.evaluate(ctxOf(name)))
+        }
+    }
+
+    @Test
+    fun `J4 只对对话路径生效（页面与头动规则没有无人值守这个状态）`() {
+        assertEquals(setOf(ToolSource.CONVERSATION), unattendedGuard.sources)
+        val pageCtx = ctxOf("call_phone", source = ToolSource.AIUI_PAGE, unattended = true)
+        assertEquals(
+            "来源过滤在 compose 层：页面路径不该被这条拒绝",
+            ToolDecision.Allow,
+            ApprovalGate.compose(pageCtx, listOf(unattendedGuard)),
+        )
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // K. fail-closed 例外 —— 第三方远端工具问不到人必须拒绝
+    // ════════════════════════════════════════════════════════════════════
+
+    private val mcpAsk = ToolDecision.Ask(DecisionOrigin.RISK_CONFIRMATION, "是否调用 MCP 工具 x", failClosed = true)
+
+    @Test
+    fun `K1 MCP 工具无确认通道时拒绝而不是降级放行`() {
+        ApprovalGate.confirmationResolver = null
+        val r = ApprovalGate.resolveAsk(mcpAsk, "mcp__srv__danger")
+        assertTrue("第三方远端副作用绝不能静默放行", r is ToolDecision.Deny)
+        assertEquals(DecisionOrigin.RISK_CONFIRMATION, (r as ToolDecision.Deny).origin)
+        assertTrue("要给出出路之一：连眼镜确认", r.reason.contains("眼镜"))
+        assertTrue("要给出出路之二：设置页标信任", r.reason.contains("信任"))
+    }
+
+    @Test
+    fun `K2 MCP 工具超时未响应同样拒绝（超时≠用户拒绝，但对 MCP 两种都不放行）`() {
+        ApprovalGate.confirmationResolver = FakeResolver(available = true, confirmed = false, cancelled = false)
+        assertTrue(ApprovalGate.resolveAsk(mcpAsk, "mcp__srv__danger") is ToolDecision.Deny)
+        ApprovalGate.confirmationResolver = FakeResolver(available = false, confirmed = false, cancelled = true)
+        assertTrue(ApprovalGate.resolveAsk(mcpAsk, "mcp__srv__danger") is ToolDecision.Deny)
+    }
+
+    @Test
+    fun `K3 MCP 工具用户确认后放行`() {
+        ApprovalGate.confirmationResolver = FakeResolver(available = true, confirmed = true)
+        assertEquals(ToolDecision.Allow, ApprovalGate.resolveAsk(mcpAsk, "mcp__srv__danger"))
+    }
+
+    @Test
+    fun `K4 内置工具的 Ask 一律不 fail-closed（fail-open 语义不变）`() {
+        // fail-open 的前提是工具侧自带"未确认就降级为无副作用动作"的保证
+        // （call_phone 只开拨号盘、装机只到安装确认页）。内置工具都满足，MCP 无法保证。
+        listOf("delete_file", "hallucinated_tool_xyz").forEach { name ->
+            val r = riskGuard.evaluate(ctxOf(name))
+            assertTrue(r is ToolDecision.Ask)
+            assertFalse("$name 不是第三方远端工具，不得改成 fail-closed", (r as ToolDecision.Ask).failClosed)
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // L. 重试判定与装配投影的数据源
+    // ════════════════════════════════════════════════════════════════════
+
+    @Test
+    fun `L1 伪工具的副作用子集（瞬时失败不可自动重试）`() {
+        val side = PseudoTools.sideEffectNames()
+        assertTrue("写记忆不可自动重放", "manage_memory" in side)
+        assertFalse("读技能原文可安全重试", "load_skill" in side)
+        assertFalse("回填计划文本可安全重试", "update_plan" in side)
+        assertFalse("只读清单可安全重试", "list_skills" in side)
+    }
+
+    @Test
+    fun `L2 装配投影只认合法 schema 且不炸`() {
+        val meta = ToolRegistry.toolList.first { it.name == "get_current_time" }
+        assertEquals(
+            "提示词闸门的数据源：必须与真正下发的 schema 同名同集合",
+            setOf("get_current_time"),
+            ToolRegistry.namesOf(listOf(ToolRegistry.buildSchema(meta))),
+        )
+        assertEquals("畸形 schema 不得让装配投影抛异常", emptySet<String>(), ToolRegistry.namesOf(listOf(JSONObject())))
     }
 }

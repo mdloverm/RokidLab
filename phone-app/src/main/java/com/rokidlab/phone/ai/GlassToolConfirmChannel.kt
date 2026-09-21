@@ -106,6 +106,7 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
     private val pending = ConcurrentHashMap<String, ConfirmWaiter>()
 
     private class ConfirmWaiter {
+        val createdAt = System.currentTimeMillis()
         val latch = CountDownLatch(1)
         @Volatile var allowed = false
     }
@@ -175,6 +176,26 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
         lastCancelled = !allowed   // 眼镜端回执「no」= 用户显式取消
         w.latch.countDown()
         Log.i(TAG, "confirm result (id=$id allowed=$allowed)")
+    }
+
+    /**
+     * 是否有等待中的眼镜端确认（v2c 审批手势的生效条件）：
+     * MotionRuleEngine 只在「审批弹窗确实在等用户答复」期间才把手势映射为确认/取消，
+     * 平时的点头摇头绝不触碰审批 —— 防误触的边界就在这一查。
+     */
+    fun approvalPending(): Boolean = pending.isNotEmpty()
+
+    /**
+     * v2c 审批手势解除：MotionRuleEngine 检测到点头（=允许）/摇头（=取消）时调用。
+     * 只解除**最早**挂起的确认（正常时刻至多一个；并发多个时按排队先后）。
+     *
+     * @return true = 成功解除（有 pending 且已按手势回执）；false = 无等待中的确认，手势无效果
+     */
+    fun resolveByMotion(allowed: Boolean): Boolean {
+        val earliest = pending.entries.minByOrNull { it.value.createdAt }?.key ?: return false
+        Log.i(TAG, "resolve by motion (allowed=$allowed id=$earliest)")
+        onResult(earliest, allowed)
+        return true
     }
 
     /** 清空全部等待中的确认（连接断开 / Session.cleanup 时调用，避免线程挂满 35s）。 */

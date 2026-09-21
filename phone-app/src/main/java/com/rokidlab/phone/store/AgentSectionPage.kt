@@ -70,6 +70,8 @@ internal fun AgentSectionPage(
         mutableIntStateOf(com.rokidlab.phone.ai.LongTermMemoryManager.count(ctx))
     }
     var showClearConfirm by remember { mutableStateOf(false) }
+    // 点「清空」时现算的作用域（只用于确认框文案）——0 表示本来就没有记忆，那种情况不弹框
+    var clearScope by remember { mutableIntStateOf(0) }
     var showLongClearConfirm by remember { mutableStateOf(false) }
     var showMemoryManage by remember { mutableStateOf(false) }
     Dialog(
@@ -152,7 +154,16 @@ internal fun AgentSectionPage(
             Spacer(Modifier.height(20.dp))
             // 清空会话记忆按钮
             Button(
-                onClick = { showClearConfirm = true },
+                onClick = {
+                    // 先看有没有东西可清：一条记忆都没有时弹确认框是纯噪音，直接给一句反馈
+                    val n = com.rokidlab.phone.ai.AgentSessionManager.memorySessionCount(ctx)
+                    if (n <= 0) {
+                        Toast.makeText(ctx, ctx.getString(R.string.agent_memory_none), Toast.LENGTH_SHORT).show()
+                    } else {
+                        clearScope = n
+                        showClearConfirm = true
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -275,10 +286,10 @@ internal fun AgentSectionPage(
         AlertDialog(
             onDismissRequest = { showClearConfirm = false },
             title = { Text(stringResource(R.string.agent_memory_clear), color = BrewTextBright, fontWeight = FontWeight.Bold) },
-            text = { Text(stringResource(R.string.agent_memory_clear_confirm), color = BrewMuted, fontSize = 14.sp) },
+            text = { Text(stringResource(R.string.agent_memory_clear_confirm, clearScope), color = BrewMuted, fontSize = 14.sp) },
             confirmButton = {
                 TextButton(onClick = {
-                    com.rokidlab.phone.ai.AgentSessionManager.clear()
+                    com.rokidlab.phone.ai.AgentSessionManager.clearAll(ctx)
                     showClearConfirm = false
                     Toast.makeText(ctx, ctx.getString(R.string.agent_memory_cleared), Toast.LENGTH_SHORT).show()
                 }) {

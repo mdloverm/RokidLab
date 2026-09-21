@@ -1,6 +1,7 @@
 package com.rokidlab.phone.ai.approval
 
 import android.util.Log
+import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.ai.ToolRisk
 import com.rokidlab.phone.ai.ToolRiskMap
 import org.json.JSONObject
@@ -83,6 +84,9 @@ object ApprovalGate {
      *
      * @param source    调用来源（决定限流分桶与部分策略是否生效）
      * @param localOnly 乐奇聊天「本机模式」（不经眼镜）；仅 [ToolSource.CONVERSATION] 有意义
+     * @param unattended 定时自主任务（无人值守）：只放行 [ToolRegistry.unattendedToolNames]；
+     *   仅 [ToolSource.CONVERSATION] 有意义
+     * @param context   读工具开关（[ToolRegistry.isEnabled]）用；为 null 则开关闸门不表态
      * @return 只会是 [ToolDecision.Allow] 或 [ToolDecision.Deny]（Ask 已在内部解析）
      */
     fun preExecute(
@@ -90,8 +94,19 @@ object ApprovalGate {
         name: String,
         args: JSONObject,
         localOnly: Boolean = false,
+        unattended: Boolean = false,
+        context: android.content.Context? = null,
     ): ToolDecision {
-        val ctx = ToolCallContext(source = source, name = name, args = args, localOnly = localOnly)
+        val ctx = ToolCallContext(
+            source = source,
+            name = name,
+            args = args,
+            localOnly = localOnly,
+            unattended = unattended,
+            // 开关状态在这里结算（判定链本身只吃纯数据）：context 为 null 时保持 null，
+            // 于是开关闸门不表态 —— 与旧行为一致
+            enabled = context?.let { ToolRegistry.isEnabled(it, name) },
+        )
         val composed = compose(ctx)
         val resolved = if (composed is ToolDecision.Ask) resolveAsk(composed, name) else composed
         audit(ctx, resolved)
@@ -148,11 +163,16 @@ object ApprovalGate {
      * "取消"和"超时"在眼镜端都是 `allowed=false`，**只能靠这个标志区分**。
      * 早期实现不区分，导致"用户点错一次 / 眼镜没响应"被当成拒绝，
      * 用户侧看到「你已在眼镜上取消」但自己根本没操作。
+     *
+     * ⚠️ 例外：[ToolDecision.Ask.failClosed] 为 true（第三方远端 MCP 工具）时**不适用上表** ——
+     * "问不到"（无通道/超时）也会拒绝。理由：fail-open 的前提是工具侧自己有
+     * "未获确认时降级为无副作用动作"的保证，MCP 工具由第三方 server 实现，没有这个保证。
      */
     internal fun resolveAsk(ask: ToolDecision.Ask, toolName: String): ToolDecision {
         val channel = confirmationResolver
         if (channel == null || !channel.isAvailable()) {
-            return ToolDecision.Allow
+            // 问不到人：默认降级放行；第三方远端工具则拒绝（理由见上）
+            return if (ask.failClosed) denyUnconfirmed(toolName, "当前无法向你确认") else ToolDecision.Allow
         }
         val confirmed = runCatching { channel.confirm(toolName, ask.prompt) }.getOrDefault(false)
         if (confirmed) return ToolDecision.Allow
@@ -162,8 +182,22 @@ object ApprovalGate {
                 "你已在眼镜上取消，操作未执行：'$toolName'",
             )
         }
-        return ToolDecision.Allow
+        // 超时/未响应：默认放行；第三方远端工具则拒绝
+        return if (ask.failClosed) denyUnconfirmed(toolName, "你没有确认") else ToolDecision.Allow
     }
+
+    /**
+     * [ToolDecision.Ask.failClosed] 的拒绝文案。
+     *
+     * 必须给出**可操作的出路**：否则用户只会看到"AI 说被安全策略挡住"而不知道下一步做什么。
+     * 两条出路对应两个真实开关 —— 连上眼镜（走确认）或把 server 标为信任（免逐次确认，
+     * 见 `McpServersPage` 的「信任此服务器」）。
+     */
+    private fun denyUnconfirmed(toolName: String, why: String): ToolDecision = ToolDecision.Deny(
+        DecisionOrigin.RISK_CONFIRMATION,
+        "$why，第三方工具 '$toolName' 未执行。它来自外部服务器（无法保证未确认时不产生副作用），" +
+            "请连接眼镜后重试以确认本次调用，或在「设置 → MCP 服务器」里把该服务器标为信任",
+    )
 
     // ════════════════════════════════════════════════════════════════════
     // 风险表的另外两个用途（同一份声明的三个消费者）

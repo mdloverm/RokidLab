@@ -49,6 +49,8 @@ class KeyButtonService : Service() {
     private lateinit var aiuiHost: AiuiHostController
     private lateinit var configHandlers: ConfigHandlers
     private lateinit var cxrBridge: CxrBridgeCoordinator
+    /** IMU 头动采集（v1 查询层数据源；internal：CxrBridgeCoordinator 收到控制指令后直达） */
+    internal lateinit var headImu: HeadImuService
 
     override fun onCreate() {
         super.onCreate()
@@ -61,6 +63,7 @@ class KeyButtonService : Service() {
         ipReporter = GlassesIpReporter(this, core)
         aiuiHost = AiuiHostController(this, core)
         configHandlers = ConfigHandlers(this, core)
+        headImu = HeadImuService(this, core)
         cxrBridge = CxrBridgeCoordinator(this, core, aiTakeover, keyRoutes, toolConfirm, overlays, ipReporter, aiuiHost, configHandlers)
         // 装配连续对话开关关闭时撤销回调
         configHandlers.continueDialogCanceller = { aiTakeover.cancelPendingContinueDialog() }
@@ -126,6 +129,7 @@ class KeyButtonService : Service() {
         keyRoutes.releaseQuizWakeLocks()
         overlays.release()
         ipReporter.unregister()
+        headImu.onDestroy()
         cxrBridge.onDestroy()
         // 崩溃/异常销毁自愈：经 AlarmManager 排一次补拉（**不是** Handler.postDelayed）。
         // START_STICKY 在 startRequested=false（服务被 stop）时不生效，需要主动重启；

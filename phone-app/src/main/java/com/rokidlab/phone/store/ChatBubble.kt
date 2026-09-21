@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -50,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rokidlab.phone.R
 import com.rokidlab.phone.ai.AgentStep
+import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.design.BrewAmber
 import com.rokidlab.phone.design.BrewBg
 import com.rokidlab.phone.design.BrewBorder
@@ -82,7 +84,8 @@ internal fun ChatBubble(
     /**
      * 「过程」区块**默认**是否展开（设置页里的「展开过程」，默认 true）。
      *
-     * 它只是**初始值**：用户点标题手动折叠/展开后以本人的操作为准（见 [TraceBlock] 的 remember）。
+     * 语义＝**默认值**，不是"初始值快照"：用户在这张卡标题上点过之后以他的手动操作为准，
+     * 没动过的卡片则实时跟随本值（两层状态见 [TraceBlock]）—— 否则设置页改了聊天窗口不响应。
      */
     expandTrace: Boolean = true,
 ) {
@@ -192,16 +195,23 @@ private const val MAX_VISIBLE_STEPS = 6
  *
  * 默认展开：用户提问的正是"到底调了什么工具"，默认收起等于没解决。可点击标题折叠。
  *
- * @param msgId 用作 remember 的 key：不同消息各自记住自己的展开状态
+ * 展开状态分**两层**，各管各的（这正是"设置页开关"与"卡片箭头"不再打架的机制）：
+ *  - **默认层** `expandByDefault`（设置页「展开过程」）：每帧实时读，改了就跟着变；
+ *  - **手动层** `manual`（用户在这张卡上点过箭头）：非空即优先，覆盖默认层。
+ *  ⇒ 改设置页时**没手动动过的卡片**会一起变；他单独折过的那张保持原样，不会被弹开。
+ *
+ * @param msgId 用作 remember 的 key：不同消息各自记住自己的**手动**操作
  * @param steps 该轮全部过程步骤（按发生顺序；同 key 的更新已在 [com.rokidlab.phone.store.ChatStateHolder.upsertTrace] 覆盖合并）
  * @param usage 本轮 token 成本；**展开时**在区块右下角显示（收起时只有一行标题，塞进去会把标题挤乱）
- * @param expandByDefault 初始展开状态（来自设置页「展开过程」）。
- *   ⚠️ 只当**初始值**：之后以用户手动点的为准 —— 所以 remember 的 key 是 `msgId` 而不是它，
- *   否则用户在设置里一改，所有卡片会被一起重置（手动折叠的那张会莫名弹开）。
+ * @param expandByDefault **默认**展开状态（来自设置页「展开过程」）。
+ *   ⚠️ 它**不是"初始值快照"**：快照会让用户在设置里改完之后聊天窗口毫无反应 ——
+ *   设置页说"展开"、卡片还是折着，两个控件各说各的（用户报的冲突）。
  */
 @Composable
 private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, expandByDefault: Boolean) {
-    var expanded by remember(msgId) { mutableStateOf(expandByDefault) }
+    // null = 用户没单独动过这张卡 ⇒ 跟随设置页默认值；非 null = 用户点过 ⇒ 以他为准
+    var manual by remember(msgId) { mutableStateOf<Boolean?>(null) }
+    val expanded = manual ?: expandByDefault
     val running = steps.any { it.state == AgentStep.State.RUNNING }
 
     Column(
@@ -216,7 +226,7 @@ private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, ex
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { expanded = !expanded },
+                .clickable { manual = !expanded },
         ) {
             Icon(
                 imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
@@ -354,10 +364,11 @@ private fun TraceStepRow(step: AgentStep) {
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = if (step.kind == AgentStep.Kind.THINKING) {
-                        Icons.Outlined.Psychology
-                    } else {
-                        Icons.Outlined.Build
+                    imageVector = when (step.kind) {
+                        AgentStep.Kind.THINKING -> Icons.Outlined.Psychology
+                        // 知识库检索：书 —— 一眼区分"模型调了工具"和"App 自己先查了你的文档"
+                        AgentStep.Kind.KNOWLEDGE -> Icons.Outlined.MenuBook
+                        AgentStep.Kind.TOOL -> Icons.Outlined.Build
                     },
                     contentDescription = null,
                     tint = color,
@@ -365,7 +376,7 @@ private fun TraceStepRow(step: AgentStep) {
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    text = step.title.ifBlank { stepLabel(step) },
+                    text = stepText(step),
                     color = BrewText,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
@@ -389,12 +400,45 @@ private fun TraceStepRow(step: AgentStep) {
 }
 
 /**
- * 思考类步骤的文案（工具类步骤的标题就是工具名，不走这里）。
+ * 一步过程的标题。
+ *
+ * - **工具行**：把 `AgentStep.title`（模型发来的 wire name）换成**工具设置页里同一套名字** ——
+ *   `get_current_time` → "当前时间"、MCP 工具 → "服务器名 · 工具名"。映射只在
+ *   [ToolRegistry.displayNameOf] 一处做；查不到（伪工具、已被删除的 MCP server 的历史消息）
+ *   **自动回退成原名**，不会变成空串。
+ * - **思考行**：`title` 按约定是空串，文案由 [stepLabel] 本地化。
+ *
+ * ⚠️ 这是**纯展示层替换**：落盘/事件流/日志里仍是 wire name，所以旧历史消息也会一起变成友好名
+ * （不需要数据迁移）。代价是界面名字与日志名字不一致 —— 要拿原始标识符排查请走
+ * `SessionTraceDialog`。
+ */
+@Composable
+private fun stepText(step: AgentStep): String {
+    val raw = step.title
+    if (step.kind == AgentStep.Kind.THINKING || raw.isBlank()) return stepLabel(step)
+    return ToolRegistry.displayNameOf(raw, LocalContext.current)
+}
+
+/**
+ * 一步过程的文案（工具类步骤的标题就是工具名，不走这里）。
  *
  * 服务层只发语义（kind + state），文案在这里本地化 —— 见 [AgentStep.title] 的说明。
+ * - 思考：`RUNNING`「正在思考」/ `OK`「思考完毕」
+ * - 知识库检索：`RUNNING`「正在检索知识库」/ `OK`「已检索知识库」
  */
 @Composable
 private fun stepLabel(step: AgentStep): String = when {
+    // 知识库检索（自动 RAG）：标题恒为空，文案在这里本地化。
+    // 两态刻意都只是"检索了/在检索"，**不**在标题里说"命中/没命中" ——
+    // 命中与否是数据，放在 detail 里（用户核对来源用），标题只描述动作。
+    step.kind == AgentStep.Kind.KNOWLEDGE && step.state == AgentStep.State.RUNNING ->
+        stringResource(R.string.chat_trace_kb_running)
+
+    step.kind == AgentStep.Kind.KNOWLEDGE -> stringResource(R.string.chat_trace_kb_done)
+
+    // 防御性兜底，不是常规路径：工具步骤的 title 按约定恒非空（见 AgentStep.tool），
+    // 所以正常永远走不到这一行。之所以保留而不是删掉 —— 一旦服务层漏填了工具名，
+    // 删掉它会掉进下面的思考文案里，工具步骤显示"思考完毕"比显示"执行中…"误导得多。
     step.kind == AgentStep.Kind.TOOL -> stringResource(R.string.chat_trace_tool_running)
     step.state == AgentStep.State.RUNNING -> stringResource(R.string.chat_trace_thinking)
     else -> stringResource(R.string.chat_trace_thought)

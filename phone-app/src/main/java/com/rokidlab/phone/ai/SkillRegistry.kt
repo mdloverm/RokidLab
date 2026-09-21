@@ -45,6 +45,19 @@ object SkillRegistry {
     /** load_skill_section 伪工具名：大技能按章取正文（分片模式的第 2.5 层） */
     const val TOOL_NAME_SECTION = "load_skill_section"
 
+    /**
+     * 技能**管理**伪工具名（对话里直接装/看/删技能）。
+     *
+     * 为什么要有这三个：技能安装原先只有设置页三个入口（手动填写 / 导入文件 / 填 URL），
+     * 用户在对话里说「你把这个技能装上」「我发个链接你装一下」时，模型**只能让用户自己去设置页点**——
+     * 而 `SkillRegistry` 的安装管线早就写好了，差的只是"把它暴露给模型"这一层。
+     *
+     * 风险档见 [com.rokidlab.phone.ai.approval.PseudoTools]：写本地技能目录，属本机副作用，不走眼镜确认。
+     */
+    const val TOOL_INSTALL = "install_skill"
+    const val TOOL_LIST = "list_skills"
+    const val TOOL_DELETE = "delete_skill"
+
     /** 内置官方大技能名（aiui-dev = 官方 SKILL.md + 参考手册 + 本地 lab-runtime.md） */
     const val BUNDLED_SKILL = "aiui-dev"
 
@@ -211,6 +224,26 @@ object SkillRegistry {
         return if (file.isFile) runCatching { file.readText(Charsets.UTF_8) }.getOrNull() else null
     }
 
+    /**
+     * load_skill / load_skill_section 的统一准入：返回 null = 可用，非 null = 拒绝原因。
+     *
+     * ★ 为什么要在**读取侧**再查一次开关：装配侧只把"已启用"的技能写进清单、并在总开关
+     * 关闭时整个不下发技能工具 —— 但模型可以从**历史对话**里复述出一个已被用户关掉的技能名
+     * （用户先在对话里用过它，之后去设置页关掉，历史仍在上下文里）。
+     * 只靠"不下发"挡不住这种调用，开关会形同虚设。
+     */
+    private fun unavailableReason(context: Context, name: String): String? = when {
+        !isEnabled(context) -> "技能功能已在设置里关闭"
+        !isSkillEnabled(context, name) -> "技能「$name」已被关闭（在手机 App 的技能列表里打开后再用）"
+        else -> null
+    }
+
+    /** 可加载的技能名（总开关关掉时为空表，避免把"可用的技能名"这一栏暴露成误导信息） */
+    private fun loadableSkillNames(context: Context): String {
+        if (!isEnabled(context)) return "（技能功能已关闭）"
+        return listSkills(context).filter { it.enabled }.joinToString("、") { it.name }.ifEmpty { "（无）" }
+    }
+
     /** 技能目录内全部 .md 文件名（含 SKILL.md），目录缺失返回空列表 */
     fun listSkillFileNames(context: Context, name: String): List<String> {
         val dir = File(skillsDir(context), name)
@@ -351,10 +384,10 @@ object SkillRegistry {
         }
         val name = args.optString("name").trim()
         if (name.isEmpty()) return "请提供要加载的技能名 name"
+        unavailableReason(context, name)?.let { return "$it。可用的技能：${loadableSkillNames(context)}" }
         val full = loadFullText(context, name)
         if (full == null) {
-            return "未找到技能「$name」，可用的技能名：" +
-                listSkills(context).joinToString("、") { it.name }.ifEmpty { "（无）" }
+            return "未找到技能「$name」，可用的技能名：" + loadableSkillNames(context)
         }
         val doc = SkillMarkdown.parse(full) ?: return "技能「$name」文件损坏（SKILL.md 解析失败）"
         if (doc.body.length <= SkillMarkdown.MAX_INLINE_CHARS) {
@@ -451,6 +484,8 @@ object SkillRegistry {
         if (name.isEmpty() || section.isEmpty()) {
             return "请提供技能名 name 与章节 section（序号或标题）"
         }
+        // 与 load_skill 同一道准入：关掉的技能不该还能被"取章节"读到正文
+        unavailableReason(context, name)?.let { return "$it。可用的技能：${loadableSkillNames(context)}" }
         // 取正文文本：file 参数显式指定时读技能目录内参考文件，否则读主文件 SKILL.md
         val (fileName, full) = if (fileArg.isNotEmpty()) {
             val safe = safeFileName(fileArg)
@@ -494,6 +529,9 @@ object SkillRegistry {
     fun statusText(name: String): String = when (name) {
         TOOL_NAME -> "正在加载技能…"
         TOOL_NAME_SECTION -> "正在读取技能章节…"
+        TOOL_INSTALL -> "正在安装技能…"
+        TOOL_LIST -> "正在查看技能清单…"
+        TOOL_DELETE -> "正在删除技能…"
         else -> "正在执行 $name…"
     }
 
@@ -667,6 +705,201 @@ object SkillRegistry {
             return listOf(InstallResult(null, false, msg))
         }
         return results
+    }
+
+    // ═══════════════════════════════════════════════
+    // 技能管理伪工具（install / list / delete）
+    //
+    // 三个工具把设置页那套安装管线原样接到模型手上：**执行体一行新逻辑都没有**，
+    // 全部复用 installFromMarkdown / installFromZip / listSkills / delete。
+    // 这样"模型装的技能"与"用户手装的技能"在同一条路径上落盘、同一套校验，
+    // 不会出现"对话装进来的坏了但设置页装的是好的"这种分叉。
+    // ═══════════════════════════════════════════════
+
+    /** install_skill 工具 Schema */
+    fun installSchema(): JSONObject = JSONObject().apply {
+        put("type", "function")
+        put("function", JSONObject().apply {
+            put("name", TOOL_INSTALL)
+            put(
+                "description",
+                "安装一个自定义技能（SKILL.md 说明书）到手机上，装好后可被 load_skill 加载。" +
+                    "两种给法，二选一：① url = 技能包地址（支持 .zip 直链、.md/raw 单文件直链、" +
+                    "GitHub/Gitee 仓库或目录页）；② markdown = SKILL.md 全文（用户直接把内容贴进对话时用）。" +
+                    "用户说「把这个技能装上」「我发个链接你装一下」「记住这套流程」时调用。" +
+                    "⚠️ SKILL.md 必须带 frontmatter（--- 之间的 name 与 description），" +
+                    "技能名只能用中英文/数字/下划线/连字符。失败时把工具返回的原因如实告诉用户。",
+            )
+            put("parameters", JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("url", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "技能包地址（与 markdown 二选一）")
+                    })
+                    put("markdown", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "SKILL.md 全文，须含 frontmatter 的 name 与 description（与 url 二选一）")
+                    })
+                })
+                put("required", JSONArray(emptyList<String>()))
+            })
+        })
+    }
+
+    /** list_skills 工具 Schema */
+    fun listSchema(): JSONObject = JSONObject().apply {
+        put("type", "function")
+        put("function", JSONObject().apply {
+            put("name", TOOL_LIST)
+            put(
+                "description",
+                "列出手机上已安装的自定义技能（含各自的一句话用途与启用状态）。" +
+                    "用户问「你有哪些技能」「我装过什么技能」时调用；" +
+                    "准备安装新技能前也可以先看一眼，避免重名覆盖。",
+            )
+            put("parameters", JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject())
+                put("required", JSONArray(emptyList<String>()))
+            })
+        })
+    }
+
+    /** delete_skill 工具 Schema */
+    fun deleteSchema(): JSONObject = JSONObject().apply {
+        put("type", "function")
+        put("function", JSONObject().apply {
+            put("name", TOOL_DELETE)
+            put(
+                "description",
+                "删除一个已安装的自定义技能（连同它的参考文件一起删，不可恢复）。" +
+                    "用户明确说「把某某技能删掉/卸掉」时调用；不确定技能名先用 list_skills 查。" +
+                    "⚠️ 用户只是说「这次别用那个技能」时**不要**删 —— 那应该关开关而不是卸载。",
+            )
+            put("parameters", JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("name", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "要删除的技能名（取自 list_skills）")
+                    })
+                })
+                put("required", JSONArray(listOf("name")))
+            })
+        })
+    }
+
+    /** 执行 install_skill */
+    fun executeInstall(context: Context, arguments: String): String {
+        val args = try {
+            JSONObject(arguments.ifBlank { "{}" })
+        } catch (_: Exception) {
+            return "技能参数解析失败，请传入 {\"url\":\"…\"} 或 {\"markdown\":\"…\"}"
+        }
+        val markdown = args.optString("markdown").trim()
+        if (markdown.isNotEmpty()) {
+            return summarizeResults(listOf(installFromMarkdown(context, markdown)))
+        }
+        val url = args.optString("url").trim()
+        if (url.isEmpty()) {
+            return "请提供 url（技能包地址）或 markdown（SKILL.md 全文），二选一"
+        }
+        if (count(context) >= MAX_SKILLS) {
+            return "技能数量已达上限（$MAX_SKILLS 个），请先让我用 delete_skill 删掉一些再装"
+        }
+        return try {
+            when (val kind = SkillFetcher.classify(url)) {
+                SkillFetcher.Kind.UNKNOWN ->
+                    "无法识别的链接（只支持 .zip / .md / raw 直链，或 GitHub、Gitee 的仓库、目录页）"
+
+                SkillFetcher.Kind.ZIP -> when (val dl = SkillFetcher.download(url)) {
+                    is SkillFetcher.DownloadResult.Zip -> summarizeResults(installFromZip(context, dl.bytes))
+                    is SkillFetcher.DownloadResult.Markdown ->
+                        summarizeResults(listOf(installFromMarkdown(context, dl.text)))
+                }
+
+                SkillFetcher.Kind.MD_FILE -> when (val dl = SkillFetcher.download(url)) {
+                    is SkillFetcher.DownloadResult.Markdown ->
+                        summarizeResults(listOf(installFromMarkdown(context, dl.text)))
+                    is SkillFetcher.DownloadResult.Zip ->
+                        summarizeResults(installFromZip(context, dl.bytes))
+                }
+
+                SkillFetcher.Kind.REPO_PAGE -> {
+                    val candidates = SkillFetcher.resolveRepoPage(url)
+                    if (candidates.isEmpty()) {
+                        "这个仓库/目录里没有找到可安装的 SKILL.md（技能文件需带 frontmatter 的 name/description）"
+                    } else {
+                        val results = candidates.mapNotNull { cand ->
+                            runCatching {
+                                when (val dl = SkillFetcher.download(cand.rawUrl)) {
+                                    is SkillFetcher.DownloadResult.Markdown ->
+                                        installFromMarkdown(context, dl.text)
+                                    is SkillFetcher.DownloadResult.Zip ->
+                                        installFromZip(context, dl.bytes).firstOrNull()
+                                }
+                            }.getOrNull()
+                        }
+                        if (results.isEmpty()) "技能包下载失败（网络不可达或文件格式不支持）"
+                        else summarizeResults(results)
+                    }
+                }
+
+                // 兜底：classify 新增枚举时会在这里编译报错（when 不穷尽），强制补分支
+                else -> "暂不支持这种链接类型（$kind）"
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "install from url failed: ${e.message}")
+            "技能包下载/解析失败：${e.message}"
+        }
+    }
+
+    /** 安装结果汇总（给模型的文本） */
+    private fun summarizeResults(results: List<InstallResult>): String {
+        val ok = results.filter { it.success }
+        val bad = results.filterNot { it.success }
+        return buildString {
+            if (ok.isNotEmpty()) {
+                append("已安装 ${ok.size} 个技能：")
+                append(ok.joinToString("、") { it.skillName ?: "（未命名）" })
+            }
+            if (bad.isNotEmpty()) {
+                if (isNotEmpty()) append("。")
+                append("失败 ${bad.size} 个：")
+                append(bad.joinToString("；") { it.message })
+            }
+            if (isEmpty()) append("没有可安装的技能")
+        }
+    }
+
+    /** 执行 list_skills */
+    fun executeList(context: Context): String {
+        val all = listSkills(context)
+        if (all.isEmpty()) return "目前没有安装任何自定义技能（可以在设置页或让我用 install_skill 安装）"
+        val lines = all.map { s ->
+            val state = if (s.enabled) "启用中" else "已停用"
+            "- ${s.name}（$state）：${s.description.take(80)}"
+        }
+        return "已安装 ${all.size} 个技能：\n" + lines.joinToString("\n") +
+            "\n（要加载某个技能的步骤，用 load_skill 传它的名字）"
+    }
+
+    /** 执行 delete_skill */
+    fun executeDelete(context: Context, arguments: String): String {
+        val args = try {
+            JSONObject(arguments.ifBlank { "{}" })
+        } catch (_: Exception) {
+            return "技能参数解析失败，请传入 {\"name\":\"技能名\"}"
+        }
+        val name = args.optString("name").trim()
+        if (name.isEmpty()) return "请提供要删除的技能名 name（可先用 list_skills 查看）"
+        val exists = listSkills(context).any { it.name == name }
+        if (!exists) {
+            return "没有找到技能「$name」。已安装的技能：" +
+                listSkills(context).joinToString("、") { it.name }.ifEmpty { "（无）" }
+        }
+        return if (delete(context, name)) "已删除技能「$name」（不可恢复）" else "删除技能「$name」失败"
     }
 
     /** 删除技能（目录整体删除） */

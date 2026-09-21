@@ -509,6 +509,9 @@ adb/
 - FIFO 上限 200 条，90 天过期，旧 SharedPreferences 数据首次启动自动迁移
 - 注入策略必须用中文 bigram 重叠度评分 top-12，不得全量注入（会撑爆 system prompt）
 - 会话记忆超长上下文被裁剪时，前缀必须折叠为 ≤800 字 pinned system message `[summary of earlier conversation]`，不得直接截断丢弃
+- **会话记忆开关必须是纯开关**：关闭只停用（不注入、不记录），**不得顺带销毁数据**；销毁只能由用户显式触发
+- **清空的作用域必须与文案一致**：`clear()` = 当前对话（记录＋记忆）；`clearAll()` = **全部对话**的记忆且不动聊天记录。设置页按钮写"全部"就不许只清当前会话
+- **不得恢复"空闲自动过期"**：记忆随对话持久保存。原先 `maybeExpire`（10 分钟无活动清空）与"记录永久保存"的用户心智相抵，且静默发生（界面零提示）
 
 ### 12.7 KeyButtonService 稳定性约束
 
@@ -541,15 +544,32 @@ adb/
 3. 改完必须跑 `skills/rokidlab-chat-standalone-mode/scripts/check_tool_wiring.py` 双向核对
    （六张派生表 vs 各 provider 的声明；**禁止再出现手写 `toolList` 字面量**）；
    `ToolRegistry.unregisteredTools()` 自检必须为空（接缝化后结构上恒成立，用作防回退断言）
+4. **动态工具集（外部 MCP）不走上面三步**：它由 `ai/mcp/McpRegistry` 在运行期注册，
+   经 `ToolRegistry.setDynamicProviders()` 注入 `McpToolProvider`（该 provider 的两个 getter
+   必须动态读 `McpRegistry`，写成属性初始化就会固化成快照、工具永远进不了派生表且不报错）。
+   ⚠️ 动态工具的**安全靠准入，不靠审批闸门**：闸门是 fail-open（见下），所以约束是
+   「地址必须 https（**唯一例外＝回环 http**，判据＝两份 `network_security_config` 白名单的交集，
+   故 debug/release 行为一致；**不要**改成按 `BuildConfig.DEBUG` 放开——那是「调试能跑、发布才挂」）」+
+   「工具首次出现时显式写 false（`ToolRegistry.ensureDisabledByDefault`）」+
+   「schema 不合规的工具整个丢弃」（一个坏 schema 会让**整轮请求 400** ⇒ 所有工具一起失效）。
+   ⚠️ 地址判定只有一处 `McpRegistry.isUrlAllowed()`，UI 必须复用，别自己写 `startsWith`（会分叉）
 
 > 现状说明（2026-09-19 更新）：判定已全部收敛到 `ai/approval/ApprovalGate`（`ToolPolicy.kt` 已删除）。
 > fail-open 是**刻意设计**并写在 `ApprovalGate.resolveAsk` 的 KDoc 里（唯一产地）：
 > 无确认通道 / 眼镜端旧版 / 用户超时未响应 → 降级放行，仅眼镜端显式回 "no"（`wasCancelled()`）才拒绝。
 > 另：风险档的实际兜底是**最保守档** `EXTERNAL_SIDE_EFFECT`，但「完全未知的名字」会先被
 > `UnknownToolGuard` 单调拒绝，因此不会触发确认。<br>
-> 仍然成立的老问题：**当前没有任何真实工具被登记为 `EXTERNAL_SIDE_EFFECT`**
-> （`check_tool_wiring.py` 可核对）—— 确认闸门对真实工具仍处于空转状态。
-> 要让某个工具真正走眼镜确认，只需在它的 `ToolEntry.risk` 里声明 `EXTERNAL_SIDE_EFFECT`。
+> 现状更新（2026-09-20）：**内置工具里已有且仅有 `delete_file` 被登记为 `EXTERNAL_SIDE_EFFECT`**
+> —— 删除不可恢复，故走眼镜确认闸门（`edit_text_file` / `move_file` 只 `LOCAL_SIDE_EFFECT`，
+> 同机就地改动不弹确认）。这条事实由 `check_tool_wiring.py` 与 `ApprovalGateTest` 的
+> E1（走确认闸门的内置工具恰为 `delete_file`）+ E3b（确认摘要读出被删对象）共同钉住：
+> **新增 EXTERNAL 档内置工具时必须同步这两条用例**，否则 E1 会失败——那正是提醒信号。
+>
+> ⚠️ **MCP 外部工具是例外，且不依赖闸门**：`McpRegistry.toEntry` 把第三方工具登记为
+> `EXTERNAL_SIDE_EFFECT`（用户显式标了「信任」才降为 `LOCAL_SIDE_EFFECT`）——
+> 但那只影响**无人值守准入**（非 READ_ONLY 不参与），**不等于**多了确认步骤：
+> 闸门 fail-open ⇒ 无通道时照样放行。因此第三方工具的保护必须在**准入**（见 12.10 第 4 条）。
+> `check_tool_wiring.py` 的「README 工具清单」也**不含**动态 provider 的工具（运行期才有）。
 
 ### 12.11 通道租约约束
 
@@ -620,18 +640,47 @@ adb/
 - **改字节必须改测试**：任何改动 HID 描述符字节 / sync 帧格式 / 跨端载荷格式 / 聊天历史落盘格式的提交，**必须同步更新对应测试并真机回归**；不得只按注释里的长度或格式假设行事（#8 实测推翻了 `buildQtiCompatibleDescriptor` 注释声称的「≤64 字节」，实为 67 / 121 字节）
 - **行为记录 ≠ 契约**：测试发现生产代码语义不一致时，先以注释登记现象并指向评估文档待办，**不得为了让测试变绿而修改生产行为**。确需变更语义时必须拿到明确授权，并把锁行为的测试一并翻面（先例：`pullFile` 遇 CLSE 返回 true 与 `downloadFile` 返回 false 的分歧，已于 2026-09-13 按用户要求收敛为「按远端字节数对账」，测试同步改为断言 false；见 `CODE_AUDIT.md` C7 与 `ENGINEERING_ASSESSMENT_2026-09-12.md` §[P1-11]）
 - **状态复位**：测试必须复位被测单例的全局状态（`@After` 中 `BtHidCompat.setManualMode(null)` / `ApprovalGate.resetForTest()` 等），避免用例间污染
-- ⚠️ 仍无 `androidTest`；**不建托管 CI**（#10 评估结论：门禁已挂 `preBuild`、本地构建即触发，托管 CI 属重复执行且需复刻 SDK/NDK 环境）；`KeyButtonService` / `ChatStateHolder`（本体）/ `CxrLHiRokidSession` 仍无测试
+- ⚠️ 仍无 `androidTest`；**不建托管 CI**（#10 评估结论：门禁已挂 `preBuild`、本地构建即触发，托管 CI 属重复执行且需复刻 SDK/NDK 环境）；`KeyButtonService` / `CxrLHiRokidSession` 仍无测试。
+  ⚠️ `ChatStateHolder` **本体可测**（2026-09-20 起，见 `ChatStateHolderTraceTest`）：`unitTests.isReturnDefaultValues = true` ⇒ `Looper.myLooper()` 与 `getMainLooper()` 同为 null，`runOnMain` 走内联分支；`appContext` 为 null ⇒ 落盘静默跳过。写这类测试时**必须**在 `@Before`/`@After` 清 `messages` 并 `finishTrace()` 释放锚点（单例跨用例复用）
 
 ### 12.16 聊天历史落盘约束（`ChatStateHolder` / `ChatHistoryStore`）
 
 历史教训：旧实现每条消息都在**主线程**把整个列表重新 JSON 序列化后 `writeText` —— 消息越多越卡（O(n²) 写放大）；且 `clear()` 只写空数组、不删文件。约定：
 
-- **格式与回放逻辑只允许放在 `store/ChatHistoryStore.kt`**（纯 JVM、可单测）：JSONL 每行一条消息，**同 id 后写覆盖先写**（`finalizeLastAi` 靠这条语义只追加一行）。改动该文件的读写语义 → 必须同步改 `ChatHistoryStoreTest`（14 例）
+- **格式与回放逻辑只允许放在 `store/ChatHistoryStore.kt`**（纯 JVM、可单测）：JSONL 每行一条消息，**同 id 后写覆盖先写**（`finalizeLastAi` 靠这条语义只追加一行）。改动该文件的读写语义 → 必须同步改 `ChatHistoryStoreTest`（24 例）
 - **`SnapshotStateList` 只在调用线程（Compose 主线程）读写**：任何文件 I/O 一律经 `ChatStateHolder.writer`（单线程 daemon）提交，且**序列化必须在调用线程完成后把字符串交给后台** —— 后台任务不得触碰 `messages`
 - **加载不得同步阻塞 `Application.onCreate`**：读盘 / 旧格式迁移 / 压实都在 `writer` 上做，只有"塞进 `messages`"这一步 `post` 回主线程
 - **兼容旧格式**：旧版"整份 JSON 数组"的 `chat_history.json` 必须能在首启被识别并迁移为 JSONL，**迁移不丢历史**（测试已锁）。未迁移完不得改变文件名
 - **`clear()` 必须删文件**（`rewrite(file, emptyList())`），否则重启后历史复活
+- ⚠️ **一轮的「过程」落在哪条消息上，只由 `ChatStateHolder` 内部的 `traceAnchorId` 锚点决定，不看位置**。
+  历史教训（2026-09-20 真机 bug「图片已经显示出来了，过程里还在思考」）：原先按"列表末尾那条非用户
+  非状态消息"定位，而**位置不是身份** —— 一轮进行中只要**别的**消息被追加，"末尾"就换人，同一个
+  `tool:<call_id>` 的 `RUNNING` 留在旧气泡、`OK/FAILED` 写进新气泡；而 `AgentStep` 的「同 key 覆盖」
+  只在单条消息内生效 ⇒ 覆盖失效，旧气泡**永久转圈**。两条**互相独立**的插入路径都踩过（与调用了
+  哪个工具无关）：① `show_image` 的图片气泡；② 拍照流程的状态气泡（`onStage` → `add` /
+  `onStageText` → `updateLastStatus` 在末尾不是状态气泡时会**新增**一条）。
+  ⇒ 以后新增"轮中途插消息"的能力不必再动过程代码；但**禁止**把 `upsertTrace` /
+  `finalizeTraceReply` / `finalizeLastAi` 的落点改回"取末尾那条"（回归见 `ChatStateHolderTraceTest`）
+- ⚠️ **终态收尾只结清锚点那一条**（`ChatStateHolder.finishTrace`）。**禁止**改成"扫全表、见到
+  `RUNNING` 就统统标 OK"——那是拿兜底盖症状，会把"这里为什么会有残留"一起抹掉。锚点制让残留
+  **在结构上不再产生**，所以收尾不需要兜底；历史消息里若真有残留，它应该被看见、被查
+- ⚠️ **`ChatHistoryStore.parse` 里的 `RUNNING` 归一 = 崩溃修复，不是本 bug 的解法**：正常收尾必写
+  终态，所以盘上还留着 `RUNNING` 只可能是那一轮被杀进程（`addImage` 会在轮中途带着 `RUNNING`
+  落盘，之后才被终态覆盖）。**不要**因为它在此处兜住就省掉收尾
 - **落盘失败必须落 `LogCollector`**：聊天记录丢失是用户可见问题，不能只写 logcat
+- ⚠️ **「过程」卡片显示给用户的名字 ≠ 落盘的标识符**（2026-09-20）：
+  `AgentStep.title` 对工具步骤存的是模型的 **wire name**（`get_current_time` /
+  `mcp__<serverId>__<工具名>`），**禁止把显示名写进去** —— 那会污染历史数据（改名/换语言后旧消息
+  不跟着变），也断掉与日志的对应关系。面向用户的名字由 UI 层在**渲染时查表**：
+  `ChatBubble.stepText()` → `ToolRegistry.displayNameOf()`（＝工具设置页同一套名字：静态工具取
+  `ai_tool_*_name`，MCP 取 `"服务器名 · 原始工具名"`），查不到**原样回退**。
+  ⇒ 旧历史消息无需迁移即自动变成友好名；代价是界面名与日志名不一致，要原始标识符排查请走
+  `SessionTraceDialog`。⚠️ 取值口**只有 `ToolRegistry.displayNameOf` 一处**，UI 别自己拼
+  `dynamicName ?: getString(...)`（漏一处就会显示成无关资源名且不报错）
+- ⚠️ **思考行的两态文案由 UI 本地化，服务层只发语义**：`AgentStep.thinking()` 的 `title` 恒为空串
+  ⇒ 文案落在 `ChatBubble.stepLabel()`（`chat_trace_thinking`「正在思考」/ `chat_trace_thought`
+  「思考完毕」）。工具行**不吃**这套文案：`stepLabel` 里 `Kind.TOOL` 那一支是**防御性兜底**
+  （工具 title 按约定恒非空，正常不可达），保留它的理由是"服务层漏填名字"时不能掉进思考文案里
 
 ### 12.17 手机权限申请约束（全品牌统一）
 
@@ -656,3 +705,55 @@ adb/
   `ACTION_APPLICATION_DETAILS_SETTINGS`（AOSP 必有）
 - **`PermissionRequestActivity` 必须 `exported=false` + `noHistory` + `excludeFromRecents`**：
   它只是授权通道，且不应暴露给外部应用触发弹窗
+
+### 12.18 AI 对话能力面约束（文件 / 看画面 / 技能安装）
+
+2026-09-20 补齐的三块能力，各自带一条**硬边界**，不要为了"能力更强"而放宽：
+
+**① 文件工作区（`ai/FileWorkspace.kt`）**
+- 全仓**没有** `MANAGE_EXTERNAL_STORAGE`，因此只开放两个边界：`project`（`filesDir/aiui_projects/<项目>/`
+  私有镜像，**全能力**：列/读/搜/改/删/移）与 `downloads`（系统下载目录经 MediaStore，**只可列/读/删**）。
+- **禁止**对外承诺"能读任意文件"，也**禁止**在 schema 描述里暗示这一点 —— 边界必须写进各工具 schema，
+  否则模型会按"能读全盘"的直觉乱猜路径。
+- 所有相对路径必须经 `splitRel()` 拒绝 `..` / `.` / 空段 / 绝对路径，并用 `canonicalPath` 前缀比对防越界。
+- **删除**（`delete_file`）是唯一走确认闸门的内置工具（见 12.10）；`edit` / `move` 不弹确认。
+  `path` 留空 + 传 `project` = 删除**整个项目**（含下载目录公开副本）—— 该组合必须靠确认闸门拦住。
+
+**② 看画面（`look_at_view`，`vision` 域）**
+- 走**眼镜相机**（`PhotoQuizService.takeGlassesPhoto` → CXRLink），**不申请也不需要手机 `CAMERA` 权限**。
+- 工具**不直接发起模型请求**：视觉路径只把 base64 暂存 `VisionToolProvider.pendingImage`（`ThreadLocal`，
+  因工具并发执行），由**对话主循环**在紧随其后补一条带 `image_url` 的 user 消息。
+  ⚠️ **禁止**改成在工具内回调 `sendAiTextMessage` —— `aiSendLock` **非重入**，会自锁。
+- ⚠️ 出图门槛与「拍照问 AI」**刻意不同**：拍照答题"未知也先试"（失败有 OCR 兜底），
+  本工具只在**确认 `supportsImage == true`** 且用户开了「图像理解」时才走视觉路径
+  —— 工具回调没有二次机会，图一旦进了请求体，服务端 400 就是**整轮失败**。
+- ⚠️ 取图失败/眼镜离线时的文案必须**如实**说"需要连接眼镜"，**绝对不要**说成「没有相机权限」
+  —— 那是虚构归因，会误导用户去改没用的设置（这正是本条约束的由来）。
+
+**③ 技能安装（`install_skill` / `list_skills` / `delete_skill`，伪工具）**
+- 这三个走**伪工具**通道（`ai/approval/PseudoTools`）：schema 拼在 `AiConversationService.buildTools()`，
+  执行在 `runTool()` 的 `when` 分支，**不写进 `ToolRegistry.toolList`**。
+- ⚠️ **必须登记进 `PseudoTools.BY_NAME`**：漏登记 ⇒ `ToolRiskMap` 兜底成 `EXTERNAL_SIDE_EFFECT`
+  ⇒ `UnknownToolGuard` 视作已知但风险档错 → 被要求眼镜端确认，通道不可用就整条链失败。
+- ⚠️ 风险档取 `LOCAL_SIDE_EFFECT`（`list_skills` 为 `READ_ONLY`）：**刻意不设 `EXTERNAL_SIDE_EFFECT`**
+  —— 那是纯本机文件操作，让用户在眼镜上确认"删手机里的技能"既无意义又容易超时。
+- ⚠️ 伪工具总数由 `ApprovalGateTest` 的 **B2** 钉住（现为 7 个），新增/删除必须同步那条断言。
+
+### 12.19 外部文本一律判编码，不许硬解 UTF-8
+
+2026-09-20 真机 bug 的由来：知识库导入对字节流**无条件按 UTF-8 解码**。中文用户从 Windows
+记事本/导出工具拿到的 txt 常是 `ANSI(GBK)` 或 `Unicode(UTF-16LE)`，硬解后整篇变成 U+FFFD
+（实测 59 字里 45 个替换符），而**文件名与字节数照旧正确** ⇒ 界面完全看不出异常。
+症状于是是"文档明明导入成功了，问里面的内容永远答不出来"，**检索侧完全无辜**（它只是没东西可命中）。
+
+- 统一入口 `ai/TextEncoding.kt`（`decide()` / `decode()`）。判定顺序：BOM → 无 BOM 的 UTF-16
+  （NUL 密度 + 奇偶位）→ 严格 UTF-8 试解 → `GB18030` 兜底。
+- ⚠️ **凡是"读用户给的文本"的地方都必须走它**（知识库导入、`FileWorkspace` 读文件、任何新导入链路）。
+  硬编码 `Charsets.UTF_8` 读用户文件 = 把乱码当内容"如实"转述给用户，比直接报错更糟。
+- ⚠️ 严格 UTF-8 试解必须容忍**样本尾部被切断**的多字节字符（流式样本 64KB 边界必然切断）：
+  不容忍就会把正常 UTF-8 文件误判成 GB ⇒ 把本来好的文档弄成乱码，是**比不判定更糟的反向破坏**。
+  同理，**无 BOM 的 UTF-16 必须先于 UTF-8 判定**（`0x00` 是合法 UTF-8 单字节）。
+- ⚠️ **`SQLiteOpenHelper.onUpgrade` 禁止 drop 重建**：知识库/记忆库存的是用户资料，
+  版本一升就清空属于不可恢复的数据丢失。新增列一律 `ALTER TABLE … ADD COLUMN`。
+- ⚠️ 检索的两段口径必须一致：df/候选来自 SQLite `LIKE`（对 ASCII **不区分大小写**），
+  打分若用区分大小写的 `indexOf`，英文查询会出现"候选块查得到、得分全是 0"的**假空结果**。

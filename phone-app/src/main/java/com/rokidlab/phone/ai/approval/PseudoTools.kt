@@ -10,7 +10,8 @@ import com.rokidlab.phone.ai.ToolRisk
  *
  * ## 为什么需要这张表（这是本轮补上的一个真实盲区）
  *
- * `load_skill` / `load_skill_section` / `update_plan` / `manage_memory` 四个工具的 schema
+ * `load_skill` / `load_skill_section` / `update_plan` / `manage_memory`（以及 2026-09-20 新增的
+ * 技能管理三件套 `install_skill` / `list_skills` / `delete_skill`）的 schema
  * 直接拼在 `AiConversationService.buildTools()` 里，执行则走 `runTool()` 的前置 `when` 分支 ——
  * 它们**从未经过任何审批闸门**，也**不在风险表里**。
  *
@@ -43,6 +44,15 @@ internal object PseudoTools {
     private val BY_NAME: Map<String, ToolRisk> = linkedMapOf(
         SkillRegistry.TOOL_NAME to ToolRisk.READ_ONLY,
         SkillRegistry.TOOL_NAME_SECTION to ToolRisk.READ_ONLY,
+        // 技能管理三件套（对话里装/看/删技能）：
+        //  - list_skills 只读本地技能目录；
+        //  - install_skill 会写 filesDir/skills/（同名覆盖更新），属本机副作用；
+        //  - delete_skill 会删技能目录（不可恢复，但是用户自己的技能、可重新安装），
+        //    **不设 EXTERNAL_SIDE_EFFECT** —— 那会走眼镜端确认闸门，而这是纯本机文件操作，
+        //    让用户在眼镜上确认"删手机里的技能"既无意义又容易超时。
+        SkillRegistry.TOOL_LIST to ToolRisk.READ_ONLY,
+        SkillRegistry.TOOL_INSTALL to ToolRisk.LOCAL_SIDE_EFFECT,
+        SkillRegistry.TOOL_DELETE to ToolRisk.LOCAL_SIDE_EFFECT,
         AgentPlan.TOOL_NAME to ToolRisk.READ_ONLY,
         LongTermMemoryManager.TOOL_NAME to ToolRisk.LOCAL_SIDE_EFFECT,
     )
@@ -52,6 +62,18 @@ internal object PseudoTools {
 
     /** 全部伪工具名 */
     fun names(): Set<String> = BY_NAME.keys
+
+    /**
+     * 有副作用的伪工具（风险档 ≠ 只读）：瞬时失败**不重试**。
+     *
+     * 与 [com.rokidlab.phone.ai.ToolRegistry.SIDE_EFFECT_TOOLS] 同一条约定，但那张表由
+     * `ToolEntry.sideEffect` 派生 —— 伪工具不在 `toolList` 里，天然进不去。于是
+     * `manage_memory` / `install_skill` / `delete_skill` 会被当成幂等工具**重试一次**：
+     * 第一次其实已经写成功、只是回执丢了（或异常发生在写盘之后），重试就是重复写记忆 /
+     * 重复装技能（同名覆盖，倒是幂等）—— 而 `manage_memory` 的重试会凭空多出一条记忆。
+     * 这里补上，让"是否重试"与"是否有副作用"仍由同一份声明派生。
+     */
+    fun sideEffectNames(): Set<String> = BY_NAME.filterValues { it != ToolRisk.READ_ONLY }.keys
 
     /**
      * 本次会话里"模型可能调到的**全部**工具名" = 真实工具 ∪ 伪工具。

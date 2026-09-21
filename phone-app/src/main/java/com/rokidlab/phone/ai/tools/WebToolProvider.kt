@@ -1,6 +1,7 @@
 package com.rokidlab.phone.ai.tools
 
 import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.ToolContentTrust
 import com.rokidlab.phone.ai.ToolRisk
 
 import android.content.Context
@@ -46,6 +47,8 @@ internal object WebToolProvider : ToolProvider {
             displayNameRes = R.string.ai_tool_search_web_name,
             descriptionRes = R.string.ai_tool_search_web_desc,
             risk = ToolRisk.READ_ONLY,
+            // 搜索摘要由外部站点作者撰写，可能夹带提示词注入 → 回填走结构隔离
+            contentTrust = ToolContentTrust.UNTRUSTED_EXTERNAL,
             statusText = "正在搜索网页…",
             schema = toolSchema(
                 name = "search_web",
@@ -65,6 +68,8 @@ internal object WebToolProvider : ToolProvider {
             displayNameRes = R.string.ai_tool_fetch_webpage_name,
             descriptionRes = R.string.ai_tool_fetch_webpage_desc,
             risk = ToolRisk.READ_ONLY,
+            // 网页正文是典型的不可信外部内容（间接提示词注入的首要攻击面）
+            contentTrust = ToolContentTrust.UNTRUSTED_EXTERNAL,
             statusText = "正在读取网页内容…",
             schema = toolSchema(
                 name = "fetch_webpage",

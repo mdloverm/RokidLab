@@ -71,6 +71,8 @@ internal class CxrBridgeCoordinator(
                 }
                 override fun onDisconnected() {
                     core.bridgeConnected = false
+                    // IMU 数据流随链路一起停：手机不在时上行必失败，继续采样纯属耗电
+                    runCatching { service.headImu.stop() }
                     // 断线期不做路由判定：取消观察并武装，待重连成功后重新启动观察
                     reconnectArmed = true
                     cancelSelfHealCheck()
@@ -209,6 +211,14 @@ internal class CxrBridgeCoordinator(
                 announceHello()
             })
             Log.i(TAG, "subscribe(${LinkProtocol.TOPIC_HELLO_REQ}) -> $helloResult")
+
+            // IMU 头动采集控制（v1 查询层）：手机端 CUSTOMAPP 会话就绪后下发 imu_start 开流，
+            // 断连/销毁时停。默认关 —— 眼镜端不连接就不采样，零常驻开销。
+            val imuCtrlResult = core.bridge?.subscribe(AiChannel.TOPIC_IMU_CTRL, CXRServiceBridge.MsgCallback { _, args, _ ->
+                core.markDownlink()
+                service.headImu.handleControl(args)
+            })
+            Log.i(TAG, "subscribe(${AiChannel.TOPIC_IMU_CTRL}) -> $imuCtrlResult")
 
             // 停止手机投屏指令：手机端按「停止投屏」时下发。
             // PhoneMirrorActivity 设计为 socket 断开后保持前台等重连（避免重连后画面更新在

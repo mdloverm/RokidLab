@@ -17,6 +17,7 @@ package com.rokidlab.phone.ai
  * OK/FAILED 覆盖，UI 侧无需自己做状态机。约定 key：
  *  - 工具：`tool:<tool_call_id>`（每次调用唯一，多轮同名工具互不覆盖）
  *  - 思考：`think:<round>`（第几轮工具循环）
+ *  - 知识库检索：`kb:auto`（一轮最多一条，是主循环的自动检索而非模型调用）
  *
  * 纯数据类，**不含任何 Android 依赖**，因此可被 `store/ChatHistoryStore`（纯 JVM，见其类注释）
  * 直接序列化，也可被 JVM 单测覆盖。
@@ -30,8 +31,12 @@ data class AgentStep(
      *
      * - [Kind.TOOL]：工具名**原样**（`play_song` / `save_code_file`），不翻译 —— 它就是模型
      *   实际调用的标识符，用户在排查时需要对得上日志。
-     * - [Kind.THINKING]：**恒为空**。思考类的文案（"思考中…" / "已思考"）由 UI 层按
-     *   [state] + [detail] 本地化渲染 —— 服务层不该产出面向用户的文案（i18n 归属 UI）。
+     *   ⚠️ **这里存的是标识符，不是显示名**：面向用户的名字由 UI 层用
+     *   `ToolRegistry.displayNameOf()` 换成"当前时间" / "服务器名 · 工具名"。
+     *   因此**不要把显示名写进来** —— 那会污染历史数据（改名/换语言后旧消息不会跟着变），
+     *   也断掉与日志的对应关系。
+     * - [Kind.THINKING]：**恒为空**。思考类的文案（"正在思考" / "思考完毕"）由 UI 层按
+     *   [state] 本地化渲染 —— 服务层不该产出面向用户的文案（i18n 归属 UI）。
      */
     val title: String,
     /** 次要说明：工具参数摘要 / 结果摘要 / 思考预览。可空 */
@@ -44,6 +49,19 @@ data class AgentStep(
 
         /** 工具调用 */
         TOOL,
+
+        /**
+         * **知识库自动检索** —— 注意它**不是模型调用的工具**。
+         *
+         * 对话主循环在调模型**之前**会用当前提问去本地知识库自动检索、把命中段落注入
+         * system 提示词（`AiConversationService` 的自动 RAG）。这条路径不产生 tool_call，
+         * 因此既没有 `tool:<id>` 也没有工具名 —— 早先它就**在「过程」里完全不可见**：
+         * 用户只看到"AI 直接回答了"，不知道答案其实是从自己导入的文档里查出来的。
+         *
+         * 单独一个 Kind 而不是复用 [TOOL]，是为了**如实**：TOOL 行意味着"模型决定调了工具"，
+         * 排查"模型为什么没调检索工具"时把两者混在一起会误导。
+         */
+        KNOWLEDGE,
     }
 
     enum class State {
@@ -106,8 +124,8 @@ data class AgentStep(
          * 构造/更新一条思考步骤。
          *
          * @param round 第几轮工具循环，用作覆盖键（每轮一条）
-         * @param detail 已累积的推理文本（思考未开启时为空）。**只作展示预览**，
-         *   其长度即 UI 显示的"已思考 N 字"。
+         * @param detail 已累积的推理文本（思考未开启时为空）。**只作展示预览**：
+         *   UI 原样显示在标题下方，不做字数统计、也不据此改文案。
          * @param state RUNNING=正在等待模型；OK=本轮已出结果
          */
         fun thinking(
@@ -120,6 +138,34 @@ data class AgentStep(
             title = "",
             detail = compact(detail, MAX_DETAIL_CHARS),
             state = state,
+        )
+
+        /**
+         * 构造一条**知识库自动检索**步骤（主循环的 RAG，不是模型调的工具，见 [Kind.KNOWLEDGE]）。
+         *
+         * 文案归属：标题由 UI 按 [state] 本地化（与 [thinking] 同规矩），这里只填**数据**——
+         * 命中了哪几块（`《文档名》第N块`）或"库里有多少份却没匹配上"。
+         * 这几条来源正是用户核对"答案是从哪来的"的依据，所以**不要**在 UI 侧再截断掉。
+         *
+         * @param hitCount 命中段数（0 = 库里有内容但没匹配上）
+         * @param sources 命中来源标注（如 `《问.txt》第1块`）
+         * @param docCount 知识库文档总数（未命中时用于说明"库里确实有东西"）
+         */
+        fun knowledge(
+            hitCount: Int,
+            sources: List<String> = emptyList(),
+            docCount: Int = 0,
+        ): AgentStep = AgentStep(
+            key = "kb:auto",
+            kind = Kind.KNOWLEDGE,
+            title = "",
+            detail = compact(
+                if (hitCount > 0 && sources.isNotEmpty()) sources.joinToString("、")
+                else if (docCount > 0) "库里 $docCount 份文档，未匹配到相关段落"
+                else "未匹配到相关段落",
+                MAX_DETAIL_CHARS,
+            ),
+            state = State.OK,
         )
 
         /**

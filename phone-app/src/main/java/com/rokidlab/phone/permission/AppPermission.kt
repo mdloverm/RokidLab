@@ -17,8 +17,9 @@ import com.rokidlab.phone.R
  *  1. 文案各写各的，有的写「设置 → 应用 → RokidLab」有的写「乐奇实验室」；
  *  2. **缺权限时只会打印一段文本，从不拉起系统授权界面**，用户听到"请去设置里开启"之后
  *     得自己在设置里翻半天，实际表现为"这功能坏了"；
- *  3. 新增/漏改一处就漏一处（`requestAiToolPermissions` 就漏了定位与悬浮窗）。
- * 收敛到这里之后，"缺什么、怎么申请、申请不到怎么办"只有一份实现。
+ *  3. 新增/漏改一处就漏一处（启动期那份自检就漏掉了定位与悬浮窗）。
+ * 收敛到这里之后，"缺什么、怎么申请、申请不到怎么办"只有一份实现；引导流程的「开启全部权限」步
+ * 直接按本表逐项渲染 —— **新增权限只需登记本表，权限页自动多出一行**（见 project_rules.md「权限登记」）。
  *
  * ⚠️ 两条容易踩的坑（改表前先读）：
  *  - [OVERLAY] 是 **AppOps 而非运行时权限**：`requestPermissions` 对它**不会弹任何窗**，
@@ -38,6 +39,21 @@ enum class AppPermission(
     /** 低于该 API 等级时该权限不存在、自动视为已授予 */
     val minSdk: Int = 0,
 ) {
+    /**
+     * 蓝牙：连眼镜的**硬前提**（`BLUETOOTH_CONNECT` 读已配对设备、`SCAN` 发现设备）。
+     *
+     * 缺它不会弹任何提示，只在日志里留一行 `SecurityException: getBondedDevices()`，
+     * 表现为"眼镜明明配对过却连不上 / 语音推送时通时断"。
+     * Android 12 才把它拆成运行时权限；12 以下 `BLUETOOTH`/`BLUETOOTH_ADMIN` 是 normal 级别
+     * 安装即授予，所以 [minSdk] 设成 S —— 低版本自动视为已授予，不多弹一个框。
+     */
+    BLUETOOTH(
+        Manifest.permission.BLUETOOTH_CONNECT,
+        R.string.permission_label_bluetooth,
+        companions = listOf(Manifest.permission.BLUETOOTH_SCAN),
+        minSdk = Build.VERSION_CODES.S,
+    ),
+
     /** 通讯录：`search_contacts`、按姓名拨号 */
     CONTACTS(Manifest.permission.READ_CONTACTS, R.string.permission_label_contacts),
 
@@ -45,10 +61,10 @@ enum class AppPermission(
     PHONE_CALL(Manifest.permission.CALL_PHONE, R.string.permission_label_phone),
 
     /** 日历读：`query_calendar` */
-    CALENDAR_READ(Manifest.permission.READ_CALENDAR, R.string.permission_label_calendar),
+    CALENDAR_READ(Manifest.permission.READ_CALENDAR, R.string.permission_label_calendar_read),
 
     /** 日历写：`add_calendar_event` */
-    CALENDAR_WRITE(Manifest.permission.WRITE_CALENDAR, R.string.permission_label_calendar),
+    CALENDAR_WRITE(Manifest.permission.WRITE_CALENDAR, R.string.permission_label_calendar_write),
 
     /** 位置：`get_location`（WIFI 扫描同样依赖它） */
     LOCATION(
@@ -106,10 +122,14 @@ enum class AppPermission(
 
         /**
          * 展开成 `requestPermissions` 需要的权限名数组（含 [companions]）。
-         * 只取 [runtimeRequestable] 的项 —— 把 OVERLAY 混进去会让整套请求在部分 ROM 上被整批拒绝。
+         *
+         * 两道过滤，缺一个都会让整套请求在部分设备上被整批拒绝：
+         *  - 只取 [runtimeRequestable]：把 OVERLAY 混进去会让整套请求被拒；
+         *  - 只取 `minSdk <= 当前版本`：[BLUETOOTH] 的权限名在 Android 12 以下**不存在**，
+         *    申请一个不存在的权限同样会被系统整批拒绝。
          */
         fun runtimeNames(permissions: Collection<AppPermission>): Array<String> =
-            permissions.filter { it.runtimeRequestable }
+            permissions.filter { it.runtimeRequestable && it.minSdk <= Build.VERSION.SDK_INT }
                 .flatMap { listOf(it.manifestName) + it.companions }
                 .distinct()
                 .toTypedArray()

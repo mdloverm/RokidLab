@@ -46,6 +46,7 @@ internal object MediaToolProvider : ToolProvider {
 
     override val toolNames = setOf(
         "control_music",
+        "stop_tts",
         "show_lyrics",
         "get_now_playing",
         "get_cover_image",
@@ -71,6 +72,25 @@ internal object MediaToolProvider : ToolProvider {
                         "artist" to mapOf("type" to "string", "description" to "可选，歌手名，用于同名歌曲消歧，如「周杰伦」"),
                     ),
                     "required" to listOf("action"),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "stop_tts",
+            group = ToolRegistry.DOMAIN_MEDIA,
+            displayNameRes = R.string.ai_tool_stop_tts_name,
+            descriptionRes = R.string.ai_tool_stop_tts_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            // 幂等（停两次结果一样），失败可以放心重试 → sideEffect = false
+            requiresGlasses = true,
+            statusText = "正在停止播报…",
+            schema = toolSchema(
+                name = "stop_tts",
+                description = "立刻打断眼镜端正在进行的语音播报（作废已排队、尚未播出的分块）。" +
+                    "用户说「别说了」「停一下」「安静」「打断一下」时调用。只停播报，不影响屏幕上已经显示的文字。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
                 ),
             ),
         ),
@@ -152,6 +172,15 @@ internal object MediaToolProvider : ToolProvider {
                         album = song.album, cover = song.cover,
                     )
                 }
+            }
+
+            // 打断眼镜端正在进行的语音播报（原 `tts.stop` 动作的能力，现在是一条普通工具：
+            // 既能在对话里被调用，也能直接当**头动规则**的动作，如「点头就闭嘴」）
+            "stop_tts" -> {
+                val session = GlassToolConfirmChannel.global.liveSession()
+                    ?: return "眼镜端未连接，无法停止播报"
+                val r = runCatching { session.stopTtsOnGlass() }.getOrDefault(-1)
+                if (r == 0) "已停止眼镜端播报" else "停止播报失败（错误码 $r），请稍后再试"
             }
 
             "show_lyrics" -> {

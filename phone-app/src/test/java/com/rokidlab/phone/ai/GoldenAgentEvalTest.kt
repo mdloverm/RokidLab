@@ -119,8 +119,21 @@ class GoldenAgentEvalTest {
     }
 
     @Test
-    fun `B5 AIUI 会话域仅含 aiui files info`() {
-        assertEquals(setOf(ToolRegistry.DOMAIN_AIUI, ToolRegistry.DOMAIN_FILES, ToolRegistry.DOMAIN_INFO), ToolRegistry.SESSION_AIUI_DOMAINS)
+    fun `B5 AIUI 会话域仅含 aiui files info web knowledge`() {
+        // 排除项才是这个子集的意义：眼镜管理(timer/media/display)/手机域/research/vision/mcp
+        // 都是"这份活干不上"的域，每轮少发十几个 Schema。
+        // web + knowledge 是**输入侧素材**（只读），页面生成常以"把这份资料做成页面"开头，
+        // 砍掉它们会让切换到子集后的下一轮突然失去素材来源，模型只能凭印象编数据。
+        assertEquals(
+            setOf(
+                ToolRegistry.DOMAIN_AIUI,
+                ToolRegistry.DOMAIN_FILES,
+                ToolRegistry.DOMAIN_INFO,
+                ToolRegistry.DOMAIN_WEB,
+                ToolRegistry.DOMAIN_KNOWLEDGE,
+            ),
+            ToolRegistry.SESSION_AIUI_DOMAINS,
+        )
     }
 
     @Test
@@ -185,6 +198,21 @@ class GoldenAgentEvalTest {
     }
 
     @Test
+    fun `C9 可选能力条款随本轮真实下发的工具收窄`() {
+        // 装配侧会按场景裁剪工具：无人值守只发只读∪媒体白名单、技能总开关关掉就不发技能三件套、
+        // 长期记忆关掉就不发 manage_memory。静态提示若不跟着裁剪，模型会照着提示去调一个
+        // **压根不在 tools 里**的工具 —— 白耗一轮 + 拿回一句"未知工具"。
+        val full = service.buildSystemMessage().getString("content")
+        assertTrue("全量装配时应带长期记忆指令", full.contains("manage_memory"))
+        assertTrue("全量装配时应带代码落盘纪律", full.contains("save_code_file"))
+
+        val slim = service.buildSystemMessage(availableTools = setOf(ToolRegistry.TOOL_CODE_FILE)).getString("content")
+        assertFalse("不在本轮装配里的能力不得在提示词里点名", slim.contains("manage_memory"))
+        assertTrue("仍在装配里的能力条款必须保留", slim.contains(ToolRegistry.TOOL_CODE_FILE))
+        assertTrue("通用工具准则不随装配收窄", slim.contains("【工具使用准则】"))
+    }
+
+    @Test
     fun `C5 memories 段按需注入`() {
         val with = service.buildSystemMessage(memories = "用户喜欢周杰伦").getString("content")
         assertTrue(with.contains("<memories>"))
@@ -221,7 +249,7 @@ class GoldenAgentEvalTest {
         // 改由 AgentSessionStore 驱动 —— 锁定的仍是同一条契约：投影出来的历史顺序 = 记录顺序。
         val tmp = File.createTempFile("golden-agent-eval", ".jsonl")
         tmp.deleteOnExit()
-        val store = AgentSessionStore(SessionLog(tmp) { 1000L }, clock = { 1000L })
+        val store = AgentSessionStore(SessionLog(tmp) { 1000L })
         val turn = store.beginTurn(MessageSource.TEXT)
         store.appendUserMessage(turn, "第一问", MessageSource.TEXT)
         store.finishTurn(turn, "第一答", TurnEndReason.COMPLETED)

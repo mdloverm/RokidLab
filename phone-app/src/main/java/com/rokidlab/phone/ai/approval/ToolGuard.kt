@@ -24,6 +24,23 @@ internal data class ToolCallContext(
      * 会重演 2026-09-11「用户已授权却打不出电话，表现为被安全策略挡住」的事故。
      */
     val localOnly: Boolean = false,
+    /**
+     * 无人值守模式（定时自主任务）：只有 [ToolRegistry.unattendedToolNames] 里的工具准跑。
+     *
+     * ⚠️ 与 [localOnly] 正交：那是"用户这次就在手机上聊"，这是"没人看着，别乱动"。
+     * 装配侧（`schemasUnattended`）已经不下发名单外的工具，本字段让**执行侧**与之一致 ——
+     * 否则模型凭历史复述出 `call_phone` 仍会被执行（无人监管下拨号/装机是真实不可逆代价）。
+     */
+    val unattended: Boolean = false,
+    /**
+     * 工具开关状态（[ToolRegistry.isEnabled]）：**调用方算好**带进来，null = 不知道。
+     *
+     * 为什么不让 guard 自己读 SharedPreferences：本类刻意只装纯数据（见类 KDoc），
+     * 判定链不该碰 Context —— 否则 [ToolEnabledGuard] 就成了唯一必须起 Android 环境
+     * 才能测的策略。调用方 [ApprovalGate.preExecute] 手里本来就有 Context，
+     * 读一次开关再传进来，语义完全等价，而整条判定链变成可单测的纯函数。
+     */
+    val enabled: Boolean? = null,
 ) {
     /**
      * 风险档：伪工具（[PseudoTools]）→ 真实工具声明 → 未知名保守兜底。
@@ -38,6 +55,19 @@ internal data class ToolCallContext(
     /** 工具所属域（伪工具无域；未知名返回 null） */
     val domain: String?
         get() = ToolRegistry.toolList.firstOrNull { it.name == name }?.group
+
+    /**
+     * 「问不到用户就必须拒绝」（[ToolDecision.Ask.failClosed]）—— 第三方远端工具的判据。
+     *
+     * ★ 为什么只给 MCP 破例：fail-open 的前提是**工具侧自己**有"未获确认时降级为无副作用动作"
+     * 的保证（`call_phone` 只打开拨号盘不自动拨出、装机只到安装确认页，见 [ApprovalGate] 的 KDoc）。
+     * MCP 工具是**第三方 server** 实现的，我们无从保证这件事 —— 眼镜不在线/用户没响应时
+     * 静默放行，就等于「外网第三方在我们不知情时替用户执行了动作」，而且是不可撤销的远端副作用。
+     * 与其赌对端实现得克制，不如在问不到人时**明确拒绝**并让用户看到原因
+     * （提示里给出两条可操作出路：连上眼镜确认，或在设置页把该 server 标为信任）。
+     */
+    val failClosedConfirmation: Boolean
+        get() = domain == ToolRegistry.DOMAIN_MCP
 
     /** 是否要求眼镜在线（由 `ToolEntry.requiresGlasses` 派生） */
     val requiresGlasses: Boolean

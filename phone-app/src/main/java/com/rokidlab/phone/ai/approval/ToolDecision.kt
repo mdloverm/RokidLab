@@ -15,6 +15,15 @@ enum class ToolSource(
 
     /** 乐奇聊天对话路径（用户驱动的多轮 Agent 工具循环） */
     CONVERSATION("conversation"),
+
+    /**
+     * 头动规则触发路径（[com.rokidlab.phone.glasses.MotionRuleEngine] 命中规则后调用工具）。
+     *
+     * 单列一个来源只为了**审计归因**：日志里看到 `source=motion-rule` 就知道这次拨号/装机
+     * 是用户之前设的点头/摇头规则触发的，而不是他自己刚说的话。
+     * 策略面向它没有任何特判 —— 外部副作用工具照旧弹眼镜端确认（[RiskApprovalGuard] 不限来源）。
+     */
+    MOTION_RULE("motion-rule"),
 }
 
 /**
@@ -30,6 +39,21 @@ enum class DecisionOrigin {
 
     /** 名字既不是真实工具也不是伪工具（模型幻觉 / 攻击构造） */
     UNKNOWN_TOOL,
+
+    /**
+     * 工具在设置页被用户**显式关闭**（[com.rokidlab.phone.ai.ToolRegistry.isEnabled] 为 false）。
+     *
+     * 这是 MCP 第三方工具的**准入落点**：它们首次出现时被写成显式 false，
+     * 用户逐个开启才算授权。而「不下发 schema」只是省 token，模型仍可能从历史里
+     * 复述出一个工具名 —— 没有这道闸门就会真被执行（开关形同虚设）。
+     */
+    TOOL_DISABLED,
+
+    /**
+     * 无人值守（定时自主任务）下调用了不在 [com.rokidlab.phone.ai.ToolRegistry.unattendedToolNames]
+     * 白名单里的工具。装配侧本就只下发只读∪媒体白名单，此闸门防的是「模型凭记忆调出没下发的工具」。
+     */
+    UNATTENDED_SCOPE,
 
     /** per-source 滑动窗口限流 */
     RATE_LIMIT,
@@ -79,9 +103,15 @@ sealed interface ToolDecision {
      * 由 [ApprovalGate.preExecute] 内部用注入的 [ApprovalGate.ConfirmResolver] 解析，
      * **不会**漏给调用方（调用方只会拿到 [Allow] 或 [Deny]）。
      * [prompt] 是给用户看的操作摘要（来自 `ToolEntry.summarize`，与工具定义同源）。
+     *
+     * @param failClosed true = **问不到用户就拒绝**（而不是 [ApprovalGate.resolveAsk] 默认的
+     *   超时/无通道降级放行）。只给「第三方远端工具」用 —— 理由见该字段的产地
+     *   [ToolCallContext.failClosedConfirmation]：fail-open 的前提是工具侧自己有
+     *   "未获确认时降级为无副作用动作"的保证，MCP 工具没有这个保证。
      */
     data class Ask(
         val origin: DecisionOrigin,
         val prompt: String,
+        val failClosed: Boolean = false,
     ) : ToolDecision
 }

@@ -116,6 +116,8 @@ internal fun ChatSettingsDialog(
     var saving by remember { mutableStateOf(false) }
     // AI 工具管理子页面
     var showToolsManage by remember { mutableStateOf(false) }
+    // 外部 MCP 服务器管理子页面（连第三方 MCP，工具动态注入工具清单）
+    var showMcpServers by remember { mutableStateOf(false) }
     // Agent 会话记忆子页面
     var showAgentSection by remember { mutableStateOf(false) }
     // AI 技能管理子页面（用户自定义技能）
@@ -762,6 +764,36 @@ internal fun ChatSettingsDialog(
                 Text(text = "›", color = BrewMuted, fontSize = 20.sp)
             }
 
+            Spacer(Modifier.height(10.dp))
+            // 外部 MCP 入口 → 子页面
+            // 放在「AI 工具」正下方：MCP 工具最终也出现在工具清单里（多一个「外部 MCP」分类），
+            // 但它多了一层「服务器」粒度（地址/鉴权/连接状态），所以入口分开、名字点明"外部"。
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BrewPanelHi.copy(alpha = 0.5f))
+                    .border(1.dp, BrewBorder, RoundedCornerShape(12.dp))
+                    .clickable { showMcpServers = true }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.chat_settings_mcp),
+                        color = BrewTextBright,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = stringResource(R.string.chat_settings_mcp_hint),
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                    )
+                }
+                Text(text = "›", color = BrewMuted, fontSize = 20.sp)
+            }
+
             Spacer(Modifier.height(16.dp))
             // AI 技能管理入口 → 子页面
             Row(
@@ -848,6 +880,10 @@ internal fun ChatSettingsDialog(
 
     if (showToolsManage) {
         ToolsManagePage(app = app, onBack = { showToolsManage = false })
+    }
+
+    if (showMcpServers) {
+        McpServersPage(app = app, onBack = { showMcpServers = false })
     }
 
     if (showSkillsManage) {

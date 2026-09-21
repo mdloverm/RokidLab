@@ -500,6 +500,8 @@ enum class GuideStep {
     SELECT_HOST_APP,
     SELECT_MIRROR_SOURCE,
     AUTHORIZE,
+    /** 权限步：装机前把手机侧权限一次性逐项开齐（见 AppPermission 总表） */
+    PERMISSIONS,
     INSTALL_LINK,
     CONFIGURE_WIFI,
     READY
@@ -510,6 +512,14 @@ data class PrerequisitesState(
     val hostApp: RokidHostApp? = null,
     val mirrorSourceSelected: Boolean = false,
     val authorized: Boolean = false,
+    /**
+     * 权限步是否已过。
+     *
+     * 启动时用 AppPermission 总表**实测**赋值：全部已开 → true（这一步不出现，老用户无感）；
+     * 用户在本步点「下一步」或「跳过」→ 本会话内置 true。
+     * 与其他步骤一致**不做持久化** —— 缺权限时下次启动仍会重新提示，正是这一步存在的意义。
+     */
+    val permissionsReady: Boolean = true,
     val rokidLinkInstalled: Boolean = false,
     val wifiConfigured: Boolean = false,
 ) {
@@ -518,6 +528,7 @@ data class PrerequisitesState(
             hostApp == null -> GuideStep.SELECT_HOST_APP
             !mirrorSourceSelected -> GuideStep.SELECT_MIRROR_SOURCE
             !authorized -> GuideStep.AUTHORIZE
+            !permissionsReady -> GuideStep.PERMISSIONS
             !rokidLinkInstalled -> GuideStep.INSTALL_LINK
             !wifiConfigured -> GuideStep.CONFIGURE_WIFI
             else -> GuideStep.READY

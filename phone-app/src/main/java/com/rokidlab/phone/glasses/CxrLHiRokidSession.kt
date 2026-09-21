@@ -297,8 +297,10 @@ class CxrLHiRokidSession(
         linkAlive = { cxrlConnected },
         cmdLock = aiCmdLock,
         asrDeliver = { text -> dispatchGlassesAsrText(text) },
+        // ⚠️ 不要在这里再显式 stopTtsOnGlass()：abortCurrentAi() 内部必发一次 tts_stop
+        //（AiConversationService.abortCurrentAi → session.stopTtsOnGlass()），
+        // 重复下发只会让同一事件产生两条帧（且第二条与下行序列争 aiCmdLock）。
         onAbortAi = {
-            stopTtsOnGlass()
             abortCurrentAi()
         },
         onPhotoAsk = { startPhotoAsk() },
@@ -1021,6 +1023,9 @@ class CxrLHiRokidSession(
         aiuiHost.stopAgentListPushWindow()
         // Phase 4：清空等待中的工具确认并摘除全局通道（Session 销毁后拒绝新确认）
         toolConfirm.abortAll()
+        // v2：停止头动规则引擎（数据流随会话终止，继续 tick 只会空转），并清空陈旧缓冲
+        MotionRuleEngine.stop()
+        MotionBuffer.clear()
         // 通道常驻：只解绑会话，**不**把 ApprovalGate.confirmationResolver 置 null
         // （置 null 会让重连后的会话里「打电话」等工具再次被判 no confirmation channel）
         com.rokidlab.phone.ai.GlassToolConfirmChannel.unbind(this)
@@ -1103,7 +1108,20 @@ class CxrLHiRokidSession(
 
             override fun onInstallAppResult(success: Boolean) {}
             override fun onUnInstallAppResult(success: Boolean) {}
-            override fun onOpenAppResult(success: Boolean) {}
+            override fun onOpenAppResult(success: Boolean) {
+                // CUSTOMAPP 会话就绪（appStart 成功 = 自定义指令路由打通）：
+                // 自动开启眼镜端 IMU 头动数据流（默认关，随会话拉起；断连时眼镜端自动停）。
+                // 开流失败不重试 —— 工具查询侧有懒重启兜底（缓冲 stale > 5s 时重发 imu_start）。
+                if (success) {
+                    // v2：随数据流启动头动规则引擎（无规则时 tick 空转，代价可忽略）
+                    MotionRuleEngine.init(appContext)
+                    MotionRuleEngine.start()
+                    appScope.launch(Dispatchers.IO) {
+                        val r = deviceControl.sendImuControl(true)
+                        Log.i(TAG, "imu_start on session open -> $r")
+                    }
+                }
+            }
             override fun onStopAppResult(success: Boolean) {}
             override fun onQueryAppResult(installed: Boolean) {}
         })
@@ -1181,6 +1199,17 @@ class CxrLHiRokidSession(
                             (appContext as? LabApplication)?.setGlassesIp(ip)
                         } else {
                             Log.w(TAG, "Received glasses IP payload but decode failed (size=${data?.size ?: 0})")
+                        }
+                    }
+                    AiChannel.TOPIC_IMU_DATA -> {
+                        // v1 查询层：眼镜端 ~20Hz 头动数据批量上行（500ms/批），写入环形缓冲。
+                        // 消费方：get_head_pose / get_motion_history 工具与 v2 规则引擎。
+                        // binder 线程只做解码+入缓冲（O(n) 拷贝，无阻塞）。
+                        val samples = AiChannel.decodeImuData(capsToFieldList(data))
+                        if (samples != null) {
+                            MotionBuffer.append(samples)
+                        } else {
+                            Log.w(TAG, "imu_data payload decode failed (size=${data?.size ?: 0})")
                         }
                     }
                     "Jsai_GetRequestInfo" -> {

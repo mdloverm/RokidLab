@@ -137,9 +137,48 @@ internal class PhotoQuizService(private val session: CxrLHiRokidSession) {
         )
     }
 
+    /**
+     * 同步拍一张眼镜画面（供 AI 工具 `look_at_view` 调用）。
+     *
+     * ⚠️ **必须在非主线程调用**：拍照结果经 `session.mainHandler.post` 投递，
+     * 在**主线程**上 `await` 会自我死锁 —— 所以这里显式拒掉主线程调用而不是"让它卡住"。
+     * 工具循环本身跑在 worker 线程，满足条件。
+     *
+     * 与「拍照问 AI」复用同一条拍照链路（同一个 [takeGlassesPhoto]），因此不会出现
+     * 两套取图实现漂移；并发保护沿用 CXRLink 的"一次一个拍照请求"语义。
+     *
+     * @return JPEG 字节；超时 / 缺前置条件 / 链路异常一律 null（由调用方负责措辞）
+     */
+    fun capturePhotoBlocking(
+        width: Int = 1024,
+        height: Int = 768,
+        quality: Int = 80,
+        timeoutMs: Long = 20_000,
+    ): ByteArray? {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            Log.w(TAG, "capturePhotoBlocking called on main thread, refusing (would deadlock)")
+            return null
+        }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var out: ByteArray? = null
+        takeGlassesPhoto(
+            width, height, quality,
+            { jpeg -> out = jpeg; latch.countDown() },
+            { err ->
+                Log.w(TAG, "capturePhotoBlocking error: $err")
+                latch.countDown()
+            },
+        )
+        // latch 的 countDown/await 已经建立了 happens-before，out 的可见性无需额外同步
+        if (!latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            Log.w(TAG, "capturePhotoBlocking timeout after ${timeoutMs}ms")
+            return null
+        }
+        return out
+    }
+
     /** 「拍照问 AI」全流程入口（无显式回调，用聊天界面注册的默认回调；编排见 PhotoQuizFlow.start） */
     fun startPhotoAsk() = photoQuiz.start()
-
     /** 「拍照问 AI」全流程入口（显式回调；编排见 PhotoQuizFlow.start） */
     fun startPhotoAsk(
         onStage: (Int) -> Unit,

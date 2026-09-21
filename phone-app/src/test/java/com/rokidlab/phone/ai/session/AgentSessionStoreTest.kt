@@ -20,7 +20,8 @@ import java.io.File
  *
  *  1. 每轮记录 user+assistant 两条，assistant 的工具轨迹由 `ToolCall` 事件**派生**；
  *  2. 条数上限 12（约 6 轮）/ 字符上限 6000：超出时把最旧一轮压进置顶滚动摘要；
- *  3. 10 分钟（600000ms）无活动自动清空（过期用**声明**表达，不删行）；
+ *  3. **清空**：只由用户显式触发（`wipe` 真删文件）—— 原先的"10 分钟无活动自动过期"已于
+ *     2026-09-20 移除（与"记忆随对话保存"相抵，且静默发生）；
  *  4. **重启重建**：同一个文件重新打开，历史逐条一致（这是整个接线的目的）；
  *  5. 工具调用/结果成对、被打断的轮不留半轮（否则请求会出现连续两条 user → 400）。
  */
@@ -45,7 +46,7 @@ class AgentSessionStoreTest {
 
     /** 新开一个 store（同一文件 = 模拟重启）；时钟取自 [now] */
     private fun newStore(): AgentSessionStore =
-        AgentSessionStore(SessionLog(file) { now }, clock = { now }, onTrim = { trims.add(it) })
+        AgentSessionStore(SessionLog(file) { now }, onTrim = { trims.add(it) })
 
     /** 记一轮：user + （可选的工具调用对）+ assistant */
     private fun recordTurn(
@@ -136,44 +137,6 @@ class AgentSessionStoreTest {
             digest.content.lineSequence().count() >= 3,
         )
         assertTrue("摘要自身应 ≤ 800 字符", digest.content.length <= 800)
-    }
-
-    @Test
-    fun `10 分钟内无活动不清理 超过则清空`() {
-        val store = newStore()
-        recordTurn(store, "hi", "yo")
-        val last = now
-        // 9:59 内：未过期
-        assertFalse(store.maybeExpire(last + 599_999))
-        assertEquals(2, store.history().size)
-        // 恰好 10:00：未超过阈值，不清理
-        assertFalse(store.maybeExpire(last + 600_000))
-        assertEquals(2, store.history().size)
-        // 超过 10:00：清理，且返回 true
-        assertTrue(store.maybeExpire(last + 600_001))
-        assertTrue(store.history().isEmpty())
-    }
-
-    @Test
-    fun `注入时钟驱动过期语义`() {
-        val store = newStore()
-        recordTurn(store, "a", "b")
-        now += 9 * 60_000L
-        recordTurn(store, "c", "d") // 距上次 9 分钟，重置计时
-        now += 600_001L
-        assertTrue("距最后一次活动超过 10 分钟应过期", store.maybeExpire())
-        assertTrue(store.history().isEmpty())
-    }
-
-    @Test
-    fun `过期清空连滚动摘要一起清掉`() {
-        val store = newStore()
-        repeat(10) { i -> recordTurn(store, "u$i", "r$i") }
-        assertTrue("前置条件：已产生滚动摘要", store.hasDigest())
-        val last = now
-        assertTrue(store.maybeExpire(last + 700_000))
-        assertTrue("历史应清空", store.history().isEmpty())
-        assertFalse("摘要必须一起清 —— 否则像没清干净", store.hasDigest())
     }
 
     @Test

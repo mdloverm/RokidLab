@@ -217,7 +217,7 @@
     <string name="guide_authorize_step">授权</string>
     <string name="guide_ready_step">完成</string>
     <string name="guide_install_link_step">安装</string>
-    <string name="guide_install_link_title">第四步：安装眼镜端应用</string>
+    <string name="guide_install_link_title">第五步：安装眼镜端应用</string>
     <string name="guide_install_link_desc">需要将眼镜端应用安装到眼镜上，已使用 Rokid Link 功能</string>
     <string name="guide_install_link_hint">请确保眼镜已通过蓝牙连接到手机</string>
     <string name="guide_install_link_btn">开始安装到眼镜</string>
@@ -236,7 +236,17 @@
     <string name="guide_step3_title_local">第三步：授权眼镜</string>
     <string name="guide_step3_desc">需要在眼镜端授权此应用</string>
     <string name="guide_wifi_step">WiFi</string>
-    <string name="guide_step4_title_local">第五步：配置眼镜 WiFi</string>
+    <!-- 权限步（第四步）：逐项自动检测 + 点击拉起。
+         ⚠️ 新增任何系统权限都要登记到 AppPermission 总表，这里会自动多出一行 -->
+    <string name="guide_permissions_title">第四步：开启全部权限</string>
+    <string name="guide_permissions_desc">逐项点击开启，缺哪项一眼可见</string>
+    <string name="guide_permissions_granted">已开启</string>
+    <string name="guide_permissions_tap">点击开启</string>
+    <string name="guide_permissions_go_settings">去系统设置</string>
+    <string name="guide_permissions_manual">需手动开启</string>
+    <string name="guide_permissions_next">已全部开启，下一步</string>
+    <string name="guide_permissions_pending">还有 %1$d 项未开启</string>
+    <string name="guide_step4_title_local">第六步：配置眼镜 WiFi</string>
     <string name="guide_step4_desc">为眼镜设置与手机 WiFi 网络</string>
     <string name="wifi_ssid_label">WiFi 名称</string>
     <string name="wifi_password_label">WiFi 密码</string>
@@ -387,9 +397,11 @@
     <!-- 乐奇聊天 - AI 过程（思考 / 工具调用）时间线 -->
     <string name="chat_trace_title">过程</string>
     <string name="chat_trace_steps">%1$d 步</string>
-    <string name="chat_trace_thinking">思考中…</string>
-    <string name="chat_trace_thought">已思考</string>
+    <string name="chat_trace_thinking">正在思考</string>
+    <string name="chat_trace_thought">思考完毕</string>
     <string name="chat_trace_tool_running">执行中…</string>
+    <string name="chat_trace_kb_running">正在检索知识库</string>
+    <string name="chat_trace_kb_done">已检索知识库</string>
     <string name="chat_trace_collapse">收起过程</string>
     <string name="chat_trace_expand">展开过程</string>
     <string name="chat_trace_more">另有 %1$d 步已折叠</string>
@@ -402,9 +414,9 @@
     <string name="chat_settings_api_key">API 密钥</string>
     <string name="chat_settings_model">模型名</string>
     <string name="chat_settings_image_input">图像理解</string>
-    <string name="chat_settings_image_input_hint">拍照直接发给模型；需模型支持图像，不支持则自动转文字</string>
-    <string name="chat_settings_expand_trace">展开「过程」</string>
-    <string name="chat_settings_expand_trace_hint">显示每一步的思考、工具调用与本轮 token；关掉后只留一行标题</string>
+    <string name="chat_settings_image_input_hint">拍照直接发给模型；不支持图像时自动转文字</string>
+    <string name="chat_settings_expand_trace">展开过程</string>
+    <string name="chat_settings_expand_trace_hint">显示思考、工具调用与 token；关掉只留标题</string>
     <!-- 模型能力（llm 接缝）：图像开关的可用性由能力结论决定，不再让用户自己猜 -->
     <string name="chat_settings_image_unsupported">当前模型不支持图像输入，拍照将先转成文字</string>
     <string name="chat_settings_image_unknown">该模型是否支持图像输入尚未确认，可点「检测」实测</string>
@@ -444,6 +456,37 @@
     <string name="ai_tool_cat_timer">提醒与任务</string>
     <string name="ai_tool_cat_aiui">AI 应用</string>
     <string name="ai_tool_cat_files">文件</string>
+    <string name="ai_tool_cat_mcp">外部 MCP</string>
+    <string name="chat_settings_mcp">外部 MCP</string>
+    <string name="chat_settings_mcp_hint">连接第三方 MCP 服务，扩展 AI 能力</string>
+    <string name="mcp_connecting">正在连接…</string>
+    <string name="mcp_add">添加服务器</string>
+    <string name="mcp_reconnect_all">全部重连</string>
+    <string name="mcp_empty">还没有添加服务器。点「添加服务器」填入 MCP 地址（必须是 https）。</string>
+    <string name="mcp_state_disabled">已停用</string>
+    <string name="mcp_state_connected">已连接</string>
+    <string name="mcp_state_unknown">未连接</string>
+    <string name="mcp_tools_count">%1$d 个工具</string>
+    <string name="mcp_ignored">已忽略 %1$d 个工具</string>
+    <string name="mcp_tools_expand">查看 %1$d 个工具</string>
+    <string name="mcp_tools_collapse">收起 %1$d 个工具</string>
+    <string name="mcp_reconnect">重连</string>
+    <string name="mcp_edit">编辑</string>
+    <string name="mcp_delete">删除</string>
+    <string name="mcp_dialog_add_title">添加 MCP 服务器</string>
+    <string name="mcp_dialog_edit_title">编辑 MCP 服务器</string>
+    <string name="mcp_field_name">名称（可选）</string>
+    <string name="mcp_field_url">服务器地址</string>
+    <string name="mcp_field_url_hint">例如 https://example.com/mcp（自建本地服务可填 http://127.0.0.1:8181/mcp）</string>
+    <string name="mcp_url_must_be_https">只支持 https 地址（系统禁止明文流量；明文 http 仅回环地址 localhost / 127.0.0.1 可用）</string>
+    <string name="mcp_field_token">访问令牌（可选）</string>
+    <string name="mcp_field_token_hint">填入后作为 Authorization 请求头发送</string>
+    <string name="mcp_trusted_label">信任此服务器</string>
+    <string name="mcp_trusted_hint">开启后其工具按本机能力对待，不再逐次确认</string>
+    <string name="mcp_save">保存</string>
+    <string name="mcp_cancel">取消</string>
+    <string name="mcp_delete_confirm_title">删除该服务器？</string>
+    <string name="mcp_delete_confirm_body">「%1$s」的工具会立刻从 AI 可调用清单中移除。</string>
     <string name="ai_tool_cat_system">系统</string>
     <string name="chat_settings_save">保存</string>
     <string name="chat_settings_saved">已保存</string>
@@ -515,36 +558,62 @@
     <string name="chat_ocr_native_unavailable">当前设备不支持本地 OCR，无法拍照识题</string>
     <string name="chat_photo_failed">拍照失败</string>
     <string name="chat_kb_title">知识库</string>
-    <string name="chat_kb_subtitle">导入 txt 文档，拍照问 AI 时自动检索相关资料</string>
+    <string name="chat_kb_subtitle">导入 txt 文档，问 AI 时自动查里面的内容</string>
     <string name="chat_kb_import">导入文档</string>
     <string name="chat_kb_empty">知识库为空，请先导入文档</string>
     <string name="chat_kb_delete">删除</string>
-    <string name="chat_kb_import_failed">导入失败（仅支持 txt）</string>
+    <string name="chat_kb_import_failed">导入失败（仅支持 txt，且内容不能为空）</string>
     <string name="chat_kb_imported">已导入 %1$s</string>
     <string name="chat_kb_confirm_delete">删除「%1$s」？删除后不可恢复</string>
+    <string name="chat_kb_doc_meta">%1$s · %2$d 段 ›</string>
+    <string name="chat_kb_view_loading">正在读取内容…</string>
+    <string name="chat_kb_view_no_content">这份文档没有可显示的内容</string>
+    <string name="chat_kb_view_too_long">内容过长，仅显示前 %1$d 字，暂不支持编辑</string>
+    <string name="chat_kb_view_edit">编辑</string>
+    <string name="chat_kb_view_save">保存</string>
+    <string name="chat_kb_view_saving">保存中…</string>
+    <string name="chat_kb_view_saved">已保存</string>
+    <string name="chat_kb_view_save_failed">保存失败，请重试</string>
+
+    <!-- 知识库 - 语义向量检索 -->
+    <string name="chat_kb_semantic_title">语义检索</string>
+    <string name="chat_kb_semantic_hint">开启后用向量理解「换个说法」的提问，与关键词检索自动融合；需要模型服务支持 embeddings 接口</string>
+    <string name="chat_kb_semantic_model">嵌入模型（留空自动检测）</string>
+    <string name="chat_kb_semantic_detect">自动检测</string>
+    <string name="chat_kb_semantic_rebuild">重建索引</string>
+    <string name="chat_kb_semantic_index_now">立即索引</string>
+    <string name="chat_kb_semantic_indexing">正在索引 %1$d/%2$d 块…</string>
+    <string name="chat_kb_semantic_status_ready">已索引 %1$d/%2$d 块 · %3$s</string>
+    <string name="chat_kb_semantic_status_pending">%1$d/%2$d 块已索引，点「重建索引」补齐</string>
+    <string name="chat_kb_semantic_status_off">未开启（当前为纯关键词检索）</string>
+    <string name="chat_kb_semantic_detect_failed">未检测到可用的嵌入模型：当前服务商可能不支持 embeddings，可手动填写模型名后再试</string>
+    <string name="chat_kb_semantic_no_config">读不到在线模型配置，请先在「乐奇聊天 → AI 设置」配置模型</string>
+    <string name="chat_kb_semantic_index_done">索引完成：%1$d 块</string>
+    <string name="chat_kb_semantic_index_failed">索引失败：%1$s</string>
 
     <!-- 乐奇聊天 - 清空对话 -->
     <string name="chat_clear">清空对话</string>
-    <string name="chat_clear_confirm">清空全部聊天记录？清空后不可恢复，同时会重置 AI 多轮上下文。</string>
+    <string name="chat_clear_confirm">清空当前对话的聊天记录？清空后不可恢复，同时会清空该对话的 AI 上下文记忆。</string>
 
     <!-- 乐奇聊天 - Agent 会话记忆 -->
-    <string name="agent_section_title">Agent 会话记忆</string>
-    <string name="agent_section_subtitle">多轮上下文记忆管理</string>
+    <string name="agent_section_title">会话记忆</string>
+    <string name="agent_section_subtitle">会话记忆按对话各自保存，长期记忆所有对话共用</string>
     <string name="agent_memory_switch">启用会话记忆</string>
-    <string name="agent_memory_switch_hint">开启后 AI 可理解上下文指代（如「再来一首」「它是什么」），关闭后每次对话独立</string>
-    <string name="agent_memory_info">最近 6 轮（最多 12 条 / 6000 字符），10 分钟无活动自动清空</string>
-    <string name="agent_memory_clear">清空会话记忆</string>
-    <string name="agent_memory_clear_confirm">清空全部 Agent 多轮上下文记忆？不影响当前聊天记录。</string>
-    <string name="agent_memory_cleared">会话记忆已清空</string>
+    <string name="agent_memory_switch_hint">开启后 AI 能听懂「再来一首」「它是什么」这类指代。关闭只是停用——已积累的上下文会保留，重新开启后仍然生效</string>
+    <string name="agent_memory_info">超出上下文上限时自动压缩较早的对话，要点以摘要保留</string>
+    <string name="agent_memory_clear">清空全部会话记忆</string>
+    <string name="agent_memory_clear_confirm">将清空全部对话的上下文记忆（其中 %1$d 个存有记忆），聊天记录不受影响。此操作不可恢复。</string>
+    <string name="agent_memory_cleared">已清空全部会话记忆</string>
+    <string name="agent_memory_none">当前没有会话记忆</string>
     <string name="agent_longterm_switch">启用长期记忆</string>
-    <string name="agent_longterm_switch_hint">开启后 AI 会记住你的偏好与个人信息（如称呼、喜欢的歌手、常用应用），跨会话持续生效</string>
+    <string name="agent_longterm_switch_hint">开启后 AI 会记住你的偏好与个人信息（如称呼、喜欢的歌手、常用应用），对所有对话生效</string>
     <string name="agent_longterm_info">已记住 %1$d 条长期记忆</string>
     <string name="agent_longterm_clear">清空长期记忆</string>
-    <string name="agent_longterm_clear_confirm">清空全部长期记忆？AI 将忘记已记住的用户偏好与个人信息。</string>
+    <string name="agent_longterm_clear_confirm">清空全部长期记忆？AI 将忘记已记住的用户偏好与个人信息，聊天记录不受影响。</string>
     <string name="agent_longterm_cleared">长期记忆已清空</string>
     <string name="agent_longterm_manage">查看与编辑</string>
     <string name="agent_longterm_manage_title">长期记忆</string>
-    <string name="agent_longterm_manage_hint">这些是乐奇跨会话记住的关于你的事实与偏好。发现记错了可以直接改，或者删掉——不需要重新跟它说一遍。</string>
+    <string name="agent_longterm_manage_hint">这些是乐奇在所有对话里记住的关于你的事实与偏好。发现记错了可以直接改，或者删掉——不需要重新跟它说一遍。</string>
     <string name="agent_longterm_manage_loading">读取中…</string>
     <string name="agent_longterm_manage_empty">还没有长期记忆。跟乐奇说「记住我喜欢…」就会出现在这里。</string>
     <string name="agent_longterm_item_delete">删除这一条</string>
@@ -659,6 +728,8 @@
     <string name="ai_tool_launch_glasses_app_desc">打开眼镜上的应用</string>
     <string name="ai_tool_control_music_name">音乐播放控制</string>
     <string name="ai_tool_control_music_desc">播放歌曲或停止播放</string>
+    <string name="ai_tool_stop_tts_name">停止播报</string>
+    <string name="ai_tool_stop_tts_desc">让眼镜立刻停止语音播报</string>
     <string name="ai_tool_manage_timer_name">定时任务管理</string>
     <string name="ai_tool_manage_timer_desc">创建 / 查看 / 取消定时提醒</string>
     <string name="ai_tool_manage_calendar_name">日历管理</string>
@@ -681,6 +752,40 @@
     <string name="ai_tool_save_code_file_desc">写入代码/页面文件</string>
     <string name="ai_tool_read_code_file_name">读取项目源码</string>
     <string name="ai_tool_read_code_file_desc">读回已生成项目的源码</string>
+    <!-- 文件工作区（列/读/搜/改/删/移）：作用域见 ai/FileWorkspace.kt -->
+    <string name="ai_tool_list_files_name">列出文件</string>
+    <string name="ai_tool_list_files_desc">查看项目工程目录与下载目录里的文件</string>
+    <string name="ai_tool_read_text_file_name">读取文件</string>
+    <string name="ai_tool_read_text_file_desc">读取项目或下载目录里的文本文件</string>
+    <string name="ai_tool_search_files_name">搜索文件</string>
+    <string name="ai_tool_search_files_desc">按文件名关键词找文件</string>
+    <string name="ai_tool_edit_text_file_name">修改文件</string>
+    <string name="ai_tool_edit_text_file_desc">追加内容或整文件覆盖（仅项目目录）</string>
+    <string name="ai_tool_delete_file_name">删除文件</string>
+    <string name="ai_tool_delete_file_desc">删除文件、目录或整个项目（不可恢复）</string>
+    <string name="ai_tool_move_file_name">移动/重命名文件</string>
+    <string name="ai_tool_move_file_desc">在项目内改名或移动位置</string>
+    <!-- 视觉：用眼镜摄像头看真实世界 -->
+    <string name="ai_tool_look_at_view_name">看画面</string>
+    <string name="ai_tool_look_at_view_desc">用眼镜摄像头看眼前的东西</string>
+    <!-- 头动感知：眼镜 IMU 数据查询（v1） -->
+    <string name="ai_tool_get_head_pose_name">头部姿态</string>
+    <string name="ai_tool_get_head_pose_desc">通过眼镜 IMU 获取用户当前的头部姿态（俯仰/偏航/横滚与角速度），回答「我抬头了吗」这类问题或需要结合头部朝向判断时使用</string>
+    <string name="ai_tool_get_motion_history_name">动作历史</string>
+    <string name="ai_tool_get_motion_history_desc">获取最近一段时间的头部动作序列，用于判断用户是否点头、摇头或保持静止</string>
+    <!-- 头动规则：动作绑定行为（v2 规则编程层） -->
+    <string name="ai_tool_set_motion_rule_name">设置头动规则</string>
+    <string name="ai_tool_set_motion_rule_desc">把头部动作绑定到工具：点头/摇头/静止/持续抬头触发手机上指定的工具（含 MCP 工具）</string>
+    <string name="ai_tool_remove_motion_rule_name">删除头动规则</string>
+    <string name="ai_tool_remove_motion_rule_desc">删除已设置的头动规则，不带参数时列出当前全部规则</string>
+    <!-- 伪工具（不进设置页，但会出现在「过程」卡片里，显示名必须有） -->
+    <string name="ai_tool_load_skill_name">加载技能</string>
+    <string name="ai_tool_load_skill_section_name">读取技能章节</string>
+    <string name="ai_tool_install_skill_name">安装技能</string>
+    <string name="ai_tool_list_skills_name">查看技能清单</string>
+    <string name="ai_tool_delete_skill_name">删除技能</string>
+    <string name="ai_tool_update_plan_name">制定任务计划</string>
+    <string name="ai_tool_manage_memory_name">记住偏好</string>
     <string name="ai_tool_open_aiui_app_name">打开智能体应用</string>
     <string name="ai_tool_open_aiui_app_desc">在眼镜上打开 AIUI 应用</string>
     <string name="ai_tool_install_aiui_project_name">安装对话生成的AIUI项目</string>
@@ -842,30 +947,11 @@
     <string name="reconnect">重新连接</string>
     <string name="reconnecting">重新连接...</string>
 
-    <!-- Compatibility -->
+    <!-- Compatibility（电池优化 / 自启动的引导已并入引导流程「开启全部权限」步，不再在启动期弹窗） -->
     <string name="battery_optimization_title">电池优化</string>
-    <string name="battery_optimization_desc">为确保眼镜连接和后台投屏服务稳定运行，建议将本应用加入电池优化白名单，避免系统在后台强制终止应用进程。</string>
-    <string name="battery_optimization_guide">前往设置</string>
-    <string name="battery_optimization_skip">稍后再说</string>
-    <string name="auto_start_title">自启动权限</string>
-    <string name="auto_start_desc">部分手机系统（如小米、华为、OPPO、vivo）会限制应用自启动。请开启自启动权限，以确保眼镜安装 APK 结果回传、定时消息等后台功能正常工作。</string>
-    <string name="auto_start_guide">前往开启</string>
-    <string name="auto_start_skip">暂不需要</string>
-    <string name="overlay_permission_title">悬浮窗权限</string>
-    <string name="overlay_permission_desc">部分手机（OPPO/vivo）需要额外授予悬浮窗权限，以确保投屏功能稳定运行。</string>
-    <string name="overlay_permission_guide">前往开启</string>
-    <string name="overlay_permission_skip">不再提示</string>
-    <string name="compatibility_settings_title">兼容性设置</string>
-    <string name="compatibility_settings_desc">检测到您的设备为 %s，系统有额外的后台省电策略。建议完成以下设置以优化应用体验。</string>
-    <string name="compatibility_settings_battery">☐ 加入电池优化白名单</string>
-    <string name="compatibility_settings_auto_start">☐ 开启自启动权限</string>
-    <string name="compatibility_settings_done">已完成设置</string>
-    <string name="log_battery_optimization_guide">引导用户开启电池优化白名单</string>
-    <string name="log_battery_optimization_granted">已在电池优化白名单中</string>
-    <string name="log_battery_optimization_skipped">用户跳过了电池优化引导</string>
-    <string name="log_auto_start_guide">引导用户开启自启动权限</string>
-    <string name="log_auto_start_skipped">用户跳过了自启动引导</string>
-    <string name="log_overlay_permission_guide">引导用户开启悬浮窗权限</string>
+    <string name="auto_start_title">自启动</string>
+    <string name="log_mirror_permission_missing">投屏缺权限：%1$s</string>
+    <string name="log_mirror_notification_missing">投屏缺通知权限，仅状态栏卡片不显示</string>
 
     <!-- UpdateDialog -->
     <string name="download_in_progress">下载中...</string>
@@ -1213,16 +1299,11 @@
 
     <!-- 日志消息 -->
     <string name="log_bluetooth_permission_denied">蓝牙权限被拒绝</string>
-    <string name="log_notification_permission_granted">通知权限已授权</string>
-    <string name="log_notification_permission_denied">通知权限被拒绝，可在系统设置中开启</string>
     <string name="log_bluetooth_not_enabled">蓝牙仍未开启</string>
     <string name="log_mediaprojection_denied">屏幕录制权限被拒绝</string>
     <string name="log_mediaprojection_granted">屏幕录制权限已授权，正在启动投屏服务</string>
     <string name="log_loaded_apps">已加载 %d 个应用（使用离线缓存）</string>
     <string name="log_ready_authorize">准备就绪。安装眼镜应用前请先授权 %s。</string>
-    <string name="log_requesting_notification_permission">正在请求通知权限...</string>
-    <string name="log_notification_permission_guide">通知权限未授权，正在引导用户前往设置</string>
-    <string name="log_cannot_open_settings">无法打开通知设置：%s</string>
     <string name="log_refreshing_registry">正在刷新应用商店列表...</string>
     <string name="log_registry_updated">应用商店列表已更新（%d 个应用）</string>
     <string name="log_registry_unavailable">远程注册表不可用：%s</string>
@@ -1345,11 +1426,7 @@
     <string name="developer_error_no_token">❌ 打包时未配置 Gitee Token，请联系开发者在代码中填入 Token 后重打包</string>
     <string name="developer_error_duplicate_id">❌ 应用 ID \"%s\" 已存在，请使用其他 ID</string>
 
-    <!-- Compatibility - new -->
-    <string name="dialog_got_it">知道了</string>
-    <string name="vivo_limit_title">vivo 后台限制提示</string>
-    <string name="vivo_limit_desc">检测到您的设备为 vivo/iQOO，系统对非白名单应用有 10 分钟后台存活硬限制。\n\n投屏等长时间后台操作可能被中断。\n\n建议将本应用加入「受保护应用列表」（设置 → 安全 → 更多安全设置 → 受保护应用），以确保后台服务稳定运行。</string>
-    <string name="log_samsung_deep_sleep">三星设备检测：如投屏超15分钟无交互，可能被系统自动降权为后台</string>
+    <string name="vivo_limit_title">vivo 后台限制</string>
     <string name="phone_mirror_notification_channel_fgs">手机投屏前台服务</string>
     <string name="phone_mirror_notification_channel_fgs_desc">用于手机投屏前台服务运行状态显示</string>
     <string name="category_utility">实用工具</string>
@@ -1380,12 +1457,14 @@
     <string name="download_already_running">「%s」正在下载中</string>
 
     <!-- ══ 权限申请（全品牌统一：缺权限时自动拉起系统授权页，而不是只回一句"请去设置里开"） ══ -->
+    <string name="permission_label_bluetooth">蓝牙</string>
     <string name="permission_label_contacts">通讯录</string>
     <string name="permission_label_phone">电话</string>
-    <string name="permission_label_calendar">日历</string>
+    <string name="permission_label_calendar_read">日历读取</string>
+    <string name="permission_label_calendar_write">日历写入</string>
     <string name="permission_label_location">位置信息</string>
     <string name="permission_label_notification">通知</string>
-    <string name="permission_label_overlay">显示在其他应用上层（后台弹出界面）</string>
+    <string name="permission_label_overlay">显示在其他应用上层</string>
     <string name="permission_dialog_title">需要开启权限</string>
     <string name="permission_dialog_message">「%1$s」需要以下权限：\n%2$s\n\n点「立即开启」后，在系统弹窗里选「允许」即可。</string>
     <string name="permission_dialog_allow">立即开启</string>
@@ -1406,10 +1485,4 @@
     <string name="permission_reason_calendar">读取与创建日程</string>
     <string name="permission_reason_location">获取当前位置</string>
     <string name="permission_reason_launch">让眼镜语音在你锁屏或回到桌面时也能拨号、设闹钟、打开应用</string>
-    <string name="perm_overlay_title">后台运行权限</string>
-    <string name="perm_overlay_desc">为了让眼镜语音在你锁屏或回到桌面时也能「打电话 / 设闹钟 / 打开应用」，需要开启「显示在其他应用上层」（部分手机叫「后台弹出界面」「悬浮窗」）。\n\n未开启时，这些指令手机上不会有任何反应。</string>
-    <string name="log_permission_bootstrap_start">开始补齐手机权限（%d 项）</string>
-    <string name="log_permission_bootstrap_all_granted">AI 工具所需权限已全部就绪</string>
-    <string name="log_permission_overlay_granted">悬浮窗权限已开启（后台启动界面不再被系统拦截）</string>
-    <string name="log_permission_overlay_guide">引导用户开启悬浮窗权限（否则后台拨号/闹钟/打开应用会被系统静默拦截）</string>
 </resources>
