@@ -197,6 +197,19 @@ val rokidLinkProject by lazy {
         ?: error("找不到 RokidLink 模块（既不在 :RokidLink 也不在 :cxrl:RokidLab:RokidLink）")
 }
 
+// ── ink 引擎资产：与眼镜端共用同一份 ──
+// 手机端宿主（AiuiWebHost）与眼镜端（AiuiLinkActivity）跑的是同一套 assets/ink/
+// （index.html / host.js / index.js / env.js / lab-page-bridge.js / pkg/*，其中
+// ink_web_bg.wasm 有 20MB）。这里把 RokidLink 的 assets 目录挂成本模块的 srcDir，
+// APK 里仍是 assets/ink/... 的路径（两端宿主代码零改动），仓库里则只存一份。
+//
+// ⚠️ 两条约束：
+//   1. ink 资产只改 RokidLink 侧那一份；本模块 assets/ 下**不要**再放 ink/，否则同
+//      一路径有两份来源（合并结果取决于顺序，会静默用错版本）。
+//   2. RokidLink/src/main/assets 里新增的任何文件都会一并打进手机端 APK（目前该目录
+//      只有 ink/）。
+android.sourceSets.getByName("main").assets.srcDir(rokidLinkProject.projectDir.resolve("src/main/assets"))
+
 val buildRokidLinkDebug by tasks.registering {
     description = "构建 RokidLink (debug) 并拷贝到 phone-app assets"
     group = "build"

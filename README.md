@@ -487,7 +487,7 @@ RokidLab/
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts                     v3.5：删除本地 libs/*.aar 改用 Maven com.rokid.cxr:cxr-service-bridge:1.0；启用 R8（13.8MB → 8.7MB）；proguard-rules.pro 已 keep com.rokid.cxr.** 因 CXR SDK 走 JNI 反射
 │
-├── RokidLink/src/main/assets/ink/          AIUI 渲染宿主资源
+├── RokidLink/src/main/assets/ink/          AIUI 渲染宿主资源（**双端共用**；phone-app 用 assets.srcDir 挂载本目录，仓库里只存一份）
 │   ├── host.js                              宿主 JS（v3.5：新增 log() / deliverLaunchParams() / window.Lab.callTool/listTools/onToolResult 主 realm 桥）
 │   └── lab-page-bridge.js                  v3.5 新增：页面 realm 的 Lab 工具桥，自动注入到 app.js 前置，靠 fetch + __lab/tool_call_sync 同步阻塞调用
 │
