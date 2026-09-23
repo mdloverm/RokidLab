@@ -45,6 +45,7 @@
    - [双端协议同源与能力握手](#84-双端协议同源与能力握手)
    - [单元测试与回归护栏](#85-单元测试与回归护栏)
    - [聊天历史落盘与线程模型](#86-聊天历史落盘与线程模型)
+   - [本机执行环境与按需组件](#87-本机执行环境与按需组件)
 
 ---
 
@@ -803,12 +804,17 @@ export default {
 `ToolGateway.kt` 是 AIUI 页面调用手机端工具的唯一入口，**改代码前请先读以下约束**：
 
 1. **域白名单按 DOMAIN 继承而非逐工具配置** — 后期加工具只改 `ToolRegistry` 一行注册，网关 / 协议 / JS / skill 全不动。逐工具配会破坏这个性质。
-2. **全部域开放**（用户 2026-09-09 拍板）。保留 `ALLOWED_DOMAINS` 是为了想收窄时只改一处。
-3. **`DENY_TOOLS` 只放会造成技术故障的工具**（自指递归），不放「危险」工具 — 安全边界由 `isEnabled` 总开关负责，不做逐工具安全判断。
+2. **域白名单基线是全开放**（用户 2026-09-09 拍板），当前**唯一例外是 `shell` 域**
+   （2026-09-22 摘除；2026-09-23 追加：该域现有 `run_shell` 与 `install_packages` 两个能力原语，
+   加上脚本库四件套 `save_script`/`list_scripts`/`run_script`/`delete_script` ——
+   后者等价于"把任意命令存下来再跑"，同样是侧门，一并摘除）。
+   保留 `ALLOWED_DOMAINS` 就是为了收窄时只改一处。
+3. **`DENY_TOOLS` 只放会造成技术故障的工具**（自指递归），不放「危险」工具 — 安全边界由 `isEnabled` 总开关负责，不做逐工具安全判断；按「危险」收窄要落**域**白名单（见第 2 条），不加进这张表。
 4. **本类是同步阻塞 API**，调用方必须在非主线程调用。`AsrBridgeCoordinator` 已切到后台线程。
 5. **结果截断 8000 字符**：RFCOMM 单帧上限 64KB，且页面也渲染不下超长文本。
 6. **15s 超时后不 interrupt**：工具可能持有文件/网络资源，强中断会留下半写状态，让线程自己跑完（daemon 线程不阻塞进程退出）。
-7. **执行前先过 `ToolPolicy.check`**（v3.5 加入）：以 `SOURCE_AIUI_PAGE` 来源做 30/min 限流 + 风险闸门 + 审计；`EXTERNAL_SIDE_EFFECT` 工具在确认通道不可用/超时时按 **fail-open 放行**（工具自身只做无副作用动作），仅用户显式取消才 `Deny` —— 详见 §8.2。`isEnabled` 总开关仍是页面侧唯一的一键断能兜底。
+7. **执行前先过 `ApprovalGate`**（`ai/approval/`，v3.5 加入时叫 `ToolPolicy`，现已删除）：以 `SOURCE_AIUI_PAGE` 来源做 30/min 限流 + 风险闸门 + 审计。**「问不到用户时放行还是拒绝」由工具自声明**（`ToolEntry.confirmPolicy`，见 §8.2）：`BLOCK` 的（未信任的 MCP 工具、`send_sms`）问不到就 `Deny` 并给可操作出路；`PROCEED` 的（本机可重做，如 `delete_file`）问不到才降级放行 —— 只有用户**显式取消**在所有分支上都 `Deny`。`isEnabled` 总开关仍是页面侧唯一的一键断能兜底。
+8. ⚠️ **本机执行（proot 容器）不受上面这条 URL 闸门约束**：容器里的 `curl` / `apt` 以 App uid **直接开 socket**，既不经过 `ai/NetGuard` 也不经过 `network_security_config`（两者都只作用于 Java 层）。容器出网的内网/回环可达性是已知事实，**不要用 `LD_PRELOAD`/`hosts` 做半吊子拦截** —— 边界只能落在工具声明上。完整三条边界（出网 / MediaStore 登记 / rootfs 独占）见 `RULES.md` §12.21，执行环境本体与按需组件（Python / Node.js / Git）见 §8.7。
 
 ### 6.5 调试要点
 
@@ -943,7 +949,7 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 
 ### 8.2 工具按域拆分与风险闸门
 
-**注册（`ToolRegistry`）**：全量 **46 个工具 / 12 个域**（info / knowledge / glasses / timer / media / display / web / files / aiui / phone / research / **vision**；另有 `mcp` 域承载运行期动态工具，见 §8.2.1）。域集合决定会话装配：
+**注册（`ToolRegistry`）**：全量 **52 个工具 / 13 个域**（info / knowledge / glasses / timer / media / display / web / files / aiui / phone / research / **vision** / **shell**；另有 `mcp` 域承载运行期动态工具，见 §8.2.1）。域集合决定会话装配：
 
 | 会话 | 装配域 | 说明 |
 |---|---|---|
@@ -951,20 +957,20 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 | 本地模型 | `SESSION_LOCAL_DOMAINS` = 空集 | 本地小模型背不动数十个 schema |
 | AIUI / 代码生成 | `SESSION_AIUI_DOMAINS` = aiui + files + info | 命中技能后切到子集省 token |
 
-**执行（`ai/tools/`）**：`ToolRegistry.execute` 解析参数后按 `toolNames` 路由到 13 个**静态** `ToolProvider` 之一（Info / Knowledge / Glasses / Timer / Media / Display / Web / Files / Aiui / Phone / Status / **Subagent** / **Vision**；接口 `ToolProvider.kt` + schema `ToolSchemas.kt`），外加 1 个**动态** provider（`McpToolProvider`，工具集运行期才知道，见 §8.2.1）。
+**执行（`ai/tools/`）**：`ToolRegistry.execute` 解析参数后按 `toolNames` 路由到 15 个**静态** `ToolProvider` 之一（Info / Knowledge / Glasses / Timer / Media / Display / Web / Files / **Shell** / Aiui / Phone / Status / Subagent / Vision / **Motion**；接口 `ToolProvider.kt` + schema `ToolSchemas.kt`），外加 1 个**动态** provider（`McpToolProvider`，工具集运行期才知道，见 §8.2.1）。
 **新增工具 = 在对应 Provider 的 `tools()` 里加一条 `ToolEntry` + 在 `execute` 加一个分支**（风险档/副作用/要眼镜/过程文案都在那条声明里，六张表由它派生）；网关 / 协议 / JS / skill 全不动。
 ⚠️ 但**模型可见文案仍是手工同步的**：`OpenAiService` 系统提示词、其他 schema 的交叉引用、`assets/skills/aiui-dev/lab-runtime.md`。漏了这些不会编译错，只会让模型不知道该在什么时候用这个工具。
 ⚠️ **改完必跑** `skills/rokidlab-chat-standalone-mode/scripts/check_tool_wiring.py`：它守住「每个 provider 的 `toolNames` ↔ `tools()` 双向相等」「声明必带 risk/schema/statusText」「字符串资源存在」等自洽性。工具名支持三种写法（字面量 / `接收者.常量` / 同 object 内**裸常量名**）。
 
 **2026-09-20 补齐的三块对话能力**（此前是缺口，不是配置问题）：
 - **`look_at_view`（`vision` 域）**：把眼镜相机暴露成模型可主动调用的工具 —— 此前模型对「看看面前有什么」**无工具可调**，只能编出「没有相机权限」。出图两条路径：确认模型支持看图 ⇒ base64 暂存 `ThreadLocal`，由**对话主循环**补一条带 `image_url` 的 user 消息交给主模型；否则兜底本地 OCR 转文字。⚠️ **不可**在工具内回调 `sendAiTextMessage`（`aiSendLock` 非重入 ⇒ 死锁）。
-- **文件工作区（`ai/FileWorkspace.kt`，新增 6 个文件工具）**：`list_files` / `read_text_file` / `search_files` / `edit_text_file` / `delete_file` / `move_file`。两个边界 —— `project`（`filesDir/aiui_projects/<项目>/` 私有镜像，全能力）与 `downloads`（MediaStore，只列/读/删）。**无 `MANAGE_EXTERNAL_STORAGE` ⇒ 不承诺"读任意文件"**，边界必须写进各工具 schema。
+- **文件工作区（`ai/FileWorkspace.kt`，新增 6 个文件工具）**：`list_files` / `read_text_file` / `search_files` / `edit_text_file` / `delete_file` / `move_file`。两个边界 —— `project`（`filesDir/aiui_projects/<项目>/` 私有镜像，全能力）与 `downloads`（MediaStore，只列/读/删）。`MANAGE_EXTERNAL_STORAGE` **只在 proot 容器通道上使用**（`Download/Lab` ↔ `/mnt/lab` 内核直连），**文件工具不因此承诺"读任意文件"**，边界必须写进各工具 schema。
 - **技能管理三件套（伪工具）**：`install_skill` / `list_skills` / `delete_skill`，可在对话里装/看/删技能（此前只能进设置页）。执行体复用既有 `installFromMarkdown` / `installFromZip` / `listSkills` / `delete`。
 
 **外部 MCP（动态工具集，v3.9 新增）**：`ai/mcp/`（`McpClient` 传输 / `McpServerStore` 落盘 / `McpRegistry` 注册与分发）+ `ai/tools/McpToolProvider`；设置页在「乐奇聊天 → 设置 → 外部 MCP」。
 连接链路：`McpClient.initialize`（读 `Mcp-Session-Id`）→ `tools/list`（分页）→ 每个工具过 `ToolSchemaValidator`，**不合规的整个丢弃**（服务端 schema 校验是整请求级，1 个坏节点会让整轮 400、全部工具失效）。
 ⚠️ **`McpToolProvider` 不写进 `ToolRegistry.providers` 静态列表**（那是 `object` 初始化时求值的编译期常量，装不下运行期数据），而是由 `McpRegistry.rebuildIndex()` 调 `ToolRegistry.setDynamicProviders()` 注入 —— **漏调的表现是「设置页看得见新工具、模型却永远不调」且不报错**。
-⚠️ 安全**靠准入，不靠审批闸门**（闸门 fail-open，见 §8.2）：地址必须 https（`network_security_config` 禁明文；**唯一例外＝回环 http**，见下）、工具首次出现时显式写 `false`、信任标记由用户显式给出。单 server 上限 30 个工具（每个 schema 都进**每一轮**请求）。
+⚠️ 安全是**两层**，且**准入仍是第一道防线**（闸门只管"该不该问"，管不了"这个工具该不该存在"）：**①准入** 地址必须 https（`network_security_config` 禁明文；**唯一例外＝回环 http**，见下）、工具首次出现时显式写 `false`、信任标记由用户显式给出；**②闸门** 未信任的第三方工具派生 `confirmPolicy = BLOCK`（2026-09-23 起）⇒ 问不到用户即**拒绝**并给出出路，不再是从前那样静默放行（见 §8.2）。单 server 上限 30 个工具（每个 schema 都进**每一轮**请求）。
 > ⚠️ **回环例外不要照抄成「按 `BuildConfig.DEBUG` 放开 http」**：debug 变体的 `network_security_config`
 > 被 `src/debug/` 整体覆盖成 `cleartextTrafficPermitted="true"`，那样写就等于「调试能跑、发布才挂」。
 > 判据是**两份变体的白名单交集**：回环（`localhost` / `127.0.0.1` / `::1`）两边都有 ⇒ 行为一致，故只放它。
@@ -976,9 +982,9 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 |---|---|---|
 | `READ_ONLY` | 纯读取 | `get_weather` / `search_knowledge_base` |
 | `LOCAL_SIDE_EFFECT` | 本机可控/可撤销副作用 | `set_timer` / `set_phone_volume` / `call_phone` |
-| `EXTERNAL_SIDE_EFFECT` | 不可撤销，必须过确认闸门 | `delete_file`（删除不可恢复） |
+| `EXTERNAL_SIDE_EFFECT` | 不可撤销，必须过确认闸门 | `delete_file` / `delete_script` / `install_packages` / `send_sms` |
 
-未登记兜底：**真实工具的漏登记在结构上已不可能** —— 风险档是每个工具自己声明结构体（`ToolEntry.risk`）里的必填字段，跟工具定义写在一起；**完全未知的名字**（模型幻觉/攻击构造）→ `EXTERNAL_SIDE_EFFECT`（最保守），但它会先被 `UnknownToolGuard` 单调拒绝，不会触发 35 秒确认。
+未登记兜底：**真实工具的漏登记在结构上已不可能** —— 风险档是每个工具自己声明结构体（`ToolEntry.risk`）里的必填字段，跟工具定义写在一起；**完全未知的名字**（模型幻觉/攻击构造）→ `EXTERNAL_SIDE_EFFECT`（最保守，连带 `confirmPolicy = BLOCK`），但它会先被 `UnknownToolGuard` 单调拒绝，不会触发一次注定超时的确认。
 
 **策略闸门（`ApprovalGate.preExecute`，唯一审批入口）**：每次工具执行（AIUI 页面路径 / 对话路径 / 伪工具）都先过它：
 
@@ -986,17 +992,26 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 2. 未知名：既不是真实工具也不是伪工具 → 单调拒绝（旧实现会让它走风险兜底、白等一次确认）
 3. per-source 滑动窗口限流：AIUI 页面 30/min（防页面死循环刷工具）、对话路径 120/min（兜底失控循环）—— **被拒的调用不扣配额**
 4. 本机模式（仅对话路径）：用户开了「本机模式」时，需要眼镜的工具单调拒绝
-5. 风险闸门：`EXTERNAL_SIDE_EFFECT` 必须经用户确认（内置工具当前**只有** `delete_file` 为此档；外部 MCP 工具默认为此档，但闸门 fail-open ⇒ 不等于真会弹确认，见下）
+5. 风险闸门：`EXTERNAL_SIDE_EFFECT` 必须经用户确认（内置工具当前是**四个**：`delete_file` / `delete_script` / `install_packages` / `send_sms`；外部未信任的 MCP 工具默认此档）。**问不到用户时放行还是拒绝，由该工具自己声明的 `confirmPolicy` 决定**（见下）
 6. 审计：每次决策打一行日志（ALLOW/DENY + `[ORIGIN]` + 原因），系统日志面板（`LogCollector`）可观测；TAG 为 `ApprovalGate`
 
 合成规则（`ApprovalGate.compose`）：任一 guard 返回 `Deny` **立即短路**（单调最终拒绝，对齐 DSH 的 `ctx.tools.guard()`）；否则取**第一个** `Ask`；都不表态则 `Allow`。
 
-**确认通道（`GlassToolConfirmChannel`）**：实现 `ApprovalGate.ConfirmResolver`。下行 `LinkProtocol.TOPIC_TOOL_CONFIRM`（caps = [requestId, 工具名, 摘要]），眼镜端显示摘要 + TTS 播报，短按 = 允许 / 双击·长按 = 取消，眼镜端 30s 超时视为取消；上行 `LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT`（caps = [requestId, "yes"/"no"]）。通道**常驻**（`GlassToolConfirmChannel.global`），会话上线 `bind`、下线 `unbind`，`ApprovalGate.confirmationResolver` 指向它。摘要由闸门随 `confirm(prompt)` 传入，**产地是工具自己的 `ToolEntry.summarize`**。
+**确认通道有两条，取值＝眼镜优先、手机兜底**（`ApprovalGate.activeChannel()`）：
+1. **`GlassToolConfirmChannel`**（`ApprovalGate.confirmationResolver`）：下行 `LinkProtocol.TOPIC_TOOL_CONFIRM`（caps = [requestId, 工具名, 摘要]），眼镜端显示摘要 + TTS 播报，短按 = 允许 / 双击·长按 = 取消，眼镜端 30s 超时视为取消；上行 `LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT`（caps = [requestId, "yes"/"no"]）。通道**常驻**（`GlassToolConfirmChannel.global`），会话上线 `bind`、下线 `unbind`。
+2. **`PhoneToolConfirmChannel`**（`ApprovalGate.phoneConfirmationResolver`，`LabApplication.onCreate` 自注册）：透明 `ToolConfirmActivity` 弹 AlertDialog，补的是「**本机模式 = 不连眼镜**」与「眼镜通道要求在线」在**定义上互斥**这个洞。手机通道**不替换**眼镜通道 —— 眼镜在线时行为与改造前完全一致。
+两条通道都实现 `ConfirmResolver`（`channelId` 分别是 `"glass"` / `"phone"`，用于日志归因）。摘要由闸门随 `confirm(prompt)` 传入，**产地是工具自己的 `ToolEntry.summarize`**。
+⚠️ **通道不可用时必须如实返回 false，绝不假装问过**：`confirm()` 返回 true 的含义是"用户同意了"，未注入 Context 就返回 true 会让需点头的动作被**静默执行**而用户什么都没看到。
 
-> ⚠️ **降级语义（务必如实理解）**：确认通道**不可用**（会话不在线，或眼镜端旧版经能力握手判定不支持）或确认**超时未响应**时，`ApprovalGate.resolveAsk` 返回 **`Allow`**（fail-open），由工具自身在未获确认时只做**无副作用动作**（如 `call_phone` 只打开拨号盘、绝不自动拨出）；只有用户**显式取消**（`wasCancelled()` 为 true）才 `Deny`。
-> 这条语义的**唯一产地**是 `ApprovalGate.resolveAsk` 的 KDoc 与其实现（`ToolPolicy` 已删除，旧的「类注释写降级为拒绝、实现却是放行」的矛盾已消除）。
-> ⚠️ 另需知道：**内置工具里只有 `delete_file` 是 `EXTERNAL_SIDE_EFFECT`**（2026-09-20 起，删除不可恢复故走确认闸门；`check_tool_wiring.py` 与 `ApprovalGateTest` 的 E1/E3b 一起钉住这条事实）。要让别的内置工具也走眼镜确认，只需在它的 `ToolEntry.risk` 里声明该档，**并同步补一条 E3b 式的确认用例**。
-> ⚠️ **外部 MCP 工具是唯一会被登记为该档的**（未标「信任」时），但**这不等于多了确认步骤** —— 闸门 fail-open ⇒ 无通道时照样放行。因此第三方工具的保护必须落在**准入**上（https-only + 默认关 + schema 全过校验），详见 §8.2 的「外部 MCP」段。
+> ⚠️ **降级语义（2026-09-23 重构，务必如实理解）**：确认通道**不可用**（会话不在线 / 眼镜端旧版不支持 / 手机通道未 `init`）或确认**超时未响应**（**手机端等待上限**：眼镜通道 35s、手机通道 40s）时，`ApprovalGate.resolveAsk` 按**该工具自己声明的 `confirmPolicy`** 分流：
+> - `BLOCK`（越出本机边界、不可撤销：`send_sms`、**未信任的 MCP 工具**）⇒ 返回 **`Deny`** 并给出可操作出路（`ApprovalGate.denyUnconfirmed`，按 `ToolRegistry.isMcpTool` 的**名字前缀**分流 MCP / 内置两套文案）；
+> - `PROCEED`（影响不出本机、可重做：`delete_file` / `delete_script` / `install_packages`）⇒ 返回 **`Allow`**（降级放行，硬拒会让功能表现为"被安全策略挡住"）。
+>
+> `confirmPolicy` 缺省按风险档派生（`EXTERNAL_SIDE_EFFECT` ⇒ `BLOCK`，其余 ⇒ `PROCEED`），**只有 `PROCEED` / `BLOCK` 两个值**。这条语义的**唯一产地**是 `ApprovalGate.resolveAsk` 的 KDoc 与其实现。
+> ⚠️ **只有用户显式取消**（`wasCancelled()` 为 true）在两条分支上都 `Deny` —— 那是唯一真正的"用户说不"。通道异常 / 超时**不等于**取消（`denyUnconfirmed` 会说明"没问到用户"，而不是"用户拒绝了"）。
+> ⚠️ **未知名（模型幻觉）的兜底也是 `BLOCK`**（"未知即最保守"），但它会先被 `UnknownToolGuard` 单调拒绝，不会真的拖用户进一次注定超时的确认。
+> ⚠️ **显式给 EXTERNAL 档工具写 `PROCEED` 是一个"越界也照做"的洞**，`check_tool_wiring.py` 会把它报成**错误**；确属有意（本机可重做）必须登记进脚本的 `EXTERNAL_FAIL_OPEN_ALLOWLIST` 并写明理由。
+> ⚠️ **外部 MCP 工具：闸门现在真的会拦**（2026-09-23 起）—— `McpRegistry.toEntry` 把未信任的第三方工具登记为 `EXTERNAL_SIDE_EFFECT` ⇒ 派生 `BLOCK` ⇒ 无通道时**拒绝**；用户显式标了「信任」才降为 `LOCAL_SIDE_EFFECT`（此时不产生 Ask）。改造前这里写的是"闸门 fail-open ⇒ 无通道照样放行"，**那句话已经失效**。但**准入仍是第一道防线**（https-only + 默认关 + schema 全过校验），详见 §8.2 的「外部 MCP」段。
 
 ### 8.3 通道仲裁 ChannelArbiter
 
@@ -1052,7 +1067,8 @@ $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
 | `hid/HidReportTest` | 12 | `BtHidCompat.normalize` 截断/补零/未声明返 null、`declaredLength` 全矩阵、描述符 Report ID 与 `declaredReportIds` 交叉校验 |
 | `glasses/AiChannelTest` | 21 | `AiChannel` 跨端载荷 v0/v1 矩阵 + 常量名稳定性（改名即断双端） |
 | `ai/ToolRiskMapTest` | 3 | `ToolRiskMap.unregisteredTools()` 必须为空（§12.10）+ 风险表 / 无人值守只读名单 |
-| `ai/approval/ApprovalGateTest` | 35 | 合成语义（Deny 短路 / 首个 Ask 胜出 / null 不表态）+ 伪工具已知 + fail-open 三态 + per-source 限流 + 页面准入文案 + 风险表三消费者 |
+| `ai/approval/ApprovalGateTest` | 56 | 合成语义（Deny 短路 / 首个 Ask 胜出 / null 不表态）+ 伪工具已知 + 按 `confirmPolicy` 分流的降级三态（`BLOCK` 拒 / `PROCEED` 放行 / 显式取消） + 眼镜优先·手机兜底的通道选择 + per-source 限流 + 页面准入文案 + 风险表三消费者 |
+| `ai/PhoneToolConfirmChannelTest` | 4 | 手机确认通道的**未 `init` 必须不可用且不假装问过**（`isAvailable()` / `confirm()` 均为 false）+ 通道标识 `"phone"` 稳定性（日志归因） |
 | `store/ChatHistoryStoreTest` | 14 | 聊天历史 JSONL 落盘格式：同 id 后写覆盖先写、**旧版 JSON 数组迁移不丢历史**、崩溃截断半行不毁历史、`clear()` 删文件 |
 | `RokidLink/AiChannelProtocolTest` | 5 | 眼镜端能解析手机端下发的 v1 载荷（边界矩阵留在 phone-app 侧，避免重复维护） |
 
@@ -1123,3 +1139,36 @@ init(context)（Application.onCreate）
 > 约束详见 `RULES.md` §12.16；回归测试见 `store/ChatHistoryStoreTest`（24 例）+ `store/ChatStateHolderTraceTest`（6 例）。
 > ⚠️ `ChatStateHolder` 本体可测（`isReturnDefaultValues = true` ⇒ `runOnMain` 内联、`appContext` 为 null ⇒ 落盘跳过）；
 > 写这类测试必须在 `@Before`/`@After` 清 `messages` 并 `finishTrace()` 释放锚点（单例跨用例复用）。
+
+### 8.7 本机执行环境与按需组件
+
+设置页「设置 → 本机执行环境」（`settings/LocalExecScreen.kt`）对应的东西：随包只带 `libproot.so` +
+`libproot-loader.so`（共 214 KB，不借道 Termux），**rootfs 与所有组件都运行期按需下载**。
+
+```
+files/proot/                 ← ProotShell.workDir（「删除执行环境」= rm -rf 这里）
+├── tmp/                     ← 脚本先落盘，再由 guest 执行 /tmp/x.sh
+├── rootfs/                  ← Ubuntu 24.04.5 base arm64（下载 29,936,675 B，四镜像容错）
+├── rootfs.version           ← 就绪标记：version + abi + sha256
+└── extras/                  ← 按需组件（当前只有 node/），重装 rootfs 不丢
+    ├── node.version         ← 组件自己的标记，与 rootfs 那份互不牵连
+    └── node/
+
+guest 视图：  /mnt/lab    ← Download/Lab（内核 write() 直连，见 RULES §12.21②）
+              /opt/extras ← extras/（guestExtraPath 追加 /opt/extras/node/bin）
+```
+
+| 文件 | 职责 |
+|---|---|
+| `platform/ProotInstaller.kt` | rootfs：四镜像容错下载 → sha256 → 解压 → 裁剪 → 写标记；`uninstall` 整目录删除 |
+| `platform/ProotShell.kt` | guest 执行（读锁 + `Semaphore(2)`，装包走写锁）、挂载、apt 装包与进度解析、状态探测 |
+| `platform/NodeAddon.kt` | Node.js 自包含包下载 → 原子就位 → 写 `<prefix>/etc/npmrc`（npmmirror registry） |
+| `platform/ProcessRun.kt` | 「一次性命令 + 超时强杀」模型（`tar` / `rm` / `proot` 都走它） |
+| `settings/LocalExecScreen.kt` | 页面：装环境 / 三张组件卡 / 共享文件夹 / 检测环境 / 删除环境 |
+
+**对话侧**只暴露 `shell` 域两个工具：`run_shell` / `install_packages`（后者 `EXTERNAL_SIDE_EFFECT` + `PROCEED`）。
+⚠️ `shell` 域**不对 AIUI 页面开放**（§6.4 第 2 条）—— 第三方 `.aix` 页面不能任意执行命令。
+
+⚠️ 三条边界（容器出网不经任何 URL 闸门 / 容器产物必须重扫媒体库 / 装包独占 rootfs）与按需组件的完整规则
+（Python·Git 走 apt 而 Node 走下载的理由、extras 挂载与 PATH 判据、版本与 sha256 同改、新增组件清单）
+见 `RULES.md` §12.21。

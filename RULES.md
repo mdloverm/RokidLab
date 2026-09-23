@@ -471,8 +471,16 @@ adb/
 ### 12.2 Lab 工具桥约束
 
 - **AIUI 页面调用手机端工具的唯一入口**是 `ToolGateway.call()`，不得绕过
-- **`ALLOWED_DOMAINS = DOMAIN_ALL`**（用户 2026-09-09 拍板全开），收窄时只改一处
-- **`DENY_TOOLS` 只放技术故障工具**（如 `open_aiui_app` 自指递归），**不放"危险"工具**，安全边界由 `isEnabled` 总开关负责
+- **`ALLOWED_DOMAINS` 基线是全部域开放**（用户 2026-09-09 拍板），收窄/放宽都只改这一处。
+  ⚠️ **2026-09-22 起摘除 `shell` 域**（`DOMAIN_ALL - DOMAIN_SHELL`）：本机执行域里是
+  `run_shell`（任意命令执行）与 `install_packages`（任意装包，2026-09-23 新增），
+  二者都是**能力原语**，页面（对话生成／商店导入的 `.aix`）属第三方制品 ——
+  开放它等于把"在用户手机上跑任意命令/装任意软件"交给页面作者。对话路径保留该能力。
+  **要放开就删掉 `PageScope.ALLOWED_DOMAINS` 上那一个减法**（一处，`ApprovalGateTest.H6` 会跟着失败）。
+  之所以走域而不走黑名单：域是装配单位，摘掉后页面拿到的**工具清单**里也不会有它。
+  ⚠️ 同域的 `save_script` / `list_scripts` / `run_script` / `delete_script` 一并被摘除 ——
+  这是有意的：脚本库只是"把命令存下来再跑"，留着它等于给页面留一条任意命令执行的侧门。
+- **`DENY_TOOLS` 只放技术故障工具**（如 `open_aiui_app` 自指递归），**不放"危险"工具**，安全边界由 `isEnabled` 总开关负责；按"危险"收窄要落在**域**白名单上（见上一条），不加进这张表
 - **结果截断 8000 字符**：RFCOMM 单帧上限 64KB，且页面渲染不下超长文本
 - **15s 超时后不 interrupt**：工具可能持有文件/网络资源，强中断留下半写状态，让线程自己跑完（daemon 线程不阻塞进程退出）
 - **AIUI 页面侧必须用 `globalThis.Lab.callTool(...)` 或 `window.Lab.callTool(...)`**，不能写裸 `Lab.callTool` —— ink 沙箱页面 realm 不走 globalThis 解析裸标识符，会 ReferenceError
@@ -547,7 +555,11 @@ adb/
 4. **动态工具集（外部 MCP）不走上面三步**：它由 `ai/mcp/McpRegistry` 在运行期注册，
    经 `ToolRegistry.setDynamicProviders()` 注入 `McpToolProvider`（该 provider 的两个 getter
    必须动态读 `McpRegistry`，写成属性初始化就会固化成快照、工具永远进不了派生表且不报错）。
-   ⚠️ 动态工具的**安全靠准入，不靠审批闸门**：闸门是 fail-open（见下），所以约束是
+   ⚠️ 动态工具的安全是**两层**（2026-09-23 起第二层才真正生效）：
+   **①闸门**：未信任的 MCP 工具声明 `confirmPolicy = BLOCK`（由 `risk = EXTERNAL` 派生，
+   `McpRegistry.toEntry` 故意不显式覆写），问不到用户即**拒绝**并给出出路（连眼镜确认 /
+   把该 server 标为信任）—— 见 §12.20；已信任的降为 `LOCAL` 档，`RiskApprovalGuard`
+   根本不产生 Ask。**②准入**（仍是第一道防线 —— 闸门只在"该问"时介入，它管不了"不该出现"）：
    「地址必须 https（**唯一例外＝回环 http**，判据＝两份 `network_security_config` 白名单的交集，
    故 debug/release 行为一致；**不要**改成按 `BuildConfig.DEBUG` 放开——那是「调试能跑、发布才挂」）」+
    「工具首次出现时显式写 false（`ToolRegistry.ensureDisabledByDefault`）」+
@@ -555,21 +567,29 @@ adb/
    ⚠️ 地址判定只有一处 `McpRegistry.isUrlAllowed()`，UI 必须复用，别自己写 `startsWith`（会分叉）
 
 > 现状说明（2026-09-19 更新）：判定已全部收敛到 `ai/approval/ApprovalGate`（`ToolPolicy.kt` 已删除）。
-> fail-open 是**刻意设计**并写在 `ApprovalGate.resolveAsk` 的 KDoc 里（唯一产地）：
-> 无确认通道 / 眼镜端旧版 / 用户超时未响应 → 降级放行，仅眼镜端显式回 "no"（`wasCancelled()`）才拒绝。
-> 另：风险档的实际兜底是**最保守档** `EXTERNAL_SIDE_EFFECT`，但「完全未知的名字」会先被
-> `UnknownToolGuard` 单调拒绝，因此不会触发确认。<br>
-> 现状更新（2026-09-20）：**内置工具里已有且仅有 `delete_file` 被登记为 `EXTERNAL_SIDE_EFFECT`**
-> —— 删除不可恢复，故走眼镜确认闸门（`edit_text_file` / `move_file` 只 `LOCAL_SIDE_EFFECT`，
-> 同机就地改动不弹确认）。这条事实由 `check_tool_wiring.py` 与 `ApprovalGateTest` 的
-> E1（走确认闸门的内置工具恰为 `delete_file`）+ E3b（确认摘要读出被删对象）共同钉住：
-> **新增 EXTERNAL 档内置工具时必须同步这两条用例**，否则 E1 会失败——那正是提醒信号。
+> **「问不到用户时放行还是拒绝」在 2026-09-23 改成了工具的自声明字段**（`ToolEntry.confirmPolicy`
+> → `ToolConfirmPolicy`，只有 `PROCEED` / `BLOCK` 两个值），闸门读声明、**不再猜域**：
+>  - `BLOCK`（越出本机边界、不可撤销：`send_sms`、**未信任的 MCP 工具**）→ 问不到就**拒绝**
+>    并给出可操作出路（`ApprovalGate.denyUnconfirmed`，按 `ToolRegistry.isMcpTool` 名字前缀分流）；
+>  - `PROCEED`（影响不出本机、可重做：删文件 / 删脚本 / 容器装包）→ 问不到就**放行**
+>    （硬拒会让功能表现为"被安全策略挡住"，正是 2026-09-11 打不出电话那次事故的方向）。
+>  - 缺省值按风险档派生：`EXTERNAL_SIDE_EFFECT` ⇒ `BLOCK`，其余 ⇒ `PROCEED`。
+> ⚠️ **只有用户显式取消**（`wasCancelled()`）在两条分支上都拒绝 —— 那是唯一真正的"用户说不"。
+> ⚠️ 未知名（模型幻觉）的 `confirmPolicy` 兜底也是 `BLOCK`（"未知即最保守"），但它会先被
+> `UnknownToolGuard` 单调拒绝，因此不会真的拖用户进一次注定超时的确认。<br>
+> 现状更新（2026-09-23）：**走确认闸门的内置工具恰为四个** —— `delete_file`、`delete_script`、
+> `install_packages`、`send_sms`（`ApprovalGateTest` 的 **E1** 钉住这份名单；E3b / E3c 钉住
+> 前三个的确认摘要要读出被操作对象）。**新增 EXTERNAL 档内置工具时必须同步 E1 + 补一条摘要用例**，
+> 否则 E1 会失败 —— 那正是提醒信号。前三个的 `confirmPolicy` 是显式 `PROCEED`（本机可重做），
+> 这一点会被 `check_tool_wiring.py` 作为**提示**列出来（它有 `EXTERNAL_FAIL_OPEN_ALLOWLIST` 豁免表，
+> 每加一个都必须写明理由）。
 >
-> ⚠️ **MCP 外部工具是例外，且不依赖闸门**：`McpRegistry.toEntry` 把第三方工具登记为
-> `EXTERNAL_SIDE_EFFECT`（用户显式标了「信任」才降为 `LOCAL_SIDE_EFFECT`）——
-> 但那只影响**无人值守准入**（非 READ_ONLY 不参与），**不等于**多了确认步骤：
-> 闸门 fail-open ⇒ 无通道时照样放行。因此第三方工具的保护必须在**准入**（见 12.10 第 4 条）。
-> `check_tool_wiring.py` 的「README 工具清单」也**不含**动态 provider 的工具（运行期才有）。
+> ⚠️ **MCP 外部工具：闸门现在真的会拦**（2026-09-23 起）。`McpRegistry.toEntry` 把未信任的第三方工具
+> 登记为 `EXTERNAL_SIDE_EFFECT` ⇒ 派生 `confirmPolicy = BLOCK` ⇒ 无通道时**拒绝**；
+> 用户显式标了「信任」才降为 `LOCAL_SIDE_EFFECT`（此时不产生 Ask，也不再需要逐次确认）。
+> 改造前这里写的是"闸门 fail-open ⇒ 无通道照样放行"，**那句话已经失效**。
+> 但**准入仍是第一道防线**（见 12.10 第 4 条）—— 闸门只管"该不该问"，管不了"这个工具该不该存在"。
+> `check_tool_wiring.py` 的「README 工具清单」**不含**动态 provider 的工具（运行期才有）。
 
 ### 12.11 通道租约约束
 
@@ -711,12 +731,16 @@ adb/
 2026-09-20 补齐的三块能力，各自带一条**硬边界**，不要为了"能力更强"而放宽：
 
 **① 文件工作区（`ai/FileWorkspace.kt`）**
-- 全仓**没有** `MANAGE_EXTERNAL_STORAGE`，因此只开放两个边界：`project`（`filesDir/aiui_projects/<项目>/`
+- ⚠️ **`MANAGE_EXTERNAL_STORAGE` 已声明**（`AndroidManifest.xml` + `AppPermission.ALL_FILES`），但它的用途
+  **只有一处**：proot 容器把 `Download/Lab` 通过**内核 `write()` 直连**绑定成 `/mnt/lab`（绕开 MediaProvider，
+  见 D20/D23）。**这不等于**文件工作区获得了全盘读写权 —— 见下。
+- 文件工作区仍只开放两个边界：`project`（`filesDir/aiui_projects/<项目>/`
   私有镜像，**全能力**：列/读/搜/改/删/移）与 `downloads`（系统下载目录经 MediaStore，**只可列/读/删**）。
 - **禁止**对外承诺"能读任意文件"，也**禁止**在 schema 描述里暗示这一点 —— 边界必须写进各工具 schema，
-  否则模型会按"能读全盘"的直觉乱猜路径。
+  否则模型会按"能读全盘"的直觉乱猜路径。声明的权限是**给容器通道用的**，不是给工具放开边界的理由。
 - 所有相对路径必须经 `splitRel()` 拒绝 `..` / `.` / 空段 / 绝对路径，并用 `canonicalPath` 前缀比对防越界。
-- **删除**（`delete_file`）是唯一走确认闸门的内置工具（见 12.10）；`edit` / `move` 不弹确认。
+- **删除**（`delete_file`）走确认闸门（见 12.10；走闸门的内置工具现为四个：`delete_file` /
+  `delete_script` / `install_packages` / `send_sms`）；`edit` / `move` 不弹确认。
   `path` 留空 + 传 `project` = 删除**整个项目**（含下载目录公开副本）—— 该组合必须靠确认闸门拦住。
 
 **② 看画面（`look_at_view`，`vision` 域）**
@@ -757,3 +781,100 @@ adb/
   版本一升就清空属于不可恢复的数据丢失。新增列一律 `ALTER TABLE … ADD COLUMN`。
 - ⚠️ 检索的两段口径必须一致：df/候选来自 SQLite `LIKE`（对 ASCII **不区分大小写**），
   打分若用区分大小写的 `indexOf`，英文查询会出现"候选块查得到、得分全是 0"的**假空结果**。
+
+### 12.20 确认闸门的降级策略与通道约束（2026-09-23）
+
+「问不到用户时放行还是拒绝」原本是**硬编码**的（`failClosedConfirmation` 写死 `domain == MCP`），
+后果是 `send_sms`（**真的会把短信发出去**）与 `call_phone`（只开拨号盘）共享同一条静默放行路径 ——
+两者的代价根本不是一个量级。现在它跟风险档一样是工具的**自声明字段**。
+
+- 声明面 = `ToolEntry.confirmPolicy`（`ToolConfirmPolicy`，**只有 `PROCEED` / `BLOCK` 两个值**）。
+  缺省按风险档派生：`EXTERNAL_SIDE_EFFECT` ⇒ `BLOCK`，其余 ⇒ `PROCEED`。
+  刻意不加第三个值（曾想加"工具自己会降级"的 `SAFE_DEGRADE`）：处置与 `PROCEED` 完全相同，
+  会变成一个没人读的字段。消费者的分支只有"放行/拒绝"两种。
+- `BLOCK` 的拒绝文案是 `ApprovalGate.denyUnconfirmed`，**必须给出可操作出路**，
+  且 MCP / 内置两条分支的判据是 `ToolRegistry.isMcpTool(name)`（**名字前缀**，产地
+  `ToolRegistry.MCP_TOOL_PREFIX`），**不是**查 `domainOfOrNull` —— MCP 工具是**动态**注册的，
+  server 断开或单测环境里查表得到 null，会让文案误落到内置分支（用户看到"去打开乐奇实验室"，
+  而正确出路是"把该 server 标为信任"）。
+- ⚠️ **显式给 EXTERNAL 档工具写 `PROCEED` 是一个"越界也照做"的洞**，`check_tool_wiring.py`
+  会把它报成**错误**。确属有意（本机可重做：删文件 / 删脚本 / 容器装包）必须登记进脚本的
+  `EXTERNAL_FAIL_OPEN_ALLOWLIST` 并写明理由。
+- **确认通道有两条，取值顺序＝眼镜优先、手机兜底**（`ApprovalGate.activeChannel()`）：
+  1. `GlassToolConfirmChannel`（`confirmationResolver`）—— 既有主路径，要求眼镜在线；
+  2. `PhoneToolConfirmChannel`（`phoneConfirmationResolver`，`LabApplication.onCreate` 自注册）
+     —— 补的是「本机模式 = 不连眼镜」与「眼镜通道要求在线」在**定义上互斥**这个洞。
+  手机通道**不替换**眼镜通道：眼镜在线时行为与改造前完全一致（`ApprovalGateTest` F9 钉住）。
+- ⚠️ **通道不可用时必须如实返回 false，绝不假装问过**。`confirm()` 返回 true 的含义是
+  "用户同意了"；未注入 Context 就返回 true，会让一个需要点头的动作被**静默执行**，
+  而用户什么都没看到 —— 那比"拒绝"坏得多。`PhoneToolConfirmChannel` 在未 `init` 时
+  `isAvailable()` / `confirm()` 都必须为 false。
+- ⚠️ `ConfirmResolver.channelId` **刻意不给默认值**：排查确认链路的第一个问题是"问到谁了"，
+  漏声明会让日志里出现无法归因的空标识 —— 宁可编译错（新增实现类时要一起补，含测试假实现）。
+
+### 12.21 本机执行（proot 容器）的三条边界（2026-09-23）
+
+**① 容器出网不经过任何 URL 级闸门 —— 如实声明，不做半吊子拦截**
+
+proot 容器里的命令（`curl` / `wget` / `apt` / `pip` …）以 **App 自己的 uid 直接开 socket**：
+既不经过 `ai/NetGuard`（那只作用于 Java 层的 `HttpURLConnection`），也不经过
+`res/xml/network_security_config.xml`（那是 `NetworkSecurityPolicy` 的事）。
+⇒ 容器**能**访问内网与回环地址（眼镜 WebServer、蓝牙隧道本地端口、本机 Ollama…）。
+
+- ⚠️ **不要试图用 `LD_PRELOAD` 垫片或改 `/etc/hosts` 去堵**：只能挡住"按域名访问"、挡不住直连 IP，
+  还会制造"以为堵住了"的错觉。真正的隔离要靠 netns/iptables，那**需要 root —— 本 App 没有**。
+- 因此容器的能力约束**只能落在工具的声明上**：`run_shell` / `run_script` 是 `LOCAL_SIDE_EFFECT`
+  （**不产生 `Ask`**），`install_packages` 是 `EXTERNAL_SIDE_EFFECT` + `confirmPolicy = PROCEED`。
+  要让容器执行也受确认约束，改的是**这些工具的 `risk` / `confirmPolicy`**，不是 NetGuard。
+- 输出侧已有隔离：`run_shell` / `run_script` 声明 `contentTrust = UNTRUSTED_EXTERNAL`
+  （容器输出可能夹带外部内容，进上下文前按不可信处理）。
+
+**② 容器写出的文件 MediaStore 看不见 ⇒ 必须重新登记**
+
+容器把 `Download/Lab` 经**内核 `write()`** 直连绑定成 `/mnt/lab`（绕开 MediaProvider），
+而**文件工作区的 `downloads` 边界走的是 MediaStore** ⇒ 两套视图分叉：
+文件明明在磁盘上，`list_files` 却说"没有"。
+
+- 因此 `run_shell` / `run_script` 执行完必须调 `ai/LabMediaScan.scanLabOutputs(context)`
+  把 `Download/Lab` 重新扫描入媒体库（`MediaScannerConnection.scanFile`，最多 300 个文件，**永不抛异常**）。
+  `ProotShell.shareStatus.publicDownload == false`（私有目录）时直接返回 —— 私有目录本来就不在媒体库。
+- `download_file` 不传 `folder` 时**默认落 `Download/Lab`**，与容器 `/mnt/lab` 是**同一个物理目录**。
+  默认值取 `ProotShell.SHARE_DIR_NAME`，**禁止**在别处再写一份目录名字面量。
+
+**③ 并发装包必须独占 rootfs**
+
+`ProotShell` 的执行路径取**读锁** + `Semaphore(2)`；`install_packages` 走
+`runScript(exclusive = true)` 取**写锁**。少这一条，两条并发 `apt install` 会互相看到半写的 dpkg 状态。
+
+**④ 按需组件（Python / Node.js / Git）—— 两条安装路径 + 一个固定挂载点**
+
+设置页「本机执行环境」的三个可选组件（`settings/LocalExecScreen.kt`），安装方式刻意不同：
+
+| 组件 | 安装方式 | 理由 |
+|---|---|---|
+| Python 3 | guest `apt`（`python3` + `ca-certificates`） | 顺带装上证书 ⇒ 之后 https 源可用（解开"首次 apt 只能走 http"的鸡生蛋） |
+| Git | guest `apt`（`git` + **`ca-certificates`**） | 它没有官方静态二进制，手动凑 deb 等于自己重写一遍依赖解析 |
+| Node.js（含 npm/npx） | 官方自包含包下载（`NodeAddon`） | 见下 |
+
+- ⚠️ **装 git 不带 `ca-certificates` 是坏的**：`installPackages` 走 `--no-install-recommends`，
+  而证书包在 Ubuntu 24.04 里只是 git 的 **Recommends** ⇒ 单独装 git 后 `git clone https://…`
+  必然证书校验失败。走 `install_packages` 工具的**模型路径同理**，故该工具的 schema 里已写明要一起装。
+- **Node.js 为什么不走 apt**（三条硬理由）：① 源里是已 EOL 的版本；② `npm` 在 universe 源，
+  还得先让用户开源、多一轮等待；③ apt 装进 rootfs ⇒ **重装环境就一起没了**。
+- **附加组件落在 rootfs 之外**：宿主 `files/proot/extras/` ↔ guest `/opt/extras`
+  （`ProotShell.extrasDir` / `nodeDir`，挂载见 `ensureExtrasBind`），与 rootfs 平级 ⇒ 重装 rootfs 不丢组件。
+  `guestExtraPath` 只在 `bin/node` **在位**时把 `/opt/extras/node/bin` 追加进 guest `PATH`
+  —— 判据是**产物在位**，不是"某个安装流程跑完了"，这样"命令能不能用"只有一处产地。
+- **就绪判定与 rootfs 同一套口径**：产物在位（`bin/node`）+ 版本标记里的版本 == 代码常量，**缺一不可**。
+  只看产物会把「解压到一半被杀」判成"已装好"，而重装入口只在未就绪分支里 ⇒ 用户**永远修不好**。
+- ⚠️ **版本号与 sha256 必须同改**（`NodeAddon.VERSION` / `SHA256`，rootfs 同理）：只改版本必然校验失败。
+  镜像必须与官方**同字节**才共用同一个 sha256（已实测 node 三个镜像 `Content-Length` 全为 57,824,078）。
+- ⚠️ **Node 归档必须 `.tar.gz`**：设备自带 toybox `tar` 不支持 `J`（去调不存在的 `xz`），用 `.tar.xz`
+  就得先进 guest 用 GNU tar 解 ⇒ 凭空多一条"rootfs 必须先能用"的前置依赖。代价是 58 MB 而非 27 MB。
+- **就位是原子的**：解到同级 `.staging` → 验 `bin/node` → 整体 `rename`；半截目录**不**参与判定。
+- 组件目录随「删除执行环境」一起走（`ProotInstaller.uninstall` 直接 `rm -rf files/proot/`），不单独留卸载入口。
+- **新增一个可执行组件的清单（缺一条视为未完成）**：
+  ① 落地位置（默认 extras，要放 rootfs 内须写明理由）；② `LocalExecScreen` 的卡片；
+  ③ `readStatus` 那次 `probeCommands` 的探测命令（**三个组件合成一条**，别各起一次 proot）；
+  ④ 中英 strings（`local_exec_<组件>_*`）；⑤ `run_shell` schema 里"可用组件"那句话
+  （模型据此判断该自己 `install_packages` 还是指引用户去设置页）。

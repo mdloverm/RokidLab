@@ -129,9 +129,9 @@ AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能
 - **协议链路**：页面 → `__lab/tool_call_sync` fetch 拦截 → `AiuiLinkActivity` 后台线程 → `AsrPushServer.pushControl(__LAB_TOOL__ + JSON)` 上行 RFCOMM → `AsrBridgeCoordinator` 分流 → `CxrLHiRokidSession.handleAiuiToolCall` → `ToolGateway.call` → `ToolRegistry.execute`，结果按原路回传兑现 Promise（同步阻塞 ≤15s 超时，结果截断 8000 字符）
 - **双桥冗余**：`host.js` 主 realm 提供 `window.Lab`（适配可访问 window 的页面），`lab-page-bridge.js` 自动注入到 `app.js` 前置（解决 ink 沙箱页面 realm 隔离看不到主 realm `window.Lab` 的问题，靠 fetch 拦截同步阻塞）
 - **启动参数下发**：用户说「用 AIUI 播放西厢」时，`open_aiui_app` 工具的 `params` 字段携带 `{"songName":"西厢"}` 经 CXR 下发到眼镜端，页面 boot 完成后作为首条 `hostMessage` (`type=launch`) 投递，页面在 `onMessage` 里接收
-- **安全约束**：
-  - `DENY_TOOLS` 仅 `open_aiui_app`（防自指递归启动）
-  - `ALLOWED_DOMAINS = DOMAIN_ALL`（用户 2026-09-09 拍板全开）
+- **安全约束**（⚠️ 下面第 1、2 条已随后续版本收窄，括号内为当前状态）：
+  - `DENY_TOOLS`（v3.5 时仅 `open_aiui_app`）现为 5 项：`open_aiui_app`（防自指递归启动）+ 会话查询三件套（`list_sessions` / `read_session` / `session_trace`，防批量导出历史）+ `research_subtask`（一次 `callTool` 会触发多次模型调用且无取消通道）
+  - `ALLOWED_DOMAINS` 基线全开（用户 2026-09-09 拍板），**2026-09-22 起摘除 `shell` 域**（本机执行＝任意命令执行原语，不开放给第三方页面）
   - `isEnabled` 总开关作为唯一安全兜底（默认开启）
 - **生成方模型须知**：lab-runtime.md 第 8 章约束生成的 AIUI 代码——必须 try/catch、必须有 loading 态、结果按字符串解析、一次只调一个工具（蓝牙通道串行）
 
