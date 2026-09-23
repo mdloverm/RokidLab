@@ -3,6 +3,7 @@
 > 参照对象：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（MIT，`dsh` 0.1.0-rc）
 > 对照对象：RokidLab `phone-app` 的乐奇聊天
 > 日期：2026-09-19
+> 最后校对：2026-09-23（**附录 B「现状速查」已按当天代码逐项复核**；正文里的时间点进度记录保持原样）
 
 ---
 
@@ -429,7 +430,7 @@ enum class Trigger { PRESSURE, CONTEXT_OVERFLOW }
 
 | 文件 | 职责 |
 |---|---|
-| `CompactionPolicy.kt` | 阈值数据面：DEFAULT 与改造前逐项一致 + `forWindow(contextWindow)` **只收紧不放宽** |
+| `CompactionPolicy.kt` | 阈值数据面：DEFAULT 与改造前逐项一致 + `forWindow(contextWindow)` **双向**（小窗口收紧 / 大窗口放宽，2026-09-19 修订） |
 | `CompactionEngine.kt` | Service Definition：`CompactionTrigger` / `CompactionResult` / `pressure` / `compactIfNeeded` / `compactNow` / `isTurnBalanced` / `digestLines` |
 | `BasicCompactionEngine.kt` | 默认实现（原 `trimLocked` 算法逐字搬迁，只是阈值改读 policy） |
 | `ContextOverflow.kt` | `CONTEXT_OVERFLOW` 触发条件：**只认输入侧措辞** |
@@ -452,6 +453,8 @@ enum class Trigger { PRESSURE, CONTEXT_OVERFLOW }
    > "摘要改为模型生成"（那时压缩会变成一次跨进程的网络调用）再补。
 3. **`CONTEXT_OVERFLOW` 的恢复方式是"重建"而不是"就地删 in-flight 段"。** 就地丢掉最早的 `assistant(tool_calls) + tool` 对会拆散配对、服务端直接 400；把 `messages` 按「system + 压缩后历史 + 当前提问」整体重建是唯一协议合法的收敛方式（代价是本轮已跑的工具要重跑一遍，但比整轮失败好）。
 4. **`forWindow` 只收紧不放宽。** 大窗口模型（deepseek 131072 / gemini 1M）仍拿 6000 字符的默认预算 —— 放宽是产品决策，不在本次范围；本次真正修的是"给本地 `num_ctx=4096` 的小模型塞 6000 字符历史必然溢出"这个 bug。UI 上给了 `windowLimited` 提示，避免用户看到"上限怎么变成 983 字符"时找不到原因。
+   > **状态更新（2026-09-19 修订）**：已改为**双向** —— 大窗口模型按同一份额放宽，并给绝对天花板
+   > （`MAX_CHARS_CEIL` / `MAX_MESSAGES_CEIL` / `MAX_DIGEST_CEIL`）防止窗口很大时单请求失控。
 
 #### 4.2.4 `approval` 接缝 ✅ 已落地（2026-09-19）
 
@@ -797,9 +800,9 @@ fun preExecute(tool: ToolEntry, args: JSONObject, ctx: ToolContext): PreToolDeci
 
 ## 附录 B：RokidLab 现状速查
 
-- 工具：35 个（可见 31 / 隐藏 4），10 个域，11 个 `ToolProvider`，六张表手工同步
-- 主循环：`AiConversationService`，`MAX_TOTAL_ROUNDS = 14`，`SUMMARY_MAX_ROUNDS = 3`
-- 会话记忆：`AgentSessionHistory`，12 条 / 6000 字符 / 摘要 800 字符 / 10 分钟过期
+- 工具：67 个静态工具（可见 63 / 隐藏 4）+ 动态 MCP 工具，14 个域，16 个 `ToolProvider`，六张表已由 `ToolEntry` 派生（不再手工同步）
+- 主循环：`AiConversationService`，`MAX_TOTAL_ROUNDS = 14`（动作 6 / 只读 8 分账，触顶自动续做 1 次），`SUMMARY_MAX_ROUNDS = 3`
+- 会话记忆：事件流 `ai/session/SessionLog`（JSONL 唯一真相源）+ `CompactionPolicy`（默认 12 条 / 6000 字符 / 摘要 800 字符，随模型窗口**双向**缩放；"10 分钟过期"已于 2026-09-20 移除）
 - 多会话：`ChatSessionStore`（`chat_sessions.json` + `chat_sessions/<id>.jsonl`）
 - 已落地（2026-09-19）：多会话、消息级操作、上下文用量条、图像理解开关
 - 已有等价物（无需重建）：`SkillRegistry`、`LongTermMemoryManager`、`KnowledgeBase`、`AgentPlan`、`AgentTaskStore`、`ToolRisk` + `GlassToolConfirmChannel`

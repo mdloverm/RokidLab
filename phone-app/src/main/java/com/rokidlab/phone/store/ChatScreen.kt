@@ -76,6 +76,8 @@ import androidx.core.content.ContextCompat
 import com.rokidlab.phone.R
 import com.rokidlab.phone.ai.AgentSessionManager
 import com.rokidlab.phone.ai.ContextUsage
+import com.rokidlab.phone.aiui.AiuiDemoCard
+import com.rokidlab.phone.aiui.AiuiDemoController
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.design.BrewAmber
 import com.rokidlab.phone.design.BrewBg
@@ -670,7 +672,20 @@ internal fun ChatModule(app: LabApplication) {
             onOpenSessions = { showSessions = true },
         )
 
-        if (messages.isEmpty()) {
+        // 手机端 AIUI 演示卡片是否在场（`open_aiui_app(target=phone)` 触发的 UI 副作用）。
+        // 在这里读一次快照状态，让整个对话页随它重组 —— 卡片本身是消息列表里的一项，
+        // 不在这里读的话 LazyColumn 的 item 集合不会跟着变。
+        val aiuiDemoShowing = AiuiDemoController.current != null
+
+        // 卡片排在最后一条消息下方，出现时很可能落在屏幕外 —— 滚到底把它露出来，
+        // 否则用户的观感是"说了演示，屏幕上什么都没有"。
+        LaunchedEffect(aiuiDemoShowing) {
+            if (aiuiDemoShowing) {
+                runCatching { listState.animateScrollToItem(messages.size) }
+            }
+        }
+
+        if (messages.isEmpty() && !aiuiDemoShowing) {
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -709,6 +724,11 @@ internal fun ChatModule(app: LabApplication) {
                         },
                         expandTrace = expandTrace,
                     )
+                }
+                // AIUI 演示卡片：排在消息流末尾 = AI 那条回复的正下方。它是工具触发的
+                // UI 副作用（见 AiuiDemoController），**不进消息历史**，不在演示时零节点。
+                if (aiuiDemoShowing) {
+                    item(key = "aiui-demo") { AiuiDemoCard() }
                 }
             }
         }

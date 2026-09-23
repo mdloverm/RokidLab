@@ -77,6 +77,25 @@ object ToolRegistry {
     const val DOMAIN_MCP = "mcp"
 
     /**
+     * 网页操作域：在手机上的可见浏览器里替用户操作真实网站（打开 → 读页面 → 点击/输入 → 滚动）。
+     *
+     * 单独成域而不是并进 [DOMAIN_WEB]：那个域是**无状态 HTTP**（搜索/读正文/发请求），
+     * 拿到的是文本、不带登录态，也点不了按钮；本域是一个**真实 WebView 页面**，
+     * 会带上用户的登录 Cookie、会在手机屏幕上显示出来。两者对用户是两件事：
+     * 「查点资料」和「让它替我在某个网站上操作」。想关掉"让它自己动网页"的人，
+     * 不应该连搜索一起关掉。
+     *
+     * ⚠️ 本域**对 AIUI 页面开放**（`PageScope.ALLOWED_DOMAINS` 只摘掉了 [DOMAIN_SHELL]）——
+     * 这是 2026-09-23 的明确选择，别当成漏网顺手收窄。已知后果要清楚：`browser_click` /
+     * `browser_type` 的"提交类先问用户"是**提示词级**约定（[BrowserGuard]），只在有模型
+     * 在中间时成立；页面走 `Lab.callTool` 直连，可以无视那句提示直接传 `confirmed=true`。
+     * 之所以仍开放：页面是用户自己要来的制品（自己让模型生成的、或从商店导入的），
+     * 页面内嵌"一键浏览某站"是真实需求，而"安全边界由工具 `isEnabled` 总开关负责、
+     * 不做逐域摘除"是本项目对 AIUI 页面的一贯口径。
+     */
+    const val DOMAIN_BROWSER = "browser"
+
+    /**
      * 第三方 MCP 工具的 **wire name 前缀**：`mcp__<serverId>__<工具名>`。
      *
      * 唯一产地 —— 生成侧（`McpRegistry.wireNameOf`）与判定侧（审批闸门的拒绝文案分流、
@@ -96,7 +115,7 @@ object ToolRegistry {
     val DOMAIN_ALL: Set<String> = setOf(
         DOMAIN_INFO, DOMAIN_KNOWLEDGE, DOMAIN_GLASSES, DOMAIN_TIMER,
         DOMAIN_MEDIA, DOMAIN_DISPLAY, DOMAIN_WEB, DOMAIN_FILES, DOMAIN_AIUI, DOMAIN_PHONE,
-        DOMAIN_RESEARCH, DOMAIN_VISION, DOMAIN_SHELL, DOMAIN_MCP,
+        DOMAIN_RESEARCH, DOMAIN_VISION, DOMAIN_SHELL, DOMAIN_MCP, DOMAIN_BROWSER,
     )
 
     /** 主 Agent 会话（眼镜语音/手机聊天，在线模型）装配的工具域 */
@@ -158,6 +177,7 @@ object ToolRegistry {
         com.rokidlab.phone.ai.tools.SubagentToolProvider,
         com.rokidlab.phone.ai.tools.VisionToolProvider,
         com.rokidlab.phone.ai.tools.MotionToolProvider,
+        com.rokidlab.phone.ai.tools.BrowserToolProvider,
     )
 
     // ═══════════════════ 动态提供者（MCP）════════════════════════
@@ -366,6 +386,14 @@ object ToolRegistry {
          * 放在中间会让用户在「文件」与「系统」之间看到它，符合"由本地能力 → 外部能力"的阅读顺序。
          */
         MCP(R.string.ai_tool_cat_mcp),
+        /**
+         * 网页操作（在手机可见浏览器里替用户操作真实网站）。
+         *
+         * 位置紧跟 [MCP] 之后：用户视角上它与「信息与联网」同属"跟外面的世界打交道"，
+         * 但比 MCP 更常被普通用户碰到，所以排在 [SYSTEM] 之前、且**不并进 [INFO_WEB]**
+         * —— 搜索是"查"，这里是"替你在网页上动手"，关掉其中一个不该连带另一个。
+         */
+        BROWSER(R.string.ai_tool_cat_browser),
         /** 系统性/内部工具（自检、日志、任务续做记账等），设置页不展示 */
         SYSTEM(R.string.ai_tool_cat_system),
     }
@@ -380,6 +408,7 @@ object ToolRegistry {
         DOMAIN_FILES -> ToolCategory.FILES
         DOMAIN_SHELL -> ToolCategory.SHELL
         DOMAIN_MCP -> ToolCategory.MCP
+        DOMAIN_BROWSER -> ToolCategory.BROWSER
         // info / web / knowledge 对用户都是「查信息」
         else -> ToolCategory.INFO_WEB
     }
@@ -506,7 +535,8 @@ object ToolRegistry {
      *
      * 关闭时必须知道这个：两条链路对应两个完全不同的关闭命令 ——
      * [LOCAL_HOST] → `closeAiuiHost()`（关 RokidLink 里渲染 .aix 的 AiuiLinkActivity），
-     * [OFFICIAL] → `Sys_AIUI_Stop`（关眼镜系统渲染层）。
+     * [OFFICIAL] → `Sys_AIUI_Stop`（关眼镜系统渲染层），
+     * [PHONE_HOST] → 收掉手机对话里的演示浮层（跟眼镜没关系）。
      * ⚠️ 不能靠"本地有没有这个 .aix"反推：对话生成的包**本地一定有** .aix，
      * 但它完全可能是走官方渲染层打开的（比如用户紧接着打开了另一个官方智能体）——
      * 反推会发错命令，表现为"说了关掉，眼镜上还亮着"。
@@ -517,6 +547,9 @@ object ToolRegistry {
 
         /** 眼镜官方渲染层：Sys_AIUI_Start / Ai_RenderPayload */
         OFFICIAL,
+
+        /** 手机端演示宿主：.aix 在本机 WebView 里渲染（对话内浮层 / 全屏操作页） */
+        PHONE_HOST,
     }
 
     /** 最近一次成功下发打开（Sys_AIUI_Start）的 agentId，供 stop_aiui_app 不带名称时作占位/日志 */
@@ -600,7 +633,7 @@ object ToolRegistry {
     /**
      * schemasFor 结果缓存：key = (domains 集合, 工具集版本号)，value = (全量工具开关快照, Schema 列表)。
      * 每次调用读一遍开关快照（SharedPreferences 首载后为内存读，开销极小）做双重校验，
-     * 命中即跳过 ~30 个工具的 JSONObject 重建；[setEnabled] 写入后清空。
+     * 命中即跳过全部工具的 JSONObject 重建；[setEnabled] 写入后清空。
      * 调用方仅对返回的 List 做 add/remove，不修改 JSONObject 本身，共享实例安全。
      *
      * ⚠️ **key 里的版本号 [tableVersion] 不是保险而是必需品**（2026-09-20 接 MCP 时加）：

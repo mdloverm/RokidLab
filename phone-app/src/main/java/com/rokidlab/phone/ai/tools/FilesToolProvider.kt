@@ -105,7 +105,7 @@ internal object FilesToolProvider : ToolProvider {
             statusText = "正在读取项目源码…",
             schema = toolSchema(
                 name = "read_code_file",
-                description = "读取对话中通过写文件工具生成的项目源码当前内容（读取手机本地的项目镜像，不改动任何文件）。当用户说“修改/改一下/调整/优化/重做/对之前的 XXX 不满意”而对象是之前生成过的代码项目或 AIUI 智能体应用时必须先调用本工具：不确定要改哪个文件时可只传 project（返回该项目的文件清单），确定后带 file 读取对应文件的完整内容，再基于读到的真实源码用“保存代码文件”工具(save_code_file)覆盖写回同一 project 的同一路径，最后用“安装 AIUI 项目”工具(install_aiui_project)重新安装到眼镜。禁止凭印象或记忆整文件重编——必须先读现网源码再动手，只重写受影响的文件。",
+                description = "读取对话中通过写文件工具生成的项目源码当前内容（读取手机本地的项目镜像，不改动任何文件）。当用户说“修改/改一下/调整/优化/重做/对之前的 XXX 不满意”而对象是之前生成过的代码项目或 AIUI 智能体应用时必须先调用本工具：不确定要改哪个文件时可只传 project（返回该项目的文件清单），确定后带 file 读取对应文件的完整内容，再基于读到的真实源码用“保存代码文件”工具(save_code_file)覆盖写回同一 project 的同一路径，最后用“安装 AIUI 项目”工具(install_aiui_project)重新安装到眼镜（改完可先用 open_aiui_app 传 target=phone 在手机上演示确认，再送到眼镜）。禁止凭印象或记忆整文件重编——必须先读现网源码再动手，只重写受影响的文件。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(

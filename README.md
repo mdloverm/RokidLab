@@ -496,8 +496,8 @@ RokidLab/
 │   └── scrcpy-server.jar                   通过 ADB 推送到 /data/local/tmp/，供 scrcpy-server 启动使用
 │
 ├── phone-app/src/debug/                    debug 专属源集（release 包完全不含）
-│   ├── AndroidManifest.xml                 仅 debug 合并 debug-AIUI 调试广播 receiver（P0-1 隔离）
-│   └── java/com/rokidlab/phone/ai/DebugAiuiReceiver.kt  AIUI 调试广播接收器（act=start/stop/install/shell/upgrade_ollama）
+│   ├── AndroidManifest.xml                 仅 debug 合并 AUDIO_SPIKE 调试广播 receiver
+│   └── java/com/rokidlab/phone/debug/AudioSpikeReceiver.kt  M0 音频流 spike 调试广播接收器
 │
 ├── crowdin.yml                             Crowdin 翻译管理配置
 ├── UI-DESIGN.md                            UI 设计参考文档

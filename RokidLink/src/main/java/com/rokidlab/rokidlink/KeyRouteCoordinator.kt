@@ -93,6 +93,13 @@ internal class KeyRouteCoordinator(
                 }
             }
 
+            // 触摸板手势（滑动 / 双指）→ AIUI 页面。确认窗口期间不送（此刻用户是在回答弹窗，
+            // 不是在操作页面）；只有真的被页面消费才 abortBroadcast，没人消费时不吞广播。
+            if (!toolConfirm.hasPending && routeTouchpadGesture(action)) {
+                abortBroadcast()
+                return
+            }
+
             when (action) {
                 "com.android.action.ACTION_SPRITE_BUTTON_DOWN" -> {
                     KeyButtonService.downTimeMs = System.currentTimeMillis()
@@ -140,6 +147,40 @@ internal class KeyRouteCoordinator(
             if ((now - lastLaunchMs) < 800L) return true
             lastLaunchMs = now
             return false
+        }
+
+        /**
+         * 触摸板手势 → AIUI 页面的 ink 键盘。返回 true = 已被宿主消费（调用方据此 abortBroadcast）。
+         *
+         * 存在的理由：`ACTION_SWIPE_*` / `ACTION_TWO_FINGER_*` 这两族广播此前**全仓零消费** ——
+         * 眼镜端触摸板的滑动与双指点击对 AIUI 页面完全不可见（详见 project_rules 的按键表）。
+         * 这里接进与物理键同一条注入通道（[AiuiLinkActivity.injectKeyToActive]），
+         * 所以「滑动」与「按方向键」在页面看来是同一种输入。
+         *
+         * 方向约定：镜腿触摸板**向前滑 = 列表往后一项**（ArrowDown），向后滑 = 往前一项。
+         * 手感若与真机相反，只需改这里的映射。双指双击 = 两次回车，与手机演示层
+         * 「双击 = 两次单击序列」保持同一语义。
+         */
+        private fun routeTouchpadGesture(action: String): Boolean {
+            val keys = when (action) {
+                "com.android.action.ACTION_SWIPE_FORWARD" -> listOf("ArrowDown")
+                "com.android.action.ACTION_SWIPE_BACK" -> listOf("ArrowUp")
+                "com.android.action.ACTION_SWIPE_LEFT" -> listOf("ArrowLeft")
+                "com.android.action.ACTION_SWIPE_RIGHT" -> listOf("ArrowRight")
+                "com.android.action.ACTION_TWO_FINGER_SWIPE_FORWARD" -> listOf("ArrowDown")
+                "com.android.action.ACTION_TWO_FINGER_SWIPE_BACK" -> listOf("ArrowUp")
+                "com.android.action.ACTION_TWO_FINGER_SINGLE_TAP" -> listOf("Enter")
+                "com.android.action.ACTION_TWO_FINGER_DOUBLE_TAP" -> listOf("Enter", "Enter")
+                else -> return false
+            }
+            var handled = false
+            for (key in keys) {
+                val down = AiuiLinkActivity.injectKeyToActive(key, "down")
+                val up = AiuiLinkActivity.injectKeyToActive(key, "up")
+                handled = handled || down || up
+            }
+            if (handled) Log.i(TAG, "touchpad $action -> ${keys.joinToString("+")} -> AIUI host")
+            return handled
         }
 
         /** 根据 UP 事件时长判断短按/长按并启动目标 */
@@ -210,6 +251,15 @@ internal class KeyRouteCoordinator(
                 addAction("com.android.action.ACTION_SPRITE_BUTTON_CLICK")
                 addAction("com.android.action.ACTION_SPRITE_BUTTON_LONG_PRESS")
                 addAction("com.android.action.ACTION_SPRITE_BUTTON_DOUBLE_CLICK")
+                // 触摸板手势（见 routeTouchpadGesture）：此前零消费，AIUI 页面收不到滑动/双击
+                addAction("com.android.action.ACTION_SWIPE_FORWARD")
+                addAction("com.android.action.ACTION_SWIPE_BACK")
+                addAction("com.android.action.ACTION_SWIPE_LEFT")
+                addAction("com.android.action.ACTION_SWIPE_RIGHT")
+                addAction("com.android.action.ACTION_TWO_FINGER_SINGLE_TAP")
+                addAction("com.android.action.ACTION_TWO_FINGER_DOUBLE_TAP")
+                addAction("com.android.action.ACTION_TWO_FINGER_SWIPE_FORWARD")
+                addAction("com.android.action.ACTION_TWO_FINGER_SWIPE_BACK")
                 priority = 100
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

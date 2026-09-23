@@ -8,7 +8,7 @@ import org.json.JSONObject
  *
  * ## 为什么需要它
  * OpenAI 兼容服务端（DeepSeek 等）对 `tools[].function.parameters` 是做**严格 JSON Schema 校验**的，
- * 而且**校验失败是整请求级**的 —— 只要 44 个工具里有 1 个节点的形状不合规，服务端直接
+ * 而且**校验失败是整请求级**的 —— 只要任意一个工具里有 1 个节点的形状不合规，服务端直接
  * `400 Invalid schema for function 'xxx'`，**所有工具一起失效**：模型既不能调用工具，
  * 也拿不到任何正文，表现为连续空轮（`toolCalls=0 content=null finish=none`）。
  *
@@ -69,7 +69,7 @@ internal object ToolSchemaValidator {
         if (params.optString("type") != "object") {
             add("function.parameters.type", "必须是 \"object\"，实际是 ${typeNameOf(params.opt("type"))}")
         }
-        // 递归结果同样带上工具名前缀 —— 否则 44 个工具里出的问题无从定位（本次实测踩到）
+        // 递归结果同样带上工具名前缀 —— 否则哪个工具出的问题无从定位（本次实测踩到）
         out += validateNode(params, "function.parameters").map { "$label · $it" }
         return out
     }

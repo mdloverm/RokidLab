@@ -484,6 +484,7 @@
     <string name="ai_tool_cat_files">Files</string>
     <string name="ai_tool_cat_shell">On-device</string>
     <string name="ai_tool_cat_mcp">External MCP</string>
+    <string name="ai_tool_cat_browser">Web Browsing</string>
     <string name="chat_settings_mcp">External MCP</string>
     <string name="chat_settings_mcp_hint">Connect third-party MCP servers to extend AI</string>
     <string name="mcp_connecting">Connecting…</string>
@@ -832,13 +833,22 @@
     <string name="ai_tool_update_plan_name">Plan Task</string>
     <string name="ai_tool_manage_memory_name">Remember Preference</string>
     <string name="ai_tool_open_aiui_app_name">Open Agent App</string>
-    <string name="ai_tool_open_aiui_app_desc">Open an AIUI app on the glasses</string>
+    <string name="ai_tool_open_aiui_app_desc">Demo on phone or open on glasses</string>
     <string name="ai_tool_install_aiui_project_name">Install Chat-Generated AIUI Project</string>
     <string name="ai_tool_install_aiui_project_desc">Package as .aix and install to glasses</string>
     <string name="ai_tool_stop_aiui_app_name">Exit AIUI App</string>
-    <string name="ai_tool_stop_aiui_app_desc">Close the AIUI app on the glasses</string>
+    <string name="ai_tool_stop_aiui_app_desc">Close phone demo or glasses AIUI app</string>
     <string name="ai_tool_list_my_aiui_apps_name">My AI Apps</string>
     <string name="ai_tool_list_my_aiui_apps_desc">List generated AIUI apps</string>
+    <string name="aiui_demo_badge">Phone demo</string>
+    <string name="aiui_demo_close">Close</string>
+    <string name="aiui_demo_fullscreen">Fullscreen</string>
+    <string name="aiui_demo_note">Same render engine as glasses</string>
+    <string name="aiui_demo_rendering">Rendering…</string>
+    <string name="aiui_demo_failed">Render failed</string>
+    <string name="aiui_demo_title">AIUI demo</string>
+    <string name="aiui_demo_exit">Back</string>
+    <string name="aiui_demo_hint">Swipe = arrows, tap = Enter</string>
     <string name="ai_tool_schedule_agent_task_name">Autonomous Task</string>
     <string name="ai_tool_schedule_agent_task_desc">Let AI research and report on schedule</string>
     <string name="ai_tool_get_weather_name">Weather</string>
@@ -996,6 +1006,25 @@
     <string name="screen_capture_capturing">Capturing screen…</string>
     <string name="ai_tool_capture_screen_name">Capture Screen</string>
     <string name="ai_tool_capture_screen_desc">Read the phone screen; first use asks for system consent</string>
+    <!-- Web browsing: drive real sites in the visible phone browser (user logs in) -->
+    <string name="ai_tool_browser_open_name">Open Page</string>
+    <string name="ai_tool_browser_open_desc">Open a URL in the phone browser</string>
+    <string name="ai_tool_browser_snapshot_name">Read Page</string>
+    <string name="ai_tool_browser_snapshot_desc">Read current page text and items</string>
+    <string name="ai_tool_browser_click_name">Click Page Item</string>
+    <string name="ai_tool_browser_click_desc">Click a page item by its number</string>
+    <string name="ai_tool_browser_type_name">Type on Page</string>
+    <string name="ai_tool_browser_type_desc">Type into an input on the page</string>
+    <string name="ai_tool_browser_scroll_name">Scroll Page</string>
+    <string name="ai_tool_browser_scroll_desc">Scroll the page up or down</string>
+    <string name="ai_tool_browser_back_name">Page Back</string>
+    <string name="ai_tool_browser_back_desc">Go back to the previous page</string>
+    <!-- Browser shell (BrowserActivity) -->
+    <string name="browser_exit">Back</string>
+    <string name="browser_title">Browser</string>
+    <string name="browser_refresh">Refresh</string>
+    <string name="browser_loading">Loading…</string>
+    <string name="browser_hint">Log-in and CAPTCHAs are on you; Leqi does the rest</string>
     <string name="switch_source_btn">Switch Source</string>
     <string name="refresh_success">Refresh Succeeded</string>
     <string name="refresh_failed">Refresh Failed</string>

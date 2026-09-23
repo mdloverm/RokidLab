@@ -104,6 +104,27 @@
             android:configChanges="orientation|screenSize"
             android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
 
+        <!-- 手机端 AIUI 全屏演示页：对话里的演示浮层点「全屏操作」进入。
+             触摸滑动/点击会翻译成眼镜上等价的方向键与回车（AIUI 页面只认键盘输入）。
+             configChanges 是为了不让旋转重建 —— WebView 里跑的是 20MB wasm 引擎，
+             重建一次要重新装载+重跑页面 onLoad。 -->
+        <activity
+            android:name=".aiui.AiuiDemoActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
+
+        <!-- 手机端浏览器页：browser_* 工具操作真实网站时的可见宿主。
+             launchMode=singleTask 是刻意的 —— 全 App 只允许一个浏览器窗口，
+             否则模型多调一次 browser_open 就会叠出第二个页面，而工具侧只认最后一个。
+             configChanges 避免旋转重建：重建会丢掉当前页面状态与已注入的编号表。 -->
+        <activity
+            android:name=".browser.BrowserActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
+
         <!-- 统一授权页：AI 工具在后台发现缺权限时，由 PermissionBridge 拉起本页
              （前台直接弹系统授权框；后台凭悬浮窗豁免拉起；两者都不可用时退通知栏提醒）。
              noHistory + excludeFromRecents：它只是"授权通道"，不该留在返回栈或最近任务里。 -->

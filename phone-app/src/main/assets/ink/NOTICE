@@ -1,0 +1,19 @@
+Bundled third-party component
+=============================
+
+ink  (@yodaos-pkg/ink@0.13.0)
+License: Apache License 2.0
+
+Files bundled in this directory:
+    index.html
+    host.js
+    index.js
+    env.js
+    lab-page-bridge.js
+    pkg/ink_web.js
+    pkg/ink_web_bg.wasm
+
+lab-page-bridge.js is authored by this project and is covered by the
+project license, not the upstream one.
+
+The full license text is provided in the LICENSE file next to this NOTICE.

@@ -489,6 +489,7 @@
     <string name="ai_tool_cat_files">文件</string>
     <string name="ai_tool_cat_shell">本机执行</string>
     <string name="ai_tool_cat_mcp">外部 MCP</string>
+    <string name="ai_tool_cat_browser">网页操作</string>
     <string name="chat_settings_mcp">外部 MCP</string>
     <string name="chat_settings_mcp_hint">连接第三方 MCP 服务，扩展 AI 能力</string>
     <string name="mcp_connecting">正在连接…</string>
@@ -841,13 +842,22 @@
     <string name="ai_tool_update_plan_name">制定任务计划</string>
     <string name="ai_tool_manage_memory_name">记住偏好</string>
     <string name="ai_tool_open_aiui_app_name">打开智能体应用</string>
-    <string name="ai_tool_open_aiui_app_desc">在眼镜上打开 AIUI 应用</string>
+    <string name="ai_tool_open_aiui_app_desc">在手机上演示或送到眼镜打开</string>
     <string name="ai_tool_install_aiui_project_name">安装对话生成的AIUI项目</string>
     <string name="ai_tool_install_aiui_project_desc">打包为 .aix 并安装到眼镜</string>
     <string name="ai_tool_stop_aiui_app_name">退出AIUI应用</string>
-    <string name="ai_tool_stop_aiui_app_desc">关闭眼镜上的 AIUI 应用</string>
+    <string name="ai_tool_stop_aiui_app_desc">关闭手机演示或眼镜上的 AIUI 应用</string>
     <string name="ai_tool_list_my_aiui_apps_name">我的AI应用</string>
     <string name="ai_tool_list_my_aiui_apps_desc">列出生成过的 AIUI 应用</string>
+    <string name="aiui_demo_badge">手机演示</string>
+    <string name="aiui_demo_close">关闭</string>
+    <string name="aiui_demo_fullscreen">全屏操作</string>
+    <string name="aiui_demo_note">与眼镜同一渲染引擎</string>
+    <string name="aiui_demo_rendering">渲染中…</string>
+    <string name="aiui_demo_failed">渲染失败</string>
+    <string name="aiui_demo_title">AIUI 演示</string>
+    <string name="aiui_demo_exit">返回</string>
+    <string name="aiui_demo_hint">滑动=方向键，点击=确认</string>
     <string name="ai_tool_schedule_agent_task_name">自主定时任务</string>
     <string name="ai_tool_schedule_agent_task_desc">到点让 AI 自己查资料再播报</string>
     <string name="ai_tool_get_weather_name">天气查询</string>
@@ -1005,6 +1015,25 @@
     <string name="screen_capture_capturing">正在截取屏幕…</string>
     <string name="ai_tool_capture_screen_name">截取手机屏幕</string>
     <string name="ai_tool_capture_screen_desc">看手机屏幕上的内容，首次会弹系统授权框</string>
+    <!-- 网页操作：在手机可见浏览器里替用户操作真实网站（登录态由用户自己建立） -->
+    <string name="ai_tool_browser_open_name">打开网页</string>
+    <string name="ai_tool_browser_open_desc">在手机浏览器里打开网址</string>
+    <string name="ai_tool_browser_snapshot_name">读取页面</string>
+    <string name="ai_tool_browser_snapshot_desc">读当前网页正文与可点元素</string>
+    <string name="ai_tool_browser_click_name">点击页面元素</string>
+    <string name="ai_tool_browser_click_desc">按编号点击网页上的元素</string>
+    <string name="ai_tool_browser_type_name">网页填表</string>
+    <string name="ai_tool_browser_type_desc">在网页输入框里填内容</string>
+    <string name="ai_tool_browser_scroll_name">网页滚动</string>
+    <string name="ai_tool_browser_scroll_desc">上下滚动网页</string>
+    <string name="ai_tool_browser_back_name">网页后退</string>
+    <string name="ai_tool_browser_back_desc">返回网页上一页</string>
+    <!-- 浏览器页面外壳（BrowserActivity） -->
+    <string name="browser_exit">返回</string>
+    <string name="browser_title">浏览器</string>
+    <string name="browser_refresh">刷新</string>
+    <string name="browser_loading">加载中…</string>
+    <string name="browser_hint">登录、验证码请自己来，其余交给乐奇</string>
     <string name="switch_source_btn">切换下载源</string>
     <string name="refresh_success">刷新成功</string>
     <string name="refresh_failed">刷新失败</string>

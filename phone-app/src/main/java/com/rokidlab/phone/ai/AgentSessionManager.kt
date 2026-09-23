@@ -236,8 +236,9 @@ internal object AgentSessionManager {
      *
      * 这是 `llm` 接缝给 `compaction` 接缝的直接输入：`ModelCapabilities.contextWindow` 是
      * 改造前完全拿不到的真实数字，而"历史预算"正是该由它推导的量。规则见
-     * [CompactionPolicy.forWindow] —— **只收紧不放宽**，所以大窗口模型（以及窗口未知时）
-     * 行为与改造前逐字一致，只有"历史上限明显超出小窗口"才会主动收紧（修的是溢出 bug）。
+     * [CompactionPolicy.forWindow] —— **双向**：小窗口收紧、大窗口放宽（两侧各有绝对天花板，
+     * 见 `MAX_CHARS_CEIL` / `MAX_MESSAGES_CEIL` / `MAX_DIGEST_CEIL`），窗口未知时原样返回默认档 ——
+     * "不知道"不等于"该调小"，否则会平白损失用户的上下文。
      */
     internal fun applyModelCapabilities(caps: ModelCapabilities) {
         val s = storeOrNull() ?: return

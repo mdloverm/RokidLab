@@ -71,6 +71,56 @@ object AiuiProject {
     fun packageFile(context: Context, agentId: String): File =
         File(packageDir(context), "$agentId.aix")
 
+    /** 全部本机 AIUI 项目名（有 app.json 才算一个项目；含**还没打包送到眼镜**的） */
+    fun localProjects(context: Context): List<String> {
+        val root = File(context.filesDir, "aiui_projects")
+        if (!root.isDirectory) return emptyList()
+        return root.listFiles()
+            ?.filter { it.isDirectory && File(it, "app.json").isFile }
+            ?.map { it.name }
+            ?.sorted()
+            ?: emptyList()
+    }
+
+    /**
+     * 项目展示名：AGENTS.md 的首个一级标题（生成时写的就是应用名），没有就用项目名。
+     *
+     * 为什么不读 app.json：它只有 pages/window 这类路由与样式配置，**没有名字字段**
+     * （见 aiui-dev 技能 §1.2）。
+     */
+    fun projectDisplayName(context: Context, project: String): String {
+        val md = File(projectDir(context, project), "AGENTS.md")
+        val title = runCatching { md.takeIf { it.isFile }?.readText() }
+            .getOrNull()
+            ?.lineSequence()
+            ?.firstOrNull { it.trim().startsWith("# ") }
+            ?.trim()
+            ?.removePrefix("#")
+            ?.trim()
+        return title?.takeIf { it.isNotEmpty() } ?: project
+    }
+
+    /**
+     * 按名字找本机项目（供「刚生成、还没送到眼镜」时在手机上演示）。
+     * 展示名 / 项目名精确 → 双向包含。
+     *
+     * ⚠️ 刻意**不做**"本机只有一个项目就用它"的兜底：用户说"打开天气查询"（内置官方智能体）时，
+     * 那样会莫名其妙打开他刚做的那个项目。名字对不上就如实报没有。
+     */
+    fun matchLocalProject(context: Context, appName: String): String? {
+        val q = appName.trim()
+        if (q.isEmpty()) return null
+        val qLower = q.lowercase()
+        val projects = localProjects(context)
+        projects.firstOrNull { it.equals(q, ignoreCase = true) }?.let { return it }
+        projects.firstOrNull { projectDisplayName(context, it).equals(q, ignoreCase = true) }?.let { return it }
+        return projects.firstOrNull {
+            val d = projectDisplayName(context, it).lowercase()
+            val p = it.lowercase()
+            p.contains(qLower) || qLower.contains(p) || d.contains(qLower) || qLower.contains(d)
+        }
+    }
+
     /**
      * 本地 .aix 文件名 → 合法 agentId（眼镜 cxr 目录文件名 / Sys_AIUI_Start 包名）。
      * 去 .aix 后缀并清洗非法字符；为空则回退 UUID（眼镜按文件名落盘与启动）。

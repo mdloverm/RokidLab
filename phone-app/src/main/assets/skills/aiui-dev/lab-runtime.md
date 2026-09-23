@@ -10,7 +10,9 @@
 ## 1. 运行链路与规模上限
 
 1. save_code_file 写项目文件（app.json + pages/index/index.ink，可加页；新页面必须登记进 app.json 的 pages 路由）。
-2. install_aiui_project 打包推送（只推不自动开）；open_aiui_app 打开；stop_aiui_app 关闭；list_my_aiui_apps 查历史。
+2. open_aiui_app 打开（target=phone 在手机上演示，target=glasses 送到眼镜）；stop_aiui_app 关闭；list_my_aiui_apps 查历史。
+   - **手机上先看不用装**：刚写完的项目直接 open_aiui_app(target=phone, appName=项目名) 就会就地打包并浮出演示卡片 —— 改一版看一眼只要几秒，确认满意了再 install_aiui_project 送到眼镜。
+   - install_aiui_project 只负责打包推送到眼镜（只推不自动开）。
 3. **改已有项目**先 read_code_file 读回真源码（只传 project 返回清单，带 file 读全文），只改受影响处后同名覆盖写回再重装。禁止凭印象整页重编。
 
 ### 单次输出硬上限（★大文件出错根因）

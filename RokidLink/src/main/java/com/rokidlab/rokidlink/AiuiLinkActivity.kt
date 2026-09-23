@@ -643,6 +643,32 @@ class AiuiLinkActivity : Activity() {
                 a?.runOnUiThread { a.finish() }
             }
         }
+
+        /**
+         * 触摸板手势 → 页面：把一次 ink 键盘注入正在渲染的宿主；无宿主（或页面还没 boot）返回 false。
+         *
+         * 存在的理由：眼镜端触摸板的 `ACTION_SWIPE_*` / `ACTION_TWO_FINGER_*` 广播此前**零消费**，
+         * AIUI 页面根本收不到滑动/双击手势。这里复用与物理键**完全相同**的注入通道
+         * （[AiuiLinkActivity.injectKey]），页面侧看到的输入没有任何差别。
+         *
+         * 返回值是给调用方决定要不要 abortBroadcast 的依据 —— 没人消费时不能把按键吞掉。
+         */
+        @JvmStatic
+        fun injectKeyToActive(code: String, action: String): Boolean {
+            val a = synchronized(lock) { activeActivity }
+            if (a != null) {
+                if (!a.booted) {
+                    Log.d(TAG, "touchpad key(not booted) code=$code")
+                    return false
+                }
+                a.injectKey(code, action)
+                return true
+            }
+            val wv = activeWebView?.get() ?: return false
+            val js = "window.__aiuiHost && window.__aiuiHost.key(${JSONObject.quote(code)},'$action')"
+            wv.post { runCatching { wv.evaluateJavascript(js, null) } }
+            return true
+        }
     }
 
     override fun onStart() {
