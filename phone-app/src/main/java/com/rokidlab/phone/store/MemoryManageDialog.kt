@@ -78,7 +78,8 @@ internal fun MemoryManageDialog(
     onChanged: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    var memories by remember { mutableStateOf<List<String>>(emptyList()) }
+    /** (全局编号, 正文)：编号用于 edit/remove 定位，必须取自全量列表（见 factItems 的 KDoc） */
+    var memories by remember { mutableStateOf<List<Pair<Int, String>>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     /** 正在编辑的编号（1 起）；0 = 不在编辑态 */
     var editingIndex by remember { mutableIntStateOf(0) }
@@ -89,7 +90,7 @@ internal fun MemoryManageDialog(
     LaunchedEffect(refresh) {
         loading = true
         memories = withContext(Dispatchers.IO) {
-            runCatching { LongTermMemoryManager.items(ctx) }.getOrDefault(emptyList())
+            runCatching { LongTermMemoryManager.factItems(ctx) }.getOrDefault(emptyList())
         }
         loading = false
     }
@@ -133,8 +134,10 @@ internal fun MemoryManageDialog(
                 )
 
                 else -> LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
-                    itemsIndexed(memories) { i, text ->
-                        val index = i + 1
+                    itemsIndexed(memories) { _, item ->
+                        // 编号取全局位置（含教训），保证 remove/update 定位与库内顺序一致
+                        val index = item.first
+                        val text = item.second
                         Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                             if (editingIndex == index) {
                                 OutlinedTextField(

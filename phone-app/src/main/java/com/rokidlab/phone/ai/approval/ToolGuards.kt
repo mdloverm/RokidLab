@@ -219,7 +219,8 @@ internal class GlassesDependencyGuard : ToolGuard {
  * 外部副作用工具 → 需要用户确认（[ToolDecision.Ask]）。
  *
  * 只负责"该问"这个判断；**怎么问、答不上来怎么办**由 [ApprovalGate] 统一处理
- * （fail-open：无确认通道/超时 → 降级放行，只有用户**显式取消**才拒绝）。
+ * （降级分流读工具的 [com.rokidlab.phone.ai.ToolConfirmPolicy]：`BLOCK` 问不到就拒、
+ * `PROCEED` 问不到就放行 —— **只有用户显式取消在两种情况下都拒**）。
  * 把"问"和"答"分开是为了让本 guard 保持无 IO、可单测。
  *
  * [ToolDecision.Ask.prompt] 用 `ToolEntry.summarize` 生成 —— 摘要与工具定义同源，
@@ -234,7 +235,10 @@ internal class RiskApprovalGuard : ToolGuard {
         return ToolDecision.Ask(
             DecisionOrigin.RISK_CONFIRMATION,
             ToolRegistry.summarizeToolCall(ctx.name, ctx.args),
-            // 第三方远端工具（MCP）问不到用户时必须拒绝，不能 fail-open（见该字段的产地）
+            // 问不到用户时放行还是拒绝 = **工具自己的声明**（ToolConfirmPolicy）：
+            // BLOCK（发短信 / 未信任的 MCP 工具）必须拒绝；PROCEED（删本机文件 / 容器装包）放行。
+            // ⚠️ 判据不再是「域 == MCP」—— 那让 send_sms（真发短信）与 call_phone（只开拨号盘）
+            // 共享了同一条静默放行路径。取值链：ToolEntry.confirmPolicy → 缺省按 risk 派生。
             failClosed = ctx.failClosedConfirmation,
         )
     }

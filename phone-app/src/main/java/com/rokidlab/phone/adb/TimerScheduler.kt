@@ -5,18 +5,19 @@ import com.rokidlab.phone.adb.ui.TimerSchedule
 import com.rokidlab.phone.adb.ui.TimerTask
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.connection.ConnectionRoute
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.rokidlab.phone.permission.AppPermission
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -48,11 +49,24 @@ class TimerScheduler(private val appContext: Context) {
          * 十几秒到几十秒；超过此值按「无回复」处理并如实通知，绝不无限等待卡住调度协程。
          */
         private const val AGENT_TASK_TIMEOUT_MS = 90_000L
+
+        /**
+         * 一次性/每日提醒错过触发后的补跑宽限（毫秒）：
+         * 设备关机/进程被杀导致到点时没跑成，恢复后错过不超过此时长才补跑一次，
+         * 超过就跳过（避免「早上 8 点的提醒晚上 10 点开机才响」）。
+         */
+        private const val FIXED_MISSED_GRACE_MS = 2 * 60 * 60 * 1000L
+
+        /** 倒计时任务错过后的补跑宽限（毫秒）。 */
+        private const val COUNTDOWN_MISSED_GRACE_MS = 60 * 60 * 1000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    // 任务运行协程表：startTask/stopTask/协程 finally 在多个协程间并发读写，必须线程安全
+    // 任务**执行中**的协程表（fireTask 期间占用）：stopTask/shutdown 时可中断执行体。
+    // 等待触发不再靠协程 delay，而由系统 AlarmManager 承载。
     private val jobs = ConcurrentHashMap<String, Job>()
+    /** 正在执行的任务 id（防同一闹钟重复投递导致动作跑两遍） */
+    private val inflight = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
     /** tasks 读-改-写锁：UI 线程与 Default 调度协程并发修改任务列表，需串行化避免丢失更新 */
     private val tasksLock = Any()
     private val tasksPrefs = appContext.getSharedPreferences(PREFS_TIMER, Context.MODE_PRIVATE)
@@ -96,110 +110,242 @@ class TimerScheduler(private val appContext: Context) {
         Log.i(TAG, "deleteTask: $id")
     }
 
-    /** 启动任务（标记 running 并挂入 appScope 调度） */
+    /**
+     * 启动任务（标记 running 并向系统 AlarmManager 登记下一次触发）。
+     *
+     * 触发等待由系统闹钟承载（而非内存协程 `delay`）：Doze/应用待机下仍由
+     * `setExactAndAllowWhileIdle` 准时唤醒；缺精确闹钟权限时降级为非精确闹钟（不阻断功能）。
+     */
     fun startTask(task: TimerTask) {
-        val taskId = task.id
-        if (jobs.containsKey(taskId)) return
+        if (jobs.containsKey(task.id)) return
         synchronized(tasksLock) {
-            tasks = tasks.map { if (it.id == taskId) it.copy(running = true) else it }
+            val cur = tasks.firstOrNull { it.id == task.id }
+            if (cur?.running == true && cur.nextTriggerAt > 0L) return
+            tasks = tasks.map {
+                if (it.id == task.id) it.copy(running = true) else it
+            }
             saveTasks()
         }
+        scheduleNext(task, recovery = false)
+    }
+
+    /**
+     * 计算并登记下一次触发闹钟。
+     *
+     * @param recovery 进程重建/开机恢复路径：true 时优先复用任务持久化的 [TimerTask.nextTriggerAt]，
+     *   错过的触发按宽限规则补跑；false（新建/编辑/上一次执行完排下一次）时按当前时刻重算。
+     */
+    private fun scheduleNext(task: TimerTask, recovery: Boolean) {
+        val now = System.currentTimeMillis()
+        val sched = task.schedule
+
+        // ── 次数用尽（interval）：直接收尾，不再排闹钟 ──
+        if (sched is TimerSchedule.Interval && task.executedCount >= sched.count) {
+            finishTask(task.id)
+            return
+        }
+
+        // ── 恢复路径：先看持久化的计划触发点是否已错过 ──
+        if (recovery && task.nextTriggerAt > 0L) {
+            val missedAt = task.nextTriggerAt
+            if (missedAt <= now) {
+                val grace = when (sched) {
+                    is TimerSchedule.Countdown -> COUNTDOWN_MISSED_GRACE_MS
+                    is TimerSchedule.Interval -> Long.MAX_VALUE // interval 错过只补一次后续接着跑
+                    is TimerSchedule.FixedTime -> FIXED_MISSED_GRACE_MS
+                }
+                // 一次性 fixed 任务若已经成功执行过，错过的只是"重排闹钟"，不补跑
+                val alreadyDoneOnce = task.executedCount > 0
+                val withinGrace = now - missedAt <= grace
+                if (withinGrace && !(alreadyDoneOnce && sched is TimerSchedule.FixedTime && !sched.repeatDaily)) {
+                    Log.i(TAG, "missed trigger recovered, fire now: ${task.name}")
+                    fireTask(task.id)
+                    return
+                }
+                // 超出宽限：daily 顺延到下一个今天/明天时刻；一次性 countdown/fixed 收尾
+                if (sched is TimerSchedule.FixedTime && sched.repeatDaily) {
+                    arm(task.id, nextFixedTime(sched, now))
+                    return
+                }
+                finishTask(task.id)
+                return
+            }
+            // 未到点：按原计划时刻重新登记（countdown 不会因重启而重新倒计时）
+            arm(task.id, missedAt)
+            return
+        }
+
+        // ── 正常排程 ──
+        val triggerAt = when (sched) {
+            is TimerSchedule.Countdown -> now + sched.seconds * 1000L
+            is TimerSchedule.Interval -> now + sched.seconds * 1000L
+            is TimerSchedule.FixedTime -> nextFixedTime(sched, now)
+        }
+        arm(task.id, triggerAt)
+    }
+
+    /** 计算下一个未来的固定时刻（今天该点未过→今天，否则明天） */
+    private fun nextFixedTime(s: TimerSchedule.FixedTime, nowMs: Long): Long {
+        val target = Calendar.getInstance().apply {
+            timeInMillis = nowMs
+            set(Calendar.HOUR_OF_DAY, s.hour)
+            set(Calendar.MINUTE, s.minute)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        if (target.timeInMillis <= nowMs) target.add(Calendar.DAY_OF_YEAR, 1)
+        return target.timeInMillis
+    }
+
+    /** 登记一个（精确）闹钟，并把触发时刻持久化（恢复补跑的判定依据） */
+    private fun arm(taskId: String, triggerAt: Long) {
+        val pi = alarmPendingIntent(taskId)
+        val am = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        try {
+            if (AppPermission.canScheduleExactAlarms(appContext)) {
+                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+            } else {
+                // 缺精确闹钟权限（31/32 被用户撤销且无 USE_EXACT_ALARM）：降级不精确闹钟，
+                // Doze 下会并入维护窗口延迟触发 —— 功能不丢，到点时间不保证
+                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+                Log.w(TAG, "exact alarm permission missing, inexact alarm armed: $taskId")
+            }
+            synchronized(tasksLock) {
+                tasks = tasks.map { if (it.id == taskId) it.copy(nextTriggerAt = triggerAt) else it }
+                saveTasks()
+            }
+            Log.i(TAG, "alarm armed: $taskId at $triggerAt")
+        } catch (e: SecurityException) {
+            // 个别 ROM 在权限被撤销时对 set*AndAllowWhileIdle 也抛 SecurityException：
+            // 记日志并放弃（下一轮定时任务执行时的权限引导会让用户重新授权）
+            Log.w(TAG, "arm failed (SecurityException): ${e.message}")
+        }
+    }
+
+    private fun alarmPendingIntent(taskId: String): PendingIntent {
+        val intent = android.content.Intent(appContext, TimerAlarmReceiver::class.java).apply {
+            action = TimerAlarmReceiver.ACTION_FIRE
+            putExtra(TimerAlarmReceiver.EXTRA_TASK_ID, taskId)
+        }
+        // String.hashCode 确定性，同一任务每次拿到同一 requestCode（取消/覆盖才找得到原闹钟）
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+        return PendingIntent.getBroadcast(appContext, taskId.hashCode(), intent, flags)
+    }
+
+    /**
+     * 闹钟触发入口（由 [TimerAlarmReceiver] → 保活服务在主线程投递）。
+     *
+     * 动作执行放在 [scope] 协程（长任务可达 90s，由保活服务 WakeLock 托底）。
+     * 执行采用 **at-least-once + 幂等工具**：先跑动作再推进计数/排下一次，
+     * 进程死在执行中途时恢复路径会据 nextTriggerAt 补跑一次（工具网关按 cbId 幂等去重）。
+     */
+    fun fireTask(taskId: String) {
+        val task = synchronized(tasksLock) { tasks.firstOrNull { it.id == taskId } } ?: return
+        if (!task.running) return
+        if (!inflight.add(taskId)) {
+            Log.i(TAG, "fireTask ignored, already inflight: ${task.name}")
+            return
+        }
         val job = scope.launch {
-            var repeatDaily = false
             try {
-                when (task.schedule) {
-                    is TimerSchedule.Interval -> {
-                        for (i in 0 until task.schedule.count) {
-                            if (!isActive) break
-                            executeActions(task.actions)
-                            updateExecutedCount(taskId)
-                            if (i < task.schedule.count - 1) delay(task.schedule.seconds * 1000L)
-                        }
-                    }
-                    is TimerSchedule.FixedTime -> {
-                        val now = Calendar.getInstance()
-                        val target = Calendar.getInstance().apply {
-                            set(Calendar.HOUR_OF_DAY, task.schedule.hour)
-                            set(Calendar.MINUTE, task.schedule.minute)
-                            set(Calendar.SECOND, 0)
-                        }
-                        var delayMs = target.timeInMillis - now.timeInMillis
-                        // 时间已过时统一顺延 24h（下一次该时间点），与 AI 提示的「明天 HH:mm」语义一致；
-                        // 避免「已过时间的一次性任务」被立即触发，造成用户预期不符
-                        if (delayMs < 0) delayMs += 24 * 3600 * 1000L
-                        if (delayMs > 0) delay(delayMs)
-                        if (isActive) {
-                            executeActions(task.actions)
-                            updateExecutedCount(taskId)
-                        }
-                        repeatDaily = task.schedule.repeatDaily
-                    }
-                    is TimerSchedule.Countdown -> {
-                        delay(task.schedule.seconds * 1000L)
-                        if (isActive) {
-                            executeActions(task.actions)
-                            updateExecutedCount(taskId)
-                        }
-                    }
-                }
+                executeActions(task.actions)
+                // 推进计数并安排下一次（动作跑完后再做，崩溃在中途 ⇒ 恢复时补跑）
+                afterFired(taskId)
+            } catch (e: Exception) {
+                Log.w(TAG, "fireTask failed: ${task.name}: ${e.message}")
+                afterFired(taskId)
             } finally {
-                // 仅当自己仍是该任务的当前执行者时清理，避免误伤并发 startTask 的新协程
-                val removed = jobs.remove(taskId, coroutineContext[Job])
-                if (removed) {
-                    synchronized(tasksLock) {
-                        tasks = tasks.map { if (it.id == taskId) it.copy(running = false) else it }
-                        saveTasks()
-                    }
-                }
-                // 每日定时任务：本次执行完成后重新调度下一天
-                if (repeatDaily) {
-                    val latest = synchronized(tasksLock) { tasks.firstOrNull { it.id == taskId } }
-                    if (latest != null) startTask(latest)
-                }
+                inflight.remove(taskId)
             }
         }
-        val prev = jobs.putIfAbsent(taskId, job)
-        if (prev != null) {
-            // 并发 startTask 已抢先登记：取消本协程，交由已有任务执行
-            job.cancel()
+        jobs[taskId] = job
+        job.invokeOnCompletion { jobs.remove(taskId, job) }
+    }
+
+    /** 一次触发完成后的推进：interval 排下一次 / daily 排明天 / 其余收尾 */
+    private fun afterFired(taskId: String) {
+        val task = synchronized(tasksLock) { tasks.firstOrNull { it.id == taskId } } ?: return
+        synchronized(tasksLock) {
+            tasks = tasks.map {
+                if (it.id == taskId) it.copy(executedCount = it.executedCount + 1) else it
+            }
+            saveTasks()
+        }
+        val updated = synchronized(tasksLock) { tasks.firstOrNull { it.id == taskId } } ?: return
+        when (val s = task.schedule) {
+            is TimerSchedule.Interval -> {
+                if (updated.executedCount >= s.count) {
+                    finishTask(taskId)
+                } else {
+                    arm(taskId, System.currentTimeMillis() + s.seconds * 1000L)
+                }
+            }
+            is TimerSchedule.FixedTime -> {
+                if (s.repeatDaily) {
+                    arm(taskId, nextFixedTime(s, System.currentTimeMillis()))
+                } else {
+                    finishTask(taskId)
+                }
+            }
+            is TimerSchedule.Countdown -> finishTask(taskId)
+        }
+    }
+
+    /** 任务自然结束（次数用尽/一次性任务已执行）：清闹钟、标记停止 */
+    private fun finishTask(taskId: String) {
+        cancelAlarm(taskId)
+        synchronized(tasksLock) {
+            tasks = tasks.map {
+                if (it.id == taskId) it.copy(running = false, nextTriggerAt = 0L) else it
+            }
+            saveTasks()
+        }
+        Log.i(TAG, "task finished: $taskId")
+    }
+
+    private fun cancelAlarm(taskId: String) {
+        runCatching {
+            val am = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            am.cancel(alarmPendingIntent(taskId))
         }
     }
 
     fun stopTask(id: String) {
         jobs[id]?.cancel()
         jobs.remove(id)
+        cancelAlarm(id)
         synchronized(tasksLock) {
-            tasks = tasks.map { if (it.id == id) it.copy(running = false) else it }
+            tasks = tasks.map {
+                if (it.id == id) it.copy(running = false, nextTriggerAt = 0L) else it
+            }
             saveTasks()
         }
     }
 
     fun stopAll() {
+        synchronized(tasksLock) { tasks.forEach { cancelAlarm(it.id) } }
         jobs.values.forEach { it.cancel() }
         jobs.clear()
         synchronized(tasksLock) {
-            tasks = tasks.map { it.copy(running = false) }
+            tasks = tasks.map { it.copy(running = false, nextTriggerAt = 0L) }
             saveTasks()
         }
     }
 
-    /** 恢复运行中的任务（保活服务启动/自愈重建时调用） */
+    /**
+     * 恢复运行中的任务（保活服务启动/开机自启/进程自愈重建时调用）。
+     * 走 recovery 路径：未到点的闹钟重新登记，错过且在宽限内的立即补跑。
+     */
     fun resumeRunningTasks() {
         val running = synchronized(tasksLock) { tasks.filter { it.running } }
-        running.forEach { startTask(it) }
+        running.forEach { scheduleNext(it, recovery = true) }
         Log.i(TAG, "resumeRunningTasks: ${running.size} running")
     }
 
-    /** App 退出时停止全部任务 */
+    /** App 退出时停止全部任务并撤销闹钟 */
     fun shutdown() {
         stopAll()
-    }
-
-    private fun updateExecutedCount(taskId: String) {
-        synchronized(tasksLock) {
-            tasks = tasks.map { if (it.id == taskId) it.copy(executedCount = it.executedCount + 1) else it }
-            saveTasks()
-        }
     }
 
     // ── 动作执行 ──
@@ -523,6 +669,7 @@ class TimerScheduler(private val appContext: Context) {
         j.put("name", task.name)
         j.put("running", task.running)
         j.put("executedCount", task.executedCount)
+        j.put("nextTriggerAt", task.nextTriggerAt)
         j.put("schedule", serializeSchedule(task.schedule))
         val actions = JSONArray()
         task.actions.forEach { actions.put(serializeAction(it)) }
@@ -540,6 +687,7 @@ class TimerScheduler(private val appContext: Context) {
         },
         running = j.optBoolean("running", false),
         executedCount = j.optInt("executedCount", 0),
+        nextTriggerAt = j.optLong("nextTriggerAt", 0L),
     )
 
     private fun serializeSchedule(s: TimerSchedule): JSONObject {

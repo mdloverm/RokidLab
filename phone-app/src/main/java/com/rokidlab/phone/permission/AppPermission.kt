@@ -38,6 +38,12 @@ enum class AppPermission(
     val companions: List<String> = emptyList(),
     /** 低于该 API 等级时该权限不存在、自动视为已授予 */
     val minSdk: Int = 0,
+    /**
+     * 是否进首装引导「开启全部权限」步并作为连接前置条件。
+     * 只有**核心链路硬前提**才为 true；可选能力的重权限（如 [ALL_FILES]）必须显式置 false，
+     * 在对应功能页单独引导 —— 否则每个新用户都会被一个 28 MB 可选功能挡在眼镜连接之前。
+     */
+    val onboardingCritical: Boolean = true,
 ) {
     /**
      * 蓝牙：连眼镜的**硬前提**（`BLUETOOTH_CONNECT` 读已配对设备、`SCAN` 发现设备）。
@@ -59,6 +65,18 @@ enum class AppPermission(
 
     /** 电话：`call_phone` 用 `ACTION_CALL` 直接拨出（未授予则只能打开拨号盘） */
     PHONE_CALL(Manifest.permission.CALL_PHONE, R.string.permission_label_phone),
+
+    /**
+     * 短信：`send_sms` 用 `SmsManager` 直接发出。
+     *
+     * [onboardingCritical] = false：短信不是"连上眼镜"的硬前提，把它放进引导会把每个新用户
+     * 多挡一步；缺权限时由 `send_sms` 现场走 [PermissionBridge.ensure] 拉起系统授权框。
+     */
+    SMS(
+        Manifest.permission.SEND_SMS,
+        R.string.permission_label_sms,
+        onboardingCritical = false,
+    ),
 
     /** 日历读：`query_calendar` */
     CALENDAR_READ(Manifest.permission.READ_CALENDAR, R.string.permission_label_calendar_read),
@@ -87,23 +105,72 @@ enum class AppPermission(
      * 代码以为成功了 —— 表现为"AI 说「正在拨打：X」但手机屏幕毫无反应"。
      * 因此所有"从后台拉起界面"的功能（拨号 / 闹钟 / 打开应用）都必须先确认它。
      */
-    OVERLAY(Manifest.permission.SYSTEM_ALERT_WINDOW, R.string.permission_label_overlay);
+    OVERLAY(Manifest.permission.SYSTEM_ALERT_WINDOW, R.string.permission_label_overlay),
+
+    /**
+     * 所有文件访问（`MANAGE_EXTERNAL_STORAGE`，Android 11+）：**只**给本机执行环境的
+     * `/mnt/lab ↔ 下载/Lab` 直通使用 —— proot 子进程只能走内核文件路径，
+     * 分区存储下没有这条 AppOps，公共下载目录直接 File 读写会被 FUSE 拒绝。
+     *
+     * 与 [OVERLAY] 同属「设置页开关」型：`requestPermissions` 不弹窗，
+     * 只能跳 `ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION`。
+     * 未授权时容器自动降级挂 App 私有目录，功能不中断（只是文件管理器里看不到）。
+     */
+    ALL_FILES(
+        Manifest.permission.MANAGE_EXTERNAL_STORAGE,
+        R.string.permission_label_all_files,
+        minSdk = Build.VERSION_CODES.R,
+        onboardingCritical = false,
+    ),
+
+    /**
+     * 精确闹钟（`SCHEDULE_EXACT_ALARM`，Android 12+）：定时提醒/自主任务到点准时触发的前提。
+     *
+     * 属于 AppOps 特殊权限（与 [OVERLAY] 同类）：`requestPermissions` 对它无效，
+     * 只能用 `ACTION_REQUEST_SCHEDULE_EXACT_ALARM` 拉起系统授权框。
+     * Android 13+ 清单同时声明了 `USE_EXACT_ALARM`（安装即授予、不可撤销），
+     * 此时 [android.app.AlarmManager.canScheduleExactAlarms] 恒为 true，本项自动视为已授予。
+     * 非连眼镜硬前提（[onboardingCritical] = false）：缺权限时定时任务降级为不精确闹钟，
+     * 在定时功能页/工具执行时按需引导。
+     */
+    EXACT_ALARM(
+        Manifest.permission.SCHEDULE_EXACT_ALARM,
+        R.string.permission_label_exact_alarm,
+        minSdk = Build.VERSION_CODES.S,
+        onboardingCritical = false,
+    );
 
     /**
      * 能否用 `requestPermissions` 弹系统授权框。
-     * false = 只能跳系统设置页手动开（目前仅 [OVERLAY]）。
+     * false = 只能跳系统设置页/专用授权框（[OVERLAY] / [ALL_FILES] / [EXACT_ALARM]）。
      */
-    val runtimeRequestable: Boolean get() = this != OVERLAY
+    val runtimeRequestable: Boolean
+        get() = this != OVERLAY && this != ALL_FILES && this != EXACT_ALARM
 
     companion object {
         /** 是否已授予。[OVERLAY] 走 `Settings.canDrawOverlays`（AOSP 契约，全 ROM 语义一致） */
         fun isGranted(context: Context, permission: AppPermission): Boolean {
             if (permission.minSdk > 0 && Build.VERSION.SDK_INT < permission.minSdk) return true
             if (permission == OVERLAY) return canDrawOverlays(context)
+            if (permission == ALL_FILES) return canManageAllFiles()
+            if (permission == EXACT_ALARM) return canScheduleExactAlarms(context)
             return ContextCompat.checkSelfPermission(
                 context, permission.manifestName,
             ) == PackageManager.PERMISSION_GRANTED
         }
+
+        /**
+         * 精确闹钟权限是否已开（Android 12+）。
+         *
+         * 33+ 清单声明了 `USE_EXACT_ALARM` 时系统安装即授予、用户不可撤销，本值恒 true；
+         * 31/32 或用户撤销过授权时为 false，需走 `ACTION_REQUEST_SCHEDULE_EXACT_ALARM` 引导。
+         */
+        fun canScheduleExactAlarms(context: Context): Boolean =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                runCatching {
+                    context.getSystemService(android.app.AlarmManager::class.java)
+                        ?.canScheduleExactAlarms() ?: false
+                }.getOrDefault(false)
 
         /**
          * 悬浮窗（BAL 豁免）是否已开。
@@ -116,9 +183,21 @@ enum class AppPermission(
         fun canDrawOverlays(context: Context): Boolean =
             runCatching { Settings.canDrawOverlays(context) }.getOrDefault(false)
 
+        /** 所有文件访问 AppOps（Android 11+；低版本在 [isGranted] 已提前放行） */
+        fun canManageAllFiles(): Boolean =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+                runCatching { android.os.Environment.isExternalStorageManager() }.getOrDefault(false)
+
         /** 过滤出仍然缺失的权限（已授予的不再打扰用户） */
         fun missing(context: Context, permissions: Collection<AppPermission>): List<AppPermission> =
             permissions.filter { !isGranted(context, it) }.distinct()
+
+        /**
+         * 首装引导与连接前置检查用的清单（[onboardingCritical] = true 的核心权限）。
+         * 可选能力的重权限不在这里，由功能页自己引导。
+         */
+        fun onboardingPermissions(): List<AppPermission> =
+            values().filter { it.onboardingCritical }
 
         /**
          * 展开成 `requestPermissions` 需要的权限名数组（含 [companions]）。

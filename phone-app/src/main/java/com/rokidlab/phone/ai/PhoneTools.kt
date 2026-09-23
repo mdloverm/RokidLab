@@ -1,17 +1,25 @@
 package com.rokidlab.phone.ai
 
 import android.Manifest
+import android.app.Activity
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Build
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.ContactsContract
 import android.provider.Settings
+import android.telephony.SmsManager
 import androidx.core.content.ContextCompat
 import android.util.Log
 import com.rokidlab.phone.R
@@ -21,14 +29,18 @@ import java.util.Calendar
 import java.util.TimeZone
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 手机端工具集（AI function calling 执行体）：通讯录 / 拨号 / 闹钟 / 打开手机应用 /
- * 手机状态 / 音量 / 日历日程。
+ * 手机端工具集（AI function calling 执行体）：通讯录 / 拨号 / 短信 / 剪贴板 / 闹钟 /
+ * 手机应用（打开 + 清单）/ 手机状态 / 音量 / 日历日程。
  *
  * 设计约束：
  * - 拨号：ACTION_CALL 直接拨出（需 CALL_PHONE，启动时申请；语音指令即授权），
  *   未授权/被 ROM 限制时退回 ACTION_DIAL 打开拨号盘
+ * - 短信：`SmsManager` 直接发出（需 SEND_SMS），等系统回执再报结果，不把"提交"讲成"发送成功"
  * - 通讯录/日历需要运行时权限，缺失时返回带引导的说明文本（模型如实转告用户去授权）
  * - 所有方法同步阻塞（Agent 工具循环已在后台线程执行），返回给模型的中文结果文本
  */
@@ -170,6 +182,173 @@ object PhoneTools {
         }
     }
 
+    // ═══════════════════════════ 短信 ═══════════════════════════
+
+    /** [sendSms] 正文上限：一条短信能装的内容，防止模型把整篇文档塞进去 */
+    private const val MAX_SMS_CHARS = 500
+
+    /** [sendSms] 等系统发送回执的最长时间 */
+    private const val SMS_SENT_TIMEOUT_MS = 8000L
+
+    /**
+     * 发短信：参数是手机号直接发；是姓名则查通讯录（唯一命中发出，多个命中返回候选）。
+     *
+     * 为什么用 `SmsManager` **直接发出**、而不是"打开短信 App 等用户点发送"：与 [dialPhone] 的
+     * ACTION_CALL 同一策略（用户说「发短信给 X」即指令）。退化成"打开短信界面等确认"还有个
+     * 隐蔽问题 —— 锁屏/后台时那次 `startActivity` 会被 BAL 静默丢弃，而模型已经拿到
+     * "已发送"的结论去答复用户了（本文件反复强调的假成功）。
+     *
+     * 为什么不"提交完就报成功"：`sendMultipartTextMessage` 是**异步**的，短信中心不可达 /
+     * 飞行模式时它同样正常返回。所以这里用 [PendingIntent] 等系统回执（最长
+     * [SMS_SENT_TIMEOUT_MS]），拿不到回执就只说"已提交、未收到回执"，绝不把"提交"讲成"发送成功"。
+     */
+    @Suppress("DEPRECATION") // SmsManager.getDefault() 在 API 31+ 废弃，低版本仍必须用它
+    fun sendSms(context: Context, to: String, message: String): String {
+        val target = to.trim()
+        val text = message.trim()
+        if (target.isEmpty()) return "请提供短信接收人（姓名或手机号）"
+        if (text.isEmpty()) return "请提供短信内容"
+        if (text.length > MAX_SMS_CHARS) {
+            return "短信内容过长（${text.length} 字），请精简到 $MAX_SMS_CHARS 字以内"
+        }
+
+        // 收件人解析：号码直接用；姓名先查通讯录（缺权限自动拉起系统授权界面）
+        val number: String
+        val label: String
+        if (target.matches(Regex("^[+\\d][\\d\\s-]{2,}$"))) {
+            number = target.replace(" ", "")
+            label = number
+        } else {
+            PermissionBridge.ensure(
+                context,
+                context.getString(R.string.permission_reason_contacts),
+                AppPermission.CONTACTS,
+            )?.let { return it }
+            val hits = searchContacts(context, target)
+            when (hits.size) {
+                0 -> return "通讯录中没有找到「$target」，请确认姓名或直接告诉我手机号"
+                1 -> {
+                    number = hits[0].number.replace(" ", "")
+                    label = hits[0].name
+                }
+                else -> return "通讯录里有多个「$target」：\n" + hits.mapIndexed { i, c ->
+                    "[${i + 1}] ${c.name}（${c.number}）"
+                }.joinToString("\n") + "\n请告诉我要发给哪一个"
+            }
+        }
+
+        if (!has(context, Manifest.permission.SEND_SMS)) {
+            return PermissionBridge.ensure(
+                context,
+                context.getString(R.string.permission_reason_sms),
+                AppPermission.SMS,
+            ) ?: context.getString(
+                R.string.permission_need_manual_open,
+                context.getString(R.string.permission_label_sms),
+            )
+        }
+
+        return try {
+            val sm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                context.getSystemService(SmsManager::class.java)
+            } else {
+                SmsManager.getDefault()
+            } ?: return "这台手机没有可用的短信服务"
+
+            val code = AtomicInteger(Int.MIN_VALUE)
+            val latch = CountDownLatch(1)
+            val action = "com.rokidlab.phone.SMS_SENT"
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, i: Intent?) {
+                    code.set(resultCode)
+                    latch.countDown()
+                }
+            }
+            // 只接收本 App 自己发出的这条广播（导出会让同机其他应用能伪造发送结果）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, IntentFilter(action), Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, IntentFilter(action))
+            }
+            try {
+                val parts = sm.divideMessage(text)
+                val sent = PendingIntent.getBroadcast(
+                    context, 0, Intent(action),
+                    PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                // 只等**最后一段**的回执：分段是顺序发出的，最后一段有回执说明前面都已提交
+                val sentIntents = ArrayList<PendingIntent?>(parts.size)
+                repeat(parts.size - 1) { sentIntents.add(null) }
+                sentIntents.add(sent)
+                sm.sendMultipartTextMessage(number, null, parts, sentIntents, null)
+
+                when {
+                    !latch.await(SMS_SENT_TIMEOUT_MS, TimeUnit.MILLISECONDS) ->
+                        "已把短信提交给系统发送给 $label（$number），但 ${SMS_SENT_TIMEOUT_MS / 1000} 秒内没收到回执（可能信号较弱），请在手机上确认"
+                    code.get() == Activity.RESULT_OK -> "已发送短信给 $label（$number）：$text"
+                    else -> "短信发送给 $label（$number）失败：${smsErrorText(code.get())}"
+                }
+            } finally {
+                runCatching { context.unregisterReceiver(receiver) }
+            }
+        } catch (e: Exception) {
+            "发送短信失败：${e.message}"
+        }
+    }
+
+    /** 系统发送回执错误码 → 中文（未知码原样带上，方便排查） */
+    private fun smsErrorText(code: Int): String = when (code) {
+        SmsManager.RESULT_ERROR_GENERIC_FAILURE -> "短信中心拒绝（余额不足或被运营商拦截）"
+        SmsManager.RESULT_ERROR_NO_SERVICE -> "当前无信号或未插入 SIM 卡"
+        SmsManager.RESULT_ERROR_RADIO_OFF -> "飞行模式已开启"
+        SmsManager.RESULT_ERROR_NULL_PDU -> "短信内容无法编码"
+        else -> "系统错误码 $code"
+    }
+
+    // ═══════════════════════════ 剪贴板 ═══════════════════════════
+
+    /** [readClipboard] 回填给模型的内容上限 */
+    private const val MAX_CLIPBOARD_CHARS = 4000
+
+    /**
+     * 读剪贴板。
+     *
+     * ⚠️ **必须诚实**：Android 10（API 29）起，只有**有输入焦点的 App**（或默认输入法）能读剪贴板，
+     * 后台读一律返回 null。而乐奇实验室的语音对话跑在前台**服务**里，App 界面往往没在前台 ——
+     * 所以"读不到"是常态而不是异常。这里把读不到的原因写清楚交回模型，
+     * 是为了让它如实说「需要先打开一下 App」，**而不是**编一段剪贴板内容（这是最容易出现的假成功）。
+     */
+    fun readClipboard(context: Context): String {
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return "读不到剪贴板：这台手机没有剪贴板服务"
+        val text = runCatching {
+            cm.primaryClip?.takeIf { it.itemCount > 0 }
+                ?.let { it.getItemAt(0).coerceToText(context).toString() }
+        }.getOrNull()?.trim()
+
+        if (text.isNullOrEmpty()) {
+            return "读不到剪贴板内容。可能原因：①App 现在不在前台（Android 10 起只有前台 App 能读剪贴板）；" +
+                "②剪贴板是空的或装的是图片不是文字。请如实告诉用户「需要把乐奇实验室切到前台我才能读到剪贴板」，" +
+                "**不要**编造剪贴板里有什么"
+        }
+        val body = text.take(MAX_CLIPBOARD_CHARS) + if (text.length > MAX_CLIPBOARD_CHARS) "\n…（已截断）" else ""
+        return "剪贴板内容（共 ${text.length} 字）：\n$body"
+    }
+
+    /** 写剪贴板（写不受 Android 10 的后台限制，任何时刻都能用） */
+    fun writeClipboard(context: Context, text: String): String {
+        val t = text.trim()
+        if (t.isEmpty()) return "请提供要复制到剪贴板的内容"
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return "复制失败：这台手机没有剪贴板服务"
+        return try {
+            cm.setPrimaryClip(ClipData.newPlainText("乐奇实验室", t))
+            "已复制到剪贴板：${t.take(60)}${if (t.length > 60) "…" else ""}（共 ${t.length} 字）"
+        } catch (e: Exception) {
+            "复制到剪贴板失败：${e.message}"
+        }
+    }
+
     // ═══════════════════════════ 闹钟 ═══════════════════════════
 
     /**
@@ -245,6 +424,65 @@ object PhoneTools {
             "已在手机上打开「$q」"
         } catch (e: Exception) {
             "打开应用失败：${e.message}"
+        }
+    }
+
+    // ═══════════════════════════ 已装应用清单 ═══════════════════════════
+
+    /** [listPhoneApps] 一次返回的条数上限（模型要的是"装了哪些"，不是几百行清单） */
+    private const val MAX_APP_LIST = 40
+
+    /**
+     * 列出手机上的应用（名称 / 包名 / 版本）。
+     *
+     * 为什么需要它：[openPhoneApp] 只能**猜**应用名，而模型并不知道这台手机到底装了什么，
+     * 「帮我打开 XX」经常直接答"没找到"。有了清单就能先查再开，也能回答"我手机装了哪些应用"。
+     *
+     * 走 `queryIntentActivities(ACTION_MAIN / CATEGORY_LAUNCHER)` 而不是 `getInstalledPackages`：
+     * 前者只列**用户能点开**的应用，与 [openPhoneApp] 的匹配集合完全一致
+     * （`getInstalledPackages` 会把几百个系统组件一起倒出来，既不相关又挤爆上下文）。
+     * manifest 已声明 `QUERY_ALL_PACKAGES`，因此这里拿得到完整清单。
+     *
+     * @param query 关键词（匹配应用名或包名；空 = 不过滤）
+     * @param includeSystem 是否包含系统预装应用（默认 false，只列用户自己装的那些）
+     */
+    fun listPhoneApps(context: Context, query: String?, includeSystem: Boolean): String {
+        val q = query?.trim().orEmpty()
+        return try {
+            val pm = context.packageManager
+            val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val matched = LinkedHashMap<String, String>() // pkg -> 展示行（只收前 MAX_APP_LIST 条）
+            val seen = HashSet<String>()                  // 已计过数的包名：一个包可能有多个启动入口
+            var total = 0
+            pm.queryIntentActivities(launcher, 0).forEach { ri ->
+                val pkg = ri.activityInfo.packageName
+                if (!seen.add(pkg)) return@forEach
+                val label = runCatching { ri.loadLabel(pm).toString() }.getOrDefault("").trim()
+                if (label.isEmpty()) return@forEach
+                val systemApp = (ri.activityInfo.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                if (systemApp && !includeSystem) return@forEach
+                if (q.isNotEmpty() && !label.contains(q, true) && !pkg.contains(q, true)) return@forEach
+                total++
+                if (matched.size < MAX_APP_LIST) {
+                    val ver = runCatching { pm.getPackageInfo(pkg, 0).versionName }.getOrNull().orEmpty()
+                    matched[pkg] = "[${matched.size + 1}] $label（$pkg${if (ver.isNotBlank()) "，v$ver" else ""}）"
+                }
+            }
+            if (matched.isEmpty()) {
+                val scope = if (includeSystem) "" else "第三方"
+                if (q.isEmpty()) {
+                    "这台手机上没有${scope}应用"
+                } else {
+                    "没有找到名称或包名包含「$q」的应用${if (includeSystem) "" else "（未包含系统应用，需要时可用 includeSystem 再查一次）"}"
+                }
+            } else {
+                val scope = if (includeSystem) "" else "第三方"
+                "手机${scope}应用：$total 个" +
+                    (if (total > matched.size) "（列出前 ${matched.size} 个）" else "") +
+                    "\n" + matched.values.joinToString("\n")
+            }
+        } catch (e: Exception) {
+            "查询应用清单失败：${e.message}"
         }
     }
 

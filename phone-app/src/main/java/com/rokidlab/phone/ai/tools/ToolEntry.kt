@@ -1,6 +1,7 @@
 package com.rokidlab.phone.ai.tools
 
 import android.content.Context
+import com.rokidlab.phone.ai.ToolConfirmPolicy
 import com.rokidlab.phone.ai.ToolContentTrust
 import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.ai.ToolRegistry.ToolCategory
@@ -32,6 +33,10 @@ import org.json.JSONObject
  * @param category       设置页分类（用户视角）；null = 由 [group] 推导
  * @param hidden         true = 设置页不展示，**但仍会下发给模型**（系统性/内部工具的惯例）
  * @param risk           风险档，驱动 [com.rokidlab.phone.ai.approval.ApprovalGate] 的确认闸门与无人值守准入
+ * @param confirmPolicy  **问不到用户时**的策略（放行 / 拒绝）。默认按 [risk] 派生：
+ *   [ToolRisk.EXTERNAL_SIDE_EFFECT] ⇒ [ToolConfirmPolicy.BLOCK]（保守），其余 ⇒ `PROCEED`。
+ *   只有需要偏离默认的工具才写它 —— 见 [ToolConfirmPolicy] 的类注释（两个值、各自用在什么动作上）。
+ *   它**只影响"问不到"那一条路**：问得到用户时，用户说了算。
  * @param sideEffect     true = 有不可逆副作用（拨号/装机/建日程…），失败**不重试**
  * @param requiresGlasses true = 没有眼镜就做不成，乐奇聊天「本机模式」下整条摘除
  * @param statusText     过程时间线文案（眼镜端显示 + 手机端状态栏共用）
@@ -61,6 +66,15 @@ internal data class ToolEntry(
     val category: ToolCategory? = null,
     val hidden: Boolean = false,
     val risk: ToolRisk,
+    /**
+     * **问不到用户时**的策略（放行 / 拒绝）；默认按 [risk] 派生（EXTERNAL ⇒ `BLOCK`）。
+     *
+     * ★ 为什么默认是"保守"而不是"宽松"：新增一个越出本机边界的工具时，作者若忘了想这件事，
+     * 我们宁可让它**问不到就拒绝**（用户看到一句如实的说明 + 出路），也不要它静默执行。
+     * 反过来，本机可重做的动作（删下载目录的文件、装个包）需要显式写 `PROCEED` ——
+     * 这几个我们在 [com.rokidlab.phone.ai.ToolRisk] 里逐个声明了，理由都写在各自的 provider 里。
+     */
+    val confirmPolicy: ToolConfirmPolicy = ToolConfirmPolicy.defaultFor(risk),
     val sideEffect: Boolean = false,
     val requiresGlasses: Boolean = false,
     /**

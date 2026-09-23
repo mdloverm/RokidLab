@@ -1,8 +1,6 @@
 package com.rokidlab.phone.store
 
 import android.content.Context
-import android.graphics.Bitmap
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -13,26 +11,24 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,8 +36,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -133,9 +127,9 @@ internal fun ChatBubble(
                     .let { m -> if (isUser && onClickUser != null) m.clickable { onClickUser?.invoke() } else m }
                     .padding(horizontal = 12.dp, vertical = 8.dp)
                 Column(modifier = bubbleModifier) {
-                    // 图片消息：先渲染图片，再附 caption 文本（仅手机端；眼镜端 TTS/显示不受影响）。
+                    // 图片消息：先渲染图片卡片，再附 caption 文本（仅手机端；眼镜端 TTS/显示不受影响）。
                     msg.imageUrl?.let { url ->
-                        BubbleImage(url)
+                        ChatImageCard(url)
                         if (msg.content.isNotBlank()) {
                             Text(
                                 text = msg.content,
@@ -146,15 +140,11 @@ internal fun ChatBubble(
                             )
                         }
                     } ?: run {
-                        // 普通文字消息：双方都用 SelectionContainer 包裹，支持长按选字 / 复制
-                        SelectionContainer {
-                            Text(
-                                text = msg.content,
-                                color = if (isUser) BrewBg else BrewTextBright,
-                                fontSize = 15.sp,
-                                lineHeight = 22.sp,
-                            )
-                        }
+                        // 普通文字消息：轻量 Markdown 渲染（代码块/标题/列表/加粗），整体支持长按选字
+                        ChatMarkdownBody(
+                            text = msg.content,
+                            textColor = if (isUser) BrewBg else BrewTextBright,
+                        )
                     }
                     Row(
                         modifier = Modifier
@@ -268,7 +258,10 @@ private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, ex
                     modifier = Modifier.padding(top = 6.dp),
                 )
             }
-            steps.takeLast(MAX_VISIBLE_STEPS).forEach { TraceStepRow(it) }
+            steps.takeLast(MAX_VISIBLE_STEPS).forEach { step ->
+                // update_plan 渲染成勾选清单，不进工具时间线（「执行 update_plan…」是黑话）
+                if (step.kind == AgentStep.Kind.PLAN) PlanStepCard(step) else TraceStepRow(step)
+            }
             TraceCostLine(usage)
         }
     }
@@ -349,6 +342,9 @@ private fun TraceStepRow(step: AgentStep) {
         AgentStep.State.OK -> BrewSuccess
         AgentStep.State.FAILED -> BrewRed
     }
+    // 思考全文展开/收起：detail 只压一行预览，fullText 是整段推理（落盘限长 8000）
+    var thinkExpanded by remember(step.key) { mutableStateOf(false) }
+    val expandable = step.kind == AgentStep.Kind.THINKING && step.fullText.isNotBlank()
     Row(modifier = Modifier
         .fillMaxWidth()
         .padding(top = 7.dp)
@@ -369,6 +365,8 @@ private fun TraceStepRow(step: AgentStep) {
                         // 知识库检索：书 —— 一眼区分"模型调了工具"和"App 自己先查了你的文档"
                         AgentStep.Kind.KNOWLEDGE -> Icons.Outlined.MenuBook
                         AgentStep.Kind.TOOL -> Icons.Outlined.Build
+                        // PLAN 不走进时间线（由 PlanStepCard 渲染），仅为 when 穷尽
+                        AgentStep.Kind.PLAN -> Icons.Outlined.Checklist
                     },
                     contentDescription = null,
                     tint = color,
@@ -384,7 +382,30 @@ private fun TraceStepRow(step: AgentStep) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (step.detail.isNotBlank()) {
+            if (expandable) {
+                Text(
+                    text = if (thinkExpanded) step.fullText else step.detail,
+                    color = BrewMuted,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    maxLines = if (thinkExpanded) 30 else 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp)
+                        .clickable { thinkExpanded = !thinkExpanded },
+                )
+                Text(
+                    text = stringResource(
+                        if (thinkExpanded) R.string.chat_think_collapse else R.string.chat_think_expand
+                    ),
+                    color = BrewDim,
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .clickable { thinkExpanded = !thinkExpanded },
+                )
+            } else if (step.detail.isNotBlank()) {
                 Text(
                     text = step.detail,
                     color = BrewMuted,
@@ -396,6 +417,99 @@ private fun TraceStepRow(step: AgentStep) {
                 )
             }
         }
+    }
+}
+
+/**
+ * update_plan 的**勾选清单**卡片：模型为多步任务立的计划，同 key 覆盖所以只渲染最新一版。
+ *
+ * 状态配色与时间线一致：done=BrewSuccess、in_progress=BrewAmber（转圈）、pending=BrewDim；
+ * 完成的标题置弱，进行中的高亮 —— 不展开多行长文，眼镜式扫一眼就知道做到第几步。
+ */
+@Composable
+private fun PlanStepCard(step: AgentStep) {
+    val steps = step.planSteps
+    if (steps.isEmpty()) {
+        // 解析失败的脏数据兜底：退回普通时间线行（至少不空白）
+        TraceStepRow(step)
+        return
+    }
+    val doneCount = steps.count { it.status == "done" }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 7.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(BrewPanelAlt)
+            .border(1.dp, BrewBorder, RoundedCornerShape(8.dp))
+            .padding(horizontal = 9.dp, vertical = 7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Outlined.Checklist,
+                contentDescription = null,
+                tint = if (doneCount == steps.size) BrewSuccess else BrewAmber,
+                modifier = Modifier.size(13.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = stringResource(R.string.chat_plan_title),
+                color = BrewText,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "$doneCount/${steps.size}",
+                color = BrewDim,
+                fontSize = 11.sp,
+            )
+        }
+        Spacer(Modifier.height(5.dp))
+        steps.forEach { ps ->
+            PlanStepRow(ps)
+        }
+    }
+}
+
+@Composable
+private fun PlanStepRow(ps: com.rokidlab.phone.ai.AgentPlan.PlanStep) {
+    val (tint, labelColor) = when (ps.status) {
+        "done" -> BrewSuccess to BrewMuted
+        "in_progress" -> BrewAmber to BrewText
+        else -> BrewDim to BrewText
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        if (ps.status == "in_progress") {
+            CircularProgressIndicator(
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .size(10.dp),
+                strokeWidth = 1.3.dp,
+                color = BrewAmber,
+            )
+        } else {
+            Text(
+                text = if (ps.status == "done") "✓" else "·",
+                color = tint,
+                fontSize = 11.sp,
+                lineHeight = 14.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.width(12.dp),
+            )
+        }
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text = ps.title,
+            color = labelColor,
+            fontSize = 11.sp,
+            lineHeight = 14.sp,
+        )
     }
 }
 
@@ -442,50 +556,4 @@ private fun stepLabel(step: AgentStep): String = when {
     step.kind == AgentStep.Kind.TOOL -> stringResource(R.string.chat_trace_tool_running)
     step.state == AgentStep.State.RUNNING -> stringResource(R.string.chat_trace_thinking)
     else -> stringResource(R.string.chat_trace_thought)
-}
-
-/**
- * 气泡内的图片：异步下载（[ChatImageCache]），加载中显示转圈占位。
- * 长边按 [ChatImageCache] 默认 600px 限制，渲染时 Fit 自适应宽度。
- */
-@Composable
-private fun BubbleImage(url: String) {
-    var bitmap by remember(url) { mutableStateOf<Bitmap?>(null) }
-    var failed by remember(url) { mutableStateOf(false) }
-    LaunchedEffect(url) {
-        ChatImageCache.load(url) { bmp ->
-            bitmap = bmp
-            if (bmp == null) failed = true
-        }
-    }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 80.dp, max = 260.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(BrewPanelAlt),
-        contentAlignment = Alignment.Center,
-    ) {
-        val bmp = bitmap
-        when {
-            bmp != null -> Image(
-                bitmap = bmp.asImageBitmap(),
-                contentDescription = null,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp)),
-                contentScale = ContentScale.Fit,
-            )
-            failed -> Text(
-                text = "图片加载失败",
-                color = BrewMuted,
-                fontSize = 12.sp,
-            )
-            else -> CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
-                strokeWidth = 2.dp,
-                color = BrewMuted,
-            )
-        }
-    }
 }

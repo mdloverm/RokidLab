@@ -3,6 +3,7 @@ package com.rokidlab.phone.ai.approval
 import com.rokidlab.phone.ai.AgentPlan
 import com.rokidlab.phone.ai.LongTermMemoryManager
 import com.rokidlab.phone.ai.SkillRegistry
+import com.rokidlab.phone.ai.ToolConfirmPolicy
 import com.rokidlab.phone.ai.ToolRisk
 
 /**
@@ -59,6 +60,17 @@ internal object PseudoTools {
 
     /** 伪工具风险档；非伪工具返回 null（由调用方回落到真实工具的风险表） */
     fun riskOf(name: String): ToolRisk? = BY_NAME[name]
+
+    /**
+     * 伪工具的确认降级策略；**非伪工具返回 null**（回落到真实工具的声明）。
+     *
+     * 全部伪工具都不是 `EXTERNAL_SIDE_EFFECT`（只读或本机副作用，见 [BY_NAME] 的取值理由），
+     * 因此 `RiskApprovalGuard` 不会为它们产生 Ask，本值实际不会被读。
+     * 提供它只为让 [ToolCallContext.confirmPolicy] 的取值**语义完整** ——
+     * 否则 `load_skill` 这类工具会从"未知名兜底"拿到 `BLOCK`，与"它压根不过闸门"自相矛盾。
+     */
+    fun confirmPolicyOf(name: String): ToolConfirmPolicy? =
+        riskOf(name)?.let { ToolConfirmPolicy.defaultFor(it) }
 
     /** 全部伪工具名 */
     fun names(): Set<String> = BY_NAME.keys

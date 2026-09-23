@@ -381,6 +381,29 @@
     <string name="chat_msg_delete_message">删除后无法恢复。</string>
     <string name="chat_msg_edit_title">编辑并重发</string>
     <string name="chat_msg_edit_hint">修改后将从这条重新提问，其后的对话会被清掉。</string>
+    <!-- 代码块卡片（Markdown 围栏代码块） -->
+    <string name="chat_code_lang_default">TEXT</string>
+    <string name="chat_code_copy">复制代码</string>
+    <string name="chat_code_download">保存到下载目录</string>
+    <string name="chat_code_run">运行代码</string>
+    <string name="chat_code_running">正在运行…</string>
+    <string name="chat_code_exit">退出码 %1$d</string>
+    <string name="chat_code_launch_failed">环境启动失败：%1$s</string>
+    <string name="chat_code_no_output">（无输出）</string>
+    <string name="chat_code_clear">清除结果</string>
+    <string name="chat_code_stdout">标准输出</string>
+    <string name="chat_code_stderr">标准错误</string>
+    <string name="chat_code_env_missing">本机执行环境未安装：到「设置 → 本机执行环境」安装后才能运行</string>
+    <string name="chat_code_python_missing">容器里还没装 python3：到「设置 → 本机执行环境」安装 Python</string>
+    <string name="chat_code_node_missing">容器里还没装 node：先在本机执行环境里安装</string>
+    <string name="chat_code_saved">已保存：%1$s</string>
+    <string name="chat_code_save_failed">保存失败：%1$s</string>
+    <!-- 图片卡片 -->
+    <string name="chat_image_preview">查看大图</string>
+    <string name="chat_image_download">保存图片到手机</string>
+    <string name="chat_image_failed">图片加载失败</string>
+    <string name="chat_image_saved">图片已保存：%1$s</string>
+    <string name="chat_image_save_failed">图片保存失败：%1$s</string>
     <string name="chat_title">乐奇聊天</string>
     <string name="chat_subtitle">文字对话 · 眼镜播报</string>
     <string name="chat_input_hint">输入消息...</string>
@@ -405,6 +428,14 @@
     <string name="chat_trace_collapse">收起过程</string>
     <string name="chat_trace_expand">展开过程</string>
     <string name="chat_trace_more">另有 %1$d 步已折叠</string>
+    <!-- update_plan 结构化计划清单 -->
+    <string name="chat_plan_title">任务计划</string>
+    <!-- 思考全文展开 -->
+    <string name="chat_think_expand">展开全文</string>
+    <string name="chat_think_collapse">收起</string>
+    <!-- 眼镜端计划单行进度 -->
+    <string name="glasses_plan_progress">计划 %1$d/%2$d · %3$s</string>
+    <string name="glasses_plan_done">计划已完成</string>
 
     <!-- 乐奇聊天 - AI 服务设置 -->
     <string name="chat_settings">AI 设置</string>
@@ -456,6 +487,7 @@
     <string name="ai_tool_cat_timer">提醒与任务</string>
     <string name="ai_tool_cat_aiui">AI 应用</string>
     <string name="ai_tool_cat_files">文件</string>
+    <string name="ai_tool_cat_shell">本机执行</string>
     <string name="ai_tool_cat_mcp">外部 MCP</string>
     <string name="chat_settings_mcp">外部 MCP</string>
     <string name="chat_settings_mcp_hint">连接第三方 MCP 服务，扩展 AI 能力</string>
@@ -558,11 +590,11 @@
     <string name="chat_ocr_native_unavailable">当前设备不支持本地 OCR，无法拍照识题</string>
     <string name="chat_photo_failed">拍照失败</string>
     <string name="chat_kb_title">知识库</string>
-    <string name="chat_kb_subtitle">导入 txt 文档，问 AI 时自动查里面的内容</string>
+    <string name="chat_kb_subtitle">导入 txt/md/json，提问时自动检索</string>
     <string name="chat_kb_import">导入文档</string>
     <string name="chat_kb_empty">知识库为空，请先导入文档</string>
     <string name="chat_kb_delete">删除</string>
-    <string name="chat_kb_import_failed">导入失败（仅支持 txt，且内容不能为空）</string>
+    <string name="chat_kb_import_failed">导入失败（仅支持 txt/md/json，内容不能为空）</string>
     <string name="chat_kb_imported">已导入 %1$s</string>
     <string name="chat_kb_confirm_delete">删除「%1$s」？删除后不可恢复</string>
     <string name="chat_kb_doc_meta">%1$s · %2$d 段 ›</string>
@@ -746,6 +778,10 @@
     <string name="ai_tool_search_web_desc">联网搜索网页</string>
     <string name="ai_tool_fetch_webpage_name">读取网页正文</string>
     <string name="ai_tool_fetch_webpage_desc">读取网页正文</string>
+    <string name="ai_tool_http_request_name">调用网络接口</string>
+    <string name="ai_tool_http_request_desc">请求 API（GET/POST 等）</string>
+    <string name="ai_tool_download_file_name">下载文件</string>
+    <string name="ai_tool_download_file_desc">把链接文件下载到下载目录</string>
     <string name="ai_tool_save_summary_txt_name">保存总结为TXT</string>
     <string name="ai_tool_save_summary_txt_desc">存成 txt 并存入知识库</string>
     <string name="ai_tool_save_code_file_name">保存代码文件</string>
@@ -765,6 +801,24 @@
     <string name="ai_tool_delete_file_desc">删除文件、目录或整个项目（不可恢复）</string>
     <string name="ai_tool_move_file_name">移动/重命名文件</string>
     <string name="ai_tool_move_file_desc">在项目内改名或移动位置</string>
+    <string name="ai_tool_zip_files_name">打包文件</string>
+    <string name="ai_tool_zip_files_desc">把项目文件压缩成 zip</string>
+    <string name="ai_tool_unzip_file_name">解压文件</string>
+    <string name="ai_tool_unzip_file_desc">解压下载目录里的 zip</string>
+    <!-- 本机执行：在手机自己的 Linux 容器里跑命令 -->
+    <string name="ai_tool_run_shell_name">运行命令</string>
+    <string name="ai_tool_run_shell_desc">在手机的 Linux 环境执行命令，需先安装执行环境</string>
+    <string name="ai_tool_install_packages_name">安装软件包</string>
+    <string name="ai_tool_install_packages_desc">在本机 Linux 环境里装软件（联网下载，先经你确认）</string>
+    <!-- 脚本库：把跑通的做法存下来复用（同样跑在本机 Linux 环境里） -->
+    <string name="ai_tool_save_script_name">保存脚本</string>
+    <string name="ai_tool_save_script_desc">把跑通的操作存成可复用脚本</string>
+    <string name="ai_tool_list_scripts_name">列出脚本</string>
+    <string name="ai_tool_list_scripts_desc">查看已保存的脚本清单</string>
+    <string name="ai_tool_run_script_name">运行脚本</string>
+    <string name="ai_tool_run_script_desc">运行已保存的脚本，需先安装执行环境</string>
+    <string name="ai_tool_delete_script_name">删除脚本</string>
+    <string name="ai_tool_delete_script_desc">从脚本库里删掉一个脚本</string>
     <!-- 视觉：用眼镜摄像头看真实世界 -->
     <string name="ai_tool_look_at_view_name">看画面</string>
     <string name="ai_tool_look_at_view_desc">用眼镜摄像头看眼前的东西</string>
@@ -804,6 +858,16 @@
     <string name="ai_tool_search_contacts_desc">按姓名查联系人电话</string>
     <string name="ai_tool_call_phone_name">拨打电话</string>
     <string name="ai_tool_call_phone_desc">拨打联系人或号码</string>
+    <string name="ai_tool_send_sms_name">发送短信</string>
+    <string name="ai_tool_send_sms_desc">给联系人或号码发短信</string>
+    <string name="ai_tool_list_phone_apps_name">手机应用清单</string>
+    <string name="ai_tool_list_phone_apps_desc">查手机装了哪些应用</string>
+    <string name="ai_tool_read_clipboard_name">读剪贴板</string>
+    <string name="ai_tool_read_clipboard_desc">读剪贴板里的文字</string>
+    <string name="ai_tool_write_clipboard_name">写入剪贴板</string>
+    <string name="ai_tool_write_clipboard_desc">把文字复制到剪贴板</string>
+    <string name="ai_tool_parse_document_name">解析文档</string>
+    <string name="ai_tool_parse_document_desc">读 Word/Excel/PPT/PDF</string>
     <string name="ai_tool_set_phone_alarm_name">手机闹钟</string>
     <string name="ai_tool_set_phone_alarm_desc">设置手机闹钟或倒计时</string>
     <string name="ai_tool_open_phone_app_name">打开手机应用</string>
@@ -936,6 +1000,11 @@
     <string name="phone_mirror_channel">手机投屏</string>
     <string name="phone_mirror_channel_desc">手机屏幕投射到眼镜</string>
     <string name="phone_mirror_projecting">正在投射屏幕到眼镜</string>
+    <string name="screen_capture_channel">屏幕截取</string>
+    <string name="screen_capture_channel_desc">截屏时短暂显示</string>
+    <string name="screen_capture_capturing">正在截取屏幕…</string>
+    <string name="ai_tool_capture_screen_name">截取手机屏幕</string>
+    <string name="ai_tool_capture_screen_desc">看手机屏幕上的内容，首次会弹系统授权框</string>
     <string name="switch_source_btn">切换下载源</string>
     <string name="refresh_success">刷新成功</string>
     <string name="refresh_failed">刷新失败</string>
@@ -1368,6 +1437,53 @@
     <string name="export_compat_diag_desc">导出机型、ROM、蓝牙等信息用于反馈</string>
     <string name="save_compat_done">兼容性诊断已导出</string>
     <string name="save_compat_failed">兼容性诊断导出失败</string>
+    <!-- 本机执行环境（自持 proot + Ubuntu rootfs）：正式设置页 -->
+    <string name="settings_local_exec">本机执行环境</string>
+    <string name="settings_local_exec_subtitle">在手机上运行 Linux 命令与脚本</string>
+    <string name="local_exec_reading">正在读取状态…</string>
+    <string name="local_exec_state_failed">失败：%1$s</string>
+    <string name="local_exec_stage_check">检查环境</string>
+    <string name="local_exec_stage_download">下载 %1$d%%</string>
+    <string name="local_exec_stage_extract">解压</string>
+    <string name="local_exec_stage_configure">配置</string>
+    <string name="local_exec_stage_done">完成</string>
+    <string name="local_exec_install_title">安装 Linux 环境</string>
+    <string name="local_exec_install_hint">约 28 MB，一次下载，装好可离线使用</string>
+    <string name="local_exec_install_cta">立即安装</string>
+    <string name="local_exec_install_cancel_hint">取消后已下载部分会被清除</string>
+    <string name="local_exec_retry">重试</string>
+    <string name="local_exec_ready">已安装 · Ubuntu %1$s</string>
+    <string name="local_exec_foot">占用 %1$s · 可用空间 %2$s</string>
+    <string name="local_exec_selftest">检测环境</string>
+    <string name="local_exec_testing">检测中…</string>
+    <string name="local_exec_section_addons">按需组件</string>
+    <string name="local_exec_python_name">Python 3</string>
+    <string name="local_exec_python_hint">运行 Python 脚本 · 约 8 MB</string>
+    <string name="local_exec_python_ready_hint">可运行 Python 脚本</string>
+    <string name="local_exec_node_name">Node.js</string>
+    <string name="local_exec_node_hint">运行 JS 与 npx 工具 · 约 58 MB</string>
+    <string name="local_exec_node_ready_hint">可运行 JavaScript 与 npx 工具</string>
+    <string name="local_exec_git_name">Git</string>
+    <string name="local_exec_git_hint">克隆与管理仓库 · 约 10 MB</string>
+    <string name="local_exec_git_ready_hint">可克隆与管理仓库</string>
+    <string name="local_exec_addon_install">安装</string>
+    <string name="local_exec_enable">开通</string>
+    <string name="local_exec_apt_update">更新软件源</string>
+    <string name="local_exec_apt_deps">解析依赖</string>
+    <string name="local_exec_apt_fetch">下载软件包</string>
+    <string name="local_exec_apt_unpack">解压安装</string>
+    <string name="local_exec_apt_setup">配置软件包</string>
+    <string name="local_exec_share_title">共享文件夹</string>
+    <string name="local_exec_share_public">已直通「%1$s」· 即容器 /mnt/lab</string>
+    <string name="local_exec_share_private">未授权 · 点击开通下载目录直通</string>
+    <string name="local_exec_share_unsupported">仅 Android 11 及以上支持直通</string>
+    <string name="local_exec_report">检测报告</string>
+    <string name="local_exec_uninstall_cta">删除环境</string>
+    <string name="local_exec_uninstall">删除执行环境</string>
+    <string name="local_exec_uninstall_confirm">容器文件、已装软件与附加组件都会删除，再用需重新下载。</string>
+    <string name="local_exec_uninstall_failed">删除失败：%1$s</string>
+    <string name="local_exec_note">不安装不影响其他功能；命令仅在 App 沙箱内运行。</string>
+    <string name="local_exec_cancel">取消</string>
     <string name="error_log_title">错误报告</string>
     <string name="error_log_hint">程序运行过程中检测到错误，导出日志可以帮助分析问题</string>
     <string name="developer_open">开发者工具</string>
@@ -1460,11 +1576,14 @@
     <string name="permission_label_bluetooth">蓝牙</string>
     <string name="permission_label_contacts">通讯录</string>
     <string name="permission_label_phone">电话</string>
+    <string name="permission_label_sms">短信</string>
     <string name="permission_label_calendar_read">日历读取</string>
     <string name="permission_label_calendar_write">日历写入</string>
     <string name="permission_label_location">位置信息</string>
     <string name="permission_label_notification">通知</string>
     <string name="permission_label_overlay">显示在其他应用上层</string>
+    <string name="permission_label_all_files">所有文件访问</string>
+    <string name="permission_label_exact_alarm">精确提醒</string>
     <string name="permission_dialog_title">需要开启权限</string>
     <string name="permission_dialog_message">「%1$s」需要以下权限：\n%2$s\n\n点「立即开启」后，在系统弹窗里选「允许」即可。</string>
     <string name="permission_dialog_allow">立即开启</string>
@@ -1480,9 +1599,21 @@
     <string name="permission_notification_text">点一下开启「%1$s」</string>
     <string name="permission_channel_name">权限提醒</string>
     <string name="permission_channel_desc">功能因缺少系统权限不可用时提醒你开启</string>
+
+    <!-- 工具确认弹窗（手机端确认通道）：外部副作用工具（如发短信）在眼镜不可用时，
+         由 ToolConfirmActivity 在手机上问一次。眼镜在线时走眼镜通道（悬浮层），不会弹这个。 -->
+    <string name="tool_confirm_title">需要你确认</string>
+    <string name="tool_confirm_message">%1$s\n\n这个操作需要你点头一次，AI 才会执行。</string>
+    <string name="tool_confirm_allow">允许</string>
+    <string name="tool_confirm_deny">取消</string>
     <string name="permission_reason_contacts">查找联系人并拨号</string>
     <string name="permission_reason_phone">直接拨出电话（没有它只能打开拨号盘）</string>
+    <string name="permission_reason_sms">直接发出短信</string>
     <string name="permission_reason_calendar">读取与创建日程</string>
     <string name="permission_reason_location">获取当前位置</string>
     <string name="permission_reason_launch">让眼镜语音在你锁屏或回到桌面时也能拨号、设闹钟、打开应用</string>
+    <string name="permission_reason_exact_alarm">让定时提醒到点准时触发</string>
+    <!-- 创建定时任务后缺精确闹钟权限时的结果提示（任务已建成，只是提醒可能不精确） -->
+    <string name="timer_exact_alarm_requested">为保证到点准时，请允许「精确提醒」。</string>
+    <string name="timer_exact_alarm_notify">请点通知开启「精确提醒」，确保准时提醒。</string>
 </resources>

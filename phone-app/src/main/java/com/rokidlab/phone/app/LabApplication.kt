@@ -192,6 +192,12 @@ class LabApplication : Application() {
         // 启动期一次性能力探测（L0 platform/ 的 ROM/SAW/SDK 能力快照，供各处 hook 降级判断）
         com.rokidlab.phone.platform.CapabilityProbe.refresh(this)
 
+        // 手机端工具确认通道：需要用户点头的工具（发短信/删文件/装包/第三方 MCP 工具）在
+        // **眼镜不可用时**（本机模式、未连接）由它问一次；眼镜在线时仍走眼镜通道（眼镜优先）。
+        // 必须在启动期硬接线：不注册时本机模式下的确认能力**整体失效且不报错**
+        // （闸门会走"问不到用户"分支，按工具声明的 ToolConfirmPolicy 分流）。
+        com.rokidlab.phone.ai.PhoneToolConfirmChannel.init(this)
+
         // 启动自检：工具风险表是否漏登记（漏登记会让该工具被误判为外部副作用而被拦下，
         // 历史事故：save_code_file 漏登记 → AIUI 生成整链路失败）。应为空。
         runCatching {
@@ -201,6 +207,16 @@ class LabApplication : Application() {
             } else {
                 Log.i(TAG, "tool risk table OK: ${com.rokidlab.phone.ai.ToolRegistry.toolList.size} tools all registered")
             }
+        }
+
+        // 自持 proot 环境自检（POC-2）：验证 app 域能否 execve `nativeLibraryDir` 里的随包二进制。
+        // 这是「本机 Linux 用户态执行环境」唯一未验证的前提（技能 android-proot-selfhost §9.1）。
+        // 走 logcat（tag ProotShell）而不是 LogCollector —— 后者只进内存环形缓冲、不写 logcat，
+        // 而这正是需要从 adb 侧读到的东西。失败信息自带 errno，可直接区分
+        // 「SELinux 域不许 exec（EACCES）」与「二进制不在位（ENOENT）」。放后台线程，不拖冷启动。
+        com.rokidlab.phone.util.namedThread("proot-selftest", daemon = true, start = true) {
+            runCatching { com.rokidlab.phone.platform.ProotShell.startupCheck(this) }
+                .onFailure { Log.w(TAG, "proot selftest crashed: ${it.message}") }
         }
 
         // Agent 会话记忆（事件流落盘）：必须先于 ChatStateHolder —— 后者的 bootstrap

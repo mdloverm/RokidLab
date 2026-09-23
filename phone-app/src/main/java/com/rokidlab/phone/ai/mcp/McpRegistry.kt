@@ -329,7 +329,7 @@ internal object McpRegistry {
         val safeTool = toolName.map { ch ->
             if (ch.isLetterOrDigit() || ch == '_' || ch == '-') ch else '_'
         }.joinToString("").ifBlank { "tool" }
-        val base = "mcp__${sanitizeId(serverId)}__$safeTool"
+        val base = "${ToolRegistry.MCP_TOOL_PREFIX}${sanitizeId(serverId)}__$safeTool"
         return if (base.length <= MAX_WIRE_NAME) {
             base
         } else {
@@ -371,7 +371,11 @@ internal object McpRegistry {
         dynamicName = "${cfg.name} · ${tool.originalName}",
         dynamicDescription = tool.description,
         category = ToolCategory.MCP,
-        // 风险档：第三方工具默认按"外部副作用"处理；用户显式标了信任才降为本地档
+        // 确认降级策略（confirmPolicy）：**刻意不显式声明**，走 defaultFor(risk) 的派生 ——
+        //   未信任（EXTERNAL）⇒ BLOCK：问不到用户必须拒绝。第三方远端动作无法保证
+        //     "未确认时只做无副作用动作"，因此不能像内置的删文件/装包那样 fail-open；
+        //   已信任（LOCAL）⇒ PROCEED：此时 RiskApprovalGuard 根本不产生 Ask，取值不被读。
+        // 这条派生关系是"第三方工具不再依赖准入单点"的关键，见 ToolConfirmPolicy 类注释。
         risk = if (cfg.trusted) ToolRisk.LOCAL_SIDE_EFFECT else ToolRisk.EXTERNAL_SIDE_EFFECT,
         // 第三方工具的幂等性不可知 ⇒ 失败不重试（避免重复副作用）
         sideEffect = true,

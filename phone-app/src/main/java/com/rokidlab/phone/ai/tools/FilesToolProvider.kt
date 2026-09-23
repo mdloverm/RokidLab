@@ -1,13 +1,17 @@
 package com.rokidlab.phone.ai.tools
 
 import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.ToolContentTrust
+import com.rokidlab.phone.ai.ToolConfirmPolicy
 import com.rokidlab.phone.ai.ToolRisk
 
 import android.content.Context
 import android.util.Log
 import com.rokidlab.phone.ai.AiuiAppRegistry
 import com.rokidlab.phone.ai.AiuiProject
+import com.rokidlab.phone.ai.ArchiveTools
 import com.rokidlab.phone.ai.Calculator
+import com.rokidlab.phone.ai.DocTools
 import com.rokidlab.phone.ai.FileWorkspace
 import com.rokidlab.phone.ai.KnowledgeBase
 import com.rokidlab.phone.ai.KuwoMusicApi
@@ -45,6 +49,9 @@ internal object FilesToolProvider : ToolProvider {
         "edit_text_file",
         "delete_file",
         "move_file",
+        "zip_files",
+        "unzip_file",
+        "parse_document",
     )
 
     override fun tools(): List<ToolEntry> = listOf(
@@ -230,6 +237,10 @@ internal object FilesToolProvider : ToolProvider {
             displayNameRes = R.string.ai_tool_delete_file_name,
             descriptionRes = R.string.ai_tool_delete_file_desc,
             risk = ToolRisk.EXTERNAL_SIDE_EFFECT,
+            // 问不到用户时照做（PROCEED）：删的是本机文件（下载目录/工程目录里我们自己的产物），
+            // 影响不出本机，且用户当初就说得很明确（"清理一下"也要先 list_files 确认清单，见 schema）。
+            // 按 BLOCK 会让本机模式下的删除直接失败 —— 那正是 save_code_file 事故的方向。
+            confirmPolicy = ToolConfirmPolicy.PROCEED,
             sideEffect = true,
             statusText = "正在删除文件…",
             summarize = { args ->
@@ -285,6 +296,82 @@ internal object FilesToolProvider : ToolProvider {
                         "to" to mapOf("type" to "string", "description" to "目标相对路径，如 pages/home/index.ink"),
                     ),
                     "required" to listOf("project", "from", "to"),
+                ),
+            ),
+        ),
+
+        // ══════════ 压缩 / 解压（作用域与安全闸见 ai/ArchiveTools.kt） ══════════
+        ToolEntry(
+            name = "zip_files",
+            group = ToolRegistry.DOMAIN_FILES,
+            displayNameRes = R.string.ai_tool_zip_files_name,
+            descriptionRes = R.string.ai_tool_zip_files_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在打包文件…",
+            schema = toolSchema(
+                name = "zip_files",
+                description = "把项目工程目录（App 生成的文件所在处）里的文件打包成一个 zip，输出到手机「下载」目录。当用户说「把这些文件打个包」「导出成压缩包」「打包发我」时用它。默认打包整个项目（project 传项目名即可）；只想打包其中一部分时用 paths 传相对路径数组（文件或目录都可，如 [\"pages\",\"app.json\"]）。单个文件上限合计 200MB、条目上限 1000。⚠️ 只能打包项目工程目录里的东西（下载目录里的散文件不能打包——需要的话先把内容写进项目）。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "project" to mapOf("type" to "string", "description" to "要打包的项目名（App 生成过的项目，如 aiui-demo）"),
+                        "paths" to mapOf(
+                            "type" to "array",
+                            "items" to mapOf("type" to "string"),
+                            "description" to "可选，要打包的相对路径列表（文件或目录）。不传 = 整个项目",
+                        ),
+                        "zipName" to mapOf("type" to "string", "description" to "可选，压缩包名（不用带 .zip），默认用项目名"),
+                    ),
+                    "required" to listOf("project"),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "unzip_file",
+            group = ToolRegistry.DOMAIN_FILES,
+            displayNameRes = R.string.ai_tool_unzip_file_name,
+            descriptionRes = R.string.ai_tool_unzip_file_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在解压文件…",
+            schema = toolSchema(
+                name = "unzip_file",
+                description = "解压手机「下载」目录里的一个 zip 到下载目录下的子文件夹（默认用压缩包名命名）。当用户说「解压这个压缩包」「把这个 zip 解开」时用它（配合 download_file 下载来的包正好闭环）。zipPath 传相对下载目录的路径，如 app.zip 或 资料/app.zip；不确定路径先用 list_files(scope=\"downloads\")。⚠️ 只支持 zip（rar/7z 不支持，那种请用「运行命令」在容器里处理）；压缩包里有非法条目名（路径穿越）或条目数/解压体积超限时会整包中止。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "zipPath" to mapOf("type" to "string", "description" to "相对下载目录的 zip 路径，如 app.zip、资料/app.zip"),
+                        "folder" to mapOf("type" to "string", "description" to "可选，解压到的子目录名（下载目录下），默认取包名"),
+                    ),
+                    "required" to listOf("zipPath"),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "parse_document",
+            group = ToolRegistry.DOMAIN_FILES,
+            displayNameRes = R.string.ai_tool_parse_document_name,
+            descriptionRes = R.string.ai_tool_parse_document_desc,
+            // 只读：不写任何东西，也不上传（PDF 走本机 OCR）→ 可以进无人值守的定时任务
+            risk = ToolRisk.READ_ONLY,
+            // 文档内容来自用户之外（别人发来的文件），可能内含注入话术
+            contentTrust = ToolContentTrust.UNTRUSTED_EXTERNAL,
+            statusText = "正在解析文档…",
+            schema = toolSchema(
+                name = "parse_document",
+                description = "把手机「下载」目录里的**文档**转成纯文本读出来，支持 docx / xlsx / pptx / pdf。" +
+                    "当用户说「把这个 Word/Excel/PPT/PDF 总结一下」「看看这份报告讲了什么」「表里第三列是什么」" +
+                    "这类需要读文档内容的请求时调用；不确定文件名先用 list_files(scope=\"downloads\") 看清单。" +
+                    "⚠️ 表格会按行取回（单元格用 | 分隔），PPT 按页、PDF 按页标注；PDF 走本机 OCR 识别，" +
+                    "可能有错字 —— 拿不准的数字要如实说明是识别结果，不要当成原文。" +
+                    "纯文本文件（txt/md/csv/json）不要用它，用 read_text_file。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "path" to mapOf("type" to "string", "description" to "相对下载目录的文档路径，如 报告.docx、资料/年报.pdf"),
+                    ),
+                    "required" to listOf("path"),
                 ),
             ),
         ),
@@ -354,7 +441,29 @@ internal object FilesToolProvider : ToolProvider {
                 to = args.optString("to"),
             )
 
+            // ── 压缩 / 解压 ──
+            "zip_files" -> ArchiveTools.zipFiles(
+                context,
+                project = args.optString("project"),
+                paths = stringList(args.optJSONArray("paths")),
+                zipName = args.optString("zipName"),
+            )
+
+            "unzip_file" -> ArchiveTools.unzipFile(
+                context,
+                zipPath = args.optString("zipPath"),
+                folder = args.optString("folder"),
+            )
+
+            "parse_document" -> DocTools.parse(context, args.optString("path"))
+
         else -> throw IllegalArgumentException("未知工具: $name")
         }
+    }
+
+    /** 取字符串数组参数（模型偶尔把数组写成字符串，这里只认真正的数组元素；非法元素当没传） */
+    private fun stringList(arr: org.json.JSONArray?): List<String> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).mapNotNull { (arr.opt(it) as? String)?.trim()?.takeIf { s -> s.isNotEmpty() } }
     }
 }

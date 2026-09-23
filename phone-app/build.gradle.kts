@@ -158,11 +158,22 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
-    // so 库未压缩存储（16KB 页面设备要求，Android 16 强制）
-    // 注意：so 压缩(useLegacyPackaging=true) 会导致 16KB 设备安装失败，必须保持未压缩
+    // so 库**压缩**存储（⇒ 清单里 extractNativeLibs=true，安装时解压到 nativeLibraryDir）。
+    //
+    // 为什么必须是 true —— 两件事同时成立才敢改：
+    //  1. **自持 proot 的硬需求**：W^X 只允许在 `nativeLibraryDir`（SELinux 类型 `apk_data_file`）
+    //     里 `execve`；而 `useLegacyPackaging = false` 时 .so 是**未压缩直载**、系统**根本不落盘** ⇒
+    //     nativeLibraryDir 是个空目录，execve 必然 ENOENT。
+    //     （2026-09-22 真机实测：装完 APK 后 `libproot.so` 不在位，自检报「二进制不在位」。）
+    //  2. **官方 16KB 页面文档明确支持这条路**：「如果无法升级到 AGP 8.5.1+，可以改用**压缩共享库**……
+    //     从而避免因共享库未对齐而导致的应用安装问题」。
+    //     ⚠️ 原注释写反了：会让 16KB 设备**装不上**的是「未压缩且未做 16KB zip 对齐」，
+    //     **不是**压缩 —— 压缩的库安装时被解压，压根不参与 zip 对齐检查。
+    // 代价：安装后占用磁盘变大（库被解压落盘，本包 11 个库约 +45 MB）；APK 本身反而变小。
+    // 依据：https://developer.android.com/guide/practices/page-sizes
     packaging {
         jniLibs {
-            useLegacyPackaging = false
+            useLegacyPackaging = true
         }
     }
 

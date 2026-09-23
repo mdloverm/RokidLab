@@ -59,6 +59,13 @@ data class TimerTask(
     val actions: List<TimerAction>,
     var running: Boolean = false,
     var executedCount: Int = 0,
+    /**
+     * 下一次计划触发的绝对时间（epoch ms）。由 [com.rokidlab.phone.adb.TimerScheduler]
+     * 在排闹钟时写入并持久化：进程被杀/设备重启恢复时据此判定「错过的触发」是否需要补跑，
+     * countdown 也按原绝对时间恢复，而不是重新倒计时。
+     * 0 = 尚未排程（旧数据/新建未启动）。
+     */
+    var nextTriggerAt: Long = 0L,
 )
 
 @Composable

@@ -20,6 +20,8 @@ import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.adb.ui.TimerAction
 import com.rokidlab.phone.adb.ui.TimerSchedule
 import com.rokidlab.phone.adb.ui.TimerTask
+import com.rokidlab.phone.permission.AppPermission
+import com.rokidlab.phone.permission.PermissionBridge
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -205,7 +207,7 @@ internal object TimerToolProvider : ToolProvider {
                     }
                     val timeLabel = String.format(Locale.CHINA, "%02d:%02d", hour, minute)
                     val actionLabel = if (timerAction == "launch") "并打开 $appName" else ""
-                    "已设置定时任务：$dayLabel $timeLabel $actionLabel，提醒：$content"
+                    "已设置定时任务：$dayLabel $timeLabel $actionLabel，提醒：$content" + exactAlarmHint(context)
                 }
             }
 
@@ -264,7 +266,8 @@ internal object TimerToolProvider : ToolProvider {
                 app.timerScheduler.startTask(task)
                 "已创建自主任务「$name」：$label。到时我会先自己去查资料，再把结果告诉你。" +
                     "为安全起见那一轮只有查询类只读能力（查时间/天气/网页/知识库/设备状态等），" +
-                    "外加在手机上播放/停止音乐；不会自动拨号、安装或修改任何设置。"
+                    "外加在手机上播放/停止音乐；不会自动拨号、安装或修改任何设置。" +
+                    exactAlarmHint(context)
             }
 
         else -> throw IllegalArgumentException("未知工具: $name")
@@ -276,5 +279,27 @@ internal object TimerToolProvider : ToolProvider {
         seconds % 3600L == 0L -> "${seconds / 3600} 小时"
         seconds % 60L == 0L -> "${seconds / 60} 分钟"
         else -> "$seconds 秒"
+    }
+
+    /**
+     * 精确闹钟权限引导：创建定时任务后若系统不允许精确闹钟（Android 12~32 被撤销授权），
+     * 经统一权限桥拉起系统授权框；已授权/不支持的版本返回空串。
+     *
+     * 注意这里不能用 [PermissionBridge.ensure]：它的返回文案是「放弃本次动作、再说一次」，
+     * 而任务**已经建成**（只是可能不精确），所以用 [PermissionBridge.request] 只发起申请，
+     * 再拼一句与本场景相符的提示。
+     */
+    private fun exactAlarmHint(context: Context): String {
+        if (AppPermission.isGranted(context, AppPermission.EXACT_ALARM)) return ""
+        val launched = PermissionBridge.request(
+            context,
+            listOf(AppPermission.EXACT_ALARM),
+            context.getString(R.string.permission_reason_exact_alarm),
+        )
+        return if (launched) {
+            " " + context.getString(R.string.timer_exact_alarm_requested)
+        } else {
+            " " + context.getString(R.string.timer_exact_alarm_notify)
+        }
     }
 }

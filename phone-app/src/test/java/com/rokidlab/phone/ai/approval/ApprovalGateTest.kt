@@ -3,6 +3,7 @@ package com.rokidlab.phone.ai.approval
 import com.rokidlab.phone.ai.ToolGateway
 import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.ai.ToolRisk
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -20,13 +21,17 @@ import org.junit.Test
  * 于是 E3b 可以用真实工具名做确认用例了）。现在判定被拆成可独立求值的 guard，
  * 每条策略可以单独锁住 —— 这正是接缝化想换来的东西。
  *
- * 本文件锁住的四类不变式：
+ * 本文件锁住的五类不变式：
  * 1. **合成语义**：Deny 单调短路（DSH 的 `ctx.tools.guard()`）、Ask 不阻断其他 guard 的拒绝。
  * 2. **伪工具必须被当作已知工具**（[PseudoTools]）—— 少这一条，把伪工具接上闸门的瞬间
  *    `load_skill` 就会被判"未知工具"，技能链直接断。
  * 3. **fail-open 三态**：无通道 / 用户显式取消 / 超时，处理方式各不相同，
  *    混淆任意两个都会造成「用户没操作却说被取消」或「用户取消了却照样执行」。
- * 4. **AIUI 页面的拒绝文案逐字不变**（页面侧按字面分支处理，[PageScope] 是唯一产地）。
+ *    2026-09-23 起再叠一层：**问不到时的放行/拒绝由工具声明的 `ToolConfirmPolicy` 决定**
+ *    （`BLOCK` 拒 / `PROCEED` 放行），不再按域硬编码 —— 见 F8 / K4 / K5。
+ * 4. **确认通道是眼镜优先、手机兜底**：手机通道只为补上"本机模式下根本没有确认"这个洞，
+ *    不替换既有眼镜主路径 —— 见 F9 / F10。
+ * 5. **AIUI 页面的拒绝文案逐字不变**（页面侧按字面分支处理，[PageScope] 是唯一产地）。
  */
 class ApprovalGateTest {
 
@@ -265,19 +270,22 @@ class ApprovalGateTest {
     private val riskGuard = RiskApprovalGuard()
 
     @Test
-    fun `E1 走确认闸门的内置工具恰为 delete_file`() {
+    fun `E1 走确认闸门的内置工具恰为这四个`() {
         // ★ 2026-09-20 起这条断言不再是"空集"。文件工作区把**删除**标成了 EXTERNAL_SIDE_EFFECT：
         // 删除不可恢复，用户明确要求"删除走确认闸门"（对照 edit_text_file / move_file 只是
-        // LOCAL_SIDE_EFFECT，直接执行不打扰）。所以本断言的职责从"守住闸门空转"变成
-        // "守住闸门只服务被显式选中的那一个" —— 任何人新增 EXTERNAL_SIDE_EFFECT 工具，
-        // 都必须回到这里同步，并补一条像 E3b 那样的确认用例。
+        // LOCAL_SIDE_EFFECT，直接执行不打扰）。
+        // ★ 2026-09-23 本机执行域新增两项：delete_script（删脚本库条目，与 delete_file 同判据）
+        // 与 install_packages（apt 会拉外网流量、改容器状态）。后者收进闸门还有一层机制考虑：
+        // run_shell 是 LOCAL 档（对话路径静默执行），把 apt 留在 shell 里 = 一条**不问用户**的装包通道。
+        // 本断言的职责：守住闸门只服务被显式选中的这几个 —— 任何人新增 EXTERNAL_SIDE_EFFECT
+        // 工具，都必须回到这里同步，并补一条像 E3b / E3c 那样的确认用例。
         val external = ToolRegistry.toolList
             .filter { ToolRegistry.riskOfOrNull(it.name) == ToolRisk.EXTERNAL_SIDE_EFFECT }
             .map { it.name }
             .sorted()
         assertEquals(
-            "若此项变化，说明确认闸门的服务对象变了，请同步回归用例（见 E3b）",
-            listOf("delete_file"),
+            "若此项变化，说明确认闸门的服务对象变了，请同步回归用例（见 E3b / E3c）",
+            listOf("delete_file", "delete_script", "install_packages", "send_sms"),
             external,
         )
     }
@@ -290,6 +298,10 @@ class ApprovalGateTest {
         // 文件工作区里只有「删除」走确认；改/移是同机就地操作，不该弹确认框打扰用户
         assertNull(riskGuard.evaluate(ctxOf("edit_text_file")))
         assertNull(riskGuard.evaluate(ctxOf("move_file")))
+        // run_shell（本机执行）必须是**本机副作用**档：容器可丢弃、不提权、触达不到第三方，
+        // 够不上"外部副作用"。若有人把它调成 EXTERNAL_SIDE_EFFECT，会退化成
+        // 「每次执行命令都要眼镜确认、未连眼镜白等 35 秒」—— 正是 save_code_file 当年的故障形状。
+        assertNull(riskGuard.evaluate(ctxOf("run_shell")))
     }
 
     @Test
@@ -320,18 +332,44 @@ class ApprovalGateTest {
         assertTrue("删下载目录文件要写出路径，实际：$fromDownloads", fromDownloads.contains("note.txt"))
     }
 
+    @Test
+    fun `E3c 新增外部档工具的确认摘要也读出对象`() {
+        // 回归 2026-09-23：本机执行域新增两个外部副作用工具（见 E1）。确认摘要必须让用户在
+        // 眼镜上一眼看出"要装什么 / 要删哪个" —— 摘要含糊时用户没法判断该不该同意，
+        // 只能盲点，等于把闸门降级成一次点击负担。
+        fun askOf(name: String, args: JSONObject): String =
+            (riskGuard.evaluate(ToolCallContext(ToolSource.CONVERSATION, name, args, false))
+                as ToolDecision.Ask).prompt
+
+        val install = askOf(
+            "install_packages",
+            JSONObject().put("packages", JSONArray().put("python3").put("ffmpeg")),
+        )
+        assertTrue("装包确认要列出包名，实际：$install", install.contains("python3"))
+
+        val emptyInstall = askOf("install_packages", JSONObject())
+        assertTrue("包名为空时也要给出一句可读的摘要，实际：$emptyInstall", emptyInstall.isNotBlank())
+
+        val del = askOf("delete_script", JSONObject().put("name", "resize-images.sh"))
+        assertTrue("删脚本确认要写出脚本名，实际：$del", del.contains("resize-images.sh"))
+    }
+
     // ════════════════════════════════════════════════════════════════════
-    // F. resolveAsk —— fail-open 三态（安全关键）
+    // F. resolveAsk —— 通道选择 + fail-open 三态 + 声明分流（安全关键）
     // ════════════════════════════════════════════════════════════════════
 
     private class FakeResolver(
         private val available: Boolean,
         private val confirmed: Boolean,
         private val cancelled: Boolean = false,
+        /** 通道标识：用它在断言里区分"这次问的是眼镜还是手机"（眼镜优先，见 F9） */
+        override val channelId: String = "glasses-fake",
     ) : ApprovalGate.ConfirmResolver {
         var lastPrompt: String? = null
+        var calls = 0
         override fun isAvailable(): Boolean = available
         override fun confirm(toolName: String, prompt: String): Boolean {
+            calls++
             lastPrompt = prompt
             return confirmed
         }
@@ -389,6 +427,7 @@ class ApprovalGateTest {
     @Test
     fun `F6 确认通道抛异常不得把调用打挂`() {
         ApprovalGate.confirmationResolver = object : ApprovalGate.ConfirmResolver {
+            override val channelId: String = "throwing"
             override fun isAvailable(): Boolean = true
             override fun confirm(toolName: String, prompt: String): Boolean = throw IllegalStateException("boom")
         }
@@ -401,6 +440,70 @@ class ApprovalGateTest {
         ApprovalGate.confirmationResolver = fake
         ApprovalGate.resolveAsk(ask, "call_phone")
         assertEquals("摘要必须来自 Ask（即工具声明），通道只负责传输", "是否拨打 张三", fake.lastPrompt)
+    }
+
+    @Test
+    fun `F8 无通道时按工具声明分流：send_sms 拒绝、delete_file 放行`() {
+        // ★ 2026-09-23 改造的核心不变式。改造前 fail-open 判据硬编码 `domain == MCP`，
+        // 于是 send_sms（**真的会把短信发出去**）与 call_phone（只开拨号盘）共享同一条
+        // 静默放行路径 —— 两者的代价根本不是一个量级。现在读工具自己声明的 confirmPolicy。
+        ApprovalGate.confirmationResolver = null
+        ApprovalGate.phoneConfirmationResolver = null
+        val noChannel = { name: String, args: JSONObject ->
+            riskGuard.evaluate(ToolCallContext(ToolSource.CONVERSATION, name, args, false)) as ToolDecision.Ask
+        }
+
+        val smsAsk = noChannel("send_sms", JSONObject().put("to", "10086").put("text", "hi"))
+        assertTrue("send_sms 声明 BLOCK ⇒ Ask 必须带 failClosed", smsAsk.failClosed)
+        assertTrue(
+            "问不到用户时绝不能静默把短信发出去",
+            ApprovalGate.resolveAsk(smsAsk, "send_sms") is ToolDecision.Deny,
+        )
+
+        val delAsk = noChannel("delete_file", JSONObject().put("scope", "downloads").put("path", "a.txt"))
+        assertFalse("delete_file 显式声明 PROCEED ⇒ 不 fail-closed", delAsk.failClosed)
+        assertEquals(
+            "删本机文件可重做，问不到就照做 —— 按 BLOCK 会表现为「被安全策略挡住」（save_code_file 事故方向）",
+            ToolDecision.Allow,
+            ApprovalGate.resolveAsk(delAsk, "delete_file"),
+        )
+    }
+
+    @Test
+    fun `F9 眼镜通道优先 手机通道只在它不可用时接管`() {
+        val glasses = FakeResolver(available = true, confirmed = false, cancelled = true, channelId = "glasses")
+        val phone = FakeResolver(available = true, confirmed = true, channelId = "phone")
+
+        // 眼镜可用时，即使手机端会「同意」也不该走到手机 —— 眼镜语音是既有主路径
+        ApprovalGate.confirmationResolver = glasses
+        ApprovalGate.phoneConfirmationResolver = phone
+        assertTrue(
+            "眼镜通道可用却去问手机，会换掉用户熟悉的主路径；且这里眼镜端是「显式取消」⇒ 必须拒绝",
+            ApprovalGate.resolveAsk(ask, "call_phone") is ToolDecision.Deny,
+        )
+        assertEquals("眼镜可用时手机通道不应被调用", 0, phone.calls)
+        assertEquals(1, glasses.calls)
+
+        // 眼镜不可用（本机模式 / 未连接）⇒ 手机通道接管，这正是补上的那个洞
+        ApprovalGate.confirmationResolver = FakeResolver(available = false, confirmed = false)
+        assertEquals("手机通道接管后用户点了允许 ⇒ 放行", ToolDecision.Allow, ApprovalGate.resolveAsk(ask, "call_phone"))
+        assertEquals("接管后必须真的问过手机通道", 1, phone.calls)
+    }
+
+    @Test
+    fun `F10 两条通道都不可用时才算问不到`() {
+        ApprovalGate.confirmationResolver = FakeResolver(available = false, confirmed = true)
+        ApprovalGate.phoneConfirmationResolver = FakeResolver(available = false, confirmed = true)
+        // 都"不可用"⇒ 谁都不该被问；且不能把上一条通道的 confirmed=true 当成结论
+        assertEquals(
+            "都不可用 ⇒ 按声明分流（call_phone 是 PROCEED）",
+            ToolDecision.Allow,
+            ApprovalGate.resolveAsk(ask, "call_phone"),
+        )
+        assertTrue(
+            "MCP 的 Ask 是 fail-closed ⇒ 都不可用时必须拒绝",
+            ApprovalGate.resolveAsk(mcpAsk, "mcp__srv__danger") is ToolDecision.Deny,
+        )
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -474,6 +577,19 @@ class ApprovalGateTest {
     @Test
     fun `H5 已知工具在开放域下通过`() {
         assertNull(PageScope.rejectReason("get_current_time", PageScope.pageVisibleTools(), PageScope::domainOf))
+    }
+
+    @Test
+    fun `H6 run_shell 不对 AIUI 页面开放`() {
+        // 页面是第三方制品（模型生成 / 用户导入的 .aix）。`run_shell` 是全表唯一的
+        // **任意命令执行**原语 —— 开放它等于让页面作者在用户手机上跑任意命令。
+        // 对话路径保留该能力是产品意图，页面路径必须拒绝。
+        val reason = PageScope.rejectReason("run_shell", PageScope.pageVisibleTools(), PageScope::domainOf)
+        assertEquals("domain 'shell' of tool 'run_shell' is not allowed in AIUI pages", reason)
+        // 边界落在**域**上而不是 DENY_TOOLS：RULES 规定黑名单只放技术故障类，
+        // 且摘域能让页面拿到的工具清单里也没有它（黑名单做不到这一点）
+        assertTrue("shell 域必须不在页面开放域里", ToolRegistry.DOMAIN_SHELL !in PageScope.ALLOWED_DOMAINS)
+        assertTrue("黑名单不该为它开先例", "run_shell" !in PageScope.DENY_TOOLS)
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -582,14 +698,42 @@ class ApprovalGateTest {
     }
 
     @Test
-    fun `K4 内置工具的 Ask 一律不 fail-closed（fail-open 语义不变）`() {
+    fun `K4 声明 PROCEED 的工具不 fail-closed（fail-open 语义不变）`() {
         // fail-open 的前提是工具侧自带"未确认就降级为无副作用动作"的保证
-        // （call_phone 只开拨号盘、装机只到安装确认页）。内置工具都满足，MCP 无法保证。
-        listOf("delete_file", "hallucinated_tool_xyz").forEach { name ->
+        // （call_phone 只开拨号盘、装机只到安装确认页）。这些内置工具满足，MCP 无法保证。
+        // ⚠️ 2026-09-23 起这**不再等于"所有内置工具"**：`send_sms` 被显式标成 BLOCK
+        // （它真的会把短信发出去，没有"降级"可言），见 E1 / F8。
+        listOf("delete_file", "delete_script", "install_packages").forEach { name ->
             val r = riskGuard.evaluate(ctxOf(name))
             assertTrue(r is ToolDecision.Ask)
-            assertFalse("$name 不是第三方远端工具，不得改成 fail-closed", (r as ToolDecision.Ask).failClosed)
+            assertFalse("$name 声明的是 PROCEED，不得改成 fail-closed", (r as ToolDecision.Ask).failClosed)
         }
+    }
+
+    @Test
+    fun `K4b 未知名兜底 fail-closed（未知即最保守）`() {
+        // 未知名（模型幻觉 / 历史残留）在 ToolRegistry 里取不到声明 ⇒ confirmPolicy 兜底 BLOCK，
+        // 与 ToolRiskMap.riskOf 的"未知名 → 最保守档"是同一条原则。
+        // 这**不会**造成"白等 40s 再被拒"：UnknownToolGuard 在到达闸门之前就单调拒绝了（见 B3/B4），
+        // 本断言守的是"万一有人把 UnknownToolGuard 摘掉，也不会漏成 fail-open"这层兜底。
+        val r = riskGuard.evaluate(ctxOf("hallucinated_tool_xyz"))
+        assertTrue(r is ToolDecision.Ask)
+        assertTrue("未知名字必须保守", (r as ToolDecision.Ask).failClosed)
+    }
+
+    @Test
+    fun `K5 MCP 文案按名字前缀判定 不依赖 server 是否连接`() {
+        // ★ 回归 2026-09-23：这里原本查 `ToolRegistry.domainOfOrNull(name) == DOMAIN_MCP`。
+        // 但 MCP 工具是**动态**注册的（dynamicProviders 只在 server 连上时才有内容），
+        // 单测环境与"server 已断开"两种情况下都查不到 ⇒ 误落到内置工具分支，
+        // 用户拿到的出路变成"去打开乐奇实验室"，而正确的出路是"把这个 server 标为信任"。
+        ApprovalGate.confirmationResolver = null
+        ApprovalGate.phoneConfirmationResolver = null
+        val reason = (ApprovalGate.resolveAsk(mcpAsk, "mcp__srv__danger") as ToolDecision.Deny).reason
+        assertTrue("必须给出 MCP 专属出路：标信任", reason.contains("信任"))
+        assertFalse("不得落到内置工具文案", reason.contains("打开乐奇实验室"))
+        assertTrue("前缀判据必须与生成侧同源", ToolRegistry.isMcpTool("mcp__srv__danger"))
+        assertFalse("内置工具不能被前缀判据误伤", ToolRegistry.isMcpTool("send_sms"))
     }
 
     // ════════════════════════════════════════════════════════════════════

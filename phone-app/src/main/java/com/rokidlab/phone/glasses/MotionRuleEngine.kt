@@ -69,7 +69,7 @@ object MotionRuleEngine {
      * 规则动作执行线程。
      *
      * 单线程池（蓝牙/CXR 下行命令本就该串行）+ **必须另起线程**：
-     * 审批闸门最多阻塞 35s 等眼镜端确认，工具本身还可能访问网络/ADB —— 放在 120ms 的
+     * 审批闸门最多阻塞 ~40s 等用户确认（眼镜通道 35s / 手机通道 40s），工具本身还可能访问网络/ADB —— 放在 120ms 的
      * 判定线程上会直接把头动识别停掉（判定停 → 审批手势也一起失效，用户点了头也没反应）。
      */
     private val worker: ExecutorService = Executors.newSingleThreadExecutor { r ->
@@ -255,7 +255,7 @@ object MotionRuleEngine {
      * 与对话路径共用同一条审批闸门（见类注释）—— 这里不维护任何动作白名单，
      * 手机端全部工具（含 MCP）都能作为规则目标。
      *
-     * 全部执行都在 [worker] 上做：审批可能阻塞 35s，工具可能访问网络/ADB。
+     * 全部执行都在 [worker] 上做：审批可能阻塞 ~40s，工具可能访问网络/ADB。
      */
     private fun fire(rule: MotionRule) {
         lastFired[rule.id] = System.currentTimeMillis()

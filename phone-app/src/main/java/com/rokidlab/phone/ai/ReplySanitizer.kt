@@ -51,4 +51,62 @@ object ReplySanitizer {
         s = TAIL.replace(s, "")
         return s.trim()
     }
+
+    // ═══════════════════ 眼镜通道专用：Markdown → 口语文本 ═══════════════════
+    //
+    // 手机气泡支持 Markdown 渲染（代码块卡片等），但眼镜只有「窄屏显示 + TTS 语音」：
+    // 围栏符号、缩进、星号不能念，整段代码念出来更是灾难。同一条回复因此分两个版本——
+    // 手机拿 [sanitize] 后的原文（保留 Markdown），眼镜走本方法。
+
+    private val FENCE_LINE = Regex("^\\s*(```|~~~)")
+    private val INLINE_CODE = Regex("`([^`\n]+)`")
+    private val BOLD = Regex("\\*\\*([^*]+)\\*\\*|__([^_]+)__")
+    private val ITALIC = Regex("(?<!\\*)\\*([^*\n]+)\\*(?!\\*)")
+    private val LINK = Regex("\\[([^]]+)]\\([^)\\s]+\\)")
+    private val HEADING_LEAD = Regex("^\\s*#{1,6}\\s+")
+    private val BULLET_LEAD = Regex("^\\s*[-*+]\\s+")
+
+    /**
+     * 把 Markdown 回复剥成眼镜能显示/念的纯文本：
+     * - 围栏代码块整段丢弃（含流式中未闭合的），只留代码外的散文结论；
+     * - 整条回复几乎全是代码（模型只给了代码没写结论）时，补一句引导看手机；
+     * - 行内代码/加粗/斜体/链接去符号留文字，标题/列表去标记，压缩空白。
+     */
+    fun sanitizeForGlass(raw: String): String {
+        val base = sanitize(raw)
+        if (base.isEmpty()) return ""
+
+        val proseLines = mutableListOf<String>()
+        var inFence = false
+        var hasCode = false
+        base.lines().forEach { line ->
+            if (FENCE_LINE.containsMatchIn(line)) {
+                inFence = !inFence
+                hasCode = true
+                return@forEach
+            }
+            if (!inFence) proseLines += line
+        }
+
+        var prose = proseLines.joinToString("\n")
+        prose = LINK.replace(prose) { it.groupValues[1] }
+        prose = INLINE_CODE.replace(prose) { it.groupValues[1] }
+        prose = BOLD.replace(prose) { m ->
+            m.groupValues.drop(1).firstOrNull { it.isNotEmpty() } ?: ""
+        }
+        prose = ITALIC.replace(prose) { it.groupValues[1] }
+        prose = prose.lines().joinToString("\n") { line ->
+            BULLET_LEAD.replace(HEADING_LEAD.replace(line, ""), "· ")
+        }
+        prose = prose
+            .replace("~~~", "")
+            .replace(Regex("[ \t]+"), " ")
+            .replace(Regex("\n{2,}"), "\n")
+            .trim()
+
+        if (prose.isBlank()) {
+            return if (hasCode) "代码已经写好啦，请看手机屏幕。" else ""
+        }
+        return prose
+    }
 }

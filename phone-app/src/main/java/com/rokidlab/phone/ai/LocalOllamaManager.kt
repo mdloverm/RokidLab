@@ -171,13 +171,18 @@ object LocalOllamaManager {
         // Vulkan 后端驱动不兼容易崩溃自重启，固定关闭；termux 默认 CPU 构建会忽略该变量
         append("export OLLAMA_VULKAN=0; ")
         append("export OLLAMA_HOST=127.0.0.1:11434; ")
-        append("command -v ollama >/dev/null 2>&1 || { echo 'ollama not installed'; exit 1; }; ")
+        // ollama 走**绝对路径**，不靠 PATH 解析：RUN_COMMAND 起的进程继承的是 Android 应用的
+        // 环境（PATH 里没有 $PREFIX/bin，而 ollama 只装在那里）。裸命令名时 `command -v ollama`
+        // 直接返回空，于是这条链"静默判自己没装 ollama"、exit 1，且输出无处可去。
+        // $P 由 ShellOps 的环境前缀注入；这里再留一个裸名兜底，保证脱离该前缀也能跑。
+        append("O=\"\$P/bin/ollama\"; [ -x \"\$O\" ] || O=ollama; ")
+        append("command -v \"\$O\" >/dev/null 2>&1 || { echo 'ollama not installed'; exit 1; }; ")
         if (killFirst) {
             append(killStaleCommand())
             append("sleep 1; ")
         }
         append("printf '\\n=== serve start %s ===\\n' \"\$(date '+%F %T')\" >> \"\$HOME/.rokid-ollama.log\"; ")
-        append("exec ollama serve >> \"\$HOME/.rokid-ollama.log\" 2>&1")
+        append("exec \"\$O\" serve >> \"\$HOME/.rokid-ollama.log\" 2>&1")
     }
 
     // ═══════════════════ 启动 / 停止 ═══════════════════

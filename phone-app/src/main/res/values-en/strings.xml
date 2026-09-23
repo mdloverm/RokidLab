@@ -378,6 +378,29 @@
     <string name="chat_msg_delete_message">This cannot be undone.</string>
     <string name="chat_msg_edit_title">Edit and resend</string>
     <string name="chat_msg_edit_hint">Your edit will be re-sent from this message; everything after it will be cleared.</string>
+    <!-- Code block cards (Markdown fenced blocks) -->
+    <string name="chat_code_lang_default">TEXT</string>
+    <string name="chat_code_copy">Copy code</string>
+    <string name="chat_code_download">Save to Downloads</string>
+    <string name="chat_code_run">Run code</string>
+    <string name="chat_code_running">Running…</string>
+    <string name="chat_code_exit">Exit code %1$d</string>
+    <string name="chat_code_launch_failed">Environment error: %1$s</string>
+    <string name="chat_code_no_output">(no output)</string>
+    <string name="chat_code_clear">Clear result</string>
+    <string name="chat_code_stdout">stdout</string>
+    <string name="chat_code_stderr">stderr</string>
+    <string name="chat_code_env_missing">Local Linux environment is not installed. Set it up in Settings → Local exec to run code.</string>
+    <string name="chat_code_python_missing">python3 is not installed in the container. Install Python in Settings → Local exec.</string>
+    <string name="chat_code_node_missing">node is not installed in the container. Install it in the local exec environment first.</string>
+    <string name="chat_code_saved">Saved: %1$s</string>
+    <string name="chat_code_save_failed">Save failed: %1$s</string>
+    <!-- Image cards -->
+    <string name="chat_image_preview">View full image</string>
+    <string name="chat_image_download">Save image to phone</string>
+    <string name="chat_image_failed">Failed to load image</string>
+    <string name="chat_image_saved">Image saved: %1$s</string>
+    <string name="chat_image_save_failed">Failed to save image: %1$s</string>
     <string name="chat_title">LeQi Chat</string>
     <string name="chat_subtitle">Chat · Spoken on Glasses</string>
     <string name="chat_input_hint">Type a message...</string>
@@ -402,6 +425,14 @@
     <string name="chat_trace_collapse">Collapse steps</string>
     <string name="chat_trace_expand">Expand steps</string>
     <string name="chat_trace_more">%1$d more steps</string>
+    <!-- update_plan structured checklist -->
+    <string name="chat_plan_title">Plan</string>
+    <!-- Reasoning full-text expand -->
+    <string name="chat_think_expand">Show full reasoning</string>
+    <string name="chat_think_collapse">Collapse</string>
+    <!-- One-line plan progress on glasses -->
+    <string name="glasses_plan_progress">Plan %1$d/%2$d · %3$s</string>
+    <string name="glasses_plan_done">Plan complete</string>
     <string name="chat_settings">AI Settings</string>
     <string name="chat_settings_title">AI Service Settings</string>
     <string name="chat_settings_hint">Supports OpenAI-compatible APIs (DeepSeek / Qwen / Kimi / Ollama, etc.)</string>
@@ -451,6 +482,7 @@
     <string name="ai_tool_cat_timer">Reminders &amp; Tasks</string>
     <string name="ai_tool_cat_aiui">AI Apps</string>
     <string name="ai_tool_cat_files">Files</string>
+    <string name="ai_tool_cat_shell">On-device</string>
     <string name="ai_tool_cat_mcp">External MCP</string>
     <string name="chat_settings_mcp">External MCP</string>
     <string name="chat_settings_mcp_hint">Connect third-party MCP servers to extend AI</string>
@@ -552,11 +584,11 @@
     <string name="chat_ocr_native_unavailable">Local OCR is not supported on this device.</string>
     <string name="chat_photo_failed">Failed to take photo</string>
     <string name="chat_kb_title">Knowledge Base</string>
-    <string name="chat_kb_subtitle">Import txt docs; they are searched automatically when you ask AI</string>
+    <string name="chat_kb_subtitle">Import txt/md/json; searched automatically when you ask</string>
     <string name="chat_kb_import">Import Document</string>
     <string name="chat_kb_empty">Knowledge base is empty. Please import documents first.</string>
     <string name="chat_kb_delete">Delete</string>
-    <string name="chat_kb_import_failed">Import failed (txt only, and content must not be empty)</string>
+    <string name="chat_kb_import_failed">Import failed (txt/md/json only; content must not be empty)</string>
     <string name="chat_kb_imported">Imported %1$s</string>
     <string name="chat_kb_confirm_delete">Delete "%1$s"? This cannot be undone.</string>
     <string name="chat_kb_doc_meta">%1$s · %2$d chunks ›</string>
@@ -740,6 +772,10 @@
     <string name="ai_tool_search_web_desc">Search the web</string>
     <string name="ai_tool_fetch_webpage_name">Read Webpage</string>
     <string name="ai_tool_fetch_webpage_desc">Read a web page text</string>
+    <string name="ai_tool_http_request_name">Call API</string>
+    <string name="ai_tool_http_request_desc">Request an API (GET/POST etc.)</string>
+    <string name="ai_tool_download_file_name">Download File</string>
+    <string name="ai_tool_download_file_desc">Download a URL into Downloads</string>
     <string name="ai_tool_save_summary_txt_name">Save Summary as TXT</string>
     <string name="ai_tool_save_summary_txt_desc">Save summary as txt into knowledge base</string>
     <string name="ai_tool_save_code_file_name">Save Code File</string>
@@ -758,6 +794,24 @@
     <string name="ai_tool_delete_file_desc">Delete a file, folder or whole project (irreversible)</string>
     <string name="ai_tool_move_file_name">Move/Rename File</string>
     <string name="ai_tool_move_file_desc">Rename or move files inside a project</string>
+    <string name="ai_tool_zip_files_name">Zip Files</string>
+    <string name="ai_tool_zip_files_desc">Compress project files into a zip</string>
+    <string name="ai_tool_unzip_file_name">Unzip File</string>
+    <string name="ai_tool_unzip_file_desc">Extract a zip in Downloads</string>
+    <!-- On-device execution: run commands inside the phone's own Linux container -->
+    <string name="ai_tool_run_shell_name">Run Command</string>
+    <string name="ai_tool_run_shell_desc">Run commands in the Linux environment on the phone; install it first</string>
+    <string name="ai_tool_install_packages_name">Install Packages</string>
+    <string name="ai_tool_install_packages_desc">Install software in the on-device Linux environment (downloads; asks you first)</string>
+    <!-- Script library: save what worked and reuse it (runs in the same Linux environment) -->
+    <string name="ai_tool_save_script_name">Save Script</string>
+    <string name="ai_tool_save_script_desc">Save working steps as a reusable script</string>
+    <string name="ai_tool_list_scripts_name">List Scripts</string>
+    <string name="ai_tool_list_scripts_desc">Show the scripts you have saved</string>
+    <string name="ai_tool_run_script_name">Run Script</string>
+    <string name="ai_tool_run_script_desc">Run a saved script; install the environment first</string>
+    <string name="ai_tool_delete_script_name">Delete Script</string>
+    <string name="ai_tool_delete_script_desc">Remove a script from the script library</string>
     <string name="ai_tool_look_at_view_name">Look Ahead</string>
     <string name="ai_tool_look_at_view_desc">See what is in front of you via the glasses camera</string>
     <!-- Head motion sensing: glasses IMU data query (v1) -->
@@ -795,6 +849,16 @@
     <string name="ai_tool_search_contacts_desc">Find a contact phone number</string>
     <string name="ai_tool_call_phone_name">Call Phone</string>
     <string name="ai_tool_call_phone_desc">Dial a contact or a number</string>
+    <string name="ai_tool_send_sms_name">Send SMS</string>
+    <string name="ai_tool_send_sms_desc">Text a contact or a number</string>
+    <string name="ai_tool_list_phone_apps_name">Phone Apps</string>
+    <string name="ai_tool_list_phone_apps_desc">List apps installed on the phone</string>
+    <string name="ai_tool_read_clipboard_name">Read Clipboard</string>
+    <string name="ai_tool_read_clipboard_desc">Read the text in the clipboard</string>
+    <string name="ai_tool_write_clipboard_name">Copy to Clipboard</string>
+    <string name="ai_tool_write_clipboard_desc">Copy text to the clipboard</string>
+    <string name="ai_tool_parse_document_name">Parse Document</string>
+    <string name="ai_tool_parse_document_desc">Read Word/Excel/PPT/PDF</string>
     <string name="ai_tool_set_phone_alarm_name">Phone Alarm</string>
     <string name="ai_tool_set_phone_alarm_desc">Set a phone alarm or countdown</string>
     <string name="ai_tool_open_phone_app_name">Open Phone App</string>
@@ -927,6 +991,11 @@
     <string name="phone_mirror_channel">Phone Mirror</string>
     <string name="phone_mirror_channel_desc">Project phone screen to glasses</string>
     <string name="phone_mirror_projecting">Projecting screen to glasses</string>
+    <string name="screen_capture_channel">Screen Capture</string>
+    <string name="screen_capture_channel_desc">Shown briefly while capturing</string>
+    <string name="screen_capture_capturing">Capturing screen…</string>
+    <string name="ai_tool_capture_screen_name">Capture Screen</string>
+    <string name="ai_tool_capture_screen_desc">Read the phone screen; first use asks for system consent</string>
     <string name="switch_source_btn">Switch Source</string>
     <string name="refresh_success">Refresh Succeeded</string>
     <string name="refresh_failed">Refresh Failed</string>
@@ -1359,6 +1428,53 @@
     <string name="export_compat_diag_desc">Export device, ROM and Bluetooth info for reports</string>
     <string name="save_compat_done">Compatibility diagnostics exported</string>
     <string name="save_compat_failed">Failed to export compatibility diagnostics</string>
+    <!-- On-device execution environment (self-hosted proot + Ubuntu rootfs): settings page -->
+    <string name="settings_local_exec">On-device Environment</string>
+    <string name="settings_local_exec_subtitle">Run Linux commands and scripts on the phone</string>
+    <string name="local_exec_reading">Reading status…</string>
+    <string name="local_exec_state_failed">Failed: %1$s</string>
+    <string name="local_exec_stage_check">checking</string>
+    <string name="local_exec_stage_download">downloading %1$d%%</string>
+    <string name="local_exec_stage_extract">extracting</string>
+    <string name="local_exec_stage_configure">configuring</string>
+    <string name="local_exec_stage_done">done</string>
+    <string name="local_exec_install_title">Install Linux Environment</string>
+    <string name="local_exec_install_hint">About 28 MB, one-time download; works offline after</string>
+    <string name="local_exec_install_cta">Install Now</string>
+    <string name="local_exec_install_cancel_hint">Cancel to remove the already downloaded files</string>
+    <string name="local_exec_retry">Retry</string>
+    <string name="local_exec_ready">Installed · Ubuntu %1$s</string>
+    <string name="local_exec_foot">Uses %1$s · %2$s free</string>
+    <string name="local_exec_selftest">Run Check</string>
+    <string name="local_exec_testing">Checking…</string>
+    <string name="local_exec_section_addons">OPTIONAL COMPONENTS</string>
+    <string name="local_exec_python_name">Python 3</string>
+    <string name="local_exec_python_hint">Run Python scripts · about 8 MB</string>
+    <string name="local_exec_python_ready_hint">Ready for Python scripts</string>
+    <string name="local_exec_node_name">Node.js</string>
+    <string name="local_exec_node_hint">Run JS and npx tools · about 58 MB</string>
+    <string name="local_exec_node_ready_hint">Ready for JavaScript and npx tools</string>
+    <string name="local_exec_git_name">Git</string>
+    <string name="local_exec_git_hint">Clone and manage repos · about 10 MB</string>
+    <string name="local_exec_git_ready_hint">Ready to clone and manage repos</string>
+    <string name="local_exec_addon_install">Install</string>
+    <string name="local_exec_enable">Enable</string>
+    <string name="local_exec_apt_update">Updating package index</string>
+    <string name="local_exec_apt_deps">Resolving dependencies</string>
+    <string name="local_exec_apt_fetch">Downloading packages</string>
+    <string name="local_exec_apt_unpack">Unpacking</string>
+    <string name="local_exec_apt_setup">Configuring</string>
+    <string name="local_exec_share_title">Shared Folder</string>
+    <string name="local_exec_share_public">Linked to \"%1$s\" · mounted at /mnt/lab</string>
+    <string name="local_exec_share_private">Not granted · tap to link the Downloads folder</string>
+    <string name="local_exec_share_unsupported">Linking requires Android 11 or later</string>
+    <string name="local_exec_report">CHECK REPORT</string>
+    <string name="local_exec_uninstall_cta">Remove Environment</string>
+    <string name="local_exec_uninstall">Remove Environment</string>
+    <string name="local_exec_uninstall_confirm">Container files, installed packages and add-ons are all removed; you will need to download again.</string>
+    <string name="local_exec_uninstall_failed">Delete failed: %1$s</string>
+    <string name="local_exec_note">Optional; other features work without it. Commands run only inside the app sandbox.</string>
+    <string name="local_exec_cancel">Cancel</string>
     <string name="error_log_title">Error Report</string>
     <string name="error_log_hint">An error was detected. Exporting logs can help analyze the issue</string>
     <string name="developer_open">Developer Tools</string>
@@ -1451,11 +1567,14 @@
     <string name="permission_label_bluetooth">Bluetooth</string>
     <string name="permission_label_contacts">Contacts</string>
     <string name="permission_label_phone">Phone</string>
+    <string name="permission_label_sms">SMS</string>
     <string name="permission_label_calendar_read">Read calendar</string>
     <string name="permission_label_calendar_write">Write calendar</string>
     <string name="permission_label_location">Location</string>
     <string name="permission_label_notification">Notifications</string>
     <string name="permission_label_overlay">Display over other apps</string>
+    <string name="permission_label_all_files">All files access</string>
+    <string name="permission_label_exact_alarm">Exact alarms</string>
     <string name="permission_dialog_title">Permission required</string>
     <string name="permission_dialog_message">%1$s needs the following permissions:\n%2$s\n\nTap Grant now, then choose Allow in the system dialog.</string>
     <string name="permission_dialog_allow">Grant now</string>
@@ -1471,9 +1590,21 @@
     <string name="permission_notification_text">Tap to grant %1$s</string>
     <string name="permission_channel_name">Permission alerts</string>
     <string name="permission_channel_desc">Reminds you when a feature is unavailable because a system permission is missing</string>
+
+    <!-- Tool confirmation dialog (phone-side confirm channel): used when the glasses are
+         unavailable, so external-side-effect tools (e.g. sending SMS) can still ask once. -->
+    <string name="tool_confirm_title">Confirmation needed</string>
+    <string name="tool_confirm_message">%1$s\n\nThis action needs your approval before the AI runs it.</string>
+    <string name="tool_confirm_allow">Allow</string>
+    <string name="tool_confirm_deny">Cancel</string>
     <string name="permission_reason_contacts">look up a contact and dial</string>
     <string name="permission_reason_phone">place the call directly (without it only the dialer can be opened)</string>
+    <string name="permission_reason_sms">send text messages directly</string>
     <string name="permission_reason_calendar">read and create calendar events</string>
     <string name="permission_reason_location">get the current location</string>
     <string name="permission_reason_launch">let glasses voice dial, set alarms and open apps while your phone is locked or on the home screen</string>
+    <string name="permission_reason_exact_alarm">make scheduled reminders fire on time</string>
+    <!-- Shown after a timer/agent task is created but exact-alarm is missing (task still exists) -->
+    <string name="timer_exact_alarm_requested">Allow \"Exact alarms\" so it fires on time.</string>
+    <string name="timer_exact_alarm_notify">Tap the notification to enable exact alarms.</string>
 </resources>

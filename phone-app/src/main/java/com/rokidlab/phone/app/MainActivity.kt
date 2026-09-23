@@ -178,6 +178,20 @@ class MainActivity : AppCompatActivity() {
     // 手机投屏 - MediaProjection 权限请求
     @Volatile
     private var isStartingPhoneMirror = false
+
+    /**
+     * 「截屏」工具的 MediaProjection 授权框。
+     *
+     * 与投屏那份授权**各是各的**：投屏的 token 归 `PhoneMirrorService` 长期使用，
+     * 这里拿到的一次性 token 交给 `ScreenCaptureService` 抓一帧就 `stop()`。
+     * 之所以要两块，是因为 targetSdk 34 起一个 MediaProjection 只允许
+     * `createVirtualDisplay` 一次（详见 `ScreenCaptureService` 的类注释）。
+     */
+    private val screenCaptureConsentLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        ScreenCaptureBroker.deliverConsent(result.resultCode, result.data)
+    }
     private val phoneMirrorProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -272,7 +286,7 @@ class MainActivity : AppCompatActivity() {
             mirrorSourceSelected = !isFirstRun,
             // 权限步实测：全部已开 → 这一步不出现（老用户不会被引导拦住）；
             // 只要有缺项，就在「安装眼镜端应用」之前先过这一步（AppPermission 是唯一事实来源）
-            permissionsReady = AppPermission.missing(this, AppPermission.values().toList()).isEmpty(),
+            permissionsReady = AppPermission.missing(this, AppPermission.onboardingPermissions()).isEmpty(),
             // 「安装眼镜端应用」/「配置眼镜 WiFi」两步每次启动都各出现一次，刻意不落盘：
             //  · 装：两端没有版本比对（眼镜端是旧版只会静默降级，表现为"某些功能不工作"），
             //    手机端更新后必须重装眼镜端，忘了没人提醒；
@@ -367,9 +381,16 @@ class MainActivity : AppCompatActivity() {
             @Suppress("DEPRECATION")
             registerReceiver(phoneInstallStatusReceiver, filter)
         }
+        // 「截屏」工具的授权框只能由 Activity 弹：挂载窗口 = 界面能弹框的窗口，
+        // 挂上之后 AI 工具线程才可能请求到一次系统截屏授权（见 ScreenCaptureBroker）
+        ScreenCaptureBroker.attach {
+            val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            screenCaptureConsentLauncher.launch(projectionManager.createScreenCaptureIntent())
+        }
     }
 
     override fun onStop() {
+        ScreenCaptureBroker.detach()
         runCatching { unregisterReceiver(phoneInstallStatusReceiver) }
         super.onStop()
     }
@@ -603,7 +624,7 @@ class MainActivity : AppCompatActivity() {
             hostApp = null,
             mirrorSourceSelected = false,
             authorized = false,
-            permissionsReady = AppPermission.missing(this, AppPermission.values().toList()).isEmpty(),
+            permissionsReady = AppPermission.missing(this, AppPermission.onboardingPermissions()).isEmpty(),
             rokidLinkInstalled = false,
             wifiConfigured = false,
         )

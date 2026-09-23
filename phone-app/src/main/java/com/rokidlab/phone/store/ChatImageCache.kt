@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
 import android.util.Log
 import com.rokidlab.phone.util.namedThread
 import okhttp3.OkHttpClient
@@ -66,19 +67,36 @@ internal object ChatImageCache {
         }
         namedThread("chat-image-clean", start = true) {
             val bmp = runCatching {
-                val req = Request.Builder().url(url).build()
-                http.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) {
-                        Log.w(TAG, "load $url: HTTP ${resp.code}")
-                        return@use null
-                    }
-                    val body = resp.body?.bytes() ?: return@use null
-                    decodeSampled(body, maxSize)
-                }
+                val bytes = fetchBytesLocked(url) ?: return@runCatching null
+                decodeSampled(bytes, maxSize)
             }.onFailure { Log.w(TAG, "load $url failed: ${it.message}") }.getOrNull()
             if (bmp != null) memCache[url] = bmp
             inflight.remove(url)
             mainHandler.post { onResult(bmp) }
+        }
+    }
+
+    /**
+     * 拉取图片**原始字节**（不采样、不缩放），供「保存到手机」保存原图。
+     * 支持 http(s) 直链与 `data:image/...;base64,` 内联图。调用方需在 worker 线程。
+     */
+    fun fetchBytes(url: String): ByteArray? = fetchBytesLocked(url)
+
+    private fun fetchBytesLocked(url: String): ByteArray? {
+        if (url.startsWith("data:", ignoreCase = true)) {
+            val raw = url.substringAfter(",", "")
+            if (raw.isBlank()) return null
+            return runCatching { Base64.decode(raw, Base64.DEFAULT) }
+                .onFailure { Log.w(TAG, "bad data url: ${it.message}") }
+                .getOrNull()
+        }
+        val req = Request.Builder().url(url).build()
+        http.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                Log.w(TAG, "fetch $url: HTTP ${resp.code}")
+                return null
+            }
+            return resp.body?.bytes()
         }
     }
 

@@ -9,12 +9,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -25,6 +22,11 @@ import kotlinx.coroutines.withContext
  *
  * 当前条目：查看眼镜状态、当前线路（WiFi/蓝牙隧道探测）、提交应用到商店
  * （进入 [DeveloperScreen] 表单）、导出日志、导出兼容性诊断。
+ *
+ * ⚠️ 「本机执行环境」曾经长在这里（当时它没有正式入口，而"下载→解压→跑通 python"
+ * 这条链必须在真机上验证过才算数）。链路验证通过后已迁到 [LocalExecScreen]，
+ * 由 `SettingsScreen` 的「更多」区直达 —— **不要再往这里加用户可见的功能入口**：
+ * 这一页的心智是"排障工具"，混进产品功能会让用户以为它是排障功能。
  */
 @Composable
 internal fun DeveloperModeScreen(

@@ -41,6 +41,14 @@ class ToolRiskMapTest {
         assertEquals(ToolRisk.LOCAL_SIDE_EFFECT, ToolRiskMap.riskOf("show_image"))
         assertEquals(ToolRisk.LOCAL_SIDE_EFFECT, ToolRiskMap.riskOf("call_phone"))
 
+        // 本机执行域的三档分野（2026-09-23 定档，判据与理由见 ShellToolProvider 的类注释）：
+        //  - run_shell 最坏只毁掉可重下的 rootfs、不提权 ⇒ LOCAL（对话路径静默执行是有意的）
+        //  - install_packages 会下几百 MB 外网流量、改容器状态 ⇒ EXTERNAL（必须过确认闸门）
+        //  - delete_script 删除不可恢复，与 delete_file 同级 ⇒ EXTERNAL
+        assertEquals(ToolRisk.LOCAL_SIDE_EFFECT, ToolRiskMap.riskOf("run_shell"))
+        assertEquals(ToolRisk.EXTERNAL_SIDE_EFFECT, ToolRiskMap.riskOf("install_packages"))
+        assertEquals(ToolRisk.EXTERNAL_SIDE_EFFECT, ToolRiskMap.riskOf("delete_script"))
+
         // 完全不存在的名字（模型幻觉 / 攻击构造）必须保持最保守档
         // （注意：它在审批链里会先被 UnknownToolGuard 拦下，见 ApprovalGateTest.B3/B4）
         assertEquals(ToolRisk.EXTERNAL_SIDE_EFFECT, ToolRiskMap.riskOf("hallucinated_tool_xyz"))
@@ -66,6 +74,24 @@ class ToolRiskMapTest {
             "save_summary_txt", "manage_timer", "schedule_agent_task",
             "control_music", "show_lyrics", "launch_glasses_app",
             "open_phone_app", "show_image", "clear_agent_task",
+            // 短信：内容发出即不可撤回，且触达第三方号码（EXTERNAL_SIDE_EFFECT）
+            "send_sms",
+            // 剪贴板写入：改了系统共享状态，别的 App 下一次粘贴会拿到它
+            "write_clipboard",
+            // 本机执行：无人值守时**绝不允许**跑任意命令（它改的是真机上的文件，且不可预判）
+            "run_shell",
+            // 装包同理，且它还会下外网流量、失败会留下 dpkg 半配置状态
+            "install_packages",
+            // 脚本库同理：存/跑脚本就是跑命令的另一条写法（list_scripts 只读，不在此列）
+            "save_script", "run_script",
+            // 删脚本：删除不可恢复，无人值守时没人能确认
+            "delete_script",
+            // 联网写动作：POST/PUT/DELETE 会触达第三方，下载会往用户存储写文件
+            "http_request", "download_file",
+            // 压缩/解压：会往下载目录写文件（解压还会一次写出很多个）
+            "zip_files", "unzip_file",
+            // 截屏：会弹系统授权框、占用一次 MediaProjection 会话，无人值守时没法被确认
+            "capture_screen",
         )
         mustBeExcluded.forEach { name ->
             assertTrue(
@@ -78,6 +104,10 @@ class ToolRiskMapTest {
         listOf(
             "get_current_time", "get_weather", "search_web", "fetch_webpage",
             "search_knowledge_base", "get_agent_status", "search_past_conversations",
+            // 只读的手机侧查询：查应用清单不改变任何状态，必须能在无人值守时用
+            "list_phone_apps",
+            // 读剪贴板 / 解析文档：只读、不上传（PDF 走本机 OCR），同样必须能在无人值守时用
+            "read_clipboard", "parse_document",
         ).forEach { name ->
             assertTrue("查询工具 $name 应在只读名单内", name in allowed)
         }

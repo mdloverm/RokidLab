@@ -29,6 +29,11 @@ data class KbDocInfo(
     val chunkCount: Int = 0,
     /** 该文档的编码判定结果（如 UTF-8 / GB18030 / UTF-16LE），用于界面上如实说明 */
     val charset: String = "",
+    /**
+     * 导入来源格式（见 [DocNormalizer.SourceFormat.columnValue]：md/txt/json）。
+     * 入库正文都已规范化为 Markdown，该字段只作来源记录与界面标识，不影响检索。
+     */
+    val format: String = "md",
 )
 
 /** 一次检索命中：块文本 + 来源标注（文档名 + 块序号）+ 相关度得分 */
@@ -61,7 +66,8 @@ data class KbDocText(val text: String, val truncated: Boolean)
 private const val TAG = "KnowledgeBase"
 
 /**
- * 本地知识库：文档导入（txt）→ 编码判定 → 分块 → SQLite 存储 → 关键词检索。
+ * 本地知识库：文档导入（txt/md/json，正文经 [DocNormalizer] 统一规范化为 Markdown）→
+ * 编码判定 → 结构感知分块 → SQLite 存储 → 关键词/向量混合检索。
  *
  * 用于 RAG 场景：眼镜拍照或对话提问 → 检索相关知识块 → 注入 system 提示词作为参考资料。
  * （「拍照问 AI」链路会先过本地 OCR，把识别出的文字当作查询。）
@@ -86,8 +92,9 @@ object KnowledgeBase {
      * 知识库装的是用户自己导入的资料，升级把库清空属于不可恢复的数据丢失。
      * v2：docs 增加 charset 列（记录导入时判定的编码，见 [TextEncoding]）。
      * v3：chunks 增加 embedding / embedding_model 列（语义向量索引，见 [backfillEmbeddings]）。
+     * v4：docs 增加 format 列（导入来源格式 md/txt/json，正文统一规范化为 Markdown）。
      */
-    const val DB_VERSION = 3
+    const val DB_VERSION = 4
 
     /** 块长目标（字符） */
     private const val CHUNK_SIZE = 500
@@ -135,6 +142,15 @@ object KnowledgeBase {
     private const val MAX_DOC_BYTES = 100L * 1024 * 1024
 
     /**
+     * JSON 文档单独的导入字节上限。
+     *
+     * JSON 美化（[DocNormalizer.normalize]）必须整份解析、无法走 8KB 流式窗口；
+     * org.json 解析与缩进输出的堆占用约为文本的 5~10 倍，5MB 在手机上已是
+     * 数十 MB 级临时开销，再大没有现实知识场景，直接判失败。
+     */
+    private const val MAX_JSON_BYTES = 5L * 1024 * 1024
+
+    /**
      * 管理界面**查看/编辑**时最多取多少字符。
      *
      * 单文档上限 100MB，全量读进内存会 OOM，UI 也显示不了那么多字 ⇒ 超出即截断，
@@ -166,18 +182,23 @@ object KnowledgeBase {
     // ═══════════════════════════════════════════════════
 
     /**
-     * 从 Uri 导入文档（.txt 读文本），返回文档信息。
+     * 从 Uri 导入文档（txt / md / json），返回文档信息。
      *
-     * 流式导入：8KB 窗口逐段读字符、边读边分块入库，常驻内存 O(块)（数百字符级），
+     * 不管源格式如何，入库正文统一规范化为 Markdown（见 [DocNormalizer]）。
+     *
+     * 流式导入：md/txt 走 8KB 窗口逐段读字符、边读边分块入库，常驻内存 O(块)（数百字符级），
      * 不随文档体积增长 —— 这是单文档上限能提到 100MB 的前提
      * （旧实现整文档读成单个 String，UTF-16 堆占用约为文件的 2~6 倍）。
+     * JSON 必须整份解析才能缩进美化，走单独的全量读取路径（上限 [MAX_JSON_BYTES]）。
      */
     fun importUri(context: Context, uri: Uri, displayName: String? = null): KbDocInfo? {
         val name = displayName ?: uri.lastPathSegment ?: "doc_${System.currentTimeMillis()}"
-        // 元数据大小只做提前拦截；查不到（-1）时由流式读取的字节计数兜底限制
+        val format = DocNormalizer.formatFromName(name)
+        // 元数据大小只做提前拦截；查不到（-1）时由流式读取/全量读取的字节计数兜底限制
         val size = querySize(context, uri)
-        if (size > MAX_DOC_BYTES) {
-            Log.w(TAG, "importUri: file too large (${size / 1024 / 1024}MB > ${MAX_DOC_BYTES / 1024 / 1024}MB), skip $name")
+        val sizeLimit = if (format == DocNormalizer.SourceFormat.JSON) MAX_JSON_BYTES else MAX_DOC_BYTES
+        if (size > sizeLimit) {
+            Log.w(TAG, "importUri: file too large (${size / 1024 / 1024}MB > ${sizeLimit / 1024 / 1024}MB), skip $name")
             return null
         }
         val input = try {
@@ -187,11 +208,47 @@ object KnowledgeBase {
             null
         } ?: return null
         return try {
-            input.use { importStream(context, name, it) }
+            input.use { stream ->
+                if (format == DocNormalizer.SourceFormat.JSON) {
+                    importJsonStream(context, name, stream)
+                } else {
+                    importStream(context, name, stream, format)
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "importUri failed: $name", e)
             null
         }
+    }
+
+    /**
+     * JSON 全量读取路径：字节计数限流 → 编码判定（与流式路径同一套 [TextEncoding]，
+     * GBK/UTF-16 的 JSON 也能正确解）→ [DocNormalizer] 美化包围栏 → 回到通用流式入口分块。
+     * 规范化后是 UTF-8 的 Markdown 文本，编码探测在那里会自然判成 UTF-8。
+     */
+    private fun importJsonStream(
+        context: Context,
+        name: String,
+        input: java.io.InputStream,
+    ): KbDocInfo {
+        val counter = CountingInputStream(input)
+        val bytes = counter.readBytesWithLimit(MAX_JSON_BYTES)
+        val decision = TextEncoding.decide(bytes)
+        val raw = String(
+            bytes,
+            decision.bomBytes,
+            bytes.size - decision.bomBytes,
+            decision.charset,
+        )
+        val normalized = DocNormalizer.normalize(raw, DocNormalizer.SourceFormat.JSON)
+        val utf8 = normalized.toByteArray(Charsets.UTF_8)
+        return importStream(
+            context,
+            name,
+            java.io.ByteArrayInputStream(utf8),
+            DocNormalizer.SourceFormat.JSON,
+            declaredSize = counter.count,
+        )
     }
 
     /** 查询 Uri 对应文件大小（查不到返回 -1，由读取端做字节数兜底限制） */
@@ -207,17 +264,34 @@ object KnowledgeBase {
 
     /**
      * 把内存文本导入知识库（网页总结等小文本落库），内部同样走流式分块路径。
+     * 来源按纯文本记（网页摘要是去标签后的纯文本，即 Markdown 段落子集）。
      */
     fun importText(context: Context, name: String, text: String): KbDocInfo =
-        importStream(context, name, java.io.ByteArrayInputStream(text.toByteArray(Charsets.UTF_8)))
+        importStream(
+            context,
+            name,
+            java.io.ByteArrayInputStream(text.toByteArray(Charsets.UTF_8)),
+            DocNormalizer.SourceFormat.TXT,
+        )
 
     /**
      * 流式导入主路径：编码判定 → 字节计数限流 → 解码 → 滚动窗口分块 → 逐块入库。
      *
      * 整个导入包在单个事务里：中途任何失败（超限/IO/空文本）endTransaction 自动回滚，
      * docs/chunks 不残留半份文档（doc 行也在事务内插入，回滚即消失）。
+     *
+     * @param format 导入来源格式（md/txt/json），记入 docs.format；正文规范化在调用前/
+     *   解码后完成，本方法只负责把**已经是 Markdown 的文本**分块入库。
+     * @param declaredSize 记到 docs.size 的字节数；null = 记输入流实际计数。
+     *   JSON 路径传**源文件大小**（美化后的 UTF-8 大小会偏离用户手里的文件）。
      */
-    fun importStream(context: Context, name: String, input: java.io.InputStream): KbDocInfo {
+    fun importStream(
+        context: Context,
+        name: String,
+        input: java.io.InputStream,
+        format: DocNormalizer.SourceFormat = DocNormalizer.SourceFormat.TXT,
+        declaredSize: Long? = null,
+    ): KbDocInfo {
         val database = db(context)
         val counter = CountingInputStream(input)
         // 编码判定先于一切：读一小段样本（≤ PROBE_BYTES）决定字符集，再把它拼回流头继续**流式**读。
@@ -232,6 +306,7 @@ object KnowledgeBase {
                 put("size", 0)
                 put("imported_at", System.currentTimeMillis())
                 put("charset", decision.charset.name())
+                put("format", format.columnValue)
             })
             if (docId <= 0) throw IllegalStateException("insert doc failed")
 
@@ -263,20 +338,22 @@ object KnowledgeBase {
                 insertChunk(database, docId, chunkIdx++, chunk)
             }
             if (totalChars == 0 || chunkIdx == 0) throw IllegalStateException("empty text")
+            val finalSize = declaredSize ?: counter.count
             database.update(
                 "docs",
-                ContentValues().apply { put("size", counter.count) },
+                ContentValues().apply { put("size", finalSize) },
                 "id=?", arrayOf(docId.toString()),
             )
             database.setTransactionSuccessful()
-            Log.i(TAG, "importStream: $name -> ${counter.count} bytes, $chunkIdx chunks, charset=${decision.charset.name()}")
+            Log.i(TAG, "importStream: $name -> $finalSize bytes, $chunkIdx chunks, charset=${decision.charset.name()}, format=${format.columnValue}")
             return KbDocInfo(
                 docId,
                 name,
-                counter.count.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                finalSize.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
                 System.currentTimeMillis(),
                 chunkIdx,
                 decision.charset.name(),
+                format.columnValue,
             )
         } finally {
             // 未 setSuccessful 的异常路径在这里回滚：库中不留半份文档
@@ -333,22 +410,48 @@ object KnowledgeBase {
                 throw IllegalStateException("document exceeds ${MAX_DOC_BYTES / 1024 / 1024}MB limit")
             }
         }
+
+        /**
+         * 全量读入（JSON 美化路径用），用 [limit] 单独限流：超过即抛异常，
+         * 由导入入口的事务/捕获兜成「导入失败」，绝不让一个大文件把堆撑爆。
+         */
+        fun readBytesWithLimit(limit: Long): ByteArray {
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(16 * 1024)
+            while (true) {
+                val n = read(buf)
+                if (n < 0) break
+                out.write(buf, 0, n)
+                if (count > limit) {
+                    throw IllegalStateException("json document exceeds ${limit / 1024 / 1024}MB limit")
+                }
+            }
+            return out.toByteArray()
+        }
     }
 
     /**
      * 滚动窗口分块器（流式导入用）。
      *
-     * 块长约 CHUNK_SIZE 字符，优先在句子边界断开（找不到合适句界按 CHUNK_SIZE 硬切，
+     * 块长约 CHUNK_SIZE 字符，优先在句子/换行边界断开（找不到合适句界按 CHUNK_SIZE 硬切，
      * 与旧逻辑一致）；相邻块保留 CHUNK_OVERLAP 字符重叠，答案恰好跨块边界时
      * 两块都能独立命中完整上下文。流未结束时窗口内不足一块则等待下一次 feed，不硬凑尾块。
+     *
+     * **Markdown 结构保留**（v4）：入库正文统一是 Markdown，出块时不再把换行折叠成空格 ——
+     * 标题、列表、段落分隔必须活过切块，否则预览/编辑里恢复出来的是被压平的一行文本。
+     * 清洗只做三件事：去 CR（CRLF→LF）、行内连续空格压一个、3+ 连续换行压成段落分隔（2 个）。
      */
-    private class Chunker {
+    // internal（而非 private）：md 结构保留是 v4 的关键行为，单测直接钉住切块结果
+    internal class Chunker {
         private companion object {
-            /** 句子边界字符（块切分优先在句末断开） */
+            /** 句子/换行边界字符（块切分优先在这些位置断开；换行天然是最干净的 Markdown 切点） */
             val BREAK_CHARS = charArrayOf('。', '！', '？', '；', '\n', '.', '!', '?', ';')
 
-            /** 空白折叠（出块前把连续空白压成单空格，与旧全量清洗行为一致） */
-            val WHITESPACE_RUN = Regex("\\s+")
+            /** 行内空白（**不含换行**）折叠为单空格，保留 md 的行与段落结构 */
+            val INLINE_SPACE_RUN = Regex("[ \\t]+")
+
+            /** 3+ 连续换行压成 2 个（段落之间只留一个空行） */
+            val NEWLINE_RUN = Regex("\n{3,}")
         }
 
         private val buf = StringBuilder()
@@ -368,13 +471,21 @@ object KnowledgeBase {
                     val boundary = buf.lastIndexOfAny(BREAK_CHARS, end)
                     if (boundary > CHUNK_SIZE / 2) end = boundary + 1
                 }
-                val text = buf.substring(0, end).replace(WHITESPACE_RUN, " ").trim()
-                // 前进量：流未结束时保留 CHUNK_OVERLAP 字符作下一块开头；流尾全部消费
-                val consumed = if (eof) end else (end - CHUNK_OVERLAP).coerceAtLeast(1)
+                val text = sanitize(buf.substring(0, end))
+                // 整块切出时恒保留 CHUNK_OVERLAP 字符作下一块开头（含 eof 时），
+                // 否则块尾换行被 trim 后会与下一块直接粘连；末块消费全部剩余
+                val consumed = if (end >= len) len else (end - CHUNK_OVERLAP).coerceAtLeast(1)
                 buf.delete(0, consumed)
                 if (text.isNotEmpty()) return text
             }
         }
+
+        /** 块级清洗：去 CR → 压段落空行 → 压行内空格 → 去首尾空白（不改动任何正文字符） */
+        private fun sanitize(raw: String): String =
+            raw.replace("\r", "")
+                .replace(NEWLINE_RUN, "\n\n")
+                .replace(INLINE_SPACE_RUN, " ")
+                .trim()
     }
 
     // ═══════════════════════════════════════════════════
@@ -543,7 +654,7 @@ object KnowledgeBase {
         }
         val result = mutableListOf<KbDocInfo>()
         database.rawQuery(
-            "SELECT id, name, size, imported_at, charset FROM docs ORDER BY imported_at DESC",
+            "SELECT id, name, size, imported_at, charset, format FROM docs ORDER BY imported_at DESC",
             null,
         ).use { c ->
             while (c.moveToNext()) {
@@ -556,6 +667,8 @@ object KnowledgeBase {
                         c.getLong(3),
                         counts[id] ?: 0,
                         c.getString(4) ?: "",
+                        // 旧库（v4 迁移前）默认 md：纯文本是 Markdown 子集，渲染无差异
+                        c.getString(5) ?: "md",
                     ),
                 )
             }
@@ -933,7 +1046,9 @@ private class KbDbHelper(context: Context) : SQLiteOpenHelper(context, Knowledge
                 "name TEXT NOT NULL, " +
                 "size INTEGER NOT NULL, " +
                 "imported_at INTEGER NOT NULL, " +
-                "charset TEXT NOT NULL DEFAULT '')",
+                "charset TEXT NOT NULL DEFAULT '', " +
+                // v4：导入来源格式（md/txt/json）；正文已统一规范化为 Markdown
+                "format TEXT NOT NULL DEFAULT 'md')",
         )
         db.execSQL(
             "CREATE TABLE chunks (" +
@@ -972,6 +1087,12 @@ private class KbDbHelper(context: Context) : SQLiteOpenHelper(context, Knowledge
             runCatching {
                 db.execSQL("ALTER TABLE chunks ADD COLUMN embedding_model TEXT")
             }.onFailure { Log.w(TAG, "onUpgrade: add embedding_model column skipped: ${it.message}") }
+        }
+        if (oldVersion < 4) {
+            // v4：导入来源格式。旧文档是纯文本（Markdown 段落子集），默认按 md 渲染无差异
+            runCatching {
+                db.execSQL("ALTER TABLE docs ADD COLUMN format TEXT NOT NULL DEFAULT 'md'")
+            }.onFailure { Log.w(TAG, "onUpgrade: add format column skipped: ${it.message}") }
         }
     }
 }

@@ -96,6 +96,25 @@ internal object ChatHistoryStore {
                 put("t", s.title)
                 put("d", s.detail)
                 put("s", s.state.name)
+                // 思考全文（限长，见 AgentStep.MAX_FULL_TEXT_CHARS）；空则不写，省历史文件体积
+                if (s.fullText.isNotEmpty()) {
+                    put(
+                        "f",
+                        if (s.fullText.length > AgentStep.MAX_FULL_TEXT_CHARS) {
+                            s.fullText.substring(0, AgentStep.MAX_FULL_TEXT_CHARS)
+                        } else {
+                            s.fullText
+                        },
+                    )
+                }
+                // 计划清单：[{t: 标题, s: 状态}]
+                if (s.planSteps.isNotEmpty()) {
+                    put("p", JSONArray().apply {
+                        s.planSteps.forEach { ps ->
+                            put(JSONObject().put("t", ps.title).put("s", ps.status))
+                        }
+                    })
+                }
             })
         }
     }
@@ -108,6 +127,14 @@ internal object ChatHistoryStore {
             val o = runCatching { arr.getJSONObject(i) }.getOrNull() ?: continue
             val key = o.optString("k")
             if (key.isEmpty()) continue
+            val planSteps = o.optJSONArray("p")?.let { pa ->
+                (0 until pa.length()).mapNotNull { pi ->
+                    val po = pa.optJSONObject(pi) ?: return@mapNotNull null
+                    val title = po.optString("t").trim()
+                    if (title.isEmpty()) return@mapNotNull null
+                    com.rokidlab.phone.ai.AgentPlan.PlanStep(title, po.optString("s", "pending"))
+                }
+            }.orEmpty()
             out.add(
                 AgentStep(
                     key = key,
@@ -117,6 +144,8 @@ internal object ChatHistoryStore {
                     detail = o.optString("d"),
                     state = runCatching { AgentStep.State.valueOf(o.optString("s")) }
                         .getOrDefault(AgentStep.State.OK),
+                    planSteps = planSteps,
+                    fullText = o.optString("f"),
                 )
             )
         }

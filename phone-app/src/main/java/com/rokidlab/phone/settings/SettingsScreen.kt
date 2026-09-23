@@ -59,13 +59,14 @@ internal fun SettingsScreen(
     var showContributorsDialog by remember { mutableStateOf(false) }
     val currentTheme = BrewThemeManager.currentTheme
 
-    // ── 开发者模式入口（开发/排障工具统一收纳在二级页） ──
+    // ── 二级页入口 ──
     var showDeveloperMode by remember { mutableStateOf(false) }
+    var showLocalExec by remember { mutableStateOf(false) }
 
-    if (showDeveloperMode) {
-        DeveloperModeScreen(onBack = { showDeveloperMode = false }, actions = actions)
-    } else {
-    Column(
+    when {
+        showLocalExec -> LocalExecScreen(onBack = { showLocalExec = false })
+        showDeveloperMode -> DeveloperModeScreen(onBack = { showDeveloperMode = false }, actions = actions)
+        else -> Column(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
@@ -198,6 +199,15 @@ internal fun SettingsScreen(
             content = ctx.getString(R.string.contributors_desc),
             color = BrewSuccess,
             onClick = { showContributorsDialog = true },
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // 本机执行环境（自持 proot）：可选能力 —— 不装不影响任何其它功能，装了 AI 才能在手机上跑命令
+        SettingsCard(
+            title = ctx.getString(R.string.settings_local_exec),
+            content = ctx.getString(R.string.settings_local_exec_subtitle),
+            color = BrewTeal,
+            onClick = { showLocalExec = true },
         )
         Spacer(modifier = Modifier.height(12.dp))
 

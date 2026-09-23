@@ -35,13 +35,22 @@ data class AgentStep(
      *   `ToolRegistry.displayNameOf()` 换成"当前时间" / "服务器名 · 工具名"。
      *   因此**不要把显示名写进来** —— 那会污染历史数据（改名/换语言后旧消息不会跟着变），
      *   也断掉与日志的对应关系。
-     * - [Kind.THINKING]：**恒为空**。思考类的文案（"正在思考" / "思考完毕"）由 UI 层按
-     *   [state] 本地化渲染 —— 服务层不该产出面向用户的文案（i18n 归属 UI）。
+     * - [Kind.THINKING] / [Kind.PLAN]：**恒为空**。文案由 UI 层按 [state] 本地化渲染。
      */
     val title: String,
     /** 次要说明：工具参数摘要 / 结果摘要 / 思考预览。可空 */
     val detail: String = "",
     val state: State = State.RUNNING,
+    /**
+     * [Kind.PLAN] 专用：结构化计划步骤（来自 `update_plan` 伪工具）。
+     * UI 渲染成勾选清单而非工具时间线；空 = 非计划步骤。
+     */
+    val planSteps: List<AgentPlan.PlanStep> = emptyList(),
+    /**
+     * [Kind.THINKING] 专用：推理全文（仅结束态推送一次）。
+     * [detail] 只存一行预览；用户在过程卡片上点击展开时看这份。落盘时由序列化层截断。
+     */
+    val fullText: String = "",
 ) {
     enum class Kind {
         /** 模型思考（含未开启长思考时的"等待模型响应"） */
@@ -62,6 +71,14 @@ data class AgentStep(
          * 排查"模型为什么没调检索工具"时把两者混在一起会误导。
          */
         KNOWLEDGE,
+
+        /**
+         * **任务计划清单**（`update_plan` 伪工具）：模型为多步任务立的步骤计划与进度。
+         *
+         * 同 `plan:auto` 键覆盖：模型每次更新计划都整体替换上一版（UI 永远只显示最新计划），
+         * 渲染成勾选清单（pending/in_progress/done），不进工具时间线。
+         */
+        PLAN,
     }
 
     enum class State {
@@ -86,6 +103,12 @@ data class AgentStep(
 
         /** 工具参数摘要长度：够看清 `{songName:"西厢"}` 这类关键入参即可 */
         const val MAX_ARGS_CHARS = 120
+
+        /**
+         * 推理全文落盘/内存展示上限。单轮长思考实测可达 ~2.5 万字符，
+         * 全量进聊天历史文件会把 JSONL 撑大；超出的尾部对"回顾怎么想的"价值也低。
+         */
+        const val MAX_FULL_TEXT_CHARS = 8_000
 
         /**
          * 构造一条工具调用的过程步骤。
@@ -127,18 +150,48 @@ data class AgentStep(
          * @param detail 已累积的推理文本（思考未开启时为空）。**只作展示预览**：
          *   UI 原样显示在标题下方，不做字数统计、也不据此改文案。
          * @param state RUNNING=正在等待模型；OK=本轮已出结果
+         * @param fullText 推理全文（仅 [state] = OK 时由调用方传一次）：UI 点击思考行展开查看。
+         *   不落 UI 预览通道，由落盘层按 [MAX_FULL_TEXT_CHARS] 截断。
          */
         fun thinking(
             round: Int,
             detail: String = "",
             state: State = State.RUNNING,
+            fullText: String = "",
         ): AgentStep = AgentStep(
             key = "think:$round",
             kind = Kind.THINKING,
             title = "",
             detail = compact(detail, MAX_DETAIL_CHARS),
             state = state,
+            fullText = fullText,
         )
+
+        /**
+         * 构造一条**任务计划**步骤（`update_plan` 伪工具的结构化呈现）。
+         *
+         * 同 `plan:auto` 键：模型每更新一版计划就整体覆盖上一版，UI 只渲染最新清单。
+         * [detail] 同步压一行进度摘要（如「2/5 · 正在查询天气」），保证不支持新 Kind 的
+         * 旧渲染路径/眼镜单行通道也有可读文本。
+         */
+        fun plan(steps: List<AgentPlan.PlanStep>): AgentStep {
+            val done = steps.count { it.status == "done" }
+            val current = steps.firstOrNull { it.status == "in_progress" }
+                ?: steps.firstOrNull { it.status == "pending" }
+            val summary = if (current != null && done < steps.size) {
+                "$done/${steps.size} · ${current.title}"
+            } else {
+                "${steps.size}/${steps.size}"
+            }
+            return AgentStep(
+                key = "plan:auto",
+                kind = Kind.PLAN,
+                title = "",
+                detail = compact(summary, MAX_DETAIL_CHARS),
+                state = if (done == steps.size) State.OK else State.RUNNING,
+                planSteps = steps.take(8),
+            )
+        }
 
         /**
          * 构造一条**知识库自动检索**步骤（主循环的 RAG，不是模型调的工具，见 [Kind.KNOWLEDGE]）。

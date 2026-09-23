@@ -11,17 +11,59 @@ import com.rokidlab.phone.adb.AdbShellClient
  */
 object ShellOps {
 
-    /** Termux 前缀路径（RUN_COMMAND 的 bash/home 都在其下） */
+    /** Termux 前缀路径（RUN_COMMAND 的 bash 及 base64/pkg/python 等都在其下） */
     private const val TERMUX_PREFIX = "/data/data/com.termux/files/usr"
 
     /**
-     * 在 Termux 后台执行一段 shell（通过 RUN_COMMAND 广播/服务调用）。
+     * Termux home。
      *
-     * 背景：本机大模型（Ollama）由 Termux 宿主，Lab 借 RUN_COMMAND 驱动其执行命令。
-     * 执行结果不会回传（RUN_COMMAND 为单向），成败由调用方轮询 HTTP 判断。
+     * ⚠️ 是 `files/home`，**不是** `files/usr/home` —— 后者是 `$PREFIX` 的子目录，
+     * 与 home 无关。写错的表现极隐蔽：进程能起来（exec 审计照常放行），但 cwd 不落地，
+     * 脚本里一切相对路径都偏。
+     */
+    private const val TERMUX_HOME = "/data/data/com.termux/files/home"
+
+    /**
+     * 每条 RUN_COMMAND 前都要带的环境自救前缀。
      *
-     * 新版 Termux 由 RunCommandService 处理该 Action（旧版才是 Activity）：
-     * 优先 `startForegroundService`，解析不到服务时退回 Activity 方式。
+     * 为什么不能省（2026-09-22 真机定位「命令发出去了、脚本 49ms 就无声退出、哪儿都没日志」）：
+     *  1. **RUN_COMMAND 起的进程不加载 `~/.bashrc`**，`$HOME`/`$PATH` 都不能指望。
+     *     最阴的不是报错：`$HOME` 为空或是别的值时会**静默走偏**。
+     *  2. **`exec >> 文件` 重定向失败会让 bash 直接退出** —— `exec` 是特殊内建命令，
+     *     重定向错误即致命。脚本开头正是用 `exec >> "$SETUP_LOG"` 收拢日志的，
+     *     于是 "$HOME 不对" 直接表现为"脚本一字不吐地消失"。所以要**先把 HOME 修正**再交给脚本。
+     *  3. **`base64 -d > 文件` 在命令找不到时已经把文件建成 0 字节**：PATH 缺 `$PREFIX/bin`
+     *     时 `base64` 是 command not found，但 `>` 的重定向早已执行 ⇒ 后续 `bash <空文件>`
+     *     瞬间退出。所以 PATH 必须先补齐，且落盘命令一律走绝对路径。
+     *  4. **路径以硬编码为准、环境变量只作兜底**（顺序不能反）：`$HOME` "存在但是错的值"时，
+     *     `${HOME:-默认}` 这种写法救不了，必须先 `[ -d ... ]` 验目录。
+     */
+    private val ENV_PROLOGUE: String = buildString {
+        append("P=$TERMUX_PREFIX; ")
+        append("H=$TERMUX_HOME; ")
+        append("[ -d \"\$H\" ] || H=\"\${HOME:-$TERMUX_HOME}\"; ")
+        append("export HOME=\"\$H\"; ")
+        append("export PATH=\"\$P/bin:\$P/bin/applets:/system/bin:/system/xbin:/vendor/bin:\$PATH\"; ")
+    }
+
+    /**
+     * 在 Termux 后台执行一段 shell（通过 RUN_COMMAND 服务调用）。
+     *
+     * 背景：本机大模型（Ollama）由 Termux 宿主，Lab 借 RUN_COMMAND 驱动它。
+     * `RUN_COMMAND` 是**单向**的：执行结果不回传，成败由调用方自行轮询判断
+     * （Ollama 的 stdout/stderr 由它自己重定向到 `$HOME/.rokid-ollama.log`）。
+     *
+     * ⚠️ **刻意不设 `RUN_COMMAND_WORKDIR`**（2026-09-22 实测后去掉）。
+     * 不传时 Termux 自己会给默认值 `TERMUX_HOME_DIR_PATH`（官方 wiki 明写），
+     * 而显式传一个路径会多走一道 `validateDirectoryFileExistenceAndPermissions` ——
+     * 排查中"能到 bash"和"整条卡死"两次唯一的输入差异就是它，去掉即消除这个变量。
+     * 本函数带的 [ENV_PROLOGUE] 已把 `HOME` 和全部工具路径钉成绝对值，**cwd 无关紧要**。
+     *
+     * [command] 会自动带上 [ENV_PROLOGUE]（修正 HOME/PATH），调用方直接写业务即可，
+     * 并可直接使用它定义的 `$P`（prefix）与 `$H`（home）两个变量。
+     *
+     * ⚠️ **一次 [runTermuxCommand] 只发一条命令**，且多条之间会**并发**执行（Termux 为每条
+     * 起一个后台任务）。有多步依赖关系时必须自己拼成**一条**命令，不能用多条代替。
      *
      * @throws java.io.IOException Termux 不可解析（未安装 / 未开「允许外部应用」）
      * @throws SecurityException 本 App 未被授予 RUN_COMMAND 权限
@@ -30,9 +72,12 @@ object ShellOps {
         val intent = android.content.Intent("com.termux.RUN_COMMAND").apply {
             setPackage("com.termux")
             putExtra("com.termux.RUN_COMMAND_PATH", "$TERMUX_PREFIX/bin/bash")
-            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", command))
-            putExtra("com.termux.RUN_COMMAND_WORKDIR", "$TERMUX_PREFIX/home")
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", ENV_PROLOGUE + command))
             putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra(
+                "com.termux.RUN_COMMAND_COMMAND_HELP",
+                "https://github.com/termux/termux-app/wiki/RUN_COMMAND-Intent",
+            )
         }
         if (ctx.packageManager.resolveService(intent, 0) != null) {
             ctx.startForegroundService(intent)

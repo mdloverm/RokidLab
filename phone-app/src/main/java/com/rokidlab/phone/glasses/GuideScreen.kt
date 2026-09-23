@@ -389,7 +389,7 @@ private fun PermissionsStep(
     onDone: (() -> Unit)?,
     ctx: android.content.Context,
 ) {
-    val items = remember { AppPermission.values().toList() }
+    val items = remember { AppPermission.onboardingPermissions() }
     var refreshTick by remember { mutableStateOf(0) }
 
     // 从系统授权框回来有 launcher 回调，但从「悬浮窗设置页」回来没有任何回调可挂，

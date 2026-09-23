@@ -185,7 +185,20 @@ class GoldenAgentEvalTest {
     fun `C3 在线模式包含代码落盘纪律`() {
         val sys = service.buildSystemMessage().getString("content")
         assertTrue("缺 save_code_file 落盘指令", sys.contains("save_code_file"))
-        assertTrue("缺「严禁源码当回复」条款", sys.contains("严禁把大段代码"))
+        // ★ 2026-09-23 契约变更：原先这里断言的是"严禁把大段代码原文直接当作回复"。
+        // 手机端改为富文本（能渲染 Markdown 围栏代码块）后，产品策略变成**分流**：
+        //   ① 「想看一眼这段代码」→ 就在正文用围栏代码块给出，不动 save_code_file；
+        //   ② 「生成项目/多文件/要保存」→ 走 save_code_file 落盘，**且正文不再复述源码**。
+        // 所以断言随之改成锁新契约的两端：分流要说明白，落盘场景仍要禁止复述一遍源码
+        // （否则模型会既写文件又在气泡里贴全文，眼镜端还会把源码念出来）。
+        assertTrue(
+            "缺「落盘后正文里不要再贴源码」约束",
+            sys.contains("正文里不要再贴源码"),
+        )
+        assertTrue(
+            "缺「想看代码就在正文用围栏代码块给」的分流说明",
+            sys.contains("围栏代码块"),
+        )
     }
 
     @Test

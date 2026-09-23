@@ -26,11 +26,23 @@ import org.json.JSONObject
  * 实现散在 `if` 链中，改动时极易把 fail-open 误改成 fail-closed
  * （那会让功能表现为「被安全策略挡住」，见 `GlassToolConfirmChannel` 的历史事故）。
  *
- * ## fail-open 是刻意的
+ * ## 「问不到用户时怎么办」由工具自己声明，不是猜域
  *
- * 确认通道不可用 / 眼镜端旧版 / 用户没响应（超时）→ **放行**，由工具侧保证
- * 「未获确认时只做无副作用动作」（如 `call_phone` 只打开拨号盘，绝不自动拨出）。
- * 只有用户在眼镜上**显式回 "no"** 才拒绝。硬拒曾造成"用户已授权却打不出电话"的事故。
+ * 确认通道不可用 / 眼镜端旧版 / 用户没响应（超时）时，闸门按工具声明的
+ * [com.rokidlab.phone.ai.ToolConfirmPolicy] 分流：
+ *  - [com.rokidlab.phone.ai.ToolConfirmPolicy.PROCEED]（影响不出本机、可重做：删文件、装包）→
+ *    **放行**。硬拒会让功能表现为「被安全策略挡住」，正是 2026-09-11 那次
+ *    "用户已授权却打不出电话"事故的方向；
+ *  - [com.rokidlab.phone.ai.ToolConfirmPolicy.BLOCK]（越出本机边界、不可撤销：发短信、
+ *    未信任的第三方 MCP 工具）→ **拒绝**并给出可操作出路。这类动作没有"先照做、错了再改"
+ *    的余地，而"问不到"本身是可被解决的（戴上眼镜 / 打开 App）。
+ *
+ * 只有用户**显式拒绝**才在两个分支上都拒绝 —— 那是唯一真正的"用户说不"。
+ *
+ * ⚠️ 这条路曾经硬编码 `domain == MCP`（"按工具属于哪个域猜该不该问到底"），于是
+ * `send_sms`（真会发出短信）与 `call_phone`（只开拨号盘）共享了同一条静默放行路径。
+ * 风险档早就是工具的自声明字段，确认策略却还是域的特例 —— 同一个思路只做了一半。
+ * 现在两者都读工具自己的声明，与 [com.rokidlab.phone.ai.tools.ToolEntry] 同源。
  */
 object ApprovalGate {
 
@@ -46,36 +58,58 @@ object ApprovalGate {
     private fun activeGuards(): List<ToolGuard> = guardsOverride ?: defaultGuards
 
     /**
-     * 副作用工具的用户确认通道（眼镜端阻塞端点，渲染"是否拨打 XXX"确认页）。
-     * 常驻单例由 `GlassToolConfirmChannel.global` 注入（见 `CxrLHiRokidSession`）。
+     * 副作用工具的用户确认通道。**有两个实现**，取值顺序见 [activeChannel]：
+     *  1. 眼镜端（`GlassToolConfirmChannel`）—— 用户戴着眼镜时最顺手，也是既有主路径；
+     *  2. 手机端（[com.rokidlab.phone.ai.PhoneToolConfirmChannel]）—— 本机模式 / 未连接眼镜时兜底。
      *
-     * null / [ConfirmResolver.isAvailable] 为 false 时 → **降级放行**（fail-open）。
+     * 两个都不可用时，按工具声明的 [com.rokidlab.phone.ai.ToolConfirmPolicy] 分流
+     * （见类注释 —— 改造前这里是一律放行，即"fail-open 的唯一产地"）。
      */
     interface ConfirmResolver {
-        /** 确认通道当前是否可用（眼镜端已升级且链路在线） */
+        /**
+         * 审计用的通道标识（日志里一眼看出"这次问的是眼镜还是手机"）。
+         *
+         * ★ 刻意**不给默认值**：排查确认链路时第一个问题就是"问到谁了"，
+         * 漏声明会让日志里出现一个无法归因的空标识 —— 宁可编译错。
+         */
+        val channelId: String
+
+        /** 确认通道当前是否可用（眼镜端已升级且链路在线 / 手机端能拉起界面） */
         fun isAvailable(): Boolean
 
         /**
          * 阻塞等待用户确认（仅在 [isAvailable] 为 true 时调用）。返回 true = 用户同意执行。
          *
          * @param prompt 给用户看的操作摘要（由闸门传入，与工具定义同源），
-         *   通道负责把它渲染到眼镜端悬浮层 + TTS 播报。
+         *   通道负责把它渲染到眼镜端悬浮层 + TTS 播报 / 手机端弹窗。
          */
         fun confirm(toolName: String, prompt: String): Boolean
 
-        /** 上一次确认是否被用户**显式取消**（true=取消 → 拒绝；false=超时/未响应 → 降级放行） */
+        /** 上一次确认是否被用户**显式取消**（true=取消 → 拒绝；false=超时/未响应 → 按声明分流） */
         fun wasCancelled(): Boolean = false
     }
 
+    /** 眼镜端通道（`CxrLHiRokidSession.init` 注入；链路在线时可用） */
     @Volatile
     var confirmationResolver: ConfirmResolver? = null
+
+    /**
+     * 手机端通道（[com.rokidlab.phone.ai.PhoneToolConfirmChannel] 在 `LabApplication.onCreate` 自注册）。
+     *
+     * ★ 为什么必须有：眼镜通道要求**眼镜在线**，而「本机模式」的设计目标恰恰是
+     * "不连眼镜也能用" —— 两者在定义上互斥。于是本机模式下所有需要确认的工具
+     * 都落到了 fail-open 分支（静默执行，连"要不要问"都不产生）。
+     * 本通道只在眼镜通道不可用时接管 ⇒ 眼镜在线时行为与改造前**完全一致**。
+     */
+    @Volatile
+    var phoneConfirmationResolver: ConfirmResolver? = null
 
     // ════════════════════════════════════════════════════════════════════
     // 门面：唯一对外入口
     // ════════════════════════════════════════════════════════════════════
 
     /**
-     * 工具执行前的统一审批（同步；可能阻塞至多 ~35s 等用户确认）。
+     * 工具执行前的统一审批（同步；可能阻塞至多 ~40s 等用户确认 —— 眼镜通道 35s、手机通道 40s）。
      *
      * 必须在**非主线程**调用（AIUI 页面网关的 worker 线程 / 对话的工具循环线程都满足）。
      *
@@ -155,48 +189,81 @@ object ApprovalGate {
      *
      * | 情况 | 结论 | 理由 |
      * |---|---|---|
-     * | 无通道 / 通道不可用（未连接、眼镜端旧版） | **放行** | 硬拒会让功能表现为「被安全策略挡住」 |
-     * | 用户**显式取消** | 拒绝 | 唯一的"用户说不" |
-     * | 超时 / 无响应 / 通道抛异常 | **放行** | 同第一行；工具侧只做无副作用动作 |
+     * | 用户**显式拒绝** | 拒绝 | 唯一的"用户说不"（两条通道、两个分支上都成立） |
+     * | 问到了且用户同意 | 放行 | —— |
+     * | 问不到 / 超时 / 通道抛异常，且工具声明 `PROCEED` | **放行** | 影响不出本机、可重做；硬拒会变成「被安全策略挡住」 |
+     * | 问不到 / 超时，且工具声明 `BLOCK` | 拒绝 | 越出本机边界、不可撤销，没有"先照做、错了再改"的余地 |
      *
-     * ⚠️ 三个分支的区分依据是 [ConfirmResolver.wasCancelled] ——
-     * "取消"和"超时"在眼镜端都是 `allowed=false`，**只能靠这个标志区分**。
+     * ⚠️ "用户拒绝"与"超时"的区分依据是 [ConfirmResolver.wasCancelled] ——
+     * 通道在两种情况下都返回 `allowed=false`，**只能靠这个标志区分**。
      * 早期实现不区分，导致"用户点错一次 / 眼镜没响应"被当成拒绝，
      * 用户侧看到「你已在眼镜上取消」但自己根本没操作。
-     *
-     * ⚠️ 例外：[ToolDecision.Ask.failClosed] 为 true（第三方远端 MCP 工具）时**不适用上表** ——
-     * "问不到"（无通道/超时）也会拒绝。理由：fail-open 的前提是工具侧自己有
-     * "未获确认时降级为无副作用动作"的保证，MCP 工具由第三方 server 实现，没有这个保证。
      */
     internal fun resolveAsk(ask: ToolDecision.Ask, toolName: String): ToolDecision {
-        val channel = confirmationResolver
-        if (channel == null || !channel.isAvailable()) {
-            // 问不到人：默认降级放行；第三方远端工具则拒绝（理由见上）
+        val channel = activeChannel()
+        if (channel == null) {
+            // 两条通道都问不到：按工具自己的声明分流（见类注释）
             return if (ask.failClosed) denyUnconfirmed(toolName, "当前无法向你确认") else ToolDecision.Allow
         }
         val confirmed = runCatching { channel.confirm(toolName, ask.prompt) }.getOrDefault(false)
-        if (confirmed) return ToolDecision.Allow
+        if (confirmed) {
+            Log.i(TAG, "confirmed via ${channel.channelId} (tool=$toolName)")
+            return ToolDecision.Allow
+        }
         if (channel.wasCancelled()) {
+            // 文案不带"在眼镜上"这类通道限定 —— 现在两条通道都可能问到（手机弹窗取消同样走这里）
             return ToolDecision.Deny(
                 DecisionOrigin.RISK_CONFIRMATION,
-                "你已在眼镜上取消，操作未执行：'$toolName'",
+                "你已取消本次操作，未执行：'$toolName'",
             )
         }
-        // 超时/未响应：默认放行；第三方远端工具则拒绝
+        // 超时/未响应/通道抛异常：同样按声明分流
         return if (ask.failClosed) denyUnconfirmed(toolName, "你没有确认") else ToolDecision.Allow
     }
+
+    /**
+     * 当前可用的确认通道：**眼镜优先、手机兜底**。
+     *
+     * 为什么眼镜优先：眼镜语音是主入口，用户说话时戴着眼镜，悬浮层确认 + TTS 是他熟悉的方式；
+     * 而"眼镜在线却没戴"是一个我们无法从链路状态判定的状态（需要佩戴检测，不在本轮范围内），
+     * 贸然改成手机优先反而会把既有主路径的体验换掉。手机通道的定位是**补上"
+     * 眼镜不可用时根本没有确认"这个洞**，不是替换眼镜通道。
+     *
+     * ⚠️ [ConfirmResolver.isAvailable] 也必须包在 `runCatching` 里：通道实现要读链路状态、
+     * 读 SharedPreferences，抛异常时应当按"这条通道不可用"继续往下走，
+     * 而不是让一个本该被确认的动作因为异常直接崩掉整轮对话。
+     */
+    private fun activeChannel(): ConfirmResolver? =
+        firstAvailable(confirmationResolver) ?: firstAvailable(phoneConfirmationResolver)
+
+    private fun firstAvailable(resolver: ConfirmResolver?): ConfirmResolver? =
+        resolver?.takeIf { runCatching { it.isAvailable() }.getOrDefault(false) }
 
     /**
      * [ToolDecision.Ask.failClosed] 的拒绝文案。
      *
      * 必须给出**可操作的出路**：否则用户只会看到"AI 说被安全策略挡住"而不知道下一步做什么。
-     * 两条出路对应两个真实开关 —— 连上眼镜（走确认）或把 server 标为信任（免逐次确认，
-     * 见 `McpServersPage` 的「信任此服务器」）。
+     * 出路按工具来源分两条 ——
+     *  - 第三方 MCP：连上眼镜确认，或在「设置 → MCP 服务器」把该 server 标为信任（免逐次确认）；
+     *  - 内置工具（如 `send_sms`）：打开手机上的乐奇实验室（让确认弹窗能显示出来）后重试，
+     *    或连接眼镜用眼镜确认。**不能只说"被安全策略拦截"** —— 那是没有出路的话。
+     *
+     * ⚠️ 分流判据是**工具名前缀**（[ToolRegistry.isMcpTool]），**不是**查域
+     * （[ToolRegistry.domainOfOrNull] == [ToolRegistry.DOMAIN_MCP]）。原因见
+     * [ToolRegistry.MCP_TOOL_PREFIX]：MCP 工具是动态注册的，server 断开或处于单测环境时
+     * 查表得到 null，会让这里误落到内置工具分支 —— 用户看到"去打开乐奇实验室"，
+     * 而正确的出路其实是"把这个 server 标为信任"。
      */
     private fun denyUnconfirmed(toolName: String, why: String): ToolDecision = ToolDecision.Deny(
         DecisionOrigin.RISK_CONFIRMATION,
-        "$why，第三方工具 '$toolName' 未执行。它来自外部服务器（无法保证未确认时不产生副作用），" +
-            "请连接眼镜后重试以确认本次调用，或在「设置 → MCP 服务器」里把该服务器标为信任",
+        if (ToolRegistry.isMcpTool(toolName)) {
+            "$why，第三方工具 '$toolName' 未执行。它来自外部服务器（无法保证未确认时不产生副作用），" +
+                "请连接眼镜后重试以确认本次调用，或在「设置 → MCP 服务器」里把该服务器标为信任"
+        } else {
+            "$why，'$toolName' 未执行。这个操作会产生本机之外的影响（例如把短信真的发出去），" +
+                "必须由你点头一次：请在手机上打开乐奇实验室后重试" +
+                "（确认弹窗需要 App 在前台，或已授予悬浮窗），也可以连接眼镜后用眼镜确认"
+        },
     )
 
     // ════════════════════════════════════════════════════════════════════
@@ -228,14 +295,15 @@ object ApprovalGate {
     /**
      * 每次决策一行日志（LogCollector 的「乐奇聊天 → 工具 → 查看日志」可直接观测）。
      *
-     * 格式对齐改造前的 `ToolPolicy: audit: ...`，只多带一个 `[ORIGIN]` ——
-     * 排查「AI 说被安全策略挡住」时，第一件事就是看**是哪个 guard 拒的**。
+     * 格式对齐改造前的 `ToolPolicy: audit: ...`，只多带 `[ORIGIN]` 与 `confirm=` ——
+     * 排查「AI 说被安全策略挡住」时，第一件事是看**是哪个 guard 拒的**；
+     * 排查「本机模式下这个动作怎么会执行/被拒」时，第一件事是看**它的确认降级策略**。
      *
      * ⚠️ TAG 从 `ToolPolicy` 改成了 `ApprovalGate`（类已合并）。日志面板若有按 TAG
      * 过滤的规则，需要一起改。
      */
     private fun audit(ctx: ToolCallContext, decision: ToolDecision) {
-        val head = "audit: source=${ctx.source.id} tool=${ctx.name} risk=${ctx.risk}"
+        val head = "audit: source=${ctx.source.id} tool=${ctx.name} risk=${ctx.risk} confirm=${ctx.confirmPolicy}"
         when (decision) {
             is ToolDecision.Allow -> Log.i(TAG, "$head -> ALLOW")
             is ToolDecision.Deny -> Log.i(TAG, "$head -> DENY [${decision.origin}] ${decision.reason}")
@@ -248,9 +316,10 @@ object ApprovalGate {
     // 测试支撑
     // ════════════════════════════════════════════════════════════════════
 
-    /** 复位注入状态（确认通道 + 策略集）。仅测试调用。 */
+    /** 复位注入状态（两条确认通道 + 策略集）。仅测试调用。 */
     internal fun resetForTest() {
         guardsOverride = null
         confirmationResolver = null
+        phoneConfirmationResolver = null
     }
 }

@@ -32,13 +32,27 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <!-- 拨号：有了它才能用 ACTION_CALL 直接拨出（全品牌一致）；未授权时自动退回 ACTION_DIAL -->
     <uses-permission android:name="android.permission.CALL_PHONE" />
+    <!-- 短信：AI 工具 send_sms 直接发出（缺权限时现场拉起系统授权框） -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <!-- AI 工具（手机闹钟，normal 级权限无需运行时请求） -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- 定时任务精确触发：31/32 用 SCHEDULE_EXACT_ALARM（用户可撤销，需引导），
+         33+ 用 USE_EXACT_ALARM（安装即授予；本应用为提醒/闹钟类用途，侧载分发不受 Play 政策约束） -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        tools:targetApi="31" />
+    <uses-permission
+        android:name="android.permission.USE_EXACT_ALARM"
+        tools:targetApi="33" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 本地模型：通过 RUN_COMMAND 在 Termux 中启动/停止 Ollama 服务 -->
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+    <!-- 本机执行环境：proot 容器的 /mnt/lab 直通公共「下载/Lab」目录（分区存储下 File 路径直读写必需） -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
 
     <queries>
         <package android:name="com.rokid.sprite.global.aiapp" />
@@ -101,8 +115,25 @@
             android:noHistory="true"
             android:theme="@style/Theme.RokidLabPhone.Transparent" />
 
+        <!-- 工具确认页（手机端确认通道）：需要用户点头的工具（发短信/删文件/装包/第三方 MCP 工具）
+             在**眼镜不可用时**由 PhoneToolConfirmChannel 拉起本页问一次。
+             眼镜在线时走眼镜悬浮层确认，不会弹本页。
+             noHistory + excludeFromRecents：它只是一次"问一句 → 答一句"的通道，不该留在返回栈里。 -->
+        <activity
+            android:name=".ai.approval.ToolConfirmActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:noHistory="true"
+            android:theme="@style/Theme.RokidLabPhone.Transparent" />
+
         <receiver
             android:name=".glasses.PhoneInstallResultReceiver"
+            android:exported="false" />
+
+        <!-- 定时任务精确闹钟入口：Doze/省电策略下由系统 AlarmManager 准时唤醒并投递给保活服务执行 -->
+        <receiver
+            android:name=".adb.TimerAlarmReceiver"
             android:exported="false" />
 
         <provider
@@ -117,6 +148,12 @@
 
         <service
             android:name=".mirror.PhoneMirrorService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- 一次性截屏：投屏没开时「看手机屏幕」的取图路径（抓完即 stopSelf，不在状态栏常驻） -->
+        <service
+            android:name=".mirror.ScreenCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 

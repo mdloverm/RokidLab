@@ -269,6 +269,27 @@ object ManufacturerUtils {
         launchFirstAvailable(context, overlaySettingsCandidates(context))
 
     /**
+     * 「所有文件访问」开关页（Android 11+，proot 容器 /mnt/lab 直通下载目录用）。
+     * 候选链：应用专属标准页 → 全部应用列表页 → 应用详情页兜底。
+     */
+    @android.annotation.SuppressLint("NewApi")
+    fun openAllFilesSettings(context: Context): Boolean =
+        launchFirstAvailable(context, allFilesCandidates(context))
+
+    @android.annotation.SuppressLint("NewApi")
+    private fun allFilesCandidates(context: Context): List<Intent> {
+        val pkg = context.packageName
+        val appSpecific = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+            data = Uri.parse("package:$pkg")
+        }
+        val allApps = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+        val detail = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:$pkg")
+        }
+        return listOf(appSpecific, allApps, detail)
+    }
+
+    /**
      * 悬浮窗权限页候选链。
      *
      * 顺序与自启动相反 —— **系统标准页排第一**：`ACTION_MANAGE_OVERLAY_PERMISSION`

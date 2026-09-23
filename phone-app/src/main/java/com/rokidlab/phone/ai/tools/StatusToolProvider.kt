@@ -14,6 +14,7 @@ import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.ai.session.SessionDump
 import com.rokidlab.phone.ai.session.SessionLog
 import com.rokidlab.phone.app.LabApplication
+import com.rokidlab.phone.platform.ProotInstaller
 import com.rokidlab.phone.store.ChatMsg
 import com.rokidlab.phone.store.ChatSessionStore
 import com.rokidlab.phone.store.ChatStateHolder
@@ -56,7 +57,7 @@ internal object StatusToolProvider : ToolProvider {
             statusText = "正在自检运行状态…",
             schema = toolSchema(
                 name = "get_agent_status",
-                description = "查询我自己当前的运行状态：所用模型与接口、眼镜是否已连接（ADB 通道是否可用）、知识库有几篇文档、长期记忆几条、装了哪些技能、哪些工具被用户关闭、AIUI 页面工具网关是否开启。当用户问「你能做什么/你怎么不能XX」「眼镜连上了吗」「知识库里有东西吗」，或在某次设备操作失败后需要判断是不是连接/开关/权限问题时调用本工具自检后再回答，不要凭空猜测自己的状态。",
+                description = "查询我自己当前的运行状态：所用模型与接口、眼镜是否已连接（ADB 通道是否可用）、知识库有几篇文档、长期记忆几条、装了哪些技能、哪些工具被用户关闭、本机执行环境（proot + Ubuntu）装没装、AIUI 页面工具网关是否开启。当用户问「你能做什么/你怎么不能XX」「眼镜连上了吗」「知识库里有东西吗」，或在某次设备操作失败后需要判断是不是连接/开关/权限/环境问题时调用本工具自检后再回答，不要凭空猜测自己的状态。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf<String, Any>(),
@@ -238,6 +239,9 @@ internal object StatusToolProvider : ToolProvider {
         val kbDocs = runCatching { KnowledgeBase.docCount(context) }.getOrDefault(0)
         sb.append("\n· 知识库：$kbDocs 篇文档")
         sb.append("；长期记忆：${runCatching { LongTermMemoryManager.count(context) }.getOrDefault(0)} 条")
+        // 教训单独报一条：模型据此知道"我在这台设备上已经攒了经验"，遇到工具报错时更倾向于
+        // 先查教训/换策略而不是原样重试（也是这套机制"看得见"的唯一入口）。
+        sb.append("（其中经验教训 ${runCatching { LongTermMemoryManager.lessonCount(context) }.getOrDefault(0)} 条）")
         sb.append("；会话记忆：${if (AgentSessionManager.isEnabled(context)) "开启" else "关闭"}")
 
         // 4) 技能
@@ -255,10 +259,22 @@ internal object StatusToolProvider : ToolProvider {
         }
         sb.append("；计划工具 update_plan：可用")
 
-        // 6) AIUI 页面工具网关（页面 Lab.callTool 的总闸）
+        // 6) 本机执行环境（proot + Ubuntu rootfs）：AI 能不能在这台手机上跑 shell 命令
+        //    ⚠️ 只报"装没装、哪个版本"，**不算占用** —— 遍历 rootfs 几万个文件是秒级开销，
+        //    不该出现在一次状态查询里（要占用数字的地方是设置页，那里有进度可等）
+        sb.append("\n· 本机执行环境：").append(
+            when {
+                !ProotInstaller.isInstalled(context) ->
+                    "未安装（用户到「设置 → 本机执行环境」可下载安装；现在 run_shell 用不了）"
+                else ->
+                    "已就绪（Ubuntu ${ProotInstaller.installedVersion(context) ?: "?"}，可执行 run_shell）"
+            },
+        )
+
+        // 7) AIUI 页面工具网关（页面 Lab.callTool 的总闸）
         sb.append("\n· AIUI 页面工具网关：${if (ToolGateway.isEnabled(context)) "开启" else "关闭（页面内 callTool 全部不可用）"}")
 
-        // 7) 未完成的长任务（流程级 checkpoint）：让模型知道"上次做到哪了"，
+        // 8) 未完成的长任务（流程级 checkpoint）：让模型知道"上次做到哪了"，
         //    用户问「上次那个做完了吗」时能如实回答，也能据此接着做
         val pendingTask = runCatching { AgentTaskStore.summary(context) }.getOrNull()
         if (!pendingTask.isNullOrBlank()) {

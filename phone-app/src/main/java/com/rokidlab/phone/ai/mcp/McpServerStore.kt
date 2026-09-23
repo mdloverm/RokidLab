@@ -11,7 +11,10 @@ import java.io.File
  *
  * @param id        本地生成的稳定标识（工具名前缀 `mcp__<id>__…` 用它），一旦创建不再变
  * @param name      用户看得见的名字（工具在设置页显示为「名字 · 工具名」）
- * @param url       Streamable HTTP 端点，**必须 https**（release 包禁止明文，见下）
+ * @param url       Streamable HTTP 端点：**https，或回环 http**（`http://127.0.0.1` / `localhost` / `::1`）。
+ *                  release 包默认禁止明文，但回环在 `res/xml/network_security_config.xml` 的白名单里、
+ *                  且两份变体行为一致 —— 所以"自建本地 MCP"这条调试路径是通的，
+ *                  判定**只看** [McpRegistry.isUrlAllowed]，别在这里另写一份 https 检查（会把它堵死）。
  * @param headers   附加请求头（鉴权 token 等）。⚠️ 明文存盘、不得写进日志，见 [McpServerStore]
  * @param enabled   server 级总开关（关掉 ⇒ 它的工具全部不下发）
  * @param trusted   信任标记：true ⇒ 工具风险档降为 `LOCAL_SIDE_EFFECT`（免确认）；

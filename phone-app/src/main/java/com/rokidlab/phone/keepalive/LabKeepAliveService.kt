@@ -34,6 +34,10 @@ class LabKeepAliveService : Service() {
         private const val CHANNEL_ID = "keep_alive_fgs"
         private const val RESTART_REQUEST_CODE = 3002
         private const val RESTART_DELAY_MS = 2_000L
+
+        /** 定时任务闹钟投递：[com.rokidlab.phone.adb.TimerAlarmReceiver] 到点把任务 id 送进本服务执行 */
+        const val ACTION_FIRE_TIMER = "com.rokidlab.phone.action.FIRE_TIMER"
+        const val EXTRA_TASK_ID = "task_id"
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -67,6 +71,16 @@ class LabKeepAliveService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 定时闹钟到点：由 TimerAlarmReceiver 投递（长任务在 TimerScheduler 自己的协程里跑，
+        // 本服务前台身份 + WakeLock 为其托底），不阻塞主线程
+        if (intent?.action == ACTION_FIRE_TIMER) {
+            val taskId = intent.getStringExtra(EXTRA_TASK_ID)
+            if (taskId != null) {
+                runCatching {
+                    (application as LabApplication).timerScheduler.fireTask(taskId)
+                }.onFailure { Log.w(TAG, "fire timer task failed: ${it.message}") }
+            }
+        }
         // START_STICKY：系统回收进程后自动重建服务，实现保活自愈
         return START_STICKY
     }

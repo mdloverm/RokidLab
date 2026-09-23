@@ -6,9 +6,11 @@ import android.util.Base64
 import android.util.Log
 import com.rokidlab.phone.R
 import com.rokidlab.phone.ai.LocalOcr
+import com.rokidlab.phone.ai.ScreenCaptureTools
 import com.rokidlab.phone.ai.ToolContentTrust
 import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.ai.ToolRisk
+import com.rokidlab.phone.ai.llm.LlmRegistry
 import com.rokidlab.phone.app.LabApplication
 import org.json.JSONObject
 
@@ -52,6 +54,75 @@ internal object VisionToolProvider : ToolProvider {
 
     /** 取走并清空本线程刚拍到的图片；没有则返回 null（消费点：对话主循环） */
     fun takePendingImage(): String? = pendingImage.get().also { pendingImage.remove() }
+
+    /**
+     * 会产出「待投递图片」的工具名 —— 对话主循环据此在工具执行后立刻取图并补一条带图 user 消息。
+     *
+     * 新增出图工具**必须**登记在这里：漏了的话图片会滞留在 ThreadLocal 里，
+     * 表现是"工具说好了给图，模型却什么都没看到"。
+     */
+    internal val pendingImageTools: Set<String> = setOf(TOOL_LOOK, ScreenCaptureTools.TOOL_CAPTURE)
+
+    /**
+     * 一张 JPEG 的**唯一**出图判定：能看图就直接交给模型，否则本地 OCR 转文字。
+     *
+     * 眼镜相机（[TOOL_LOOK]）与手机截屏（`capture_screen`）共用这一份 —— 两条链路
+     * 各有各的措辞借口，但"什么时候走视觉"的判据只能有一套，否则迟早分叉。
+     *
+     * @param source     图片来源措辞（「眼镜画面」/「手机屏幕」），直接写进给模型的回报
+     * @param noTextHint 只能转文字且一个字都没识别到时的建议（不同来源该说的话不同）
+     */
+    internal fun deliverImage(
+        context: Context,
+        jpeg: ByteArray,
+        source: String,
+        noTextHint: String,
+    ): String {
+        // 出图路径判定 —— 与 PhotoQuizFlow 共用同一个决策入口，避免两套口径漂移
+        val app = context.applicationContext as? LabApplication
+        val cfg = runCatching { app?.cxrL?.getAiConfig() }.getOrNull()
+        val caps = cfg?.let { c -> runCatching { LlmRegistry.capabilities(c, context) }.getOrNull() }
+        val userEnabled = app?.chatImageInputEnabled == true
+        if (userEnabled && caps?.supportsImage == true) {
+            val b64 = runCatching { Base64.encodeToString(jpeg, Base64.NO_WRAP) }.getOrNull()
+            if (!b64.isNullOrBlank()) {
+                pendingImage.set(b64)
+                Log.i(TAG, "deliverImage: vision path, source=$source, jpeg=${jpeg.size}B")
+                return "已拍下$source，图片会随本条消息一起交给你。请直接看图回答用户刚才的问题；" +
+                    "若图中关键信息看不清，如实说明，不要猜。"
+            }
+        }
+
+        // 转文字路径：本地 OCR（首次使用会下载约 15MB 模型，可能较慢）
+        val text = runCatching {
+            val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return@runCatching ""
+            try {
+                LocalOcr.ensureInit(context) { }
+                LocalOcr.recognize(context, bmp)
+            } finally {
+                bmp.recycle()
+            }
+        }.getOrDefault("").trim()
+
+        val why = when {
+            !userEnabled -> "（当前未开启「图像理解」，只把画面里的文字读了出来）"
+            caps == null -> "（无法确认当前模型能否看图，只把画面里的文字读了出来）"
+            caps.imageKnownUnsupported -> "（当前模型不支持图像输入，只把画面里的文字读了出来；" +
+                "可以在聊天设置里换一个支持看图的模型）"
+            else -> "（未走视觉路径，只把画面里的文字读了出来）"
+        }
+        return if (text.isEmpty()) {
+            val reason = when {
+                LocalOcr.nativeUnavailable -> "本机不支持本地 OCR"
+                LocalOcr.modelsUnavailable -> "OCR 模型未就绪（下载失败）"
+                else -> "画面里没有识别到文字"
+            }
+            "已拍下$source，但不能描述画面内容：$reason$why。" +
+                "请如实告诉用户你只能看到文字、看不到画面内容，并建议：$noTextHint"
+        } else {
+            "已拍下$source，识别到的文字如下$why：\n$text"
+        }
+    }
 
     override val toolNames = setOf(TOOL_LOOK)
 
@@ -108,50 +179,12 @@ internal object VisionToolProvider : ToolProvider {
             ?: return "看不了：向眼镜取画面失败（可能眼镜未连接、不在拍摄状态或响应超时）。" +
                 "请如实告诉用户这次没看到，不要说成「没有相机权限」"
 
-        // 出图路径判定 —— 与 PhotoQuizFlow 共用同一个决策入口，避免两套口径漂移
-        val caps = runCatching {
-            com.rokidlab.phone.ai.llm.LlmRegistry.capabilities(session.getAiConfig(), context)
-        }.getOrNull()
-        val userEnabled = app.chatImageInputEnabled
-        if (userEnabled && caps?.supportsImage == true) {
-            val b64 = runCatching { Base64.encodeToString(jpeg, Base64.NO_WRAP) }.getOrNull()
-            if (!b64.isNullOrBlank()) {
-                pendingImage.set(b64)
-                Log.i(TAG, "look: vision path, jpeg=${jpeg.size}B")
-                return "已拍下眼镜画面，图片会随本条消息一起交给你。请直接看图回答用户刚才的问题；" +
-                    "若图中关键信息看不清，如实说明，不要猜。"
-            }
-        }
-
-        // 转文字路径：本地 OCR（首次使用会下载约 15MB 模型，可能较慢）
-        val text = runCatching {
-            val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return@runCatching ""
-            try {
-                LocalOcr.ensureInit(context) { }
-                LocalOcr.recognize(context, bmp)
-            } finally {
-                bmp.recycle()
-            }
-        }.getOrDefault("").trim()
-
-        val why = when {
-            !userEnabled -> "（当前未开启「图像理解」，只把画面里的文字读了出来）"
-            caps == null -> "（无法确认当前模型能否看图，只把画面里的文字读了出来）"
-            caps.imageKnownUnsupported -> "（当前模型不支持图像输入，只把画面里的文字读了出来；" +
-                "可以在聊天设置里换一个支持看图的模型）"
-            else -> "（未走视觉路径，只把画面里的文字读了出来）"
-        }
-        return if (text.isEmpty()) {
-            val reason = when {
-                LocalOcr.nativeUnavailable -> "本机不支持本地 OCR"
-                LocalOcr.modelsUnavailable -> "OCR 模型未就绪（下载失败）"
-                else -> "画面里没有识别到文字"
-            }
-            "已拍下眼镜画面，但不能描述画面内容：$reason$why。" +
-                "请如实告诉用户你只能看到文字、看不到画面内容，并建议：换一个支持看图的模型，" +
-                "或在聊天设置里开启「图像理解」。**不要**编造画面里有什么。"
-        } else {
-            "已拍下眼镜画面，识别到的文字如下$why：\n$text"
-        }
+        // 出图判定与回报措辞全部在 deliverImage 里，与 capture_screen（手机截屏）共用同一套
+        return deliverImage(
+            context = context,
+            jpeg = jpeg,
+            source = "眼镜画面",
+            noTextHint = "换一个支持看图的模型，或在聊天设置里开启「图像理解」。**不要**编造画面里有什么。",
+        )
     }
 }

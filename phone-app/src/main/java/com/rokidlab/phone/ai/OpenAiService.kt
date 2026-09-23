@@ -175,6 +175,8 @@ class OpenAiService(
      *
      * @param memories 长期记忆文本（跨会话的用户事实/偏好，注入 <memories> 段）；
      *                 null 表示无记忆不注入（省 token）
+     * @param lessons Agent 自己的经验教训（跨会话积累的坑与有效做法，注入 <lessons> 段）；
+     *                与 [memories] 分开注入的理由见 [LongTermMemoryManager] 类注释。null 表示不注入
      * @param skills 用户自定义技能清单（注入 <skills> 段，name+description 第 1 层披露）；
      *               模型命中描述时须调用 load_skill 加载完整步骤再执行。null 表示无技能不注入
      * @param localMode 本地轻量模式：使用精简人设（无工具准则段），明确告知模型无联网/无工具，
@@ -184,6 +186,7 @@ class OpenAiService(
         contextText: String? = null,
         instruction: String? = null,
         memories: String? = null,
+        lessons: String? = null,
         skills: String? = null,
         budget: String? = null,
         localMode: Boolean = false,
@@ -235,10 +238,12 @@ class OpenAiService(
                     append("\n- 任务被中断（被打断/预算用尽）后，用户说「继续」就是接着做未完成的步骤：先看系统提示里的任务进度，从「→」那一步继续，已完成部分不要重做；若用户放弃，调用 clear_agent_task")
                 }
                 append("\n- 工具返回失败或查不到时，如实告知用户，不要假装成功")
+                append("\n- **不要因为「没有现成的工具/文件」就停在「我做不到」**：先找替代路径 —— 换个工具或参数重试、先装好环境、先上网查、先读真实文件看清内容、把任务拆成能做的几步。能做多少做多少，最后如实说清卡在哪一步、缺什么，不要用一句「做不到」结束")
                 append("\n- 闲聊、常识问答、创作类问题不需要调用工具，直接回答")
                 append("\n- 结合对话历史理解上下文：用户说「再来一首」「它是什么意思」时，指代的是之前聊到的内容")
                 if (has("manage_memory")) {
                     append("\n- 当用户表达了需要长期记住的个人事实或偏好（如称呼、喜欢的歌手、常用应用、作息习惯）时，调用 manage_memory 工具记住，以便后续对话延续")
+                    append("\n- 当你自己**踩到坑或试出有效做法**时（某个工具报错后你换了参数/顺序才成功、某条命令必须先装环境、某个接口必须先登录等），用 manage_memory(kind=\"lesson\") 把这条经验记下来（一句话讲清「做什么/怎么做才对」），下次遇到同类任务会先提示你。同一件事只记一次，不要记用户隐私或一次性的临时错误")
                 }
                 if (has("search_past_conversations")) {
                     append("\n- 用户提到「以前聊过的」「上次那个」「我之前问你的」但当前上下文里找不到时，调用 search_past_conversations 检索历史对话，不要反问「我们聊过吗」")
@@ -263,16 +268,29 @@ class OpenAiService(
                 if (has("list_files")) {
                     append("\n- 涉及手机上的文件时（「我生成过哪些文件」「那个项目里有什么」「看一下 app.json」，或要改、删、重命名生成过的文件）：先用 list_files / search_files 看清有什么，再用 read_text_file 读真实内容，改动用 edit_text_file / move_file，删除用 delete_file。**不要凭印象描述文件里写了什么**；删除不可恢复，动手前先列出将删的清单并向用户确认")
                 }
+                if (has("save_script")) {
+                    append("\n- 反复要做的处理不要每次都重拼命令：你刚用 run_shell 试通了多步流程、或用户说「以后每次都这样处理/存成脚本」时，用 save_script 把它存成脚本（**存之前先确认真的跑通**）；之后用 run_script 按名字直接跑，不确定存过什么先用 list_scripts 查（名字必须与清单完全一致，不要凭印象猜）；脚本废弃/存错要清掉时用 delete_script（删除不可恢复，先 list_scripts 确认名字，并告知用户将删哪个）")
+                }
+                if (has("run_shell")) {
+                    append("\n- run_shell 里是一个完整的 Linux 环境（bash + 常用命令）：**缺什么命令就自己装上再用** —— 先 `which xxx` 确认没有，再用 **install_packages**（它会先请用户确认）装上后接着做，不要把「没这个命令」当成结论抛回给用户。⚠️ **不要在 run_shell 里跑 apt-get install**：那条通道不问用户，而且超时上限更短，装到一半被强杀会留下 dpkg 半配置状态。环境还没安装时它会直接告诉你，这时引导用户去「设置 → 本机执行环境」安装即可，不要反复重试")
+                }
+                if (has("download_file")) {
+                    append("\n- 本机没有需要的文件/工具时用 download_file 把链接下到手机「下载」目录（下完可在 run_shell 里解压/赋权直接用）；`.aix`/`.apk` 这类要装的东西不要用 download_file，走对应的安装工具")
+                }
+                if (has("http_request")) {
+                    append("\n- 要调接口/取结构化数据时用 http_request 直接请求（GET/POST 都行），拿到响应自己读；状态码非 2xx 说明请求本身有问题（参数/鉴权/额度），据响应体改参数重试或如实告知原因，不要凭印象编数据")
+                }
                 if (has("install_skill")) {
                     append("\n- 用户想把一套流程或说明书「记下来以后照着做」，或给了技能包链接让你装（「把这个技能装上」）时，用 install_skill；不确定装过什么先用 list_skills 查；用户明确要卸载才用 delete_skill（只是「这次别用」应关开关而不是删）")
                 }
                 if (has("save_code_file")) {
-                    append("\n- 当用户让你写代码、生成页面/应用或输出项目文件时：先用 save_code_file 工具把每个文件写入手机「下载/项目名/」目录（一次一个文件、逐个调用），生成每个文件前告知「正在生成 文件名…」，成功后告知「文件名 生成成功」；眼镜端最终只做简短结论播报（如「已生成 4 个文件，保存在下载目录的 xxx 项目」），严禁把大段代码原文直接当作回复发给用户")
+                    append("\n- 写代码分两种场景，不要混用：① 用户只是想看/学/要一段代码（「写个快排」「给我一段 Python 示例」「这个函数怎么写」）→ 直接在回复正文里用围栏代码块输出（手机会渲染成可复制、可保存、可运行的卡片），**不要**调用 save_code_file；② 用户明确要生成项目/页面/应用/多个文件，或要求保存成文件 → 用 save_code_file 逐个写入手机「下载/项目名/」目录（一次一个文件、逐个调用），生成前告知「正在生成 文件名…」，最终只做简短结论（如「已生成 4 个文件，保存在下载目录的 xxx 项目」），正文里不要再贴源码")
                 }
             }
-            append("\n\n【回复风格】（眼镜语音播报场景）")
-            append("\n- 口语化、简短自然，一般不超过 3 句话")
-            append("\n- 纯文本：不要用 markdown、序号、表情符号、换行符")
+            append("\n\n【回复风格】（手机端富文本 + 眼镜端语音播报）")
+            append("\n- 口语化、简短自然，正文一般不超过 3 句话；不要用表情符号")
+            append("\n- 手机界面支持 Markdown：展示代码必须用带语言标注的围栏代码块（```python 这种）；需要分点或强调时可用列表、标题、加粗")
+            append("\n- 眼镜端只会听到代码块之外的纯文本：所以关键结论、代码讲解必须写在代码块外面的自然语言句子里，不能只给代码不说话")
             // 系统提示里用了 <memories>/<skills> 这类 XML 风格段落，模型会模仿该风格把正文包成
             // `<answer>…</answer>`（2026-09-17 真机：眼镜上直接显示了 "answer" 字样）。
             // 这里显式禁止；消费侧还有 ReplySanitizer 兜底，两道防线都要留。
@@ -282,6 +300,21 @@ class OpenAiService(
                 append("\n\n<memories>\n")
                 append(memories)
                 append("\n</memories>\n以下是与用户相关的长期记忆，回答时如有涉及请据此个性化；与当前问题无关可忽略。")
+            }
+            // 教训段紧跟记忆段：两者都是"跨会话累积的自我提示"，但性质不同 ——
+            // 记忆是"关于用户的事实"（可忽略），教训是"你自己踩过的坑"（该照做，不是可选项）。
+            if (!lessons.isNullOrBlank()) {
+                // 末尾那句「可用 manage_memory 更新或删除」要点名工具，所以按闸门给 ——
+                // 本地轻量模式不装配 manage_memory，提它等于让模型去找一个不存在的工具。
+                val tail = if (has("manage_memory")) {
+                    "不要重复已经失败过的做法；若已确认某条不再成立，可用 manage_memory 更新或删除。"
+                } else {
+                    "不要重复已经失败过的做法。"
+                }
+                append("\n\n<lessons>\n")
+                append(lessons)
+                append("\n</lessons>\n以上是你自己过去在这台设备上积累的经验教训。做同类事情时按它来，")
+                append(tail)
             }
             if (!skills.isNullOrBlank()) {
                 append("\n\n<skills>\n")

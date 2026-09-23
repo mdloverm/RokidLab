@@ -23,10 +23,26 @@ import com.rokidlab.phone.ai.ToolRegistry
 internal object PageScope {
 
     /**
-     * 页面可调用的工具域：全部开放（用户 2026-09-09 拍板）。
-     * 想收窄时只改这一处，调用逻辑不用动。
+     * 页面可调用的工具域。
+     *
+     * 基线是"全部开放"（用户 2026-09-09 拍板），**减去本机执行域** —— 想收窄时只改这一处，
+     * 调用逻辑不用动（`ToolGateway.ALLOWED_DOMAINS` 是本常量的别名，页面看到的工具清单
+     * 与准入判定都由它派生，不会出现"页面列表里有、调用被拒"的错位）。
+     *
+     * ## 为什么摘掉 `shell` 域：这不是"逐工具安全判断"，而是**能力形态**的边界
+     * `run_shell` 是全表唯一的**任意命令执行**原语。AIUI 页面是**第三方制品**
+     * （对话生成、或用户从商店导入的 `.aix`），开放它等于把"在这台手机上执行任意命令"
+     * 交给页面作者 —— 而用户对页面的心智是「显示点东西」，不是「可以在我手机上跑命令」。
+     *
+     * 为什么不用 `DENY_TOOLS` 表达（那里 5 条里已有隐私/成本类，加一条似乎更省事）：
+     *  - `RULES.md §AIUI` 把 `DENY_TOOLS` 的定位钉死在「**技术故障类**」，
+     *    并要求"不做逐工具安全判断"（安全边界归 `isEnabled` 总开关）；
+     *  - 在**域**上表达还有一层实际好处：域是装配单位，摘掉后页面拿到的**工具清单**里
+     *    也不会有它（只有黑名单的话，页面仍会在列表里看见 `run_shell` 却调不动）。
+     *
+     * 对话路径（用户本人在场、可追问、可撤销）**保留**该能力，这是产品意图。
      */
-    val ALLOWED_DOMAINS: Set<String> = ToolRegistry.DOMAIN_ALL
+    val ALLOWED_DOMAINS: Set<String> = ToolRegistry.DOMAIN_ALL - ToolRegistry.DOMAIN_SHELL
 
     /**
      * 例外：不开放给页面的工具。
@@ -48,6 +64,8 @@ internal object PageScope {
      * `search_web` / `fetch_webpage` 就够了 —— 那些是单次调用。
      *
      * 注意：安全边界由 `ToolGateway.isEnabled` 总开关负责，这里不做逐工具安全判断。
+     * ⚠️ 这条纪律意味着**不能**因为"某个工具很危险"就往本表里加名字 ——
+     * 那类收窄要落在**域**上（见 [ALLOWED_DOMAINS] 对 `shell` 域的处理）。
      */
     val DENY_TOOLS: Set<String> = setOf(
         "open_aiui_app",

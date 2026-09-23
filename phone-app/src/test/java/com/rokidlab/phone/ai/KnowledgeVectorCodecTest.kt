@@ -48,10 +48,10 @@ class KnowledgeVectorCodecTest {
     }
 
     @Test
-    fun `DB 版本为 v3 且迁移承诺向量列`() {
+    fun `DB 版本为 v4 且迁移承诺 format 列`() {
         // 版本号变更必须成对修改 onCreate/onUpgrade（见 KnowledgeBase.KbDbHelper）；
         // 钉住当前版本，误改版本号而漏迁移时第一时间暴露
-        assertEquals(3, KnowledgeBase.DB_VERSION)
+        assertEquals(4, KnowledgeBase.DB_VERSION)
     }
 
     @Test

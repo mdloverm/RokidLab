@@ -19,9 +19,11 @@ import java.util.concurrent.atomic.AtomicLong
  * 上行：[LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT]（caps = [requestId, "yes"/"no"]），
  *   由 CxrLHiRokidSession.registerGlobalCmdListener 回调 [onResult]。
  *
- * 未连接 / 眼镜端旧版（未订阅确认通道）时 → [isAvailable] 为 false，由 [ApprovalGate] 降级放行；
+ * 未连接 / 眼镜端旧版（未订阅确认通道）时 → [isAvailable] 为 false，由 [ApprovalGate]
+ * 改问**手机端通道**（[PhoneToolConfirmChannel]，见 `ApprovalGate.activeChannel`）；
+ * 两条通道都不可用时才按工具声明的 `ToolConfirmPolicy` 分流（PROCEED 放行 / BLOCK 拒绝）。
  * 已发送但 30s 无回执 → [confirm] 返回 false 且 [wasCancelled] 为 false，
- * 闸门同样按「超时降级放行」处理（仅眼镜端显式回 "no" 才算用户取消 → 拒绝）。
+ * 闸门同样按"没问到"处理（仅眼镜端显式回 "no" 才算用户取消 → 拒绝）。
  * 本通道**常驻**（见 [global]），会话上线时 [bind]、下线时 [unbind]，只要求眼镜在线即可用。
  *
  * ★ 本类只负责**传输**：给用户看的操作摘要在调用时由闸门传入（[confirm] 的 `prompt` 参数），
@@ -96,7 +98,10 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
     fun liveSession(): CxrLHiRokidSession? =
         session?.takeIf { it.cxrlConnected && it.cxrLink != null }
 
-    /** 上一次确认是否被用户**显式取消**（区分「取消」=拒绝 与「超时」=降级为拨号盘） */
+    /** 审计标识：日志里区分"这次问的是眼镜还是手机"（手机通道是 `phone`） */
+    override val channelId: String = "glass"
+
+    /** 上一次确认是否被用户**显式取消**（区分「取消」=拒绝 与「超时」=没问到） */
     @Volatile
     private var lastCancelled = false
 

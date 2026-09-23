@@ -30,6 +30,69 @@ enum class ToolRisk {
 }
 
 /**
+ * 「问不到用户时怎么办」—— 需要确认的工具的**降级策略**。
+ *
+ * ## 为什么需要它
+ * 闸门在**问不到用户**时（无确认通道、或用户没响应）必须二选一：放行还是拒绝。
+ * 改造前这个选择是**硬编码**的 —— `ToolCallContext.failClosedConfirmation` 写死
+ * `domain == MCP`，等于"按工具属于哪个域"来猜"该不该问到底"。于是出现了两个后果：
+ *  - `send_sms`（**真的会把短信发出去**）在无通道时静默放行，与 `call_phone`（只开拨号盘）
+ *    享受同一条 fail-open 路径 —— 而两者的代价根本不是一个量级；
+ *  - 风险档早就由工具自己声明了，确认策略却还是"域的特例"。同一个思路只做了一半。
+ *
+ * 现在它跟 [ToolRisk] 一样是工具的**自声明字段**（[com.rokidlab.phone.ai.tools.ToolEntry.confirmPolicy]），
+ * 闸门读声明而不是猜域。
+ *
+ * ## 两个值的区别只在"问不到时"
+ * 问得到用户时两者完全一样：用户点允许就执行、点拒绝就拒绝。
+ *
+ * ★ 刻意**只有两个值**：唯一消费者（`ApprovalGate.resolveAsk` 的无通道分支）只有
+ * "放行/拒绝"两种处置。曾考虑第三个值 SAFE_DEGRADE（声明"工具自己会降级为无副作用动作"），
+ * 但它的处置与 [PROCEED] 完全相同 ⇒ 会变成一个没人读的字段。
+ * 需要时再引入（同 [com.rokidlab.phone.ai.approval.ToolDecision] 里不引入 `hard` 字段的理由）。
+ *
+ * ⚠️ 默认值对 [ToolRisk.EXTERNAL_SIDE_EFFECT] 是 [BLOCK]（见 [defaultFor]）：
+ * 宁可让新工具在问不到用户时**拒绝**，也不要让它静默执行一个越出本机边界的动作。
+ * 要放宽成 [PROCEED]，作者必须显式写出来 —— 那就逼他思考一次"这个动作最坏能坏成什么"。
+ */
+enum class ToolConfirmPolicy {
+
+    /**
+     * 问不到用户就**照做**。
+     *
+     * 用于**影响不出本机、且可重做**的动作：删下载目录的一个文件、删脚本库里一条脚本、
+     * 在容器里装个包（容器可丢弃，重下 28.5 MB 即恢复）。问不到人时拒绝它们，
+     * 只会让功能表现为"被安全策略挡住"（`save_code_file` 那次事故的方向）。
+     *
+     * 也涵盖"工具侧自己保证未确认时只做无副作用动作"的情形（如只打开拨号盘不自动拨出）
+     * —— 处置相同，无需第三个值。
+     */
+    PROCEED,
+
+    /**
+     * 问不到用户就**拒绝**。
+     *
+     * 用于**越出本机边界、且不可撤销**的动作：发出短信、调用第三方 MCP server。
+     * 用户**显式取消**时两者都会拒绝（那是唯一真正的"用户说不"）；本值额外覆盖
+     * "压根问不到"—— 因为这类动作没有"先照做、错了再改"的余地。
+     */
+    BLOCK,
+    ;
+
+    companion object {
+        /**
+         * 未显式声明时的默认策略。
+         *
+         * 判据是 [ToolRisk.EXTERNAL_SIDE_EFFECT]（"触达第三方、不可撤销"），
+         * 它本来就该蕴含"问不到就别做"。非外部档的工具根本不经过确认闸门
+         * （`RiskApprovalGuard` 只对 EXTERNAL 产生 Ask），取什么值都不会被读。
+         */
+        fun defaultFor(risk: ToolRisk): ToolConfirmPolicy =
+            if (risk == ToolRisk.EXTERNAL_SIDE_EFFECT) BLOCK else PROCEED
+    }
+}
+
+/**
  * 工具名 → 风险档。
  *
  * 接缝化后，风险档是**每个工具自己的声明字段**（[com.rokidlab.phone.ai.tools.ToolEntry.risk]），

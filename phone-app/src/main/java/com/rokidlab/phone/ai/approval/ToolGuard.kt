@@ -1,5 +1,6 @@
 package com.rokidlab.phone.ai.approval
 
+import com.rokidlab.phone.ai.ToolConfirmPolicy
 import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.ai.ToolRisk
 import com.rokidlab.phone.ai.ToolRiskMap
@@ -54,20 +55,31 @@ internal data class ToolCallContext(
 
     /** 工具所属域（伪工具无域；未知名返回 null） */
     val domain: String?
-        get() = ToolRegistry.toolList.firstOrNull { it.name == name }?.group
+        get() = ToolRegistry.domainOfOrNull(name)
 
     /**
-     * 「问不到用户就必须拒绝」（[ToolDecision.Ask.failClosed]）—— 第三方远端工具的判据。
+     * **问不到用户时**的策略 —— 工具自己的声明（[com.rokidlab.phone.ai.tools.ToolEntry.confirmPolicy]）。
      *
-     * ★ 为什么只给 MCP 破例：fail-open 的前提是**工具侧自己**有"未获确认时降级为无副作用动作"
-     * 的保证（`call_phone` 只打开拨号盘不自动拨出、装机只到安装确认页，见 [ApprovalGate] 的 KDoc）。
-     * MCP 工具是**第三方 server** 实现的，我们无从保证这件事 —— 眼镜不在线/用户没响应时
-     * 静默放行，就等于「外网第三方在我们不知情时替用户执行了动作」，而且是不可撤销的远端副作用。
-     * 与其赌对端实现得克制，不如在问不到人时**明确拒绝**并让用户看到原因
-     * （提示里给出两条可操作出路：连上眼镜确认，或在设置页把该 server 标为信任）。
+     * ★ 改造前这里是硬编码的 `domain == DOMAIN_MCP`：等于"按工具属于哪个域"猜"该不该问到底"。
+     * 风险档早就是工具的自声明字段，确认策略却还是域的特例 —— 同一个思路只做了一半。
+     * 后果是 `send_sms`（真的会发出短信）与 `call_phone`（只开拨号盘）共享同一条 fail-open 路径。
+     * 现在读声明：`send_sms` 声明 BLOCK（问不到就不发），删文件/装包声明 PROCEED（本机可重做）。
+     *
+     * ⚠️ 未知名（伪工具、模型幻觉）兜底 BLOCK，与 [ToolRiskMap.riskOf] 同一条"未知即保守"原则；
+     * 伪工具不受影响 —— 它们全是只读/本机档，[RiskApprovalGuard] 不会为它们产生 Ask。
+     */
+    val confirmPolicy: ToolConfirmPolicy
+        get() = PseudoTools.confirmPolicyOf(name) ?: ToolRegistry.confirmPolicyOf(name)
+
+    /**
+     * 「问不到用户就必须拒绝」（[ToolDecision.Ask.failClosed]）。
+     *
+     * 现在由 [confirmPolicy] 派生（`BLOCK` ⇒ true）。值怎么选见
+     * [com.rokidlab.phone.ai.ToolConfirmPolicy] 的类注释 —— 那里写了两个值分别用在什么动作上，
+     * 以及为什么默认对 EXTERNAL 档取 `BLOCK`。
      */
     val failClosedConfirmation: Boolean
-        get() = domain == ToolRegistry.DOMAIN_MCP
+        get() = confirmPolicy == ToolConfirmPolicy.BLOCK
 
     /** 是否要求眼镜在线（由 `ToolEntry.requiresGlasses` 派生） */
     val requiresGlasses: Boolean

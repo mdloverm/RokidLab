@@ -57,6 +57,17 @@ object ToolRegistry {
      */
     const val DOMAIN_VISION = "vision"
     /**
+     * 本机执行域：在手机自己的 Linux 用户态环境（proot + Ubuntu rootfs）里跑命令。
+     *
+     * 单独成域而不是塞进 [DOMAIN_FILES]：它是**唯一一条"任意命令执行"**能力
+     * （文件域只能列/读/搜/改/删/移），用户想关掉它时的心智是「别在我手机上随便执行命令」，
+     * 而不是「别动我的文件」。独立成域也让它可以整域从某些场景里摘掉。
+     *
+     * ⚠️ 本域**不对 AIUI 页面开放**（见 `ai/approval/PageScope.ALLOWED_DOMAINS`）：
+     * 页面是第三方制品，把任意命令执行交给页面作者不是产品意图。
+     */
+    const val DOMAIN_SHELL = "shell"
+    /**
      * 外部 MCP 服务器提供的工具（动态：连上 server 才知道有哪些）。
      *
      * ⚠️ 与其它域的本质区别：**这个域的工具集在运行时会变**。因此它虽然列在 [DOMAIN_ALL] 里，
@@ -65,11 +76,27 @@ object ToolRegistry {
      */
     const val DOMAIN_MCP = "mcp"
 
+    /**
+     * 第三方 MCP 工具的 **wire name 前缀**：`mcp__<serverId>__<工具名>`。
+     *
+     * 唯一产地 —— 生成侧（`McpRegistry.wireNameOf`）与判定侧（审批闸门的拒绝文案分流、
+     * 日志归因）都读这里，不要再各写一份字面量。
+     *
+     * ★ 为什么判定侧必须用**名字前缀**而不是查 [domainOfOrNull]：MCP 工具是**动态**注册的，
+     * `dynamicProviders` 只在 server 连上时才有内容。查表会得到一个"连接断了就查不到"的结论 ——
+     * 后果是拒绝文案误落到内置工具分支（用户看不到「把该 server 标为信任」这条出路），
+     * 且单测环境（永远没有 server）里这条分流完全测不到。前缀是工具名的固有形状，与连接状态无关。
+     */
+    const val MCP_TOOL_PREFIX = "mcp__"
+
+    /** 名字是否指向一个第三方 MCP 工具（只看形状，不依赖连接状态；见 [MCP_TOOL_PREFIX]） */
+    internal fun isMcpTool(name: String): Boolean = name.startsWith(MCP_TOOL_PREFIX)
+
     /** 全部工具域（主 Agent 默认全量装配，未来可拆出子集） */
     val DOMAIN_ALL: Set<String> = setOf(
         DOMAIN_INFO, DOMAIN_KNOWLEDGE, DOMAIN_GLASSES, DOMAIN_TIMER,
         DOMAIN_MEDIA, DOMAIN_DISPLAY, DOMAIN_WEB, DOMAIN_FILES, DOMAIN_AIUI, DOMAIN_PHONE,
-        DOMAIN_RESEARCH, DOMAIN_VISION, DOMAIN_MCP,
+        DOMAIN_RESEARCH, DOMAIN_VISION, DOMAIN_SHELL, DOMAIN_MCP,
     )
 
     /** 主 Agent 会话（眼镜语音/手机聊天，在线模型）装配的工具域 */
@@ -102,8 +129,8 @@ object ToolRegistry {
 
     // ═══════════════════ 工具接缝（capability seam）════════════════════════
     // 每个 provider 自声明自己的工具清单（元数据 + schema + 风险档 + 文案），见 ToolEntry。
-    // 下面所有"表"（toolList / SIDE_EFFECT_TOOLS / GLASSES_REQUIRED_TOOLS / 风险档 / statusText
-    // / 确认摘要）**全部由 tools() 聚合派生**，不再手工同步。
+    // 下面所有"表"（toolList / SIDE_EFFECT_TOOLS / GLASSES_REQUIRED_TOOLS / 风险档 / 确认策略
+    // / statusText / 确认摘要）**全部由 tools() 聚合派生**，不再手工同步。
     //   ★ 新增工具 = 在对应 provider 的 tools() 与 execute() 各加一条，不需要改本文件的任何名单。
 
     /**
@@ -123,6 +150,8 @@ object ToolRegistry {
         com.rokidlab.phone.ai.tools.DisplayToolProvider,
         com.rokidlab.phone.ai.tools.WebToolProvider,
         com.rokidlab.phone.ai.tools.FilesToolProvider,
+        com.rokidlab.phone.ai.tools.ShellToolProvider,
+        com.rokidlab.phone.ai.tools.ScriptToolProvider,
         com.rokidlab.phone.ai.tools.AiuiToolProvider,
         com.rokidlab.phone.ai.tools.PhoneToolProvider,
         com.rokidlab.phone.ai.tools.StatusToolProvider,
@@ -219,6 +248,25 @@ object ToolRegistry {
     internal fun riskOfOrNull(name: String): ToolRisk? = entryByName[name]?.risk
 
     /**
+     * 取工具的**确认降级策略**（问不到用户时放行还是拒绝）。
+     *
+     * 查不到名字（伪工具 / 模型幻觉 / 已下线的工具）一律 [ToolConfirmPolicy.BLOCK] ——
+     * 与 [ToolRiskMap.riskOf] 的"未知即最保守"同一条原则。
+     * 伪工具不受影响：它们全是只读或本机档，`RiskApprovalGuard` 根本不会为它们产生 Ask。
+     */
+    internal fun confirmPolicyOf(name: String): ToolConfirmPolicy =
+        entryByName[name]?.confirmPolicy ?: ToolConfirmPolicy.BLOCK
+
+    /**
+     * 取工具所属域（未知名返回 null）。
+     *
+     * ⚠️ 唯一产地：调用方不要再自己 `toolList.firstOrNull { … }?.group` ——
+     * 那会每次构造整张 `toolList`（MCP 工具是运行时动态的，构造有成本），
+     * 且"域从哪来"会分叉成两份实现。
+     */
+    internal fun domainOfOrNull(name: String): String? = entryByName[name]?.group
+
+    /**
      * 取工具结果的内容信任级别（注入隔离用）。
      *
      * 查不到名字（伪工具/未知工具）一律按 [ToolContentTrust.TRUSTED]：
@@ -305,6 +353,13 @@ object ToolRegistry {
         AIUI(R.string.ai_tool_cat_aiui),
         FILES(R.string.ai_tool_cat_files),
         /**
+         * 本机执行（在手机自己的 Linux 容器里跑命令）。
+         *
+         * 位置紧跟 [FILES] 之后：两者都作用于"这台机器上的数据"，阅读顺序上连着；
+         * 也远离 [SYSTEM]（那是设置页不展示的内部工具），语义上不混。
+         */
+        SHELL(R.string.ai_tool_cat_shell),
+        /**
          * 外部 MCP 服务器提供的工具。
          *
          * 位置在 [FILES] 之后、[SYSTEM] 之前 —— **枚举声明顺序 = 设置页分组顺序**，
@@ -323,6 +378,7 @@ object ToolRegistry {
         DOMAIN_MEDIA, DOMAIN_DISPLAY -> ToolCategory.MEDIA
         DOMAIN_AIUI -> ToolCategory.AIUI
         DOMAIN_FILES -> ToolCategory.FILES
+        DOMAIN_SHELL -> ToolCategory.SHELL
         DOMAIN_MCP -> ToolCategory.MCP
         // info / web / knowledge 对用户都是「查信息」
         else -> ToolCategory.INFO_WEB

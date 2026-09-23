@@ -13,9 +13,11 @@ import java.io.File
  *
  * ## 为什么要有"工作区"这个概念
  *
- * 本 App **没有** `MANAGE_EXTERNAL_STORAGE`：全盘任意路径读写在 Android 10+ 上根本做不到
- * （`File` API 对公开存储不可见，越权访问只会得到一个空目录而不是异常 —— 正好是最难排查的那种）。
- * 所以「读任意文件」不能按字面实现，只能先把**能力边界**定清楚，再让工具在这个边界内提供完整 CRUD。
+ * 本 App 虽然声明了 `MANAGE_EXTERNAL_STORAGE`（`AppPermission.ALL_FILES`），但那是**给 proot 容器通道用的**：
+ * 容器把 `Download/Lab` 用内核 `write()` 直连绑定成 `/mnt/lab`，需要该权限才能落到共享存储的真实路径上。
+ * 这**不**代表文件工具可以读写全盘：本层刻意不走 `File` API 直接改公开存储 —— Android 10+ 上那对公开存储
+ * 不可见/语义不稳（越权访问只会得到一个空目录而不是异常，正好是最难排查的那种）。
+ * 所以「读任意文件」不按字面实现，只先把**能力边界**定清楚，再让工具在这个边界内提供完整 CRUD。
  * 边界有两个，正好覆盖 App 自己产出的全部文件：
  *
  * | scope | 位置 | 支持的操作 |
@@ -81,8 +83,12 @@ object FileWorkspace {
     /**
      * 在项目根目录内解析相对路径。
      * @return null = 项目名非法 / 项目不存在 / 路径非法 / 越出项目根
+     *
+     * `internal`（而非 private）：压缩/解压（[ArchiveTools]）也要按**同一套**路径规则
+     * 定位项目文件 —— 复制一份规则出来迟早会与这份分叉（本文件的类注释已把"同一份约束
+     * 不能有两套"写成了硬约束）。
      */
-    private fun resolveInProject(context: Context, project: String, rel: String): File? {
+    internal fun resolveInProject(context: Context, project: String, rel: String): File? {
         val proj = project.trim()
         if (!PROJECT_NAME.matches(proj)) return null
         val segs = splitRel(rel) ?: return null
@@ -95,8 +101,8 @@ object FileWorkspace {
         return target
     }
 
-    /** 列出（项目名）→ 项目根；名非法或目录不存在返回 null */
-    private fun projectRoot(context: Context, project: String): File? {
+    /** 列出（项目名）→ 项目根；名非法或目录不存在返回 null（`internal`：见 [resolveInProject]） */
+    internal fun projectRoot(context: Context, project: String): File? {
         val proj = project.trim()
         if (!PROJECT_NAME.matches(proj)) return null
         val dir = AiuiProject.projectDir(context, proj)
@@ -184,6 +190,66 @@ object FileWorkspace {
                 null,
             ) > 0
         }.getOrDefault(false)
+
+    /**
+     * 打开下载目录里某个文件的**字节流**（给解压/校验这类二进制场景用；文本读取走 [readTextFile]）。
+     *
+     * 存在的理由：下载目录在 API29+ 是 MediaStore 里的行，只能通过 `contentResolver` 打开，
+     * 「找行 → 开流」这套细节只该有一份实现（[ArchiveTools] 解压时就靠它）。
+     *
+     * @param relPath 相对下载目录的路径，如 `app.zip` 或 `资料/app.zip`
+     * @return 可读流；文件不存在、或该行是别的 App 创建的（本 App 无权限）时返回 null
+     */
+    internal fun openDownloadInput(context: Context, relPath: String): java.io.InputStream? {
+        val segs = splitRel(relPath) ?: return null
+        if (segs.isEmpty()) return null
+        val name = segs.last()
+        val relDir = "${Environment.DIRECTORY_DOWNLOADS}/" + segs.dropLast(1).joinToString("/") +
+            if (segs.size > 1) "/" else ""
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val row = queryDownloads(context, relDir).firstOrNull { it.name == name } ?: return null
+            return runCatching {
+                context.contentResolver.openInputStream(
+                    ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, row.id),
+                )
+            }.getOrNull()
+        }
+        val file = File(legacyDownloadRoot(context), segs.joinToString("/"))
+        return if (file.isFile) runCatching { file.inputStream() }.getOrNull() else null
+    }
+
+    /**
+     * 打开下载目录里某个文件的**可随机读**句柄（`PdfRenderer` 这类要求可 seek 的场景用；
+     * 顺序读走 [openDownloadInput]）。
+     *
+     * 存在的理由与 [openDownloadInput] 相同：「找行 → 开句柄」这套 MediaStore 细节只该有一份实现。
+     *
+     * @return 可读句柄；文件不存在、或该行是别的 App 创建的（本 App 无权限）时返回 null
+     */
+    internal fun openDownloadFd(context: Context, relPath: String): android.os.ParcelFileDescriptor? {
+        val segs = splitRel(relPath) ?: return null
+        if (segs.isEmpty()) return null
+        val name = segs.last()
+        val relDir = "${Environment.DIRECTORY_DOWNLOADS}/" + segs.dropLast(1).joinToString("/") +
+            if (segs.size > 1) "/" else ""
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val row = queryDownloads(context, relDir).firstOrNull { it.name == name } ?: return null
+            return runCatching {
+                context.contentResolver.openFileDescriptor(
+                    ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, row.id),
+                    "r",
+                )
+            }.getOrNull()
+        }
+        val file = File(legacyDownloadRoot(context), segs.joinToString("/"))
+        if (!file.isFile) return null
+        return runCatching {
+            android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+        }.getOrNull()
+    }
+
+    /** 低版本（<29）下载目录根 → `File`（`internal`：见 [openDownloadInput]） */
+    internal fun legacyRoot(context: Context): File = legacyDownloadRoot(context)
 
     // ═══════════════════════════════════════════════════════
     // ① 列目录
@@ -281,32 +347,61 @@ object FileWorkspace {
         }
     }
 
-    private fun readDownload(context: Context, project: String, path: String): String {
+    /**
+     * 下载作用域的**目录解析**（纯函数，`internal` 以便单测直接锁住规则）。
+     *
+     * ⚠️ 目录必须按**完整路径**拼，不能只取第一段当项目名：
+     * [ArchiveTools.unzipFile] 解出来的包常有多级子目录（如 `app/pages/index/index.ink`），
+     * 只取首段会定位到 `Download/app/` ⇒ 症状是"能解压、list_files 看得见、就是读不出内容"，
+     * 而两个工具的 schema 互相承诺了这个闭环。
+     *
+     * 两种调用风格都认：path 自带项目名（schema 文档里的写法 `项目名/app.json`），
+     * 或另传 `project` 参数（此时补在路径前面）。
+     *
+     * @return `(MediaStore 的 RELATIVE_PATH 前缀 "Download/a/b/", 给用户看的相对路径 "a/b/file.txt")`；
+     *   null = 项目名或路径不合法
+     */
+    internal fun resolveDownloadPath(project: String, path: String): Pair<String, String>? {
         val rel = path.trim().replace('\\', '/').trim('/')
-        if (rel.isEmpty()) return "读取失败：path 不能为空"
-        val segs = splitRel(rel) ?: return "读取失败：路径不合法（$rel）"
+        if (rel.isEmpty()) return null
+        val segs = splitRel(rel) ?: return null
         val fileName = segs.last()
         val dirSegs = segs.dropLast(1)
-        val proj = project.trim().ifEmpty { dirSegs.firstOrNull().orEmpty() }
-        if (proj.isNotBlank() && !PROJECT_NAME.matches(proj)) {
-            return "读取失败：文件名/项目名不合法（$rel）"
+        val proj = project.trim()
+        if (proj.isNotEmpty() && !PROJECT_NAME.matches(proj)) return null
+        val fullDir = if (proj.isNotEmpty() && dirSegs.firstOrNull() != proj) {
+            listOf(proj) + dirSegs
+        } else {
+            dirSegs
         }
-        val relDir = listOf(Environment.DIRECTORY_DOWNLOADS, proj).filter { it.isNotBlank() }
-            .joinToString("/") + "/"
+        val relDir = buildString {
+            append(Environment.DIRECTORY_DOWNLOADS).append('/')
+            if (fullDir.isNotEmpty()) append(fullDir.joinToString("/")).append('/')
+        }
+        return relDir to (fullDir + fileName).joinToString("/")
+    }
+
+    private fun readDownload(context: Context, project: String, path: String): String {
+        val resolved = resolveDownloadPath(project, path)
+            ?: return if (path.trim().isBlank()) "读取失败：path 不能为空"
+            else "读取失败：路径不合法（$path）"
+        val (relDir, display) = resolved
+        val fileName = display.substringAfterLast('/')
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val row = queryDownloads(context, relDir).firstOrNull {
                 it.name == fileName && it.rel == relDir
-            } ?: return "下载目录里没有「$rel」"
+            } ?: return "下载目录里没有「$display」"
             val text = runCatching {
                 context.contentResolver.openInputStream(
                     ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, row.id),
                 )?.use { TextEncoding.decode(it.readBytes()) }
-            }.getOrNull() ?: return "读取失败：无法打开「$rel」（可能是其他 App 创建的文件，本 App 无权限）"
-            return clipRead("下载/$rel", text)
+            }.getOrNull() ?: return "读取失败：无法打开「$display」（可能是其他 App 创建的文件，本 App 无权限）"
+            return clipRead("下载/$display", text)
         }
-        val file = File(legacyDownloadRoot(context), rel)
-        if (!file.isFile) return "下载目录里没有「$rel」"
-        return clipRead("下载/$rel", runCatching { TextEncoding.decode(file.readBytes()) }.getOrDefault(""))
+        val file = File(legacyDownloadRoot(context), display)
+        if (!file.isFile) return "下载目录里没有「$display」"
+        return clipRead("下载/$display", runCatching { TextEncoding.decode(file.readBytes()) }.getOrDefault(""))
     }
 
     private fun clipRead(label: String, raw: String): String = if (raw.length > MAX_READ_CHARS) {

@@ -67,7 +67,9 @@ internal fun AgentSectionPage(
         mutableStateOf(com.rokidlab.phone.ai.LongTermMemoryManager.isEnabled(ctx))
     }
     var longTermCount by remember {
-        mutableIntStateOf(com.rokidlab.phone.ai.LongTermMemoryManager.count(ctx))
+        // 只数**用户事实**：教训是 AI 自己攒的（"工具 X 失败过"），算进"已记住 N 条"会让用户
+        // 看到一个对不上的数字（管理列表里只有事实，见 MemoryManageDialog）。
+        mutableIntStateOf(com.rokidlab.phone.ai.LongTermMemoryManager.factItems(ctx).size)
     }
     var showClearConfirm by remember { mutableStateOf(false) }
     // 点「清空」时现算的作用域（只用于确认框文案）——0 表示本来就没有记忆，那种情况不弹框
@@ -277,7 +279,7 @@ internal fun AgentSectionPage(
         MemoryManageDialog(
             onDismiss = { showMemoryManage = false },
             onChanged = {
-                longTermCount = com.rokidlab.phone.ai.LongTermMemoryManager.count(ctx)
+                longTermCount = com.rokidlab.phone.ai.LongTermMemoryManager.factItems(ctx).size
             },
         )
     }

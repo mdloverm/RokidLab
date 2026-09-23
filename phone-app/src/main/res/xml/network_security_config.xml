@@ -19,6 +19,13 @@
   已知局限：眼镜 WiFi IP 由眼镜经 `TOPIC_GLASSES_IP` 自报，可能是任意局域网地址，
   而 NSC 不支持 CIDR / 通配，无法枚举。故 `AiuiProject` 的眼镜 WebServer 调用在明文被拒时
   自动回落蓝牙隧道（127.0.0.1，已白名单），不会因此让 AIUI 安装/删除直接失败。
+
+  ⚠️ 这份白名单是**进程级**的：任何走 HttpURLConnection 的代码都吃它。所以"开了明文口子"
+  不等于"谁都可以打这些地址"，把关责任在调用方：
+  - AI 的网页工具（search_web / fetch_webpage / http_request / download_file）由
+    `ai/NetGuard.kt` 统一拒绝内网与回环地址（含重定向逐跳复查）；
+  - 眼镜通道走 `AiuiProject` / 蓝牙隧道、本机模型走 `LlmRegistry`，都是专用路径。
+  新增白名单条目时请一并确认 NetGuard 是否需要同步（否则就多出一条闸门旁路）。
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false">

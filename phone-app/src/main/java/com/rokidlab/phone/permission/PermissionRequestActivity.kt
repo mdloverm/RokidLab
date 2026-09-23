@@ -170,6 +170,8 @@ class PermissionRequestActivity : AppCompatActivity() {
         val handled = when (permission) {
             null -> false
             AppPermission.OVERLAY -> ManufacturerUtils.openOverlaySettings(this)
+            AppPermission.ALL_FILES -> ManufacturerUtils.openAllFilesSettings(this)
+            AppPermission.EXACT_ALARM -> openExactAlarmSettings()
             else -> ManufacturerUtils.openAppPermissionSettings(this, permission.manifestName)
         }
         if (!handled) {
@@ -180,6 +182,27 @@ class PermissionRequestActivity : AppCompatActivity() {
     }
 
     // ═══════════════════════════ 生命周期 ═══════════════════════════
+
+    /**
+     * 精确闹钟授权框（Android 12+）：`ACTION_REQUEST_SCHEDULE_EXACT_ALARM` 直接弹
+     * 系统的「允许发送提醒？」对话框（不是设置页），带本包名 data 才会弹框而非跳列表。
+     * ROM 裁剪掉该 Activity 时返回 false，由调用方兜底到应用详情页。
+     */
+    private fun openExactAlarmSettings(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        return runCatching {
+            startActivity(
+                Intent(
+                    android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                    android.net.Uri.parse("package:$packageName"),
+                ),
+            )
+            true
+        }.getOrElse {
+            Log.w(TAG, "exact alarm request screen unavailable: ${it.message}")
+            ManufacturerUtils.openAppPermissionSettings(this, AppPermission.EXACT_ALARM.manifestName)
+        }
+    }
 
     override fun onStop() {
         super.onStop()

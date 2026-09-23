@@ -154,7 +154,17 @@ internal fun KbManageDialog(
                 }
                 TextButton(
                     onClick = {
-                        importLauncher.launch(arrayOf("text/plain"))
+                        // text/plain 覆盖 txt；md/json 在不少 ROM 上被归成 octet-stream，
+                        // 一并放行后由 KnowledgeBase 按扩展名识别（未知扩展名按纯文本处理）
+                        importLauncher.launch(
+                            arrayOf(
+                                "text/plain",
+                                "text/markdown",
+                                "text/x-markdown",
+                                "application/json",
+                                "application/octet-stream",
+                            )
+                        )
                     },
                     enabled = !importing,
                 ) {
@@ -377,11 +387,11 @@ internal fun KbDocViewerDialog(
                         .border(1.dp, BrewBorder, RoundedCornerShape(8.dp))
                         .padding(10.dp),
                 ) {
-                    Text(
+                    // 入库正文统一是 Markdown（txt 原文 / md 原样 / json 美化代码块），
+                    // 复用聊天气泡的零依赖渲染器：标题/列表/段落/围栏代码块同一套视觉
+                    ChatMarkdownBody(
                         text = content.text,
-                        color = BrewTextBright,
-                        fontSize = 13.sp,
-                        lineHeight = 19.sp,
+                        textColor = BrewTextBright,
                     )
                 }
             }
