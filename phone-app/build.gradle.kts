@@ -122,7 +122,7 @@ android {
 
         release {
             signingConfig = signingConfigs.getByName("release")
-            // R8 混淆压缩 dex，减小 APK 体积（so 必须未压缩以兼容 16KB 设备）
+            // R8 混淆压缩 dex，减小 APK 体积（so 的压缩策略见下方 packaging 块，别照抄旧结论）
             isMinifyEnabled = true
             // P0-5：release 关闭全局明文。实际策略以 res/xml/network_security_config.xml 为准
             // （声明该文件后本属性在 API 24+ 被忽略），此处保持同值以避免误读。
