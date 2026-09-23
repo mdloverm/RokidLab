@@ -1,5 +1,9 @@
 # RokidLab v3.5 架构与安全评估
 
+> ⚠️ **后已更正（2026-09-23）**：本文 `useLegacyPackaging = false` 的结论**已作废**，现为 **`true`（so 压缩存储）** —— 自持 proot 需在 `nativeLibraryDir` 内 `execve`，`false` 时 so 未压缩直载、系统不落盘 ⇒ 该目录为空、必然 ENOENT；官方 16KB 文档也把「压缩共享库」列为 AGP < 8.5.1 的替代方案（让 16KB 设备装不上的是「未压缩且未做 zip 对齐」，不是压缩）。
+>
+> 权威说明见 `phone-app/build.gradle.kts` 的 `packaging` 块与 `platform/ProotShell.kt` 类注释；本文其余内容保持当时快照，未作订正。
+
 > 评估日期：2026-09-10（2026-09-12 全量复核刷新，HEAD=`cd9c6f0` / v3.5）
 > 评估范围：`D:\rokidapp\cxrl\RokidLab` 全工程（phone-app main 160 + RokidLink main 19，共 **179 个 main Kotlin 文件**；另有测试 15 个）
 > 评估方法：静态扫描 + 文档与实现交叉核对（非真机测试）

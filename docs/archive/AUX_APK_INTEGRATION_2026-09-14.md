@@ -1,5 +1,9 @@
 # 辅助 APK 集成形态设计（T2：OCR 全栈下沉）
 
+> ⚠️ **后已更正（2026-09-23）**：本文把 `useLegacyPackaging = false` 写成「必须与主 App 一致的硬约束」**已作废**，现为 **`true`（so 压缩存储）** —— 自持 proot 需在 `nativeLibraryDir` 内 `execve`，`false` 时 so 未压缩直载、系统不落盘 ⇒ 该目录为空、必然 ENOENT；官方 16KB 文档也把「压缩共享库」列为 AGP < 8.5.1 的替代方案（让 16KB 设备装不上的是「未压缩且未做 zip 对齐」，不是压缩）。主 App 改 `true` 后，辅助 APK 仍应与主 App 保持一致。
+>
+> 权威说明见 `phone-app/build.gradle.kts` 的 `packaging` 块与 `platform/ProotShell.kt` 类注释；本文其余内容保持当时快照，未作订正。
+
 > 设计对象：`D:\rokidapp\cxrl\RokidLab`（Kotlin/Compose，targetSdk 34，minSdk 29）
 > 上游依据：`docs/MODULE_STRIPPING_2026-09-14.md`（T2 方案：把 OCR 全栈 55.4 MB 下沉到第二个 APK）
 > 设计日期：2026-09-14 ｜ 性质：**只读研究 + 设计输出，未改动任何源码 / 构建脚本 / 资源**

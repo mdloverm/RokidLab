@@ -1,5 +1,9 @@
 # RokidLab 全项目评估报告（v3.6 / 2026-09-14）
 
+> ⚠️ **后已更正（2026-09-23）**：本文 `useLegacyPackaging = false` 的结论**已作废**，现为 **`true`（so 压缩存储）** —— 自持 proot 需在 `nativeLibraryDir` 内 `execve`，`false` 时 so 未压缩直载、系统不落盘 ⇒ 该目录为空、必然 ENOENT；官方 16KB 文档也把「压缩共享库」列为 AGP < 8.5.1 的替代方案（让 16KB 设备装不上的是「未压缩且未做 zip 对齐」，不是压缩）。
+>
+> 权威说明见 `phone-app/build.gradle.kts` 的 `packaging` 块与 `platform/ProotShell.kt` 类注释；本文其余内容保持当时快照，未作订正。
+
 - **评估对象**：`D:\rokidapp\cxrl\RokidLab`（phone-app + RokidLink，Kotlin / Compose）
 - **基线**：HEAD = `f95deb4`（`fix(v3.6): 缺陷复核修复与安全加固 + 构建入口唯一化`），`versionName=3.6` / `versionCode=21`
 - **工作区状态**：干净（仅 4 个未跟踪的新文档 / mermaid 图）；**已恢复"可 clean checkout 编译"基线**
