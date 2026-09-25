@@ -664,6 +664,21 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
 - **安全与工程**：签名材料出库（去掉明文回退，缺失即中止 release 构建）；调试广播接收器收拢进 debug 源集；工具精简（电量 / 设备信息 / 存储合并为 `get_glasses_status`）；OCR 模型按需下载降低包体
 - **版本**：手机端 4.0（versionCode 25）/ 眼镜端 RokidLink 4.0（versionCode 18），内嵌眼镜端为 R8 混淆 release 包
 
+## v4.1 更新总览
+
+- **屏幕操作域（无障碍）**：新增 5 个工具 —— `read_screen`（读屏，返回可点元素与文字并带 `[n]` 编号）、`tap_screen`（按文案 / 编号 / 坐标点击）、`swipe_screen`（四个方向滑动）、`press_key`（返回 / 桌面 / 最近任务 / 通知栏 / 快捷开关）、`type_text`（往聚焦输入框填字）
+  - 读屏取元素树而非截图，token 消耗降一个数量级且定位更准；`[n]` 编号只对最近一次读取有效，界面变化时按文案回树重查并如实告知「请重新读取」，不照旧坐标盲点
+  - 新增无障碍截屏通道（`canTakeScreenshot`），不再每次弹系统「开始截屏」授权框；本地把两次请求拉开到 ≥363ms 规避 AOSP 节流上限，失败按错误码仅重试一次
+  - `type_text` 刻意不代填密码；提交类关键词操作与裸坐标点击需用户确认
+  - `screen` 域与既有的 `shell` 域一致，**不对 AIUI 页面开放**（页面制品不能操作整台手机）
+- **本机网页预览**：新增 `start_web_preview` / `stop_web_preview`，在 Ubuntu 容器里拉起**常驻**网页服务（自动分配端口并注入 `$PREVIEW_PORT`），聊天页出现预览条，点开即全屏 WebView 实时查看；最多同时 2 个，rootfs 装卸前强制停服
+- **模型供应商管理**：内置 12 家品牌预设（DeepSeek / Kimi / 通义千问 / 智谱 GLM / 火山方舟 / 硅基流动 / OpenAI / Anthropic / Gemini / xAI / OpenRouter / 自定义 OpenAI 兼容），各存独立 baseUrl / 密钥 / 模型，密钥走 Android Keystore 加密；支持拉取 `/models` 模型清单与余额查询；旧版手填在线槽位配置自动收编进钥匙串
+- **聊天输入栏上拉面板**：供应商 / 思考深度 / 附件三块统一改为 `ModalBottomSheet`，可一键切换「供应商 + 模型」并同步下发眼镜端，行尾显示余额
+- **聊天富卡片（全部本地离线渲染）**：公式（KaTeX 0.16.11）、图表（mermaid 11.x）、表格（横向滚动 + 斑马纹）、文件（可展开正文 / 复制）、音视频（点击才播，离开屏幕即释放解码器）；`run_shell` 产出文件自动成卡（单次最多 3 个）
+- **眼镜端链路加固**：ASR 推送改为 WiFi 优先、蓝牙兜底双通道（协议同源、握手令牌 `ROKIDPUSH1`）；新增常驻下行观测，路由 stale 时 Alarm 自杀重启进程自愈；手机端可下发 `rokidlab_push_restart` 远程踢活推送服务
+- **修复**：中文 txt 乱码（改走 GB18030 / UTF-16 解码链）、图片按 EXIF 校正方向、SAF 授权过期导致文件卡打不开（落盘纯文本副本）、眼镜端 RFCOMM 监听失败后永久死亡（退避重建）、无障碍服务关闭后调用要等到超时（`onUnbind` 也清实例引用）
+- **版本**：手机端 4.1（versionCode 26）/ 眼镜端 RokidLink 4.1（versionCode 19），内嵌眼镜端为 R8 混淆 release 包
+
 ## 使用指南
 
 1. 确保眼镜已连接到与手机相同的 WiFi 网络
