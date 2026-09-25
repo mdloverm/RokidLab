@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  无障碍服务配置（LabAccessibilityService）。
+
+  三个能力开关就是这套方案的全部理由，逐条说明「为什么必须是这三项」：
+
+  * `canTakeScreenshot`（API 30+）—— 截屏**唯一不弹系统授权框**的通道。
+    另一条路（MediaProjection）每次会话都要用户点一次「开始截屏」，而授权不可持久化
+    （抓完还必须 stop()，否则状态栏留常驻截屏标记）⇒ 连不起来的「截屏 → 判断 → 点击」闭环。
+    ⚠️ 系统对无障碍截屏有**最小间隔**（AOSP `ACCESSIBILITY_TAKE_SCREENSHOT_REQUEST_INTERVAL_TIMES_MS = 333ms`），
+    所以它是「零弹窗、可连续」，不是 30fps 视频流 —— 连续取帧由 LabAccessibility 侧节流 + 重试兜住。
+
+  * `canPerformGestures` —— 点击/滑动（`dispatchGesture`）。没有它就只能"看"，不能替用户动手。
+
+  * `canRetrieveWindowContent` —— 读 UI 树（控件文案 + 坐标 + 是否可编辑）。
+    比截屏更省 token 也更准：模型可以直接说「点『发送』」，不必靠视觉估计坐标。
+
+  `accessibilityEventTypes` 只订阅窗口切换：我们**不消费事件流**（所有动作都是工具触发的
+  同步查询），订阅内容越少对系统的持续开销越小。`notificationTimeout` 同样是这个取向。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:description="@string/accessibility_service_desc"
+    android:notificationTimeout="100"
+    android:summary="@string/accessibility_service_summary" />

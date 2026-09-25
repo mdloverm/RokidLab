@@ -92,6 +92,10 @@ class ToolRiskMapTest {
             "zip_files", "unzip_file",
             // 截屏：会弹系统授权框、占用一次 MediaProjection 会话，无人值守时没法被确认
             "capture_screen",
+            // 屏幕操作（无障碍域）：读屏会把用户屏幕上的一切（消息/余额/验证码）带进上下文，
+            // 点击/输入则是在整台手机上动手 —— 用户不在场时两件都不该发生。
+            // ⚠️ read_screen 是只读动作却登记在本机副作用档，正是为了落在这一行里（见 ScreenOpToolProvider 注释）
+            "read_screen", "tap_screen", "swipe_screen", "press_key", "type_text",
         )
         mustBeExcluded.forEach { name ->
             assertTrue(

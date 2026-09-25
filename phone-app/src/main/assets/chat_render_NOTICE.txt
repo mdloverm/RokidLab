@@ -1,0 +1,33 @@
+第三方资源声明（聊天渲染）
+============================
+
+目录：phone-app/src/main/assets/chat_render/
+用途：手机端聊天窗口的「公式卡」与「Mermaid 图卡」离线渲染（WebView 内加载，不联网）。
+
+KaTeX —— 数学公式排版
+--------------------
+  文件：chat_render/katex/katex.min.js（272 KB）
+        chat_render/katex/katex.min.css（24 KB）
+        chat_render/katex/fonts/*.woff2（20 个字体，共 304 KB）
+  来源：https://github.com/KaTeX/KaTeX
+  版本：0.16.11（取自 https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/）
+  许可：MIT License
+  Copyright (c) 2013-2020 Khan Academy and other contributors
+
+Mermaid —— 流程图 / 时序图等图表渲染
+-----------------------------------
+  文件：chat_render/mermaid.min.js（3.5 MB）
+  来源：https://github.com/mermaid-js/mermaid
+  版本：11.x（取自 https://cdn.jsdelivr.net/npm/mermaid@11/dist/）
+  许可：MIT License
+  Copyright (c) 2014-2024 Knut Sveidqvist
+
+为什么内置而不是运行时从 CDN 拉
+------------------------------
+设备（含眼镜链路）经常处于无网/弱网环境，公式与图表属于"回答的一部分"，
+渲染失败会直接丢掉信息。资源随包内置可保证离线可渲染；代价是 APK 增大约 4.1 MB。
+
+维护
+----
+升级版本：重新下载上述文件覆盖，并更新本文件里的版本号；
+公式/图表的卡片实现在 store/ChatWebRenderCard.kt，解析在 store/ChatMarkdown.kt。

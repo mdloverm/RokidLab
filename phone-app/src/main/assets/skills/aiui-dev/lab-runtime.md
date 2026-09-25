@@ -5,7 +5,8 @@
 ## 0. 开发必读顺序
 
 1. 本须知全文已在 load_skill 返回中，优先级最高。
-2. 写代码前用 load_skill_section(name="aiui-dev", section=…) 读官方章节，不要凭印象写 SFC：写 .ink 读第 2 章「SFC .ink Specification」，按键读第 4 章「Events」，组件查 components.md，API 查 apis-*.md（wx.* → apis-wx.md）。
+2. 写代码前用 load_skill_section(name="aiui-dev", section=…) 读官方章节，不要凭印象写 SFC：写 .ink 读 framework.md 的 SFC 章节，按键/生命周期查 events.md，组件查 components.md，样式查 wxss.md，API 先查 apis.md 索引再进对应域（wx.* → apis-wx.md），交付前过一遍 checklist.md。
+3. 本技能快照基于官方 main（2026-09-23，对应运行时 ink v0.18.0，RokidLink 内嵌运行时已同步升级）。可用新能力：`<streamdown>` / `<table>` / `<video>` 流式渲染、自定义组件、OPFS 持久化、流式 fetch（TextDecoder stream:true）、Web Audio、Widgets、后台 Agent Workers（app.json 用 `agentWorkers`，**`workers` 字段已废弃**）。⚠️ 新能力按需使用：页面若用了 0.16+ 的 API，在老固件眼镜的官方通道（AiuiActivity）可能渲染不出，不确定时优先用基础档（0.14）能力。
 
 ## 1. 运行链路与规模上限
 
@@ -39,6 +40,14 @@
   - 配色靠 class，用官方透明度阶梯：空 `rgba(64,255,94,.06)` → `.24` → `.48` → `.72` → 最大 `#40ff5e`（如 2048 瓦片）；一格一个 class，**不要用 style 内联绑定**。
   - 刷新：全部格子一次 `setData`（32 个字段无压力）；**状态变化一律由按键驱动** —— 本宿主**定时器不执行**（见 §9.0），别用 `setInterval`/`setTimeout`。
 
+### 2.4 彩色显示（yodaos-sprite-full）★仅手机预览可用
+- 眼镜屏是**单色绿光波导**，物理上没有彩色通道，**永远不支持彩色**；彩色只对手机预览有意义。
+- **默认绝不写 app.json 的 theme 字段**（打包时也会强制剥离，保眼镜安全）。
+- **只有用户明确说出"彩色/全彩/带颜色"时**才做彩色版：
+  1. 页面按全彩配色写（深底亮字、彩色 token 都可以，不再受 §2.1 绿通道约束）；
+  2. 打开用 open_aiui_app(**target=phone, color=true**)——打包自动注入 `"theme":"yodaos-sprite-full"`，只进手机包。
+- 同一个项目推眼镜时颜色会退化为绿通道亮度、效果不可控（深蓝灰≈黑）。要上眼镜必须按 §2.1 绿色规范重写配色，并提醒用户彩色版上眼镜会走样。
+
 ## 3. 渲染宿主差异（自托管 AiuiLinkActivity）
 
 - 本宿主只渲染全屏页（会话卡不可用）。
@@ -46,9 +55,32 @@
 - 官方环境有默认行为（Backspace 返回、↑↓ 滚动、Enter 激活），自托管没有、页面全包；键处理首行 `event.preventDefault()`。
 - 文字是第一反馈通道；任何按键后必须 setData 刷新文字/高亮/计分。
 
-## 4. 宿主键码契约（Lab 手柄物理键 → 页面 event.code）
+## 4. 按键输入契约（⚠️ 全部宿主统一：手机全屏预览 = 眼镜手柄，同一套）
 
-方向键 ↑↓←→→`ArrowUp/Down/Left/Right`；Select/Start→`Enter`；A/B/C→`KeyZ/KeyX/KeyC`；X/Y/Z→`KeyA/KeyS/KeyD`；L/R→`KeyQ/KeyW`；眼镜 BACK/Esc→`Backspace`/`Escape`；镜腿物理键→`GlobalHook`。
+**唯一正确写法**（两种宿主都这样收）：
+
+```js
+// Page 对象上定义 onKeyDown（不是 onKey，不是 @keydown，不是 window 事件）
+onKeyDown(e) {
+  e.preventDefault();
+  switch (e.code) {            // 读 e.code 字符串，不是 e.keyCode / e.which 数字
+    case 'ArrowUp':   this.move(0, -1); break;
+    case 'ArrowDown': this.move(0, 1); break;
+    case 'ArrowLeft': this.move(-1, 0); break;
+    case 'ArrowRight': this.move(1, 0); break;
+    case 'Enter': case 'KeyZ': this.confirm(); break;
+    case 'Backspace': case 'Escape': this.exit(); break;
+  }
+},
+```
+
+🚫 **禁止的反面写法**（引擎不派发这些事件，写了页面永远收不到按键）：
+- `onKey(e)` / `onkeydown` / `@keydown` / `window.addEventListener('keydown', …)` —— 本引擎只认 Page 级 `onKeyDown`/`onKeyUp`；
+- 读 `e.keyCode` / `e.which` / `e.key` 数字键码（19/20/21/22…）—— 契约是 **`e.code` 字符串**（`'ArrowUp'`、`'Enter'`、`'KeyZ'`…），`keyCode` 恒为 0/undefined。
+
+键值映射：↑↓←→→`ArrowUp/Down/Left/Right`；Select/Start→`Enter`；A/B/C→`KeyZ/KeyX/KeyC`；X/Y/Z→`KeyA/KeyS/KeyD`；L/R→`KeyQ/KeyW`；眼镜 BACK/Esc→`Backspace`/`Escape`；镜腿物理键→`GlobalHook`。
+
+> 自检口诀：写完页面搜一遍 `onKey`、`keyCode` 两个词——出现即错，必须改成 `onKeyDown` + `e.code`。
 
 ## 5. 手柄语义标准
 
@@ -65,6 +97,7 @@
 3. `<page>` 根标签，禁止 `<template>`。
 4. `<style>` class 样式。
 5. 用到的每键在 onKeyDown/onKeyUp 都处理；每键动作即时反馈（setData 刷新文字）。
+6. **按键 API 自检**：页面里不得出现 `onKey(`、`e.keyCode`、`e.which`、`addEventListener('keydown'` 任何一处；只允许 `onKeyDown`/`onKeyUp` + `e.code`（见 §4）。
 
 ## 7. 视觉与防鬼影
 

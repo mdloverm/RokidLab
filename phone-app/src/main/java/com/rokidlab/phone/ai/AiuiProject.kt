@@ -41,6 +41,9 @@ import java.util.zip.ZipOutputStream
 object AiuiProject {
     private const val TAG = "AiuiProject"
 
+    /** 官方 ink 全彩主题名（仅手机预览注入；眼镜单色绿光屏不支持，眼镜包强制剥离 theme） */
+    const val COLOR_THEME_FULL = "yodaos-sprite-full"
+
     /** 眼镜开发者 WebServer（AssistServer 内 WebServerService）固定监听端口 */
     private const val GLASSES_WEB_PORT = 8848
 
@@ -220,9 +223,16 @@ object AiuiProject {
      * 补缺省：VERSION 缺失时生成 UUID；app.json 缺失时报错（页面清单是必需）；
      * 要求存在 pages/index/index.ink（agent 首页入口，打开负载默认指向它）。
      *
+     * colorTheme 语义（彩色显示只有手机预览支持，眼镜是单色绿光屏）：
+     *  - false（默认）：打包时**强制剥离** app.json 的 theme 字段 —— 无论源码里 AI 写了什么，
+     *    眼镜包永远走运行时默认（单色绿）主题，结构上杜绝彩色包被推上眼镜。
+     *  - true：打包时注入 "theme":"yodaos-sprite-full"（官方全彩主题），输出独立文件
+     *    [packageFile] 同目录的 `<agentId>.color.aix`（不覆盖绿色包）；agentId 不变，
+     *    登记表/打开链路照常。仅供 open_aiui_app(color=true, target=phone) 手机预览使用。
+     *
      * @return null = 打包失败（原因见日志）
      */
-    fun buildAix(context: Context, project: String, appName: String): AixResult? {
+    fun buildAix(context: Context, project: String, appName: String, colorTheme: Boolean = false): AixResult? {
         val src = projectDir(context, project)
         if (!src.isDirectory) {
             Log.w(TAG, "buildAix: project dir missing: ${src.absolutePath}")
@@ -266,8 +276,12 @@ object AiuiProject {
         // 指纹变→引擎重新解压 runtime 缓存；内容不变→指纹幂等（idempotent）。
         runCatching { File(src, "VERSION").writeText(contentVersion(src)) }
 
-        val aix = File(packageDir(context), "$agentId.aix")
+        val aix = if (colorTheme) File(packageDir(context), "$agentId.color.aix") else packageFile(context, agentId)
         runCatching {
+            if (!colorTheme) {
+                // 源码变了之后旧的彩色包就是陈年脏数据，绿色包重打包时顺手清掉
+                File(packageDir(context), "$agentId.color.aix").delete()
+            }
             aix.delete()
             ZipOutputStream(aix.outputStream().buffered()).use { zos ->
                 src.walkTopDown().filter { it.isFile }.forEach { f ->
@@ -275,12 +289,27 @@ object AiuiProject {
                     if (f.name.startsWith(".rokid_")) return@forEach
                     val entryName = f.relativeTo(src).path.replace('\\', '/')
                     zos.putNextEntry(ZipEntry(entryName))
-                    f.inputStream().use { it.copyTo(zos) }
+                    if (entryName == "app.json") {
+                        // theme 收口点：彩色包注入全彩主题，眼镜包强制剥离——
+                        // 无论 AI 在源码 app.json 里写了什么，双端各拿各的
+                        val themed = runCatching {
+                            JSONObject(f.readText().trim().ifEmpty { "{}" }).apply {
+                                if (colorTheme) put("theme", COLOR_THEME_FULL) else remove("theme")
+                            }.toString()
+                        }.getOrNull()
+                        if (themed != null) {
+                            zos.write(themed.toByteArray(Charsets.UTF_8))
+                        } else {
+                            f.inputStream().use { it.copyTo(zos) }
+                        }
+                    } else {
+                        f.inputStream().use { it.copyTo(zos) }
+                    }
                     zos.closeEntry()
                 }
             }
         }.onFailure {
-            Log.e(TAG, "buildAix: zip failed", it)
+            Log.e(TAG, "buildAix: zip failed (colorTheme=$colorTheme)", it)
             return null
         }
         Log.i(TAG, "buildAix ok: agentId=$agentId size=${aix.length()} -> ${aix.absolutePath}")

@@ -2,7 +2,10 @@ import initInkWasm, {
   InkWebView as RawInkWebView,
   get_bundle_version as getInkBundleVersionFromWasm,
   get_version as getInkVersionFromWasm,
+  parse_aix_manifest_bytes as parseAixManifestBytesFromWasm,
+  parse_aix_manifest_files as parseAixManifestFilesFromWasm,
   satisfies_engine as satisfiesInkEngineFromWasm,
+  set_web_audio_assets as setWebAudioAssets,
 } from './pkg/ink_web.js';
 import {
   clearInkRequestInterceptor as clearInkRequestInterceptorBridge,
@@ -12,6 +15,8 @@ import {
 
 let bindingsPromise;
 let configuredNavigatorHost = null;
+let previewAppSequence = 0;
+const WINDOW_OPEN_TARGETS = new Set(['_blank', '_current', '_widget']);
 
 function getDefaultScaleFactor() {
   return Number(globalThis.devicePixelRatio || 1);
@@ -96,13 +101,39 @@ function normalizeOptionalNavigatorHostLanguages(value) {
     .filter(Boolean);
 }
 
-function normalizeNavigatorHostFields(serialNumber, platform, arch, languages, region) {
+function normalizeNavigatorPlatformService(value) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('`navigatorHost.platformService` must be an object when provided.');
+  }
+  const normalized = {
+    region: normalizeOptionalNavigatorHostField(value.region, 'platformService.region'),
+    environment: normalizeOptionalNavigatorHostField(
+      value.environment,
+      'platformService.environment',
+    ),
+    host: normalizeOptionalNavigatorHostField(value.host, 'platformService.host'),
+  };
+  return normalized.region || normalized.environment || normalized.host ? normalized : null;
+}
+
+function normalizeNavigatorHostFields(
+  serialNumber,
+  platform,
+  arch,
+  languages,
+  region,
+  platformService,
+) {
   const normalized = {
     serialNumber: normalizeOptionalNavigatorHostField(serialNumber, 'serialNumber'),
     platform: normalizeOptionalNavigatorHostField(platform, 'platform'),
     arch: normalizeOptionalNavigatorHostField(arch, 'arch'),
     languages: normalizeOptionalNavigatorHostLanguages(languages),
     region: normalizeOptionalNavigatorHostField(region, 'region'),
+    platformService: normalizeNavigatorPlatformService(platformService),
   };
 
   if (
@@ -110,7 +141,8 @@ function normalizeNavigatorHostFields(serialNumber, platform, arch, languages, r
     !normalized.platform &&
     !normalized.arch &&
     normalized.languages.length === 0 &&
-    !normalized.region
+    !normalized.region &&
+    !normalized.platformService
   ) {
     return null;
   }
@@ -124,6 +156,7 @@ export function configNavigatorHost(
   arch = null,
   languages = null,
   region = null,
+  platformService = null,
 ) {
   configuredNavigatorHost = normalizeNavigatorHostFields(
     serialNumber,
@@ -131,6 +164,7 @@ export function configNavigatorHost(
     arch,
     languages,
     region,
+    platformService,
   );
 }
 
@@ -268,6 +302,31 @@ function normalizeHostTarget(target) {
     return target;
   }
   throw new TypeError('`target` must be one of `_current`, `_blank`, or `_widget`.');
+}
+
+function normalizeViewContextUpdate(update) {
+  if (update == null || typeof update !== 'object' || Array.isArray(update)) {
+    throw new TypeError('`update` must be an object.');
+  }
+  const normalized = {};
+  if (Object.prototype.hasOwnProperty.call(update, 'focus')) {
+    if (update.focus !== 'focus' && update.focus !== 'blur') {
+      throw new TypeError('`update.focus` must be either `focus` or `blur`.');
+    }
+    normalized.focus = update.focus;
+  }
+  if (Object.prototype.hasOwnProperty.call(update, 'target')) {
+    normalized.target = normalizeHostTarget(update.target);
+  }
+  for (const key of ['inputEnabled']) {
+    if (Object.prototype.hasOwnProperty.call(update, key)) {
+      if (typeof update[key] !== 'boolean') {
+        throw new TypeError(`\`update.${key}\` must be a boolean.`);
+      }
+      normalized[key] = update[key];
+    }
+  }
+  return normalized;
 }
 
 function normalizeOpenHostOptions(hostOptions) {
@@ -618,6 +677,16 @@ function normalizeLayoutMode(value) {
   throw new TypeError('`layoutMode` must be either `bounded` or `width-constrained-auto-height`.');
 }
 
+export function normalizeLoopbackRoutingPolicy(value) {
+  if (value == null || value === '') {
+    return 'default-transport';
+  }
+  if (value === 'default-transport' || value === 'native') {
+    return value;
+  }
+  throw new TypeError('`loopbackRoutingPolicy` must be `default-transport` or `native`.');
+}
+
 function normalizeThemeName(value) {
   if (value == null) {
     return null;
@@ -831,6 +900,34 @@ function serializeBatteryStatusResponse(result) {
         chargingTime: normalized.chargingTime,
         dischargingTime: normalized.dischargingTime,
         level: normalized.level,
+      },
+    },
+  });
+}
+
+function serializeDeviceTokenResponse(result) {
+  if (!result || typeof result !== 'object') {
+    throw new TypeError('`device.requestToken()` must resolve to a device token object.');
+  }
+  const token = typeof result.token === 'string' ? result.token.trim() : '';
+  const tokenType = typeof result.tokenType === 'string' ? result.tokenType.trim() : '';
+  if (!token || !tokenType) {
+    throw new TypeError(
+      '`device.requestToken()` must return non-empty token and tokenType strings.',
+    );
+  }
+  const expiresAt = result.expiresAt == null ? undefined : Number(result.expiresAt);
+  if (expiresAt !== undefined && (!Number.isSafeInteger(expiresAt) || expiresAt < 0)) {
+    throw new TypeError('`device.requestToken()` expiresAt must be a non-negative integer.');
+  }
+  return serializeIpcResponseData({
+    type: 'Device',
+    data: {
+      type: 'Token',
+      data: {
+        token,
+        tokenType,
+        ...(expiresAt === undefined ? {} : { expiresAt }),
       },
     },
   });
@@ -1111,14 +1208,63 @@ function serializeSpeechSynthesisStartedResponse(result) {
   });
 }
 
+function serializeSpeechRecognitionCapabilitiesResponse(result) {
+  if (result == null || typeof result !== 'object' || Array.isArray(result)) {
+    throw new TypeError('`speech.getRecognitionCapabilities()` must return an object.');
+  }
+  const audioFormats = Array.isArray(result.audioFormats)
+    ? result.audioFormats.map((format) => ({
+        mimeType: String(format?.mimeType || ''),
+        sampleRates: Array.isArray(format?.sampleRates) ? format.sampleRates.map(Number) : [],
+        channelCounts: Array.isArray(format?.channelCounts) ? format.channelCounts.map(Number) : [],
+        sampleFormats: Array.isArray(format?.sampleFormats)
+          ? format.sampleFormats.filter((value) => value === 's16' || value === 'f32')
+          : [],
+      }))
+    : [];
+  return serializeIpcResponseData({
+    type: 'Speech',
+    data: {
+      type: 'RecognitionCapabilities',
+      data: {
+        audioFormats,
+        maxChunkBytes: Math.max(1, Math.trunc(Number(result.maxChunkBytes) || 0)),
+        interimResults: Boolean(result.interimResults),
+        maxAlternatives: Math.max(1, Math.trunc(Number(result.maxAlternatives) || 1)),
+        phrases: Boolean(result.phrases),
+        contextUpdates: Boolean(result.contextUpdates),
+        segmentationModes: Array.isArray(result.segmentationModes)
+          ? result.segmentationModes.filter((value) => ['auto', 'vad', 'semantic'].includes(value))
+          : [],
+        vadSilenceDuration: {
+          supported: Boolean(result.vadSilenceDuration?.supported),
+          minMs: Number.isInteger(result.vadSilenceDuration?.minMs)
+            ? result.vadSilenceDuration.minMs
+            : null,
+          maxMs: Number.isInteger(result.vadSilenceDuration?.maxMs)
+            ? result.vadSilenceDuration.maxMs
+            : null,
+        },
+      },
+    },
+  });
+}
+
 const HOST_CAPABILITY_SERIALIZERS = {
   speech: {
+    cancelSpeak: () => serializeSuccessResponse(),
     speak: () => serializeSuccessResponse(),
     synthesize: (result) => serializeSpeechSynthesisStartedResponse(result),
     abortSynthesis: () => serializeSuccessResponse(),
     startRecognition: () => serializeSuccessResponse(),
     stopRecognition: () => serializeSuccessResponse(),
     abortRecognition: () => serializeSuccessResponse(),
+    getRecognitionCapabilities: (result) => serializeSpeechRecognitionCapabilitiesResponse(result),
+    openRecognitionStream: () => serializeSuccessResponse(),
+    writeRecognitionAudio: () => serializeSuccessResponse(),
+    finishRecognitionStream: () => serializeSuccessResponse(),
+    abortRecognitionStream: () => serializeSuccessResponse(),
+    updateRecognitionContext: () => serializeSuccessResponse(),
   },
   geolocation: {
     getCurrentPosition: (result) => serializeGeolocationPositionResponse(result),
@@ -1128,6 +1274,9 @@ const HOST_CAPABILITY_SERIALIZERS = {
   battery: {
     start: (result) => serializeBatteryStatusResponse(result),
     stop: () => serializeSuccessResponse(),
+  },
+  device: {
+    requestToken: (result) => serializeDeviceTokenResponse(result),
   },
   payment: {
     canMakePayment: (result) => serializePaymentCanMakePaymentResponse(result),
@@ -1155,6 +1304,8 @@ const HOST_CAPABILITY_SERIALIZERS = {
     enumerateDevices: (result) => serializeEnumerateDevicesResponse(result),
     getUserMedia: (result) => serializeGetUserMediaResponse(result),
     stopMediaTrack: () => serializeSuccessResponse(),
+    startAudioTrack: () => serializeSuccessResponse(),
+    stopAudioTrack: () => serializeSuccessResponse(),
     createMediaRecorder: (result) => serializeCreateMediaRecorderResponse(result),
     startMediaRecorder: () => serializeSuccessResponse(),
     pauseMediaRecorder: () => serializeSuccessResponse(),
@@ -1833,6 +1984,9 @@ function normalizeHostCapabilities(capabilities, eventTarget = null) {
         );
       }
       const request = parseHostCapabilityRequest(requestJson, capability, method);
+      if (capability === 'speech' && method === 'writeRecognitionAudio') {
+        request.bytes = Uint8Array.from(request.bytes || []);
+      }
       const result = await hook(request);
       return serializer(result, request);
     },
@@ -1901,6 +2055,34 @@ function buildSpeechResultEvent(eventType, detail) {
         resultIndex: Math.max(0, Math.trunc(Number(payload.resultIndex) || 0)),
         isFinal: Boolean(payload.isFinal),
         alternatives,
+      },
+    },
+  });
+}
+
+function buildSpeechResultsEvent(eventType, detail) {
+  const payload = requireDetailObject(detail, eventType);
+  const targetId = requireStringField(payload.targetId, 'targetId', eventType);
+  const sessionId = requireStringField(payload.sessionId, 'sessionId', eventType);
+  const results = Array.isArray(payload.results)
+    ? payload.results.map((result) => ({
+        isFinal: Boolean(result?.isFinal),
+        alternatives: Array.isArray(result?.alternatives)
+          ? result.alternatives.map((alternative) => ({
+              transcript: String(alternative?.transcript || ''),
+              confidence: Number(alternative?.confidence || 0),
+            }))
+          : [],
+      }))
+    : [];
+  return createIpcEvent(eventType, targetId, {
+    type: 'Speech',
+    data: {
+      type: 'Results',
+      data: {
+        sessionId,
+        resultIndex: Math.max(0, Math.trunc(Number(payload.resultIndex) || 0)),
+        results,
       },
     },
   });
@@ -2116,6 +2298,7 @@ const HOST_CAPABILITY_EVENT_BUILDERS = {
   'speech.speechstart': (detail) =>
     buildSpeechSessionEvent('speech.speechstart', 'SpeechStart', detail),
   'speech.result': (detail) => buildSpeechResultEvent('speech.result', detail),
+  'speech.results': (detail) => buildSpeechResultsEvent('speech.results', detail),
   'speech.nomatch': (detail) => buildSpeechSessionEvent('speech.nomatch', 'NoMatch', detail),
   'speech.error': (detail) => buildSpeechErrorEvent('speech.error', detail),
   'speech.speechend': (detail) => buildSpeechSessionEvent('speech.speechend', 'SpeechEnd', detail),
@@ -2297,12 +2480,16 @@ export async function initInk(options = {}) {
   if (!bindingsPromise) {
     const initInput =
       options.wasmUrl || options.moduleOrPath || new URL('./pkg/ink_web_bg.wasm', import.meta.url);
-    bindingsPromise = initInkWasm(initInput).then(() => ({
-      InkWebView: RawInkWebView,
-      getInkBundleVersion: getInkBundleVersionFromWasm,
-      getInkVersion: getInkVersionFromWasm,
-      satisfiesInkEngine: satisfiesInkEngineFromWasm,
-    }));
+    bindingsPromise = initInkWasm(initInput).then(() => {
+      setWebAudioAssets(new URL('./audio/', import.meta.url).href);
+      return {
+        InkWebView: RawInkWebView,
+        getInkBundleVersion: getInkBundleVersionFromWasm,
+        getInkVersion: getInkVersionFromWasm,
+        parseAixManifest,
+        satisfiesInkEngine: satisfiesInkEngineFromWasm,
+      };
+    });
   }
 
   return bindingsPromise;
@@ -2314,6 +2501,20 @@ export function getInkVersion() {
 
 export function getInkBundleVersion() {
   return getInkBundleVersionFromWasm();
+}
+
+/**
+ * Parses an AIX package or an unpacked application file collection.
+ *
+ * Binary inputs are treated as `.aix` package bytes. Maps, entry arrays, and
+ * plain objects are treated as files rooted at the application directory.
+ */
+export function parseAixManifest(source) {
+  const packageBytes = cloneUint8Array(source);
+  if (packageBytes) {
+    return parseAixManifestBytesFromWasm(packageBytes);
+  }
+  return parseAixManifestFilesFromWasm(normalizeBundleFiles(source));
 }
 
 /**
@@ -2356,6 +2557,7 @@ export class InkView {
     const height = Number(config.height);
     const scaleFactor = normalizeScaleFactor(config.scaleFactor);
     const appFps = normalizeAppFps(config.appFps);
+    const loopbackRoutingPolicy = normalizeLoopbackRoutingPolicy(config.loopbackRoutingPolicy);
     if (!Number.isFinite(width)) {
       throw new Error('`width` is a required numeric value.');
     }
@@ -2379,6 +2581,7 @@ export class InkView {
       themeName,
       themeCss,
       Boolean(config.systemAgent),
+      loopbackRoutingPolicy,
       configuredNavigatorHost,
       normalizeHostPackages(config.hostPackages),
       normalizeHostFontsDir(config.hostFontsDir),
@@ -2401,6 +2604,7 @@ export class InkView {
   #surface;
   #animationFrameApi;
   #frameHandle;
+  #rendering;
   #autoRender;
   #closeRequested;
   #destroyed;
@@ -2420,6 +2624,7 @@ export class InkView {
   #onContentSizeChanged;
   #onMessage;
   #onPerformanceEntry;
+  #onOpenRequested;
   #hostCapabilitiesTarget;
 
   constructor(rawView, options = {}) {
@@ -2428,6 +2633,7 @@ export class InkView {
     this.#surface = null;
     this.#animationFrameApi = ensureAnimationFrameApi();
     this.#frameHandle = null;
+    this.#rendering = false;
     this.#autoRender = false;
     this.#closeRequested = false;
     this.#destroyed = false;
@@ -2447,11 +2653,13 @@ export class InkView {
     this.#onContentSizeChanged = null;
     this.#onMessage = null;
     this.#onPerformanceEntry = null;
+    this.#onOpenRequested = null;
     this.#hostCapabilitiesTarget = new EventTarget();
     this.#bindHostCapabilityEvents();
     this.onContentSizeChanged = options.onContentSizeChanged || null;
     this.onMessage = options.onMessage || null;
     this.onPerformanceEntry = options.onPerformanceEntry || null;
+    this.onOpenRequested = options.onOpenRequested || null;
     this.setHostCapabilities(options.hostCapabilities || null);
   }
 
@@ -2794,6 +3002,37 @@ export class InkView {
     return consumed;
   }
 
+  #consumeWindowOpenRequests() {
+    if (
+      typeof this.#onOpenRequested !== 'function' ||
+      typeof this.#rawView.consumeWindowOpenRequestJson !== 'function'
+    ) {
+      return false;
+    }
+    let consumed = false;
+    while (true) {
+      const json = this.#rawView.consumeWindowOpenRequestJson();
+      if (!json) {
+        return consumed;
+      }
+      try {
+        const request = JSON.parse(json);
+        if (
+          !request ||
+          typeof request !== 'object' ||
+          typeof request.url !== 'string' ||
+          !WINDOW_OPEN_TARGETS.has(request.target)
+        ) {
+          continue;
+        }
+        consumed = true;
+        this.#onOpenRequested(request);
+      } catch {
+        // Ignore malformed bridge payloads and continue draining the queue.
+      }
+    }
+  }
+
   #captureResizeSnapshot() {
     if (
       this.#resizeSnapshot ||
@@ -3083,6 +3322,9 @@ export class InkView {
     };
 
     addListener(canvas, 'pointerdown', (event) => {
+      if (!this.isInputEnabled()) {
+        return;
+      }
       const { x, y } = getPointerPosition(canvas, event);
       this.notifyUserInteraction();
       if (syncFocus && focusTarget && typeof focusTarget.focus === 'function') {
@@ -3100,6 +3342,9 @@ export class InkView {
       this.requestRender();
     });
     addListener(canvas, 'pointermove', (event) => {
+      if (!this.isInputEnabled()) {
+        return;
+      }
       const { x, y } = getPointerPosition(canvas, event);
       this.#rawView.dispatchPointer(
         'pointermove',
@@ -3113,6 +3358,9 @@ export class InkView {
       this.requestRender();
     });
     addListener(canvas, 'pointerup', (event) => {
+      if (!this.isInputEnabled()) {
+        return;
+      }
       const { x, y } = getPointerPosition(canvas, event);
       this.#rawView.dispatchPointer(
         'pointerup',
@@ -3126,6 +3374,9 @@ export class InkView {
       this.requestRender();
     });
     addListener(canvas, 'pointercancel', (event) => {
+      if (!this.isInputEnabled()) {
+        return;
+      }
       const { x, y } = getPointerPosition(canvas, event);
       this.#rawView.dispatchPointer(
         'touchcancel',
@@ -3142,6 +3393,9 @@ export class InkView {
       canvas,
       'wheel',
       (event) => {
+        if (!this.isInputEnabled()) {
+          return;
+        }
         const { x, y } = getPointerPosition(canvas, event);
         const { deltaX, deltaY } = scaleWheelDelta(event);
         if (options.preventWheelDefault !== false && typeof event.preventDefault === 'function') {
@@ -3350,13 +3604,57 @@ export class InkView {
   }
 
   setInteractive(interactive) {
-    this.#rawView.setInteractive(Boolean(interactive));
+    const value = Boolean(interactive);
+    if (typeof this.#rawView.updateViewContext === 'function') {
+      this.#rawView.updateViewContext('', '', value ? 1 : 0);
+    } else {
+      this.#rawView.setInteractive(value);
+    }
     this.requestRender();
     return this;
   }
 
   isInteractive() {
     return Boolean(this.#rawView.isInteractive());
+  }
+
+  updateViewContext(update) {
+    const normalized = normalizeViewContextUpdate(update);
+    if (typeof this.#rawView.updateViewContext !== 'function') {
+      const updatedFieldCount = [
+        normalized.focus,
+        normalized.target,
+        normalized.inputEnabled,
+      ].filter((value) => value != null).length;
+      if (updatedFieldCount > 1) {
+        throw new Error('Atomic multi-field updates require raw `updateViewContext` support.');
+      }
+      if (normalized.focus === 'focus') this.#rawView.focus();
+      if (normalized.focus === 'blur') this.#rawView.blur();
+      if (normalized.target != null) this.#rawView.setTarget(normalized.target);
+      if (normalized.inputEnabled != null) {
+        this.#rawView.setInteractive(normalized.inputEnabled);
+      }
+    } else {
+      const encode = (value) => (value == null ? -1 : value ? 1 : 0);
+      this.#rawView.updateViewContext(
+        normalized.focus || '',
+        normalized.target || '',
+        encode(normalized.inputEnabled),
+      );
+    }
+    this.requestRender();
+    return this;
+  }
+
+  setInputEnabled(enabled) {
+    return this.updateViewContext({ inputEnabled: Boolean(enabled) });
+  }
+
+  isInputEnabled() {
+    return typeof this.#rawView.isInputEnabled === 'function'
+      ? Boolean(this.#rawView.isInputEnabled())
+      : Boolean(this.#rawView.isInteractive());
   }
 
   notifyUserInteraction() {
@@ -3435,26 +3733,37 @@ export class InkView {
     if (this.#destroyed || this.#closeRequested) {
       return false;
     }
-    const appliedAutoHeight = this.#applyPendingAutoHeightContentSize();
-    const hasMoreWork = Boolean(this.#rawView.render());
-    const contentSizeChanged = this.#consumeContentSizeChanged();
-    this.#consumeMessageEvent();
-    this.#consumePerformanceEntry();
-    if (hasMoreWork) {
-      this.#clearResizeSnapshot();
-      this.#presentSurface();
-    } else if (appliedAutoHeight) {
-      this.#presentSurface({ useResizeSnapshot: true });
-    }
-    this.#consumeCloseRequested();
-    const closeRequested = this.#consumeClosed();
-    if (
-      !closeRequested &&
-      (hasMoreWork || contentSizeChanged || appliedAutoHeight || this.#autoRender)
-    ) {
+    if (this.#rendering) {
       this.requestRender();
+      return false;
     }
-    return !closeRequested && hasMoreWork;
+
+    this.#rendering = true;
+    try {
+      const appliedAutoHeight = this.#applyPendingAutoHeightContentSize();
+      const hasMoreWork = Boolean(this.#rawView.render());
+      const contentSizeChanged = this.#consumeContentSizeChanged();
+      this.#consumeMessageEvent();
+      this.#consumePerformanceEntry();
+      this.#consumeWindowOpenRequests();
+      if (hasMoreWork) {
+        this.#clearResizeSnapshot();
+        this.#presentSurface();
+      } else if (appliedAutoHeight) {
+        this.#presentSurface({ useResizeSnapshot: true });
+      }
+      this.#consumeCloseRequested();
+      const closeRequested = this.#consumeClosed();
+      if (
+        !closeRequested &&
+        (hasMoreWork || contentSizeChanged || appliedAutoHeight || this.#autoRender)
+      ) {
+        this.requestRender();
+      }
+      return !closeRequested && hasMoreWork;
+    } finally {
+      this.#rendering = false;
+    }
   }
 
   requestRender() {
@@ -3597,6 +3906,25 @@ export class InkView {
     this.#onPerformanceEntry = callback || null;
   }
 
+  setOnOpenRequested(callback) {
+    if (callback != null && typeof callback !== 'function') {
+      throw new TypeError('`callback` must be a function or null.');
+    }
+    this.onOpenRequested = callback || null;
+    return this;
+  }
+
+  get onOpenRequested() {
+    return this.#onOpenRequested;
+  }
+
+  set onOpenRequested(callback) {
+    if (callback != null && typeof callback !== 'function') {
+      throw new TypeError('`callback` must be a function or null.');
+    }
+    this.#onOpenRequested = callback || null;
+  }
+
   isCloseRequested() {
     return this.#closeRequested;
   }
@@ -3625,6 +3953,100 @@ export class InkView {
 
 export function createInkView(options) {
   return InkView.create(options);
+}
+
+/**
+ * Renders one widget entry through its optional `onPreview()` lifecycle and
+ * returns a detached ImageBitmap containing the final frame.
+ */
+export async function renderPreviewToImageBitmap(files, options = {}) {
+  const entry = typeof options.entry === 'string' ? options.entry.trim() : '';
+  if (!entry) {
+    throw new TypeError('`entry` must be a non-empty widget path.');
+  }
+
+  const width = Math.trunc(Number(options.width ?? 480));
+  const height = Math.trunc(Number(options.height ?? 140));
+  if (!Number.isFinite(width) || width <= 0) {
+    throw new TypeError('`width` must be a positive integer.');
+  }
+  if (!Number.isFinite(height) || height <= 0) {
+    throw new TypeError('`height` must be a positive integer.');
+  }
+  if (typeof globalThis.OffscreenCanvas !== 'function') {
+    throw new Error('renderPreviewToImageBitmap requires OffscreenCanvas support.');
+  }
+
+  const signal = options.signal;
+  signal?.throwIfAborted();
+  const bindings = await initInk();
+  signal?.throwIfAborted();
+
+  const targetCanvas = new globalThis.OffscreenCanvas(width, height);
+  const backingCanvas = createDomCanvas(width, height);
+  const rawView = new bindings.InkWebView(
+    width,
+    height,
+    1,
+    60,
+    'bounded',
+    null,
+    null,
+    false,
+    'default-transport',
+    configuredNavigatorHost,
+    [],
+    null,
+  );
+
+  try {
+    rawView.bindCanvas(backingCanvas);
+    previewAppSequence += 1;
+    rawView.openPreviewBundle(
+      `ink-preview-${Date.now()}-${previewAppSequence}`,
+      normalizeBundleFiles(files),
+      entry,
+      serializeQuery(options.query ?? null),
+    );
+
+    const animationFrame = ensureAnimationFrameApi();
+    while (!rawView.pollPreview()) {
+      signal?.throwIfAborted();
+      await new Promise((resolve, reject) => {
+        let handle = null;
+        const abort = () => {
+          animationFrame.cancel(handle);
+          reject(signal.reason);
+        };
+        handle = animationFrame.request(() => {
+          signal?.removeEventListener('abort', abort);
+          resolve();
+        });
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) {
+          abort();
+        }
+      });
+    }
+
+    signal?.throwIfAborted();
+    rawView.render();
+    const context = targetCanvas.getContext('2d');
+    if (!context || typeof context.drawImage !== 'function') {
+      throw new Error('Failed to create the offscreen preview rendering context.');
+    }
+    context.drawImage(backingCanvas, 0, 0, width, height);
+
+    if (typeof targetCanvas.transferToImageBitmap === 'function') {
+      return targetCanvas.transferToImageBitmap();
+    }
+    if (typeof globalThis.createImageBitmap === 'function') {
+      return globalThis.createImageBitmap(targetCanvas);
+    }
+    throw new Error('renderPreviewToImageBitmap requires ImageBitmap support.');
+  } finally {
+    rawView.destroy();
+  }
 }
 
 export function createFrameworkBindings() {

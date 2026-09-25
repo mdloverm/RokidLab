@@ -85,6 +85,16 @@ object AsrPushServer {
     @Volatile
     private var clientConn: Closeable? = null
 
+    /**
+     * 是否有手机连着（RFCOMM 或 WiFi 直连）。
+     *
+     * 这是**不经过 cxr-service** 的「手机在场」证据 —— 关键用途是给下行自愈当判据：
+     * 实测（2026-09-24）cxr-service 分发路由 stale 时，**CXR 侧回调链会一起废掉**
+     * （`onDisconnected` 不回调），于是 `core.bridgeConnected` 会**永远停在 true**，
+     * 拿它判"手机在不在"必然误判。本地 accept 到的这条连接才是可信的在场信号。
+     */
+    val hasClient: Boolean get() = clientConn != null
+
     private var rfcommServerSocket: BluetoothServerSocket? = null
     private var tcpServerSocket: ServerSocket? = null
     private var rfcommAcceptThread: Thread? = null

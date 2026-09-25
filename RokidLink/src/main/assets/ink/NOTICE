@@ -1,8 +1,13 @@
 Bundled third-party component
 =============================
 
-ink  (@yodaos-pkg/ink@0.13.0)
+ink  (@yodaos-pkg/ink@0.18.0)
 License: Apache License 2.0
+
+Upstream: https://github.com/yodaos-project/AIUI (npm @yodaos-pkg/ink)
+Upgraded from 0.13.0 on 2026-09-24. Changelog highlights 0.14 -> 0.18:
+streaming fetch/ReadableStream compat, <streamdown>/<table>/<video>,
+custom components, OPFS storage, widgets, agentWorkers, Web Audio.
 
 Files bundled in this directory:
     index.html
@@ -12,8 +17,17 @@ Files bundled in this directory:
     lab-page-bridge.js
     pkg/ink_web.js
     pkg/ink_web_bg.wasm
+    pkg/snippets/ink-web-5262d3ba706f4d95/src/audio_worklet/host.js
+    audio/ink_audio_worklet_processor.js
+    audio/ink_audio_worklet_processor_bg.wasm
+    audio/ink_audio_worklet_processor_bg.wasm.d.ts
+    audio/ink_audio_worklet_processor.d.ts
+    audio/worklet.js
+    audio/worklet-encoding.js
 
 lab-page-bridge.js is authored by this project and is covered by the
-project license, not the upstream one.
+project license, not the upstream one. index.html and host.js are this
+project's integration glue around the upstream runtime (createInkView /
+openBundle / startRendering) and are maintained locally.
 
 The full license text is provided in the LICENSE file next to this NOTICE.

@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -53,6 +54,8 @@ import com.rokidlab.phone.design.BrewTextBright
 internal fun ChatMessageActionsDialog(
     msg: ChatMsg,
     canRegenerate: Boolean,
+    /** 引用这条消息（挂到下一轮上下文）—— 用户与 AI 消息都能引 */
+    onQuote: () -> Unit,
     onCopy: () -> Unit,
     onEdit: () -> Unit,
     onRegenerate: () -> Unit,
@@ -76,6 +79,11 @@ internal fun ChatMessageActionsDialog(
                 color = BrewMuted,
                 fontSize = 11.sp,
                 modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 6.dp),
+            )
+            ActionItem(
+                icon = Icons.Filled.FormatQuote,
+                label = stringResource(R.string.chat_msg_quote),
+                onClick = onQuote,
             )
             ActionItem(
                 icon = Icons.Filled.ContentCopy,

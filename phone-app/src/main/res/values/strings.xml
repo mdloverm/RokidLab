@@ -361,15 +361,15 @@
     <string name="chat_events_cat_compaction">压缩</string>
     <string name="chat_events_cat_cut">作废</string>
     <string name="chat_events_cat_lifecycle">过程</string>
-    <string name="chat_trace_cost_tokens">输入 %1$s / 输出 %2$s</string>
+    <string name="chat_trace_cost_tokens">Token 用量 %1$s</string>
     <string name="chat_trace_cost_calls">%1$d 次模型调用</string>
     <string name="chat_trace_cost_elapsed">耗时 %1$s</string>
     <string name="chat_trace_cost_unknown">本轮用量未知（服务端未返回）</string>
-    <string name="chat_context_tokens">最近一轮 token：输入 %1$d / 输出 %2$d</string>
+    <string name="chat_context_tokens">最近一轮 token 用量：%1$d</string>
     <string name="chat_context_tokens_est">最近一轮输出约 %1$d 字（服务端未返回用量，无法给出 token 数）</string>
     <string name="chat_context_elapsed">耗时 %1$.1f 秒</string>
     <string name="chat_context_model_calls">%1$d 次模型调用</string>
-    <string name="chat_context_session_total">本会话累计 token：输入 %1$d / 输出 %2$d（%3$d 轮统计到的真实用量）</string>
+    <string name="chat_context_session_total">本会话累计 token 用量：%1$d（%2$d 轮统计到的真实用量）</string>
     <!-- 消息级操作（2026-09-19） -->
     <string name="chat_msg_actions">消息操作</string>
     <string name="chat_msg_copy">复制</string>
@@ -411,6 +411,72 @@
     <string name="chat_stop">停止</string>
     <string name="chat_think_on">思考开</string>
     <string name="chat_think_off">思考关</string>
+    <!-- 思考深度（输入栏思考图标弹出面板；同键写 mode 串与旧布尔，默认自动） -->
+    <string name="chat_think_mode_title">思考深度</string>
+    <string name="chat_think_mode_auto">自动</string>
+    <string name="chat_think_mode_deep">深度思考</string>
+    <string name="chat_think_mode_off">关闭</string>
+    <string name="chat_think_mode_hint">自动＝跟随模型默认；深度思考放开长输出预算；关闭尽可能不思考</string>
+    <string name="chat_think_desc_auto">跟随模型默认：推理模型照常思考，普通模型直接回答</string>
+    <string name="chat_think_desc_deep">放开长思考与输出预算，适合复杂问题（更慢、更耗 token）</string>
+    <string name="chat_think_desc_off">尽可能关闭思考，回答更快更省</string>
+    <!-- 输入栏「发送给大模型」：上拉菜单 + 待发送附件条 -->
+    <string name="chat_attach_title">发送给大模型</string>
+    <string name="chat_attach_file">上传文件</string>
+    <string name="chat_attach_file_hint">文本类文件（txt / md / csv / json / 代码）</string>
+    <string name="chat_attach_image">上传图片</string>
+    <string name="chat_attach_image_hint">发给支持看图的模型</string>
+    <string name="chat_attach_file_ready">已选文件，写完问题一起发送</string>
+    <string name="chat_attach_image_ready">已选图片，写完问题一起发送</string>
+    <string name="chat_attach_truncated">内容较长，已截断后发送</string>
+    <string name="chat_attach_remove">移除</string>
+    <string name="chat_attach_read_failed">无法读取该文件（可能不是文本格式）</string>
+    <string name="chat_attach_image_failed">无法读取该图片</string>
+    <string name="chat_attach_file_default_ask">请阅读并总结这个文件</string>
+    <string name="chat_attach_image_default_ask">请看这张图片</string>
+    <string name="chat_attach_context_header">【用户上传的文件：%1$s】</string>
+    <string name="chat_attach_camera">拍照</string>
+    <string name="chat_attach_camera_hint">用手机相机拍一张发给模型</string>
+    <string name="chat_attach_retry">重发上次附件</string>
+    <string name="chat_attach_retry_hint">沿用上一次发过的文件/图片</string>
+    <string name="chat_attach_chars">%1$d 字</string>
+    <string name="chat_attach_ctx_percent">约占上下文 %1$d%%</string>
+    <string name="chat_attach_file_unsupported">暂不支持读取 %1$s 文件：模型只能读文本类文件（txt / md / csv / 代码等）。可先把内容转成文本，或放进知识库</string>
+    <!-- 引用消息（挂到下一轮上下文） -->
+    <string name="chat_msg_quote">引用到下一轮</string>
+    <string name="chat_quote_from_me">引用我的消息</string>
+    <string name="chat_quote_from_ai">引用 AI 回复</string>
+    <string name="chat_quote_context_header">【用户引用的上文】</string>
+    <string name="chat_quote_only_send">请针对上面引用的内容回答</string>
+    <!-- 聊天文件卡（用户上传的文件 / AI 用容器写出的文件），只读 -->
+    <string name="chat_file_kind_text">文本</string>
+    <string name="chat_file_copy">复制内容</string>
+    <string name="chat_file_copied">内容已复制</string>
+    <string name="chat_file_expand">展开内容</string>
+    <string name="chat_file_collapse">收起内容</string>
+    <string name="chat_file_reading">读取中…</string>
+    <string name="chat_file_missing">文件已不在（可能被清理或移走）</string>
+    <string name="chat_file_truncated_view">内容较长，仅显示前 400 行；完整内容请用文件管理器打开</string>
+    <string name="chat_file_produced_caption">已写入文件</string>
+    <!-- Markdown 表格卡 / 公式卡 / Mermaid 卡 / 音视频卡 -->
+    <string name="chat_table_label">表格</string>
+    <string name="chat_table_shape">%1$d 行 · %2$d 列</string>
+    <string name="chat_formula_label">公式</string>
+    <string name="chat_mermaid_label">图表</string>
+    <string name="chat_render_failed">内容无法渲染，请查看原文</string>
+    <string name="chat_media_video">视频</string>
+    <string name="chat_media_audio">音频</string>
+    <string name="chat_media_play">点击播放</string>
+    <string name="chat_media_pause">暂停</string>
+    <string name="chat_media_playing">正在播放</string>
+    <string name="chat_media_loading">加载中…</string>
+    <!-- 输入栏供应商 / 模型选择面板 -->
+    <string name="chat_provider_pick_title">供应商与模型</string>
+    <string name="chat_provider_pick_empty">尚未配置供应商，先到「管理供应商」添加</string>
+    <string name="chat_provider_pick_manage">管理供应商</string>
+    <string name="chat_provider_pick_more">其余 %1$d 个模型</string>
+    <string name="chat_provider_switched">已切换：%1$s</string>
+    <string name="chat_provider_label_local">本地模型 · %1$s</string>
     <string name="chat_key_dialog_cancel">取消</string>
     <string name="chat_sending">正在连接眼镜发送中...</string>
     <string name="chat_send_failed">发送失败</string>
@@ -467,6 +533,23 @@
     <string name="chat_settings_quiz_instruction_placeholder">例如：只显示答案</string>
     <string name="chat_settings_source_official">乐奇官方</string>
     <string name="chat_settings_source_local">本地模型</string>
+    <!-- 模型供应商管理页（品牌列表 → 密钥 → 模型，替代原三个手填输入框） -->
+    <string name="chat_settings_provider_title">模型供应商</string>
+    <string name="chat_settings_provider_hint">选择品牌服务商，填入 API 密钥即可使用；支持同时保存多家</string>
+    <string name="chat_settings_provider_entry">模型供应商</string>
+    <string name="chat_settings_provider_entry_hint">点击选择服务商与模型</string>
+    <string name="chat_settings_provider_current">当前：%1$s · %2$s</string>
+    <string name="chat_settings_provider_custom_hint">自定义（OpenAI 兼容）</string>
+    <string name="chat_settings_provider_using">当前使用该供应商</string>
+    <string name="chat_settings_provider_using_badge">使用中</string>
+    <string name="chat_settings_provider_save_use">保存并使用</string>
+    <string name="chat_settings_provider_remove">删除配置</string>
+    <string name="chat_settings_provider_need_base_model">请填写服务地址与模型名</string>
+    <string name="chat_settings_provider_saved">已保存并启用：%1$s</string>
+    <string name="chat_settings_provider_model_current">模型：%1$s</string>
+    <string name="chat_settings_provider_model_manual">模型名（可直接输入）</string>
+    <string name="chat_settings_provider_model_manual_hint">输入模型 ID，如 custom-model</string>
+    <string name="chat_settings_provider_models_more">其余 %1$d 个模型未列出</string>
     <string name="chat_settings_source_custom">自定义服务</string>
     <string name="chat_settings_official_hint">使用官方乐奇作答，无需配置。</string>
     <string name="chat_settings_local_active_hint">当前本地模型：%1$s</string>
@@ -490,6 +573,7 @@
     <string name="ai_tool_cat_shell">本机执行</string>
     <string name="ai_tool_cat_mcp">外部 MCP</string>
     <string name="ai_tool_cat_browser">网页操作</string>
+    <string name="ai_tool_cat_screen">屏幕操作</string>
     <string name="chat_settings_mcp">外部 MCP</string>
     <string name="chat_settings_mcp_hint">连接第三方 MCP 服务，扩展 AI 能力</string>
     <string name="mcp_connecting">正在连接…</string>
@@ -811,6 +895,14 @@
     <string name="ai_tool_run_shell_desc">在手机的 Linux 环境执行命令，需先安装执行环境</string>
     <string name="ai_tool_install_packages_name">安装软件包</string>
     <string name="ai_tool_install_packages_desc">在本机 Linux 环境里装软件（联网下载，先经你确认）</string>
+    <string name="ai_tool_start_web_preview_name">启动网页预览</string>
+    <string name="ai_tool_start_web_preview_desc">在本机 Linux 环境启动持续运行的网页服务，聊天里可实时预览页面效果</string>
+    <string name="ai_tool_stop_web_preview_name">停止网页预览</string>
+    <string name="ai_tool_stop_web_preview_desc">停止正在运行的网页预览服务</string>
+    <string name="chat_preview_bar_label">网页预览运行中</string>
+    <string name="chat_preview_bar_open">打开</string>
+    <string name="chat_preview_stop">停止服务</string>
+    <string name="chat_preview_stop_done">预览服务已停止</string>
     <!-- 脚本库：把跑通的做法存下来复用（同样跑在本机 Linux 环境里） -->
     <string name="ai_tool_save_script_name">保存脚本</string>
     <string name="ai_tool_save_script_desc">把跑通的操作存成可复用脚本</string>
@@ -1014,7 +1106,7 @@
     <string name="screen_capture_channel_desc">截屏时短暂显示</string>
     <string name="screen_capture_capturing">正在截取屏幕…</string>
     <string name="ai_tool_capture_screen_name">截取手机屏幕</string>
-    <string name="ai_tool_capture_screen_desc">看手机屏幕上的内容，首次会弹系统授权框</string>
+    <string name="ai_tool_capture_screen_desc">看手机屏幕上的内容（开过无障碍后不再弹授权框）</string>
     <!-- 网页操作：在手机可见浏览器里替用户操作真实网站（登录态由用户自己建立） -->
     <string name="ai_tool_browser_open_name">打开网页</string>
     <string name="ai_tool_browser_open_desc">在手机浏览器里打开网址</string>
@@ -1028,6 +1120,22 @@
     <string name="ai_tool_browser_scroll_desc">上下滚动网页</string>
     <string name="ai_tool_browser_back_name">网页后退</string>
     <string name="ai_tool_browser_back_desc">返回网页上一页</string>
+    <!-- 屏幕操作：用无障碍在手机任意界面上替用户动手（读屏 → 点击/输入/滑动/按键）。
+         前提是用户在系统「设置 → 无障碍」里开过本 App 的服务，缺它时这些工具会现场引导。 -->
+    <string name="ai_tool_read_screen_name">读取手机界面</string>
+    <string name="ai_tool_read_screen_desc">读当前界面的可点元素与文字（不弹授权框）</string>
+    <string name="ai_tool_tap_screen_name">点击手机界面</string>
+    <string name="ai_tool_tap_screen_desc">按文案或编号点击界面上的控件</string>
+    <string name="ai_tool_swipe_screen_name">滑动手机界面</string>
+    <string name="ai_tool_swipe_screen_desc">上下左右滑动界面（滚动/翻页/下拉刷新）</string>
+    <string name="ai_tool_press_key_name">手机系统按键</string>
+    <string name="ai_tool_press_key_desc">返回/回桌面/最近任务/通知栏/快捷开关</string>
+    <string name="ai_tool_type_text_name">界面输入文字</string>
+    <string name="ai_tool_type_text_desc">往当前聚焦的输入框里填文字（不代填密码）</string>
+    <!-- 无障碍服务本身（显示在系统「设置 → 无障碍」的服务列表里） -->
+    <string name="accessibility_service_label">乐奇实验室·屏幕操作</string>
+    <string name="accessibility_service_summary">让乐奇实验室读取屏幕内容并执行点击/输入</string>
+    <string name="accessibility_service_desc">开启后，乐奇实验室可以读取当前界面的内容（用于回答你的问题、看屏幕上的字），并按你的要求点击、输入、滑动。截屏不会再弹系统授权框。可随时在此关闭，关闭后这些能力立即失效。</string>
     <!-- 浏览器页面外壳（BrowserActivity） -->
     <string name="browser_exit">返回</string>
     <string name="browser_title">浏览器</string>
@@ -1506,6 +1614,9 @@
     <string name="local_exec_share_public">已直通「%1$s」· 即容器 /mnt/lab</string>
     <string name="local_exec_share_private">未授权 · 点击开通下载目录直通</string>
     <string name="local_exec_share_unsupported">仅 Android 11 及以上支持直通</string>
+    <string name="local_exec_access_title">无障碍服务</string>
+    <string name="local_exec_access_on">已开启 · AI 可免弹窗截屏、读屏、点击与输入</string>
+    <string name="local_exec_access_off">未开启 · 开通后 AI 可免弹窗截屏、读屏、点击与输入</string>
     <string name="local_exec_report">检测报告</string>
     <string name="local_exec_uninstall_cta">删除环境</string>
     <string name="local_exec_uninstall">删除执行环境</string>
@@ -1613,6 +1724,7 @@
     <string name="permission_label_overlay">显示在其他应用上层</string>
     <string name="permission_label_all_files">所有文件访问</string>
     <string name="permission_label_exact_alarm">精确提醒</string>
+    <string name="permission_label_accessibility">无障碍服务</string>
     <string name="permission_dialog_title">需要开启权限</string>
     <string name="permission_dialog_message">「%1$s」需要以下权限：\n%2$s\n\n点「立即开启」后，在系统弹窗里选「允许」即可。</string>
     <string name="permission_dialog_allow">立即开启</string>

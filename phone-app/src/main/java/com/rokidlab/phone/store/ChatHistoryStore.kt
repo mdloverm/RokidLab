@@ -35,6 +35,10 @@ internal object ChatHistoryStore {
         put("time", msg.time)
         put("isStatus", msg.isStatus)
         msg.imageUrl?.let { put("imageUrl", it) }
+        // 本地文本附件：只存路径/名字/字数（正文在磁盘上，见 ChatMsg.filePath 的说明）
+        msg.filePath?.let { put("filePath", it) }
+        msg.fileName?.let { put("fileName", it) }
+        msg.fileChars?.let { put("fileChars", it) }
         // 过程步骤：空列表不落字段（老版本读到也不出错；老历史没有该字段=无过程）
         if (msg.trace.isNotEmpty()) put("trace", traceToJson(msg.trace))
         // 本轮成本：整组全空时不落字段（老历史没有该字段=用量未知）
@@ -252,6 +256,10 @@ internal object ChatHistoryStore {
             trace = traceFromJson(o.optJSONArray("trace")),
             usage = usageFromJson(o.optJSONObject("usage")),
             turn = if (o.has("t")) o.optInt("t") else null,
+            // 本地文本附件（用户上传 / AI 产出）：键名统一 file* 前缀，与 imageUrl 分开
+            filePath = o.optString("filePath", "").ifBlank { null },
+            fileName = o.optString("fileName", "").ifBlank { null },
+            fileChars = if (o.has("fileChars")) o.optInt("fileChars") else null,
         )
     }
 }

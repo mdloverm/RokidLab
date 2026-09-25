@@ -37,6 +37,13 @@ internal class CxrBridgeCoordinator(
         private const val SELF_HEAL_RESTART_DELAY_MS = 3_000L
         /** 自杀后兜底拉起的延迟：给 START_STICKY 留出重启时间，超时未起则由兜底闹钟显式拉起 */
         private const val SELF_HEAL_BOOTSTRAP_DELAY_MS = 20_000L
+        /** 常驻下行观测周期（每轮顺带记录下行年龄，便于事后取证） */
+        private const val DOWNLINK_WATCH_INTERVAL_MS = 60_000L
+        /** 「零下行」阈值：手机在场却连续这么久收不到任何下行 ⇒ 判 cxr-service 路由 stale。
+         *  取 180s 覆盖 ≥3 个手机端 ping 周期（60s），避开偶发抖动。 */
+        private const val DOWNLINK_SILENT_LIMIT_MS = 180_000L
+        /** 自愈最小间隔：防"重启也救不回来"时反复自杀（例如手机端自己没在发 ping） */
+        private const val SELF_HEAL_MIN_GAP_MS = 15 * 60_000L
     }
 
     /** 是否处于「断线武装」状态：onDisconnected 置 true，重连成功后启动观察窗口 */
@@ -51,6 +58,15 @@ internal class CxrBridgeCoordinator(
     /** B1：去重断连重建任务，避免堆叠导致订阅倍发 */
     private var pendingReconnect: Runnable? = null
 
+    /** 常驻下行观测任务引用（主线程 Handler），cancel 用 */
+    private var downlinkWatch: Runnable? = null
+
+    /** 观测基准时刻：此刻起算「零下行」（收到下行或本轮跳过判定时前移） */
+    private var downlinkBaseMs = 0L
+
+    /** 上次自愈时刻（限流用） */
+    private var lastSelfHealMs = 0L
+
     fun init() {
         try {
             core.bridge = CXRServiceBridge()
@@ -58,6 +74,9 @@ internal class CxrBridgeCoordinator(
                 override fun onConnected(name: String, address: String, type: Int) {
                     Log.i(TAG, "CXR connected: name=$name, address=$address, type=$type")
                     core.bridgeConnected = true
+                    // 常驻观测（幂等）：不能只靠下面的 reconnectArmed —— 路由 stale 时
+                    // onDisconnected 根本不会回调，那条"断线武装"的路永远等不到（见 armDownlinkWatch）
+                    armDownlinkWatch()
                     // 连接建立后若已连 WiFi，立即上行眼镜 IP（首次/重连后让手机端尽快拿到）
                     ipReporter.sendGlassesIp()
                     // 断线重连成功：cxr-service 分发路由可能在重连后 stale（订阅返回 0 但实际不投递，
@@ -76,6 +95,9 @@ internal class CxrBridgeCoordinator(
                     // 断线期不做路由判定：取消观察并武装，待重连成功后重新启动观察
                     reconnectArmed = true
                     cancelSelfHealCheck()
+                    // 常驻观测同期停：断线了就没有"下行"可言，继续跑只会白记；重连时 onConnected 会重新 arm
+                    // （若本次断线只因回调链已死而不回调，watch 仍在跑 —— 那正是我们要它兜的场景）
+                    cancelDownlinkWatch()
                     Log.i(TAG, "CXR disconnected, will re-init in 3s")
                     // 断线期间清空下行过滤窗口与累积 ASR，避免重连后误吞用户提问/误拦文本
                     core.downlinkUntilMs = 0L
@@ -295,6 +317,70 @@ internal class CxrBridgeCoordinator(
             val r = b.sendMessage(LinkProtocol.TOPIC_HELLO, caps)
             Log.i(TAG, "hello sent: version=${LinkProtocol.PROTOCOL_VERSION} caps=0x${LinkProtocol.Cap.ALL.toString(16)} linkVersion=$linkVersion -> $r")
         }.onFailure { Log.e(TAG, "announceHello failed", it) }
+    }
+
+    // ──────────────────────────────────────────────
+    //  常驻下行观测（覆盖「回调链一起死、断线武装等不到」的场景）
+    // ──────────────────────────────────────────────
+
+    /**
+     * 常驻观测：手机在场（本地 accept 到 RFCOMM/TCP 客户端）却长时间收不到任何下行
+     * ⇒ 判定 cxr-service 分发路由 stale 并自愈。
+     *
+     * 为什么必须**常驻**、而不是只挂在「断线重连」上：
+     * 2026-09-24 真机取证证明，路由 stale 时 **CXR 侧回调链会一起废掉** ——
+     * `onDisconnected` 不回调 ⇒ `reconnectArmed` 永不置位 ⇒ 观察窗永不武装 ⇒
+     * 故障静默存活到下一次进程重启（实测 27 分钟零恢复，用户表现为「眼镜语音有几率
+     * 不进 Lab、也有几率不走自定义模型」，其实是「某次闪断后就一直坏」）。
+     * ⚠️ 该状态下 `core.bridgeConnected` 会永远停在 true，**不可信**；
+     * 只能用 [AsrPushServer.hasClient]（不经过 cxr-service）作为「手机真的在场」的证据。
+     */
+    private fun armDownlinkWatch() {
+        if (downlinkWatch != null) return
+        downlinkBaseMs = System.currentTimeMillis()
+        val task = object : Runnable {
+            override fun run() {
+                runCatching { checkDownlinkHealth() }
+                core.mainHandler.postDelayed(this, DOWNLINK_WATCH_INTERVAL_MS)
+            }
+        }
+        downlinkWatch = task
+        core.mainHandler.postDelayed(task, DOWNLINK_WATCH_INTERVAL_MS)
+        Log.i(TAG, "downlink watch armed (interval=${DOWNLINK_WATCH_INTERVAL_MS}ms, " +
+            "limit=${DOWNLINK_SILENT_LIMIT_MS}ms)")
+    }
+
+    private fun cancelDownlinkWatch() {
+        downlinkWatch?.let { core.mainHandler.removeCallbacks(it) }
+        downlinkWatch = null
+    }
+
+    private fun checkDownlinkHealth() {
+        val now = System.currentTimeMillis()
+        val since = maxOf(core.lastDownlinkMs, downlinkBaseMs)
+        val silentMs = now - since
+        // 手机不在场（本地没有客户端连着）：不动手，否则手机关机/在远处时会反复自杀重启
+        if (!AsrPushServer.hasClient) {
+            downlinkBaseMs = now
+            Log.i(TAG, "downlink watch: no RFCOMM client (phone away), reset " +
+                "(last downlink ${silentMs / 1000}s ago)")
+            return
+        }
+        if (silentMs < DOWNLINK_SILENT_LIMIT_MS) {
+            Log.d(TAG, "downlink watch: healthy, last downlink ${silentMs / 1000}s ago")
+            return
+        }
+        if (now - lastSelfHealMs < SELF_HEAL_MIN_GAP_MS) {
+            downlinkBaseMs = now
+            Log.w(TAG, "downlink watch: stale ${silentMs / 1000}s but self-heal throttled " +
+                "(last ${(now - lastSelfHealMs) / 1000}s ago)")
+            return
+        }
+        Log.w(TAG, "downlink watch: phone present but NO downlink for ${silentMs / 1000}s " +
+            "— cxr-service route stale, restarting process")
+        lastSelfHealMs = now
+        downlinkBaseMs = now
+        selfHealRestart()
     }
 
     // ──────────────────────────────────────────────

@@ -800,6 +800,100 @@ object ProotShell {
         return GuestConfigResult(dnsOk, aptSourceOk = aptOk, notes = notes)
     }
 
+    // ═══════════════════ 常驻执行（网页预览）═════════════════════════
+
+    /**
+     * 常驻执行的返回：进程句柄 + 脚本文件。
+     *
+     * 为什么把脚本文件一并交出去：脚本在常驻期间**不能删**（guest 按 `/tmp/<name>` 继续读），
+     * 而文件名在函数内部生成（含序号），调用方拿不到就删不掉 —— 让本函数交还引用，
+     * 停止时由调用方删除，不留垃圾。
+     */
+    class ResidentProcess(val process: Process, val scriptFile: File)
+
+    /**
+     * 常驻执行：把 proot 进程**拉起来就返回**，不等待、不设超时 —— 网页预览这类
+     * 「要一直活着的服务」专用（生命周期归 [com.rokidlab.phone.platform.WebPreviewManager] 管）。
+     *
+     * 与 [runScript] 共用同一套 rootfs 参数与 guest 环境，差异只有三点：
+     *  1. 脚本**不删**（进程活着就得能读）；停止时由调用方删，或随 rootfs 重装一起清空；
+     *  2. 不占执行槽位（[MAX_CONCURRENT_EXECUTIONS] 管的是"等结果"的命令）—— 但**拉起进程**
+     *     的那一瞬仍要取共享读锁：只防「与 rm -rf rootfs 交叠」，不长期持有
+     *     （长期持有会让安装侧的独占锁永远等不到）。安装/重装侧在动手前会先 stopAll；
+     *  3. 注入 `PREVIEW_PORT` 环境变量：端口由调用方在**宿主侧**预先分好（空闲端口），
+     *     guest 里的服务绑定它 —— 容器与宿主共享网络栈，宿主侧 127.0.0.1:port 直接可达。
+     *     让模型用 `$PREVIEW_PORT` 而不是自己挑端口，才能杜绝「挑了一个已被占用的端口」。
+     *
+     * @param script 完整脚本内容（含 shebang 不需要，bash 直接执行）。
+     *   ⚠️ 服务命令必须**前台运行**：脚本不退出 = 进程常驻；脚本退出 = 服务结束。
+     * @return 拉起的进程与脚本文件；rootfs 未就绪 / 抢不到锁 / 启动异常返回 null（原因记 logcat）。
+     */
+    fun startResident(
+        ctx: Context,
+        script: String,
+        previewPort: Int,
+        onLine: ((String) -> Unit)? = null,
+    ): ResidentProcess? {
+        if (!rootfsReady(ctx)) {
+            Log.w(TAG, "startResident: rootfs 未就绪")
+            return null
+        }
+        val tmp = guestTmpDir(ctx)
+        if (!tmp.exists() && !tmp.mkdirs()) {
+            Log.w(TAG, "startResident: 无法创建 guest 临时目录 ${tmp.absolutePath}")
+            return null
+        }
+        ensureGuestDirs(ctx)
+        val name = "rl-preview-${scriptSeq.incrementAndGet()}-${System.currentTimeMillis() % 100000}.sh"
+        val file = File(tmp, name)
+        return try {
+            // CRLF 教训同 runScriptLocked（Windows 侧传进来的脚本）
+            file.writeText(script.replace("\r\n", "\n"))
+            val binds = listOfNotNull(ensureShareBind(ctx), ensureExtrasBind(ctx))
+            val extraPath = guestExtraPath(ctx)
+            val pathValue = if (extraPath.isEmpty()) GUEST_PATH else "$GUEST_PATH:$extraPath"
+            val args = baseArgs(ctx, binds) + listOf(
+                "/usr/bin/env", "-i",
+                "PATH=$pathValue",
+                "HOME=$GUEST_HOME",
+                "TERM=dumb",
+                "LANG=C.UTF-8",
+                "PREVIEW_PORT=$previewPort",
+                "/bin/bash", "--noprofile", "--norc", "/tmp/$name",
+            )
+            // 与「换整个 rootfs」互斥：只在拉起进程这一瞬持有（见 KDoc 第 2 点）
+            val readLock = rootfsLock.readLock()
+            if (!runCatching { readLock.tryLock(EXEC_WAIT_SEC, TimeUnit.SECONDS) }.getOrDefault(false)) {
+                Log.w(TAG, "startResident: rootfs 正在安装/更新，放弃启动")
+                return null
+            }
+            try {
+                workDir(ctx).mkdirs()
+                tmpDir(ctx).mkdirs()
+                val pb = ProcessBuilder(listOf(prootFile(ctx).absolutePath) + args)
+                pb.directory(workDir(ctx))
+                pb.environment()["PROOT_TMP_DIR"] = tmpDir(ctx).absolutePath
+                pb.environment()["PROOT_LOADER"] = loaderFile(ctx).absolutePath
+                val proc = pb.start()
+                // 两个管道必须并发读（ProcessRun 的教训），否则管道写满就双向死锁
+                Thread {
+                    runCatching { proc.inputStream.bufferedReader().forEachLine { onLine?.invoke(it) } }
+                }.apply { isDaemon = true }.start()
+                Thread {
+                    runCatching { proc.errorStream.bufferedReader().forEachLine { onLine?.invoke(it) } }
+                }.apply { isDaemon = true }.start()
+                ResidentProcess(proc, file)
+            } finally {
+                unlockLogged(readLock)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "startResident 失败：${e.javaClass.simpleName}: ${e.message}")
+            runCatching { file.delete() }
+            null
+        }
+        // 成功路径不删脚本：常驻进程要按 /tmp/<name> 继续读它（stop 时由 WebPreviewManager 清）
+    }
+
     // ═══════════════════ 工具 ═══════════════════
 
     /** POSIX 单引号转义：`it's` → `'it'\''s'`。用于把路径安全塞进脚本。 */

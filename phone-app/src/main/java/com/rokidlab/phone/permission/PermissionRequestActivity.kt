@@ -25,7 +25,10 @@ import com.rokidlab.phone.util.ManufacturerUtils
  *
  * 交互取值：**能自动做的不让用户手动找**
  *  1. 运行时权限 → 直接调 AOSP `requestPermissions`（全 ROM 都实现，不挑品牌）；
- *  2. 悬浮窗这种"只能去设置页"的权限 → 直接跳到设置页（标准页优先，厂商页兜底）；
+ *  2. 悬浮窗/所有文件/精确闹钟/无障碍这种"只能去设置页"的权限 → 直接跳到设置页（标准页优先，厂商页兜底）；
+ *     ⚠️ 其中**无障碍**是唯一"跳过去之后还得用户自己找那一行"的：系统没有直达本应用的公开入口，
+ *     也禁止 App 自开（见 [AppPermission.ACCESSIBILITY] 的注释）。所以引导文案只能说
+ *     "已为你打开设置页"，**不能**说"已为你开启"。
  *  3. 系统弹窗被拒/被 ROM 静默拒绝（`shouldShowRequestPermissionRationale` 为 false）
  *     → **直接跳到该权限对应的设置页**，而不是丢一句"请自行去设置里开"。
  */
@@ -172,6 +175,8 @@ class PermissionRequestActivity : AppCompatActivity() {
             AppPermission.OVERLAY -> ManufacturerUtils.openOverlaySettings(this)
             AppPermission.ALL_FILES -> ManufacturerUtils.openAllFilesSettings(this)
             AppPermission.EXACT_ALARM -> openExactAlarmSettings()
+            // 无障碍是"系统设置里手动开"的开关，没有系统授权框可弹 —— 只能把人送到那一页
+            AppPermission.ACCESSIBILITY -> ManufacturerUtils.openAccessibilitySettings(this)
             else -> ManufacturerUtils.openAppPermissionSettings(this, permission.manifestName)
         }
         if (!handled) {

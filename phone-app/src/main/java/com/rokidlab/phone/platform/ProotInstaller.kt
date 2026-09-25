@@ -212,6 +212,9 @@ object ProotInstaller {
             ?: return@withContext Capability.Unavailable("下载失败（${MIRRORS.size} 个镜像都不可用）：$lastError")
 
         // ④ 破坏性区间（先 rm -rf 再解压）⇒ 必须独占；本段全是阻塞调用，同一线程收尾。
+        // 常驻预览服务跑在这个 rootfs 上：先全部停掉，避免服务进程从自己脚下被抽走
+        // （rm -rf 之后 tracee 悬空、端口被野进程占着，模型与用户都无从知晓）。
+        WebPreviewManager.stopAll(ctx, "rootfs 安装/更新")
         if (!ProotShell.tryLockRootfsExclusive(ROOTFS_LOCK_WAIT_SEC)) {
             runCatching { zip.delete() }
             return@withContext Capability.Unavailable(
@@ -292,6 +295,8 @@ object ProotInstaller {
     fun uninstall(ctx: Context): ExecResult {
         val work = ProotShell.workDir(ctx)
         if (!work.exists()) return ExecResult(0, "", "")
+        // 卸载会删掉整个 rootfs：常驻预览服务先停（同 install 的理由）
+        WebPreviewManager.stopAll(ctx, "rootfs 卸载")
         if (!ProotShell.tryLockRootfsExclusive(ROOTFS_LOCK_WAIT_SEC)) {
             return ExecResult(
                 -1, "", "",

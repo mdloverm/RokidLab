@@ -480,6 +480,11 @@ adb/
   之所以走域而不走黑名单：域是装配单位，摘掉后页面拿到的**工具清单**里也不会有它。
   ⚠️ 同域的 `save_script` / `list_scripts` / `run_script` / `delete_script` 一并被摘除 ——
   这是有意的：脚本库只是"把命令存下来再跑"，留着它等于给页面留一条任意命令执行的侧门。
+  ⚠️ **2026-09-23 起同时摘除 `screen` 域**（`DOMAIN_ALL - DOMAIN_SHELL - DOMAIN_SCREEN`）：
+  屏幕操作域里是 `tap_screen`（**在整台手机上注入任意触摸**）、`type_text`、`read_screen`（读任意 App
+  的界面文字），判据与 `shell` 域完全一致 —— 它是"把整机交给页面作者"的能力原语，
+  而不是"某个工具危险"。对话路径（用户在场、可追问、可撤销）保留全部能力。
+  要放开同样只改 `PageScope.ALLOWED_DOMAINS` 上那一个减法（`ScreenOpToolTest` 会跟着失败）。
 - **`DENY_TOOLS` 只放技术故障工具**（如 `open_aiui_app` 自指递归），**不放"危险"工具**，安全边界由 `isEnabled` 总开关负责；按"危险"收窄要落在**域**白名单上（见上一条），不加进这张表
 - **结果截断 8000 字符**：RFCOMM 单帧上限 64KB，且页面渲染不下超长文本
 - **15s 超时后不 interrupt**：工具可能持有文件/网络资源，强中断留下半写状态，让线程自己跑完（daemon 线程不阻塞进程退出）

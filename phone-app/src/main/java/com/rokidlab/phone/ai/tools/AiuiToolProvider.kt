@@ -68,6 +68,10 @@ internal object AiuiToolProvider : ToolProvider {
                             "description" to "演示位置：phone=在手机上演示（对话里浮出卡片，可全屏用触摸操作），glasses=在眼镜上打开。按用户说法选；用户没说就先问一句，不要默认替用户决定",
                         ),
                         "params" to mapOf("type" to "string", "description" to "传给该应用的启动参数，JSON 对象字符串（如 {\"songName\":\"七里香\"}）。只要用户要求“用/通过/拿某个智能体去做某事”并给出了具体对象/参数，就必须填写并调用本工具；只是“打开某应用”时可不传。传参用页面期望的参数名（如 songName / keyword / city），不确定就留空，让页面用自己的默认值处理。"),
+                        "color" to mapOf(
+                            "type" to "boolean",
+                            "description" to "仅 target=phone 时可传：以彩色主题打开手机预览（自动打包注入全彩主题 yodaos-sprite-full）。**只有用户明确说出“彩色/全彩/带颜色”时才传 true**，平时不要传；眼镜是单色绿光屏不支持彩色，target=glasses 时禁止传本参数。",
+                        ),
                     ),
                     "required" to listOf("appName"),
                 ),
@@ -148,7 +152,15 @@ internal object AiuiToolProvider : ToolProvider {
                 val appName = args.optString("appName").trim()
                 if (appName.isEmpty()) return "请告诉我要打开哪个智能体应用"
                 val targetPhone = args.optString("target").trim().equals("phone", ignoreCase = true)
+                // 彩色预览：用户明确要求"彩色/全彩"时才为 true（眼镜单色绿光屏不支持彩色，
+                // 手机包打包时注入 yodaos-sprite-full，眼镜包始终走默认绿）
+                val colorRequested = args.optBoolean("color", false)
+                if (colorRequested && !targetPhone) {
+                    return "彩色显示只有手机预览支持（眼镜屏是单色绿光波导，物理上没有彩色通道）。" +
+                        "可以先用 target=phone 的彩色版看效果；要看真实眼镜效果请去掉彩色要求"
+                }
                 var agent = ToolRegistry.matchAiuiAgent(context, appName)
+                var colorAix: java.io.File? = null
                 // 注册表里没有 → 可能是**刚生成、还没送到眼镜**的项目（注册表只由 install_aiui_project 写入）。
                 // 这里就地打包 + 登记：手机上演示本来就不需要眼镜，"送到眼镜"也只是推一次，
                 // 都不该逼用户先单独跑一遍安装流程。
@@ -176,6 +188,11 @@ internal object AiuiToolProvider : ToolProvider {
                                 ),
                             )
                         }
+                        if (colorRequested) {
+                            // 彩色预览：绿包照常登记（后续装眼镜不受影响），另出一份彩色包
+                            colorAix = AiuiProject.buildAix(context, proj, display, colorTheme = true)?.aixFile
+                                ?: return "「$proj」彩色版打包失败"
+                        }
                         agent = ToolRegistry.matchAiuiAgent(context, name)
                     }
                 }
@@ -195,7 +212,19 @@ internal object AiuiToolProvider : ToolProvider {
                 // ── 手机端演示：本机 WebView 用同一套 ink 引擎渲染，浮在对话里 ──
                 // 与眼镜那样"推过去再戴上看"相比，这条路省掉了整段投屏链路，改一版看一眼只要几秒。
                 if (targetPhone) {
-                    if (!localAix.isFile) {
+                    var demoAix = localAix
+                    if (colorRequested) {
+                        if (colorAix == null) {
+                            // agent 早已登记（非本轮就地打包）→ 从登记的源码项目现打彩色包
+                            val proj = AiuiAppRegistry.getByAgentId(context, agent.agentId)
+                                ?.project?.takeIf { it.isNotBlank() }
+                                ?: return "「${agent.name}」本地没有源码项目，出不了彩色版（只有对话生成的项目支持彩色预览）"
+                            colorAix = AiuiProject.buildAix(context, proj, agent.name, colorTheme = true)?.aixFile
+                                ?: return "「${agent.name}」彩色版打包失败（项目可能不符合 AIUI 规范，需要我先读一遍源码找问题吗）"
+                        }
+                        demoAix = colorAix
+                    }
+                    if (!demoAix.isFile) {
                         return "「${agent.name}」是内置/官方智能体，本机没有 .aix 包，只能在眼镜上打开；" +
                             "手机上演示目前只支持对话生成或本地上传的应用"
                     }
@@ -205,11 +234,12 @@ internal object AiuiToolProvider : ToolProvider {
                         AiuiDemoController.Session(
                             appName = agent.name,
                             agentId = agent.agentId,
-                            aix = localAix,
+                            aix = demoAix,
                             launchParams = launchParams,
                         ),
                     )
-                    return "好的，已在手机上演示「${agent.name}」（对话里的卡片，点「全屏操作」可用触摸滑动与点击）"
+                    val colorNote = if (colorRequested) "彩色版，" else ""
+                    return "好的，已在手机上演示「${agent.name}」（${colorNote}对话里的卡片，点「全屏操作」可用触摸滑动与点击）"
                 }
 
                 // ── 眼镜端 ──

@@ -276,6 +276,26 @@ object ManufacturerUtils {
     fun openAllFilesSettings(context: Context): Boolean =
         launchFirstAvailable(context, allFilesCandidates(context))
 
+    /**
+     * 「无障碍」设置页（屏幕操作域与零弹窗截屏的前提）。
+     *
+     * 与别的权限页不同，这一页**没有"直达本应用那一行"的公开 Action**：`ACTION_ACCESSIBILITY_SETTINGS`
+     * 只能打开服务列表，用户还得在列表里找到「乐奇实验室」再打开开关；而且系统不允许 App 自己开无障碍
+     * （能自己开的话这个开关就等于不存在）。所以候选链只到"列表页 → 应用详情页兜底"，
+     * 这一步的"最后一公里"只能交给用户 —— 也正因如此，[com.rokidlab.phone.permission.AppPermission.ACCESSIBILITY]
+     * 的引导文案不能写成"已为你开启"，只能如实说"已为你打开设置页"。
+     */
+    fun openAccessibilitySettings(context: Context): Boolean =
+        launchFirstAvailable(context, accessibilityCandidates(context))
+
+    private fun accessibilityCandidates(context: Context): List<Intent> {
+        val standard = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+        val detail = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:${context.packageName}")
+        }
+        return listOf(standard, detail)
+    }
+
     @android.annotation.SuppressLint("NewApi")
     private fun allFilesCandidates(context: Context): List<Intent> {
         val pkg = context.packageName

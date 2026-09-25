@@ -201,13 +201,14 @@ internal fun ContextUsageDialog(
             //    用户会把它当账单读。
             usage.lastTurn?.let { last ->
                 Text(
+                    // 合计口径（2026-09-25）：不再拆输入/输出。走 estimate 分支的轮次
+                    // 服务端根本没回 token，不能拿 0 凑数（见 TurnSnapshot.estimated）
                     text = if (last.estimated) {
                         stringResource(R.string.chat_context_tokens_est, last.outputChars)
                     } else {
                         stringResource(
                             R.string.chat_context_tokens,
-                            last.inputTokens ?: 0,
-                            last.outputTokens ?: 0,
+                            (last.inputTokens ?: 0) + (last.outputTokens ?: 0),
                         )
                     },
                     color = BrewMuted,
@@ -232,10 +233,10 @@ internal fun ContextUsageDialog(
             }
             usage.sessionTotals?.let { t ->
                 Text(
+                    // 合计口径（2026-09-25）：SessionTotals.total = input + output
                     text = stringResource(
                         R.string.chat_context_session_total,
-                        t.inputTokens,
-                        t.outputTokens,
+                        t.total,
                         t.turnsWithUsage,
                     ),
                     color = BrewMuted,

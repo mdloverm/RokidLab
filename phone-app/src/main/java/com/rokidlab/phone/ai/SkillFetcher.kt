@@ -257,19 +257,35 @@ object SkillFetcher {
     // 本地 lab-runtime.md 等配套文件由调用方决定不写，天然保留。
     // ═══════════════════════════════════════════════════════════
 
-    /** 官方 aiui-dev 目录内全部 .md 文件名（当前 main 分支清单） */
-    private val OFFICIAL_AIUI_DEV_FILES = listOf(
-        "SKILL.md",
-        "apis-ai.md",
-        "apis-canvas.md",
-        "apis-device.md",
-        "apis-media.md",
-        "apis-web.md",
-        "apis-wx.md",
-        "apis.md",
-        "components.md",
-        "design-system-green.md",
-        "wxss.md",
+    /**
+     * 官方 aiui-dev 文件清单：本地平铺文件名 → 上游仓库相对路径（当前 main 分支结构）。
+     *
+     * ⚠️ 上游 2026-09 起把参考文档拆进 references/ 子目录（apis/ 按域分册），而本端
+     * seedBundledSkills / load_skill 只认一层平铺 .md —— 故以映射表拍平：
+     * 拉取用上游路径，落盘/展示用本地名。本地新增配套文件（lab-runtime.md）不在此列，
+     * 由 SkillRegistry.LOCAL_COMPANION_SKILL_FILES 管辖。
+     */
+    private val OFFICIAL_AIUI_DEV_FILES: Map<String, String> = mapOf(
+        "SKILL.md" to "SKILL.md",
+        "framework.md" to "references/framework.md",
+        "events.md" to "references/events.md",
+        "checklist.md" to "references/checklist.md",
+        "components.md" to "references/components.md",
+        "wxss.md" to "references/wxss.md",
+        "design-system-green.md" to "references/design/monochrome-green.md",
+        // ── APIs（apis.md = 官方 references/apis/index.md 索引；其余按域分册）──
+        "apis.md" to "references/apis/index.md",
+        "apis-framework.md" to "references/apis/framework.md",
+        "apis-ai.md" to "references/apis/ai.md",
+        "apis-canvas.md" to "references/apis/canvas.md",
+        "apis-device.md" to "references/apis/device.md",
+        "apis-media.md" to "references/apis/media.md",
+        "apis-web.md" to "references/apis/web.md",
+        "apis-wx.md" to "references/apis/wx.md",
+        "apis-navigator.md" to "references/apis/navigator.md",
+        "apis-window.md" to "references/apis/window.md",
+        "apis-widget.md" to "references/apis/widget.md",
+        "apis-agent-worker.md" to "references/apis/agent-worker.md",
     )
 
     /** 官方 aiui-dev 技能仓库信息 */
@@ -287,22 +303,22 @@ object SkillFetcher {
      */
     fun fetchOfficialAiuiDevFiles(): Map<String, String> {
         val result = mutableMapOf<String, String>()
-        for (file in OFFICIAL_AIUI_DEV_FILES) {
+        for ((localName, upstreamPath) in OFFICIAL_AIUI_DEV_FILES) {
             val sources = listOf(
-                "https://cdn.jsdelivr.net/gh/$OFFICIAL_OWNER/$OFFICIAL_REPO@$OFFICIAL_BRANCH/$OFFICIAL_DIR/$file",
-                "https://raw.githubusercontent.com/$OFFICIAL_OWNER/$OFFICIAL_REPO/$OFFICIAL_BRANCH/$OFFICIAL_DIR/$file",
+                "https://cdn.jsdelivr.net/gh/$OFFICIAL_OWNER/$OFFICIAL_REPO@$OFFICIAL_BRANCH/$OFFICIAL_DIR/$upstreamPath",
+                "https://raw.githubusercontent.com/$OFFICIAL_OWNER/$OFFICIAL_REPO/$OFFICIAL_BRANCH/$OFFICIAL_DIR/$upstreamPath",
             )
             var ok = false
             for (src in sources) {
                 try {
-                    result[file] = String(downloadBytes(src, 8000, 12000), Charsets.UTF_8)
+                    result[localName] = String(downloadBytes(src, 8000, 12000), Charsets.UTF_8)
                     ok = true
                     break
                 } catch (e: Exception) {
-                    Log.w(TAG, "fetch official $file failed via $src: ${e.message}")
+                    Log.w(TAG, "fetch official $localName failed via $src: ${e.message}")
                 }
             }
-            if (!ok) Log.w(TAG, "fetchOfficialAiuiDevFiles: 官方文件 $file 两个源均下载失败")
+            if (!ok) Log.w(TAG, "fetchOfficialAiuiDevFiles: 官方文件 $localName 两个源均下载失败")
         }
         return result
     }

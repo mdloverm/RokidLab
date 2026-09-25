@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SwitchDefaults
@@ -64,7 +65,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// ===== 知识库管理对话框 =====
+// ===== 知识库管理弹层 =====
+// 2026-09-25 用户反馈"知识库弹出与其他几个不一致"：供应商 / 思考 / 附件当天已统一为
+// ModalBottomSheet 上拉层，唯独这里还是居中悬浮 Dialog ⇒ 升级为同款 sheet
+//（点遮罩关闭、从底部滑入）；查看/编辑正文仍保留独立 Dialog（编辑要弹键盘，铺满窗口更好用）。
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 internal fun KbManageDialog(
     onDismiss: () -> Unit,
@@ -122,18 +127,18 @@ internal fun KbManageDialog(
         }
     }
 
-    Dialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        containerColor = BrewPanel,
+        contentColor = BrewTextBright,
     ) {
+        // 整张 sheet 内容可滚：语义检索区 + 文档列表叠起来可能超过一屏，
+        // 文档列表不再自带滚动容器（双层同向滚动会抢手势）
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 28.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(BrewPanel)
-                .border(1.dp, BrewBorder, RoundedCornerShape(20.dp))
-                .padding(20.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -197,7 +202,8 @@ internal fun KbManageDialog(
                     )
                 }
             } else {
-                Column(modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                // 滚动交给整张 sheet 的外层（上面已 verticalScroll），列表自身不再限高
+                Column {
                     docs.forEach { doc ->
                         Row(
                             modifier = Modifier
@@ -259,37 +265,38 @@ internal fun KbManageDialog(
                 }
             }
         }
+    }
 
-        // 查看/编辑：单独一个窗口叠在列表之上。为什么不在列表里就地展开 ——
-        // 正文动辄上千字，就地展开既没有滚动容器、也没有编辑空间（用户实测：看不全、改不了）。
-        val vid = viewingId
-        if (vid != null) {
-            KbDocViewerDialog(
-                docId = vid,
-                docName = viewingName,
-                onDismiss = { viewingId = null },
-                onSaved = {
-                    docs = KnowledgeBase.listDocs(ctx)
-                    // 编辑保存 = 旧块删除、新块 embedding 为 NULL；语义检索开启时静默增量补齐，
-                    // 否则向量索引停留在旧文本（关键词通道不受影响，手动「立即索引」也可补）
-                    val snap = com.rokidlab.phone.ai.embedding.EmbeddingSettings.load(ctx)
-                    if (snap.ready && KnowledgeBase.vectorStatus(ctx).let { it.embeddedChunks < it.totalChunks }) {
-                        scope.launch {
-                            runCatching {
-                                withContext(Dispatchers.IO) {
-                                    KnowledgeBase.backfillEmbeddings(
-                                        ctx,
-                                        snap.baseUrl,
-                                        com.rokidlab.phone.ai.embedding.EmbeddingSettings.apiKey(ctx),
-                                        snap.model,
-                                    )
-                                }
+    // 查看/编辑：单独一个窗口叠在 sheet 之上（放在 sheet 外层组合，不嵌进 sheet 的 popup 里）。
+    // 为什么不在列表里就地展开 —— 正文动辄上千字，就地展开既没有滚动容器、也没有编辑空间
+    //（用户实测：看不全、改不了）；保持 Dialog 形态：编辑要弹键盘，铺满的独立窗口更稳。
+    val vid = viewingId
+    if (vid != null) {
+        KbDocViewerDialog(
+            docId = vid,
+            docName = viewingName,
+            onDismiss = { viewingId = null },
+            onSaved = {
+                docs = KnowledgeBase.listDocs(ctx)
+                // 编辑保存 = 旧块删除、新块 embedding 为 NULL；语义检索开启时静默增量补齐，
+                // 否则向量索引停留在旧文本（关键词通道不受影响，手动「立即索引」也可补）
+                val snap = com.rokidlab.phone.ai.embedding.EmbeddingSettings.load(ctx)
+                if (snap.ready && KnowledgeBase.vectorStatus(ctx).let { it.embeddedChunks < it.totalChunks }) {
+                    scope.launch {
+                        runCatching {
+                            withContext(Dispatchers.IO) {
+                                KnowledgeBase.backfillEmbeddings(
+                                    ctx,
+                                    snap.baseUrl,
+                                    com.rokidlab.phone.ai.embedding.EmbeddingSettings.apiKey(ctx),
+                                    snap.model,
+                                )
                             }
                         }
                     }
-                },
-            )
-        }
+                }
+            },
+        )
     }
 }
 

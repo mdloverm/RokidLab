@@ -11,9 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -31,6 +29,7 @@ import com.rokidlab.phone.R
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.design.BrewAmber
 import com.rokidlab.phone.design.BrewChat
+import com.rokidlab.phone.design.BrewCoral
 import com.rokidlab.phone.design.BrewMuted
 import com.rokidlab.phone.design.BrewPanel
 
@@ -48,15 +47,23 @@ private val ICON_BUTTON_SIZE = 40.dp
 private val ICON_SIZE = 24.dp
 
 // ===== 顶部标题栏 =====
+//
+// 构成：标题（点开会话列表） + 右侧三个按钮［本机模式 · 清空对话 · 设置］。
+//
+// ⚠️ 2026-09-24 来回挪过一次，结论记在这里免得后人再试：
+//   当天先把「本机模式 / 拍照 / 知识库 / 清空」四个一起下移到输入栏，理由是想给标题腾宽度；
+//   但用户随后指出**本机模式与清空属于"全局状态类"动作**（一个是全局开关、一个清整段对话），
+//   跟"发消息顺手点"的拍照/知识库不是一类，放输入栏反而难找 ⇒ 只把这两个挪回顶栏。
+//   拍照 / 知识库留在输入栏（它们确实是发消息前的取材动作）。
 @Composable
 internal fun ChatHeader(
-    onPhotoAsk: () -> Unit,
-    onOpenKb: () -> Unit,
     onOpenSettings: () -> Unit,
+    /** 本机模式开关（手机/眼镜） */
+    onToggleLocalOnly: () -> Unit,
+    /** 清空当前对话 */
     onClearChat: () -> Unit,
     /** 本机模式（不连眼镜也能聊）当前是否开启；见 [LabApplication.chatLocalOnlyEnabled] */
     localOnly: Boolean,
-    onToggleLocalOnly: () -> Unit,
     /** 当前会话标题（取代固定的「乐奇聊天」：多会话下用户需要知道自己在哪个对话里） */
     sessionTitle: String,
     onOpenSessions: () -> Unit,
@@ -69,8 +76,7 @@ internal fun ChatHeader(
             .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 会话列表入口就做在标题区上：标题栏实测可用宽仅 369dp，已被 5 个 IconButton
-        // 占满（每个 40dp），再塞第 6 个必然让副标题折行。点标题开列表是零宽度成本的方案，
+        // 会话列表入口就做在标题区上：点标题开列表是零宽度成本的方案，
         // 且「标题 = 当前会话名」本身就是用户找列表的心理入口。
         Column(
             modifier = Modifier
@@ -103,21 +109,11 @@ internal fun ChatHeader(
                 ),
                 color = if (localOnly) BrewAmber else BrewMuted,
                 fontSize = 11.sp,
-                // 单行硬约束：这一行宽度被右侧 5 个按钮挤得很紧，宁可省略号收尾也不许折成两行
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        // 模式切换（放最前，紧邻说明当前模式的副标题）：本机模式=手机图标，眼镜模式=眼镜图标。
-        // 图标本身就是状态指示器 —— 点了之后图标会换，不需要额外的开关图形。
-        //
-        // ⚠️ 眼镜用 `res/drawable/ic_glasses.xml`（官方 Material Symbols 字形换算，见
-        // skills/rokidlab-chat-standalone-mode/scripts/symbols_to_vector.py）——
-        // 自绘过一次线稿版，被判「跟同排图标风格不符」，官方字形才治本。
-        // ⚠️ 手机**必须用 `Icons.Filled.PhoneAndroid` 这个"细框"形状，不要换"实心"版**：
-        // 试过官方 `smartphone`(fill) 的实心方板（想解决"风格不符"），用户直接判成
-        // 「跟内存卡一样，还不如之前的」—— 手机的实心字形在任何图标集里都读成存储卡/方块。
-        // ⇒ 这条排的"实心感"不该由手机图标来承担；现在只有眼镜是自定义 drawable，手机用同库内置字形。
+        // 本机模式：图标本身就是状态（眼镜=走眼镜播报 / 手机=只在本机跑，不连眼镜也能聊）
         IconButton(onClick = onToggleLocalOnly, modifier = Modifier.size(ICON_BUTTON_SIZE)) {
             if (localOnly) {
                 Icon(
@@ -135,27 +131,11 @@ internal fun ChatHeader(
                 )
             }
         }
-        IconButton(onClick = onPhotoAsk, modifier = Modifier.size(ICON_BUTTON_SIZE)) {
-            Icon(
-                imageVector = Icons.Filled.PhotoCamera,
-                contentDescription = stringResource(R.string.chat_photo_ask),
-                tint = BrewChat,
-                modifier = Modifier.size(ICON_SIZE),
-            )
-        }
-        IconButton(onClick = onOpenKb, modifier = Modifier.size(ICON_BUTTON_SIZE)) {
-            Icon(
-                imageVector = Icons.Filled.Folder,
-                contentDescription = stringResource(R.string.chat_kb),
-                tint = BrewChat,
-                modifier = Modifier.size(ICON_SIZE),
-            )
-        }
         IconButton(onClick = onClearChat, modifier = Modifier.size(ICON_BUTTON_SIZE)) {
             Icon(
                 imageVector = Icons.Filled.DeleteSweep,
                 contentDescription = stringResource(R.string.chat_clear),
-                tint = BrewChat,
+                tint = BrewCoral,
                 modifier = Modifier.size(ICON_SIZE),
             )
         }

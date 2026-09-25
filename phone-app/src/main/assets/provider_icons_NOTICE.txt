@@ -1,0 +1,40 @@
+第三方资源声明（品牌图标）
+============================
+
+文件位置：phone-app/src/main/res/drawable/provider_icon_*.xml
+用途：RokidLab「模型供应商」页与聊天输入栏供应商面板的品牌头像。
+
+来源与许可
+----------
+图标取自 lobehub icons 图标库：
+  https://github.com/lobehub/lobe-icons
+  Copyright (c) 2023 LobeHub
+  MIT License（https://github.com/lobehub/lobe-icons/blob/master/LICENSE）
+
+参考说明：本功能参照 rikkahub 的供应商图标实现（其 AIIconMatcher.kt 注释即指向
+https://lobehub.com/zh/icons），图标资产同源。rikkahub 以 Coil3 在运行时渲染 SVG，
+本项目不使用图片库，因此把 lobe-icons 的**单色版 SVG**（fill=currentColor + 纯 path）
+离线转换为 Android VectorDrawable，运行时用 Compose Icon(tint = 品牌/accent 色) 着色。
+
+包含图标（对应内置供应商预设 id）
+--------------------------------
+  provider_icon_deepseek.xml     ← deepseek.svg     (DeepSeek 深度求索)
+  provider_icon_moonshot.xml     ← kimi.svg         (月之暗面 Kimi)
+  provider_icon_dashscope.xml    ← qwen.svg         (阿里云百炼 · 通义千问)
+  provider_icon_zhipu.xml        ← zhipu.svg        (智谱 GLM)
+  provider_icon_volces.xml       ← doubao.svg       (火山方舟 · 豆包)
+  provider_icon_siliconflow.xml  ← siliconcloud.svg (硅基流动)
+  provider_icon_openai.xml       ← openai.svg
+  provider_icon_anthropic.xml    ← anthropic.svg
+  provider_icon_gemini.xml       ← gemini.svg
+  provider_icon_xai.xml          ← xai.svg          (xAI Grok)
+  provider_icon_openrouter.xml   ← openrouter.svg
+
+「自定义（OpenAI 兼容）」无品牌图标，界面上回落为名字首字母文字头像
+（与 rikkahub 的 TextAvatar 兜底一致）。
+
+维护
+----
+新增品牌：下载 lobe-icons 单色 SVG → 转为 VectorDrawable → 在
+store/ProviderIcons.kt 的 resOf() 增加一行，并在此清单补一行。
+各品牌名称为其各自所有者的商标，此处仅用于标识所连接的服务商。

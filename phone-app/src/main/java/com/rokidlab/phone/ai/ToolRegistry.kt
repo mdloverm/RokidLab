@@ -96,6 +96,21 @@ object ToolRegistry {
     const val DOMAIN_BROWSER = "browser"
 
     /**
+     * 屏幕操作域：用**无障碍服务**在手机真实界面上替用户操作（读屏 → 点击/输入/滑动/按键）。
+     *
+     * 与 [DOMAIN_BROWSER] 的区别是"操作的界面归谁"：网页域只动本 App 那个可见 WebView
+     * （看得见、能拿到 DOM 编号、用户随时能接手）；本域动的是**任意 App 的界面**，
+     * 靠 UI 树 + 无障碍手势，最坏情况能点开系统设置、银行 App 的任意界面。
+     * 用户想关掉"让它在别的 App 里乱点"时，不该连带关掉网页操作，反之亦然 —— 所以两个域。
+     *
+     * ⚠️ 本域**不对 AIUI 页面开放**（[com.rokidlab.phone.ai.approval.PageScope.ALLOWED_DOMAINS] 里
+     * 与 `shell` 域一起被摘除）。判据是**能力形态**而不是"某个工具危险"：
+     * `tap_screen` 是全表唯一的「在整台手机上注入任意触摸」原语，与 `run_shell` 同属
+     * "把整机交给页面作者"的一类；页面的心智是「显示点东西」，不是"可以操作我的手机"。
+     */
+    const val DOMAIN_SCREEN = "screen"
+
+    /**
      * 第三方 MCP 工具的 **wire name 前缀**：`mcp__<serverId>__<工具名>`。
      *
      * 唯一产地 —— 生成侧（`McpRegistry.wireNameOf`）与判定侧（审批闸门的拒绝文案分流、
@@ -115,7 +130,7 @@ object ToolRegistry {
     val DOMAIN_ALL: Set<String> = setOf(
         DOMAIN_INFO, DOMAIN_KNOWLEDGE, DOMAIN_GLASSES, DOMAIN_TIMER,
         DOMAIN_MEDIA, DOMAIN_DISPLAY, DOMAIN_WEB, DOMAIN_FILES, DOMAIN_AIUI, DOMAIN_PHONE,
-        DOMAIN_RESEARCH, DOMAIN_VISION, DOMAIN_SHELL, DOMAIN_MCP, DOMAIN_BROWSER,
+        DOMAIN_RESEARCH, DOMAIN_VISION, DOMAIN_SHELL, DOMAIN_MCP, DOMAIN_BROWSER, DOMAIN_SCREEN,
     )
 
     /** 主 Agent 会话（眼镜语音/手机聊天，在线模型）装配的工具域 */
@@ -170,6 +185,7 @@ object ToolRegistry {
         com.rokidlab.phone.ai.tools.WebToolProvider,
         com.rokidlab.phone.ai.tools.FilesToolProvider,
         com.rokidlab.phone.ai.tools.ShellToolProvider,
+        com.rokidlab.phone.ai.tools.WebPreviewToolProvider,
         com.rokidlab.phone.ai.tools.ScriptToolProvider,
         com.rokidlab.phone.ai.tools.AiuiToolProvider,
         com.rokidlab.phone.ai.tools.PhoneToolProvider,
@@ -178,6 +194,7 @@ object ToolRegistry {
         com.rokidlab.phone.ai.tools.VisionToolProvider,
         com.rokidlab.phone.ai.tools.MotionToolProvider,
         com.rokidlab.phone.ai.tools.BrowserToolProvider,
+        com.rokidlab.phone.ai.tools.ScreenOpToolProvider,
     )
 
     // ═══════════════════ 动态提供者（MCP）════════════════════════
@@ -394,6 +411,14 @@ object ToolRegistry {
          * —— 搜索是"查"，这里是"替你在网页上动手"，关掉其中一个不该连带另一个。
          */
         BROWSER(R.string.ai_tool_cat_browser),
+        /**
+         * 屏幕操作（用无障碍在手机任意界面上替用户操作）。
+         *
+         * 紧随 [BROWSER] 之后：两者对用户都是"替我在屏幕上动手"，放在相邻位置便于对照
+         * —— 但**不并成一个分类**：一个是本 App 内的可见网页，一个是整台手机，
+         * 想关掉其中一个的人不该连带关掉另一个。
+         */
+        SCREEN(R.string.ai_tool_cat_screen),
         /** 系统性/内部工具（自检、日志、任务续做记账等），设置页不展示 */
         SYSTEM(R.string.ai_tool_cat_system),
     }
@@ -409,6 +434,7 @@ object ToolRegistry {
         DOMAIN_SHELL -> ToolCategory.SHELL
         DOMAIN_MCP -> ToolCategory.MCP
         DOMAIN_BROWSER -> ToolCategory.BROWSER
+        DOMAIN_SCREEN -> ToolCategory.SCREEN
         // info / web / knowledge 对用户都是「查信息」
         else -> ToolCategory.INFO_WEB
     }

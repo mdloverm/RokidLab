@@ -41,8 +41,17 @@ internal object PageScope {
      *    也不会有它（只有黑名单的话，页面仍会在列表里看见 `run_shell` 却调不动）。
      *
      * 对话路径（用户本人在场、可追问、可撤销）**保留**该能力，这是产品意图。
+     *
+     * ## 为什么也摘掉 `screen` 域（2026-09-23 同一条判据）
+     * `tap_screen` 是全表唯一的「在整台手机上注入任意触摸」原语 —— 与 `run_shell` 同属
+     * **能力形态**越界，而不是"某个工具危险"：页面作者只要愿意，就能让手机点开银行 App、
+     * 点掉一个确认框。页面是第三方制品（模型生成 / 商店导入的 `.aix`），
+     * 用户对它的心智是「显示点东西」，不是"可以操作我的手机"。
+     * 同样地，用**域**表达还顺带把工具清单也从页面里摘掉了（页面连 `read_screen` 都看不到），
+     * 而不是"看得见却调不动"。
      */
-    val ALLOWED_DOMAINS: Set<String> = ToolRegistry.DOMAIN_ALL - ToolRegistry.DOMAIN_SHELL
+    val ALLOWED_DOMAINS: Set<String> =
+        ToolRegistry.DOMAIN_ALL - ToolRegistry.DOMAIN_SHELL - ToolRegistry.DOMAIN_SCREEN
 
     /**
      * 例外：不开放给页面的工具。

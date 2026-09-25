@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  品牌图标：来自 lobehub/lobe-icons（MIT License），https://github.com/lobehub/lobe-icons
+  由 SVG 单色版（fill=currentColor + 纯 path）转换为 VectorDrawable；
+  统一 fillColor 为黑，运行时由 Compose Icon(tint=品牌/accent 色) 着色。
+  维护：新增品牌请同时更新 store/ProviderIcons.kt 的映射与 NOTICE。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M13.827 3.52h3.603L24 20h-3.603l-6.57-16.48zm-7.258 0h3.767L16.906 20h-3.674l-1.343-3.461H5.017l-1.344 3.46H0L6.57 3.522zm4.132 9.959L8.453 7.687 6.205 13.48H10.7z" />
+</vector>

@@ -178,6 +178,29 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <!-- 无障碍服务：屏幕操作域（read_screen / tap_screen / swipe_screen / press_key / type_text）
+             与 **零弹窗截屏** 的前提 —— 用户在系统「设置 → 无障碍」里手动开一次，之后一直有效。
+             三条不可改的声明细节：
+             ① `android:permission=BIND_ACCESSIBILITY_SERVICE`：只有系统能 bind 我们。
+                漏了它，任何 App 都能 bind 这个服务 → 等于把"读屏 + 代点"公开出去。
+             ② `exported=true` + intent-filter：无障碍是**系统主动绑定**的，必须让系统能发现它。
+                （这是全项目少数必须 exported 的组件，改动时不要按"内部服务一律 false"的惯性收窄。）
+             ③ meta-data 指向 @xml/lab_accessibility_service：能力开关（截屏/手势/读窗）在那里声明，
+                漏了 meta-data 服务仍会连上，但**没有截屏与手势能力**，且调用时只报一个
+                "no accessibility access" 的错误码 —— 极难从现象反推这里。 -->
+        <service
+            android:name=".access.LabAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/lab_accessibility_service" />
+        </service>
+
         <!-- 后台保活前台服务：通知栏常驻，保证 Lab 全部后台能力（语音助手/蓝牙 HID/ADB 工具/定时任务）不被系统回收 -->
         <service
             android:name=".keepalive.LabKeepAliveService"

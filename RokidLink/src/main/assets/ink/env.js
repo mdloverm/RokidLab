@@ -89,6 +89,7 @@ function normalizeRequest(input, init = {}, metadata = {}) {
     method: String(init.method || 'GET').toUpperCase(),
     headers: headersToObject(init.headers),
     body: cloneBody(init.body),
+    duplex: init.duplex,
     metadata: metadata && typeof metadata === 'object' ? { ...metadata } : {},
   };
 }
@@ -101,6 +102,7 @@ function normalizeInterceptorResult(request, result) {
         method: request.method,
         headers: request.headers,
         body: request.body,
+        duplex: request.duplex,
       },
     };
   }
@@ -117,6 +119,7 @@ function normalizeInterceptorResult(request, result) {
         method: request.method,
         headers: request.headers,
         body: request.body,
+        duplex: request.duplex,
       },
     };
   }
@@ -135,6 +138,9 @@ function normalizeInterceptorResult(request, result) {
       method: typeof result.method === 'string' && result.method ? result.method : request.method,
       headers: result.headers ? headersToObject(result.headers) : request.headers,
       body: Object.prototype.hasOwnProperty.call(result, 'body') ? result.body : request.body,
+      duplex: Object.prototype.hasOwnProperty.call(result, 'duplex')
+        ? result.duplex
+        : request.duplex,
     },
   };
 }
@@ -149,6 +155,7 @@ async function resolveInkFetchRequest(input, init = {}, metadata = {}, intercept
         method: request.method,
         headers: request.headers,
         body: request.body,
+        duplex: request.duplex,
       },
     };
   }

@@ -17,6 +17,11 @@ package com.rokidlab.phone.browser
  * 兜底不在这一层：① 用户在手机屏幕上**看得到每一步**（浏览器是可见的前台页面）；
  * ② 支付/银行站点按域名整体判定，不依赖按钮文案；③ 页面内容对模型是
  * `UNTRUSTED_EXTERNAL`（注入的话术不会被当指令）。
+ *
+ * ## 关键词表是**两个域共用**的（2026-09-23）
+ * [labelConfirmReason] 被无障碍屏幕操作（`com.rokidlab.phone.access.ScreenGuard`）复用：
+ * 那里点的是任意 App 的控件，同样只有一句文案可判。共用是刻意的 ——
+ * 各维护一份的话，在网页上会被拦下的「立即支付」会在微信里被放行，而这种不一致没有任何机制能发现。
  */
 internal object BrowserGuard {
 
@@ -79,6 +84,20 @@ internal object BrowserGuard {
         if (type == "password") return "这是密码输入框"
         // 比对前把空格压掉：按钮文案里 "Sign Up"/"sign up"/"SIGNUP" 是同一种东西，
         // 而关键词表里带空格（"sign up"）—— 只在一边去空格会让这类词永远匹配不上。
+        return labelConfirmReason(label)
+    }
+
+    /**
+     * 只看**控件/按钮文案**的关键词判定（不判域名、也不看 tag/type）。
+     *
+     * 抽出来是给无障碍屏幕操作用的（`ScreenGuard`）：那里要点的不是网页元素，
+     * 没有域名也没有 tag/type，手上只有一句控件文案。关键词表**必须只有一份** ——
+     * 两个域各维护一份的话，在网页上会被拦下的「立即支付」会在 App 里被放行，
+     * 而这种"两边不一致"没有任何机制能发现。
+     *
+     * @return 需要确认的原因（一句人话）；null = 文案里没有提交类关键词
+     */
+    fun labelConfirmReason(label: String): String? {
         val text = label.lowercase().replace(" ", "")
         if (text.isEmpty()) return null
         val hit = SUBMIT_KEYWORDS.firstOrNull { text.contains(it.replace(" ", "")) } ?: return null

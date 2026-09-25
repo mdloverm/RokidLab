@@ -138,14 +138,39 @@ enum class AppPermission(
         R.string.permission_label_exact_alarm,
         minSdk = Build.VERSION_CODES.S,
         onboardingCritical = false,
+    ),
+
+    /**
+     * 无障碍服务（`BIND_ACCESSIBILITY_SERVICE`）：屏幕操作域（`read_screen` / `tap_screen` /
+     * `swipe_screen` / `press_key` / `type_text`）与**零弹窗截屏**的前提。
+     *
+     * ⚠️ 这一项与其它项**形状不同**，改它之前必须知道：
+     *  1. [manifestName] 不是 `uses-permission` 里那类权限 —— 它是**服务级权限**，写在
+     *     `AndroidManifest` 的 `<service android:permission=…>` 上（保证只有系统能 bind 我们）。
+     *     这里写它只是为了"缺什么"时有个人能读的标识，`runtimeNames` 永远不会用到它。
+     *  2. 它**没有 `requestPermissions` 这条路**：只能在系统「设置 → 无障碍」里由用户手动开，
+     *     所以与 [OVERLAY] / [ALL_FILES] 同属"设置页开关"型（[runtimeRequestable] = false），
+     *     由 [PermissionRequestActivity] 跳 `ACTION_ACCESSIBILITY_SETTINGS`。
+     *  3. [minSdk] = R：`AccessibilityService.takeScreenshot()` 是 Android 11 起的能力。
+     *     低版本上"开服务"本身没意义（截不了也点不了），直接视为已授予，不再引导。
+     *
+     * [onboardingCritical] = false：它不是"连上眼镜"的硬前提，而且这个开关在系统设置里
+     * 属于**高信任授权**（开了之后能读屏、能代点），不该在首装引导里糊里糊涂地点过去。
+     * 缺它时由屏幕操作工具现场引导，且引导文案走 [PermissionBridge]（不自己拼"请去设置开"）。
+     */
+    ACCESSIBILITY(
+        "android.permission.BIND_ACCESSIBILITY_SERVICE",
+        R.string.permission_label_accessibility,
+        minSdk = Build.VERSION_CODES.R,
+        onboardingCritical = false,
     );
 
     /**
      * 能否用 `requestPermissions` 弹系统授权框。
-     * false = 只能跳系统设置页/专用授权框（[OVERLAY] / [ALL_FILES] / [EXACT_ALARM]）。
+     * false = 只能跳系统设置页/专用授权框（[OVERLAY] / [ALL_FILES] / [EXACT_ALARM] / [ACCESSIBILITY]）。
      */
     val runtimeRequestable: Boolean
-        get() = this != OVERLAY && this != ALL_FILES && this != EXACT_ALARM
+        get() = this != OVERLAY && this != ALL_FILES && this != EXACT_ALARM && this != ACCESSIBILITY
 
     companion object {
         /** 是否已授予。[OVERLAY] 走 `Settings.canDrawOverlays`（AOSP 契约，全 ROM 语义一致） */
@@ -154,6 +179,7 @@ enum class AppPermission(
             if (permission == OVERLAY) return canDrawOverlays(context)
             if (permission == ALL_FILES) return canManageAllFiles()
             if (permission == EXACT_ALARM) return canScheduleExactAlarms(context)
+            if (permission == ACCESSIBILITY) return com.rokidlab.phone.access.LabAccessibility.isEnabled(context)
             return ContextCompat.checkSelfPermission(
                 context, permission.manifestName,
             ) == PackageManager.PERMISSION_GRANTED

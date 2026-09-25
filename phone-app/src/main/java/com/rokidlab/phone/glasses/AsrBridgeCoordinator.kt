@@ -458,7 +458,12 @@ internal class AsrBridgeCoordinator(
                         val caps = Caps().also { it.write("ping") }
                         val r = synchronized(cmdLock) { link.sendCustomCmd(AiChannel.TOPIC_PING, caps) }
                         if (r == 0) {
-                            Log.d(TAG, "downlink ping sent (${AiChannel.TOPIC_PING})")
+                            // ⚠️ r==0 只代表**本地发送调用成功**，不代表眼镜端收到 —— 2026-09-24 实测：
+                            // 眼镜端 cxr-service 分发路由 stale 时，手机这侧照样每分钟"sent"成功，
+                            // 而眼镜端 `Received ping` 一条都没有（下行整段静默 27 分钟）。
+                            // 判链路是否真通，**必须看眼镜端有没有 `Received ping — downlink route healthy`**，
+                            // 别用这条日志当证据。
+                            Log.d(TAG, "downlink ping sent (${AiChannel.TOPIC_PING}) [write ok, delivery unverified]")
                         } else {
                             Log.w(TAG, "downlink ping sendCustomCmd(${AiChannel.TOPIC_PING}) -> $r")
                         }

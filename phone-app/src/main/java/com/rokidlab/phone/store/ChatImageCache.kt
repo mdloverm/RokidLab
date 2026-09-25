@@ -90,6 +90,15 @@ internal object ChatImageCache {
                 .onFailure { Log.w(TAG, "bad data url: ${it.message}") }
                 .getOrNull()
         }
+        // 本地附件（用户从相册/文件选给模型的图，落盘在 files/chat_attachments）：
+        // 不是网络请求，直接读盘 —— 走 OkHttp 会因为不认识 file:// 直接抛异常。
+        if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) {
+            val file = java.io.File(url.removePrefix("file://"))
+            if (!file.exists()) return null
+            return runCatching { file.readBytes() }
+                .onFailure { Log.w(TAG, "read local image failed: ${it.message}") }
+                .getOrNull()
+        }
         val req = Request.Builder().url(url).build()
         http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {

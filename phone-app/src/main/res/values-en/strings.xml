@@ -358,15 +358,15 @@
     <string name="chat_events_cat_compaction">Compacted</string>
     <string name="chat_events_cat_cut">Invalidated</string>
     <string name="chat_events_cat_lifecycle">Lifecycle</string>
-    <string name="chat_trace_cost_tokens">in %1$s / out %2$s</string>
+    <string name="chat_trace_cost_tokens">Tokens: %1$s</string>
     <string name="chat_trace_cost_calls">%1$d model calls</string>
     <string name="chat_trace_cost_elapsed">%1$s</string>
     <string name="chat_trace_cost_unknown">Token usage unknown (server did not report it)</string>
-    <string name="chat_context_tokens">Last turn tokens: in %1$d / out %2$d</string>
+    <string name="chat_context_tokens">Last turn tokens: %1$d</string>
     <string name="chat_context_tokens_est">Last turn output ~%1$d chars (server returned no usage, so no token count)</string>
     <string name="chat_context_elapsed">Took %1$.1f s</string>
     <string name="chat_context_model_calls">%1$d model calls</string>
-    <string name="chat_context_session_total">Session total tokens: in %1$d / out %2$d (real usage from %3$d turns)</string>
+    <string name="chat_context_session_total">Session total tokens: %1$d (real usage from %2$d turns)</string>
     <!-- Message actions (2026-09-19) -->
     <string name="chat_msg_actions">Message actions</string>
     <string name="chat_msg_copy">Copy</string>
@@ -408,6 +408,72 @@
     <string name="chat_stop">Stop</string>
     <string name="chat_think_on">Think On</string>
     <string name="chat_think_off">Think Off</string>
+    <!-- Thinking depth (input bar popover; writes mode string + legacy boolean, default auto) -->
+    <string name="chat_think_mode_title">Thinking Depth</string>
+    <string name="chat_think_mode_auto">Auto</string>
+    <string name="chat_think_mode_deep">Deep Thinking</string>
+    <string name="chat_think_mode_off">Off</string>
+    <string name="chat_think_mode_hint">Auto follows the model default; Deep thinking allows long reasoning; Off disables it when possible</string>
+    <string name="chat_think_desc_auto">Follow the model default: reasoning models think, others answer directly</string>
+    <string name="chat_think_desc_deep">Long reasoning with a larger output budget — slower, more tokens</string>
+    <string name="chat_think_desc_off">Disable thinking when possible — faster and cheaper</string>
+    <!-- Input bar: Send to model sheet + pending attachment bar -->
+    <string name="chat_attach_title">Send to Model</string>
+    <string name="chat_attach_file">Upload File</string>
+    <string name="chat_attach_file_hint">Text files (txt / md / csv / json / code)</string>
+    <string name="chat_attach_image">Upload Image</string>
+    <string name="chat_attach_image_hint">Sent to vision-capable models</string>
+    <string name="chat_attach_file_ready">File selected, write your question and send together</string>
+    <string name="chat_attach_image_ready">Image selected, write your question and send together</string>
+    <string name="chat_attach_truncated">Content is long, will be truncated before sending</string>
+    <string name="chat_attach_remove">Remove</string>
+    <string name="chat_attach_read_failed">Cannot read this file (it may not be plain text)</string>
+    <string name="chat_attach_image_failed">Cannot read this image</string>
+    <string name="chat_attach_file_default_ask">Please read and summarize this file</string>
+    <string name="chat_attach_image_default_ask">Please look at this image</string>
+    <string name="chat_attach_context_header">[File uploaded by user: %1$s]</string>
+    <string name="chat_attach_camera">Take Photo</string>
+    <string name="chat_attach_camera_hint">Shoot with the phone camera and send it</string>
+    <string name="chat_attach_retry">Resend Last Attachment</string>
+    <string name="chat_attach_retry_hint">Reuse the file or image from last time</string>
+    <string name="chat_attach_chars">%1$d chars</string>
+    <string name="chat_attach_ctx_percent">about %1$d%% of context</string>
+    <string name="chat_attach_file_unsupported">Reading %1$s files is not supported yet: models can only read text files (txt / md / csv / code). Convert it to text first, or add it to the knowledge base</string>
+    <!-- Quoted message (attached to the next turn) -->
+    <string name="chat_msg_quote">Quote for next turn</string>
+    <string name="chat_quote_from_me">Quoting my message</string>
+    <string name="chat_quote_from_ai">Quoting AI reply</string>
+    <string name="chat_quote_context_header">[Earlier message quoted by user]</string>
+    <string name="chat_quote_only_send">Please answer based on the quoted content above</string>
+    <!-- Chat file card (user-uploaded file / file written by the AI container), read-only -->
+    <string name="chat_file_kind_text">TEXT</string>
+    <string name="chat_file_copy">Copy content</string>
+    <string name="chat_file_copied">Content copied</string>
+    <string name="chat_file_expand">Expand content</string>
+    <string name="chat_file_collapse">Collapse content</string>
+    <string name="chat_file_reading">Reading…</string>
+    <string name="chat_file_missing">File is gone (may have been cleaned or moved)</string>
+    <string name="chat_file_truncated_view">Long content: showing the first 400 lines. Open it in a file manager for the full text</string>
+    <string name="chat_file_produced_caption">File written</string>
+    <!-- Markdown table / formula / mermaid / media cards -->
+    <string name="chat_table_label">TABLE</string>
+    <string name="chat_table_shape">%1$d rows · %2$d cols</string>
+    <string name="chat_formula_label">FORMULA</string>
+    <string name="chat_mermaid_label">DIAGRAM</string>
+    <string name="chat_render_failed">Cannot render this content, please read the source</string>
+    <string name="chat_media_video">VIDEO</string>
+    <string name="chat_media_audio">AUDIO</string>
+    <string name="chat_media_play">Tap to play</string>
+    <string name="chat_media_pause">Pause</string>
+    <string name="chat_media_playing">Playing</string>
+    <string name="chat_media_loading">Loading…</string>
+    <!-- Provider / model picker panel in the input bar -->
+    <string name="chat_provider_pick_title">Providers &amp; Models</string>
+    <string name="chat_provider_pick_empty">No provider configured yet. Add one in Manage Providers</string>
+    <string name="chat_provider_pick_manage">Manage Providers</string>
+    <string name="chat_provider_pick_more">%1$d more models</string>
+    <string name="chat_provider_switched">Switched to: %1$s</string>
+    <string name="chat_provider_label_local">Local model · %1$s</string>
     <string name="chat_key_dialog_cancel">Cancel</string>
     <string name="chat_sending">Connecting to glasses...</string>
     <string name="chat_send_failed">Send failed</string>
@@ -462,6 +528,23 @@
     <string name="chat_settings_quiz_instruction_placeholder">e.g. answer only</string>
     <string name="chat_settings_source_official">Official Leqi</string>
     <string name="chat_settings_source_local">Local Model</string>
+    <!-- Provider management page (brand list → key → model, replaces the three manual fields) -->
+    <string name="chat_settings_provider_title">Model Providers</string>
+    <string name="chat_settings_provider_hint">Pick a brand provider and paste its API key; multiple providers can be saved</string>
+    <string name="chat_settings_provider_entry">Model Providers</string>
+    <string name="chat_settings_provider_entry_hint">Tap to choose a provider and model</string>
+    <string name="chat_settings_provider_current">Current: %1$s · %2$s</string>
+    <string name="chat_settings_provider_custom_hint">Custom (OpenAI compatible)</string>
+    <string name="chat_settings_provider_using">Currently using this provider</string>
+    <string name="chat_settings_provider_using_badge">Active</string>
+    <string name="chat_settings_provider_save_use">Save &amp; Use</string>
+    <string name="chat_settings_provider_remove">Remove</string>
+    <string name="chat_settings_provider_need_base_model">Please fill in the base URL and model name</string>
+    <string name="chat_settings_provider_saved">Saved and activated: %1$s</string>
+    <string name="chat_settings_provider_model_current">Model: %1$s</string>
+    <string name="chat_settings_provider_model_manual">Model name (type it in)</string>
+    <string name="chat_settings_provider_model_manual_hint">Enter a model ID, e.g. custom-model</string>
+    <string name="chat_settings_provider_models_more">%1$d more models not listed</string>
     <string name="chat_settings_source_custom">Custom Service</string>
     <string name="chat_settings_official_hint">Uses the official Leqi AI. No configuration needed.</string>
     <string name="chat_settings_local_active_hint">Current local model: %1$s</string>
@@ -485,6 +568,7 @@
     <string name="ai_tool_cat_shell">On-device</string>
     <string name="ai_tool_cat_mcp">External MCP</string>
     <string name="ai_tool_cat_browser">Web Browsing</string>
+    <string name="ai_tool_cat_screen">Screen Control</string>
     <string name="chat_settings_mcp">External MCP</string>
     <string name="chat_settings_mcp_hint">Connect third-party MCP servers to extend AI</string>
     <string name="mcp_connecting">Connecting…</string>
@@ -804,6 +888,14 @@
     <string name="ai_tool_run_shell_desc">Run commands in the Linux environment on the phone; install it first</string>
     <string name="ai_tool_install_packages_name">Install Packages</string>
     <string name="ai_tool_install_packages_desc">Install software in the on-device Linux environment (downloads; asks you first)</string>
+    <string name="ai_tool_start_web_preview_name">Start Web Preview</string>
+    <string name="ai_tool_start_web_preview_desc">Start a persistent web service in the on-device Linux environment for live preview in chat</string>
+    <string name="ai_tool_stop_web_preview_name">Stop Web Preview</string>
+    <string name="ai_tool_stop_web_preview_desc">Stop a running web preview service</string>
+    <string name="chat_preview_bar_label">Web preview running</string>
+    <string name="chat_preview_bar_open">Open</string>
+    <string name="chat_preview_stop">Stop service</string>
+    <string name="chat_preview_stop_done">Preview service stopped</string>
     <!-- Script library: save what worked and reuse it (runs in the same Linux environment) -->
     <string name="ai_tool_save_script_name">Save Script</string>
     <string name="ai_tool_save_script_desc">Save working steps as a reusable script</string>
@@ -1005,7 +1097,7 @@
     <string name="screen_capture_channel_desc">Shown briefly while capturing</string>
     <string name="screen_capture_capturing">Capturing screen…</string>
     <string name="ai_tool_capture_screen_name">Capture Screen</string>
-    <string name="ai_tool_capture_screen_desc">Read the phone screen; first use asks for system consent</string>
+    <string name="ai_tool_capture_screen_desc">Read the phone screen (no consent prompt once accessibility is on)</string>
     <!-- Web browsing: drive real sites in the visible phone browser (user logs in) -->
     <string name="ai_tool_browser_open_name">Open Page</string>
     <string name="ai_tool_browser_open_desc">Open a URL in the phone browser</string>
@@ -1019,6 +1111,22 @@
     <string name="ai_tool_browser_scroll_desc">Scroll the page up or down</string>
     <string name="ai_tool_browser_back_name">Page Back</string>
     <string name="ai_tool_browser_back_desc">Go back to the previous page</string>
+    <!-- Screen control: drive any app on the phone via accessibility (read screen -> tap/type/swipe/key).
+         Requires the user to enable this app's accessibility service in system settings. -->
+    <string name="ai_tool_read_screen_name">Read Screen</string>
+    <string name="ai_tool_read_screen_desc">List clickable items and text on screen (no prompt)</string>
+    <string name="ai_tool_tap_screen_name">Tap Screen</string>
+    <string name="ai_tool_tap_screen_desc">Tap an item by its text or number</string>
+    <string name="ai_tool_swipe_screen_name">Swipe Screen</string>
+    <string name="ai_tool_swipe_screen_desc">Swipe up/down/left/right to scroll or refresh</string>
+    <string name="ai_tool_press_key_name">System Key</string>
+    <string name="ai_tool_press_key_desc">Back / Home / Recents / Notifications / Quick settings</string>
+    <string name="ai_tool_type_text_name">Type on Screen</string>
+    <string name="ai_tool_type_text_desc">Type into the focused input box (never fills passwords)</string>
+    <!-- The accessibility service itself (shown in system Settings > Accessibility) -->
+    <string name="accessibility_service_label">RokidLab Screen Control</string>
+    <string name="accessibility_service_summary">Let RokidLab read the screen and tap or type for you</string>
+    <string name="accessibility_service_desc">When enabled, RokidLab can read what is on your screen (to answer questions and read text aloud) and tap, type or swipe on your request. Screen capture no longer shows a system consent dialog. Turn it off here any time to revoke these abilities.</string>
     <!-- Browser shell (BrowserActivity) -->
     <string name="browser_exit">Back</string>
     <string name="browser_title">Browser</string>
@@ -1497,6 +1605,9 @@
     <string name="local_exec_share_public">Linked to \"%1$s\" · mounted at /mnt/lab</string>
     <string name="local_exec_share_private">Not granted · tap to link the Downloads folder</string>
     <string name="local_exec_share_unsupported">Linking requires Android 11 or later</string>
+    <string name="local_exec_access_title">Accessibility Service</string>
+    <string name="local_exec_access_on">Enabled · AI can capture, read, tap and type</string>
+    <string name="local_exec_access_off">Off · Enable for pop-up-free capture, reading, taps and typing</string>
     <string name="local_exec_report">CHECK REPORT</string>
     <string name="local_exec_uninstall_cta">Remove Environment</string>
     <string name="local_exec_uninstall">Remove Environment</string>
@@ -1604,6 +1715,7 @@
     <string name="permission_label_overlay">Display over other apps</string>
     <string name="permission_label_all_files">All files access</string>
     <string name="permission_label_exact_alarm">Exact alarms</string>
+    <string name="permission_label_accessibility">Accessibility service</string>
     <string name="permission_dialog_title">Permission required</string>
     <string name="permission_dialog_message">%1$s needs the following permissions:\n%2$s\n\nTap Grant now, then choose Allow in the system dialog.</string>
     <string name="permission_dialog_allow">Grant now</string>

@@ -1,6 +1,7 @@
 package com.rokidlab.phone.ai.tools
 
 import com.rokidlab.phone.R
+import com.rokidlab.phone.ai.LabFileOutputs
 import com.rokidlab.phone.ai.LabMediaScan
 import com.rokidlab.phone.ai.ToolContentTrust
 import com.rokidlab.phone.ai.ToolConfirmPolicy
@@ -181,6 +182,10 @@ internal object ShellToolProvider : ToolProvider {
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
+        // 执行前的共享目录快照：跑完与它做 diff，差集就是这次真正写出来的文件。
+        // 为什么靠 diff 而不是解析命令：写文件的方式太多（重定向/tee/脚本内部写/clone），
+        // 而**文件系统是唯一权威**。见 [LabFileOutputs]。
+        val before = if (name == TOOL_RUN) LabFileOutputs.snapshot(context) else emptyMap()
         val result = when (name) {
             TOOL_RUN -> runShell(context, args)
             TOOL_INSTALL -> installPackages(context, args)
@@ -189,7 +194,11 @@ internal object ShellToolProvider : ToolProvider {
         // 容器写 /mnt/lab 走的是**内核路径**（不经 MediaProvider），所以产出不会自动进媒体库 ——
         // 表现为 list_files(scope="downloads") 看不到、delete_file 找不到那一行。
         // 每轮命令执行后补扫一次，让两个视图指向同一份东西（异步、幂等、失败只记日志）。
-        if (name == TOOL_RUN) LabMediaScan.scanLabOutputs(context)
+        if (name == TOOL_RUN) {
+            LabMediaScan.scanLabOutputs(context)
+            // 产出文件报给聊天窗口（没人在看聊天页时 sink 为空，静默）
+            LabFileOutputs.publish(context, before)
+        }
         return result
     }
 

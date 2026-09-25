@@ -219,6 +219,14 @@ class LabApplication : Application() {
                 .onFailure { Log.w(TAG, "proot selftest crashed: ${it.message}") }
         }
 
+        // 网页预览孤儿清扫：App 被杀时常驻的 proot/服务进程会被遗留（野进程占着端口耗 CPU）。
+        // 每个预览的 proot cmdline 里都有唯一脚本标记 rl-preview-，冷启动按标记清一次
+        // （见 WebPreviewManager.sweepOrphans）。放后台线程，不拖冷启动。
+        com.rokidlab.phone.util.namedThread("preview-sweep", daemon = true, start = true) {
+            runCatching { com.rokidlab.phone.platform.WebPreviewManager.sweepOrphans(this) }
+                .onFailure { Log.w(TAG, "preview sweep failed: ${it.message}") }
+        }
+
         // Agent 会话记忆（事件流落盘）：必须先于 ChatStateHolder —— 后者的 bootstrap
         // 读完会话索引后会调 AgentSessionManager.bindSession()，那时需要 appContext 已就位
         com.rokidlab.phone.ai.AgentSessionManager.init(this)

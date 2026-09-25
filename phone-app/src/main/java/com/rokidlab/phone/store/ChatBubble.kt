@@ -54,6 +54,8 @@ import com.rokidlab.phone.design.BrewDim
 import com.rokidlab.phone.design.BrewMuted
 import com.rokidlab.phone.design.BrewPanel
 import com.rokidlab.phone.design.BrewPanelAlt
+import com.rokidlab.phone.design.BrewRadiusLarge
+import com.rokidlab.phone.design.BrewRadiusSmall
 import com.rokidlab.phone.design.BrewRed
 import com.rokidlab.phone.design.BrewSuccess
 import com.rokidlab.phone.design.BrewText
@@ -99,10 +101,12 @@ internal fun ChatBubble(
         return
     }
 
+    // 圆角接**全局刻度**（UI-DESIGN.md §1.4）：大角 = BrewShapeLarge(16dp)、
+    // 指向说话人的那个小角 = BrewShapeSmall(4dp)。原先硬编码数字，刻度一改就掉队。
     val bubbleShape = if (isUser) {
-        RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)
+        RoundedCornerShape(BrewRadiusLarge, BrewRadiusLarge, BrewRadiusSmall, BrewRadiusLarge)
     } else {
-        RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp)
+        RoundedCornerShape(BrewRadiusLarge, BrewRadiusLarge, BrewRadiusLarge, BrewRadiusSmall)
     }
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -117,7 +121,8 @@ internal fun ChatBubble(
             }
             // 工具执行阶段正文还是空的：此时只显示过程卡片，等正文开始流式生成再出现气泡，
             // 避免留下一个「只有时间戳的空气泡」。
-            val showBubble = msg.content.isNotBlank() || msg.imageUrl != null || msg.trace.isEmpty()
+            val showBubble = msg.content.isNotBlank() || msg.imageUrl != null ||
+                msg.filePath != null || msg.trace.isEmpty()
             if (showBubble) {
                 // 用户气泡整体可点 = 编辑重发。只挂**单击**（长按仍归 SelectionContainer 的选字）；
                 // clickable 放在 background 之后、padding 之前：水波纹被裁在圆角内，且整个内边距都可点。
@@ -130,6 +135,22 @@ internal fun ChatBubble(
                     // 图片消息：先渲染图片卡片，再附 caption 文本（仅手机端；眼镜端 TTS/显示不受影响）。
                     msg.imageUrl?.let { url ->
                         ChatImageCard(url)
+                        if (msg.content.isNotBlank()) {
+                            Text(
+                                text = msg.content,
+                                color = if (isUser) BrewBg else BrewTextBright,
+                                fontSize = 14.sp,
+                                lineHeight = 20.sp,
+                                modifier = Modifier.padding(top = 6.dp),
+                            )
+                        }
+                    } ?: msg.filePath?.let { path ->
+                        // 文件消息（用户上传 / AI 产出）：文件卡 + caption，形态与图片一致
+                        ChatFileCard(
+                            path = path,
+                            name = msg.fileName ?: path.substringAfterLast('/'),
+                            chars = msg.fileChars,
+                        )
                         if (msg.content.isNotBlank()) {
                             Text(
                                 text = msg.content,
@@ -207,6 +228,12 @@ private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, ex
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // ⚠️ 保持 10dp（**不要**改成刻度里的 8/12）：全项目 11 个文件都拿 10dp 当"卡片圆角"
+            // （文件卡/图片卡/媒体卡/表格卡/代码卡/各对话框），过程卡也是卡片，
+            // 单独"合规"会让它跟所有兄弟卡片不一致 —— 这才是更严重的不一致。
+            // 真正的问题在规范侧：UI-DESIGN.md 的刻度（4/8/12/16/20）里**没有 10**，
+            // 而实现里 10dp 是事实标准 ⇒ 要么把它补进刻度，要么全站统一迁移，
+            // 属于独立一轮的事，别在改单个组件时顺手"修正"。
             .clip(RoundedCornerShape(10.dp))
             .background(BrewPanel)
             .border(1.dp, BrewBorder, RoundedCornerShape(10.dp))
@@ -295,6 +322,11 @@ private fun TraceCostLine(usage: MsgUsage?) {
 /**
  * 成本文案（纯函数，可单测）。
  *
+ * Token 展示口径（2026-09-25 用户要求）：不再拆"输入 / 输出"，只报**合计用量** ——
+ * 用户关心的是"这轮花了多少"，输入输出拆分是账单视角不是对话视角。
+ * ⚠️ 服务端只给了一半（通常只回 prompt）时是**部分未知**：合计后加 ≥ 前缀表达下界，
+ * 不兜 0 —— 那是错误信息，比不显示更糟。
+ *
  * @return null = 没有任何可展示的信息（USAGE 全空）；否则返回要显示的一行
  */
 internal fun usageCostText(context: Context, usage: MsgUsage): String? {
@@ -302,11 +334,12 @@ internal fun usageCostText(context: Context, usage: MsgUsage): String? {
     val input = usage.inputTokens
     val output = usage.outputTokens
     if (input != null || output != null) {
+        val total = (input ?: 0) + (output ?: 0)
+        val partial = input == null || output == null
         parts.add(
             context.getString(
                 R.string.chat_trace_cost_tokens,
-                input?.let { fmtTokens(it) } ?: "?",
-                output?.let { fmtTokens(it) } ?: "?",
+                (if (partial) "≥" else "") + fmtTokens(total),
             )
         )
     }

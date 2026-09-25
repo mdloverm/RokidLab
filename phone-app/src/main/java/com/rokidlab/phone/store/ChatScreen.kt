@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -38,9 +39,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.PsychologyAlt
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.AlertDialog
@@ -64,6 +70,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -79,7 +86,6 @@ import com.rokidlab.phone.ai.ContextUsage
 import com.rokidlab.phone.aiui.AiuiDemoCard
 import com.rokidlab.phone.aiui.AiuiDemoController
 import com.rokidlab.phone.app.LabApplication
-import com.rokidlab.phone.design.BrewAmber
 import com.rokidlab.phone.design.BrewBg
 import com.rokidlab.phone.design.BrewBorder
 import com.rokidlab.phone.design.BrewChat
@@ -87,16 +93,31 @@ import com.rokidlab.phone.design.BrewMuted
 import com.rokidlab.phone.design.BrewPanel
 import com.rokidlab.phone.design.BrewPanelHi
 import com.rokidlab.phone.design.BrewRed
+import com.rokidlab.phone.design.BrewShapeLarge
 import com.rokidlab.phone.design.BrewTextBright
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val TAG = "ChatScreen"
 private const val CHAT_PREFS = "chat_prefs"
 private const val KEY_DEEPSEEK = "deepseek_key"
 /** 与 CxrLHiRokidSession.KEY_AI_THINKING 同键（shared 存储 chat_prefs），UI 直接持久化，无需等会话初始化 */
 private const val KEY_AI_THINKING = "ai_thinking"
+/** 思考深度（auto | deep | off）：auto=跟随既有安全默认（推理模型照常思考、普通模型显式关）；
+ *  deep=开启长思考（放开大预算）；off=尽可能关闭。写时与旧布尔 ai_thinking 两键同步，
+ *  于是 isThinkingEnabled() 的整条消费链路（AiConversationService → LlmRegistry.Options）零改动。 */
+private const val KEY_AI_THINK_MODE = "ai_think_mode"
+
+/** 读思考深度：优先 mode 串；老版本只有布尔 → true 迁移为 deep、false 迁移为 auto（行为不变） */
+private fun readThinkMode(prefs: android.content.SharedPreferences): String {
+    val mode = prefs.getString(KEY_AI_THINK_MODE, null)
+    return when (mode) {
+        "auto", "deep", "off" -> mode
+        else -> if (prefs.getBoolean(KEY_AI_THINKING, false)) "deep" else "auto"
+    }
+}
 /** 是否已在乐奇页就通知权限做过首次提示（只主动弹一次，拒绝后不再打扰） */
 private const val KEY_NOTIF_PERM_PROMPTED = "notif_perm_prompted_for_lab"
 
@@ -139,6 +160,20 @@ internal data class ChatMsg(
      *   带上轮号，映射就是精确的；找不到对应轮号时视图只给「复制」，不给编辑/删除。
      */
     val turn: Int? = null,
+    /**
+     * 本地文本附件（用户上传的文件、或 AI 用 `run_shell` 写出来的文件）：绝对路径。
+     *
+     * ★ 为什么存**路径**而不是正文：正文可能有十几万字，塞进历史 JSONL 会让聊天记录文件
+     *   涨到几十 MB，而每次落盘/读取都要整条过一遍。正文留在磁盘上，卡片按需读。
+     *   ⇒ 文件卡是"只读预览"，也刻意不做"在气泡里就地编辑"。
+     *
+     * ⚠️ 路径指向应用目录 / 共享目录（`Download/Lab`）。被用户手动清掉后卡片会显示"文件已不在"。
+     */
+    val filePath: String? = null,
+    /** 附件显示名（带扩展名，卡片标题用） */
+    val fileName: String? = null,
+    /** 附件字符数（文件卡显示"约 N 字"；null = 未知，例如二进制或还没读过） */
+    val fileChars: Int? = null,
 )
 
 /**
@@ -189,9 +224,9 @@ internal fun ChatModule(app: LabApplication) {
         ?: stringResource(R.string.chat_title)
     var input by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
-    // 「思考」开关状态：点亮=开启在线模型长思考（DeepSeek V4/V3.2 系生效）。
-    // 默认关闭：实测开启思考时单轮 reasoning ~2.5 万字符会吃光输出预算 → 工具调用空轮卡死。
-    var thinking by remember { mutableStateOf(prefs.getBoolean(KEY_AI_THINKING, false)) }
+    // 「思考深度」：auto（默认）/ deep（深度思考）/ off —— 见 ThinkPickPanel 与 KEY_AI_THINK_MODE。
+    // 默认 auto：既有安全行为（思考吞输出预算导致工具调用空轮的教训固化在默认档里）。
+    var thinkMode by remember { mutableStateOf(readThinkMode(prefs)) }
     // 「拍照问 AI」流程进行中
     var photoAsking by remember { mutableStateOf(false) }
     // 知识库管理弹窗
@@ -222,6 +257,37 @@ internal fun ChatModule(app: LabApplication) {
     // 进入编辑态时把焦点给输入框（否则键盘不弹，用户还得再点一下输入框）
     val inputFocus = remember { FocusRequester() }
 
+    // ── 供应商 / 思考深度弹出面板 + 输入栏供应商图标 ──────────────
+    // 面板互斥（同时只开一块），都以普通卡片形式插在输入栏上方（见 ChatBottomPanels）。
+    var showProviderPanel by remember { mutableStateOf(false) }
+    var showThinkPanel by remember { mutableStateOf(false) }
+    // 从输入栏面板的「管理供应商」进入设置页时直落供应商子页
+    var settingsOpenProvider by remember { mutableStateOf(false) }
+    // 输入栏「发送给大模型」上拉菜单
+    var showAttachSheet by remember { mutableStateOf(false) }
+    // 待发送附件（选完先挂在这里，等用户写完问题一起发）
+    var pendingFile by remember { mutableStateOf<PickedText?>(null) }
+    var pendingImage by remember { mutableStateOf<PickedImage?>(null) }
+    var pendingImageThumb by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var readingAttach by remember { mutableStateOf(false) }
+    // 上一次真正发出去的附件：失败时不用重新去相册/文件里找一遍（发送失败在 Agent 场景里不罕见）
+    var lastFile by remember { mutableStateOf<PickedText?>(null) }
+    var lastImage by remember { mutableStateOf<PickedImage?>(null) }
+    // 引用：把某条历史消息挂到下一轮当上下文（比"复制再粘贴"少一步，也不会丢原文）
+    var quoted by remember { mutableStateOf<ChatMsg?>(null) }
+    // 输入栏供应商图标显示谁：**已配置（在线槽位有密钥）时显示该品牌图标，否则默认云图标**。
+    // null = 未配置 / 官方档 / 本地模型档 ⇒ 画默认图标。
+    var activeProviderId by remember { mutableStateOf<String?>(null) }
+
+    // ⚠️ 声明必须早于用到它的 LaunchedEffect（Kotlin 局部函数不能前向引用）
+    fun refreshActiveProvider() {
+        val sess = try { app.cxrL } catch (e: Exception) { null }
+        val online = sess?.getOnlineAiConfig()
+        activeProviderId = online
+            ?.takeIf { it.apiKey.isNotBlank() }
+            ?.let { com.rokidlab.phone.ai.llm.ProviderCatalog.matchBaseUrl(it.baseUrl)?.id }
+    }
+
     // 放在 LaunchedEffect 里而不是 startEdit 里：requestFocus 要等这一帧重组完成才生效
     LaunchedEffect(editingTarget) {
         if (editingTarget != null) runCatching { inputFocus.requestFocus() }
@@ -235,6 +301,128 @@ internal fun ChatModule(app: LabApplication) {
     var localOnly by remember { mutableStateOf(app.chatLocalOnlyEnabled) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // ── AI 产出文件 → 聊天里的文件卡 ─────────────────────────────────
+    // 容器写完盘由 ShellToolProvider 做「执行前后目录 diff」并推过来（见 LabFileOutputs）。
+    // 注册在聊天页：没人看聊天时 sink 为空、静默丢弃 —— 这不是"丢数据"，
+    // 文件本来就在磁盘上，卡片只是**这次会话里的可见性**。
+    // ⚠️ 必须声明在 scope 之后（局部变量不能前向引用）。
+    DisposableEffect(Unit) {
+        com.rokidlab.phone.ai.LabFileOutputs.setSink { files ->
+            // 回调来自工具线程：写 Compose 状态列表必须切主线程
+            scope.launch {
+                files.forEach { f ->
+                    when (f.kind) {
+                        // 图片：复用已有的图片卡（全屏预览 + 下载都是现成的）
+                        com.rokidlab.phone.ai.OutputKind.IMAGE -> ChatStateHolder.addImage(
+                            isUser = false,
+                            imageUrl = "file://" + f.path,
+                            caption = f.name,
+                            turn = AgentSessionManager.currentTurn(),
+                        )
+
+                        // 文本 / 音视频：文件卡（音视频由卡片内部自动分流到播放器）
+                        else -> ChatStateHolder.addFile(
+                            isUser = false,
+                            path = f.path,
+                            name = f.name,
+                            chars = f.chars,
+                            caption = ctx.getString(R.string.chat_file_produced_caption),
+                            turn = AgentSessionManager.currentTurn(),
+                        )
+                    }
+                }
+            }
+        }
+        onDispose { com.rokidlab.phone.ai.LabFileOutputs.setSink(null) }
+    }
+
+    // ── 附件（给大模型文件 / 图片）──────────────────────────────────
+    // 选完不立刻发：挂成「待发送附件」，等用户写完问题一起发（见 PendingAttachBar）。
+    // ⚠️ 必须声明在 scope 之后（Kotlin 局部变量/函数不能前向引用）。
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        // 类型闸门放在**读之前**：模型只能读文本，PDF/Word/压缩包解出来是乱码，
+        // 发过去只会得到一段莫名其妙回答（用户会以为 AI 坏了）。当场说清楚"这类读不了"。
+        val name = ChatAttachments.displayName(ctx, uri)
+        val mime = runCatching { ctx.contentResolver.getType(uri) }.getOrNull()
+        if (!ChatAttachments.isTextLike(name, mime)) {
+            val ext = ChatAttachments.extOf(name).uppercase().ifBlank { name }
+            Toast.makeText(
+                ctx,
+                ctx.getString(R.string.chat_attach_file_unsupported, ext),
+                Toast.LENGTH_LONG,
+            ).show()
+            return@rememberLauncherForActivityResult
+        }
+        readingAttach = true
+        scope.launch {
+            val picked = withContext(Dispatchers.IO) {
+                runCatching { ChatAttachments.readText(ctx, uri) }.getOrNull()
+            }
+            readingAttach = false
+            if (picked == null) {
+                Toast.makeText(ctx, ctx.getString(R.string.chat_attach_read_failed), Toast.LENGTH_SHORT).show()
+            } else {
+                pendingFile = picked
+            }
+        }
+    }
+    // 拍照：自己给一个可写 Uri（缺省 EXTRA_OUTPUT 时相机只回一张缩略图，发给模型等于没给）
+    var cameraUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val uri = cameraUri
+        cameraUri = null
+        if (!ok || uri == null) return@rememberLauncherForActivityResult
+        readingAttach = true
+        scope.launch {
+            val picked = withContext(Dispatchers.IO) {
+                runCatching { ChatAttachments.readImage(ctx, uri) }.getOrNull()
+            }
+            readingAttach = false
+            if (picked == null) {
+                Toast.makeText(ctx, ctx.getString(R.string.chat_attach_image_failed), Toast.LENGTH_SHORT).show()
+            } else {
+                pendingImage = picked
+                pendingImageThumb = withContext(Dispatchers.IO) {
+                    runCatching {
+                        android.graphics.BitmapFactory.decodeFile(picked.fileUrl.removePrefix("file://"))
+                    }.getOrNull()
+                }
+            }
+        }
+    }
+    fun launchCamera() {
+        val uri = ChatAttachments.newCameraOutput(ctx) ?: run {
+            Toast.makeText(ctx, ctx.getString(R.string.chat_attach_image_failed), Toast.LENGTH_SHORT).show()
+            return
+        }
+        cameraUri = uri
+        runCatching { cameraLauncher.launch(uri) }
+    }
+    // 图片选择也走 OpenDocument（而不是 GetContent）：只有它支持**多 MIME 数组**，
+    // 这样才能把可选范围收窄到"真能解码的格式"；GetContent 只吃单个 MIME 字符串，
+    // 只能传 `image/*`，会把 heic/svg 这类解不出来的也放进来。
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        readingAttach = true
+        scope.launch {
+            val picked = withContext(Dispatchers.IO) {
+                runCatching { ChatAttachments.readImage(ctx, uri) }.getOrNull()
+            }
+            readingAttach = false
+            if (picked == null) {
+                Toast.makeText(ctx, ctx.getString(R.string.chat_attach_image_failed), Toast.LENGTH_SHORT).show()
+            } else {
+                pendingImage = picked
+                pendingImageThumb = withContext(Dispatchers.IO) {
+                    runCatching {
+                        android.graphics.BitmapFactory.decodeFile(picked.fileUrl.removePrefix("file://"))
+                    }.getOrNull()
+                }
+            }
+        }
+    }
     // 上下文占用：消息列表变化或「本轮回答结束」时重算 —— recordTurn 发生在回答结束之后，
     // 所以 sending 由 true 变回 false 也算一个刷新触发点，否则进度条会慢一整轮。
     // 位置必须在 sending 声明之后（这里），放在消息列表旁边会读不到它。
@@ -253,6 +441,8 @@ internal fun ChatModule(app: LabApplication) {
         if (!showSettings) {
             expandTrace = app.chatExpandTraceEnabled
             contextRefresh++
+            // ③ 设置页里可能换了供应商，输入栏那个供应商图标跟着换
+            refreshActiveProvider()
         }
     }
 
@@ -342,11 +532,20 @@ internal fun ChatModule(app: LabApplication) {
         ChatStateHolder.updateLastStatus(content)
     }
 
-    fun toggleThinking() {
-        thinking = !thinking
-        prefs.edit().putBoolean(KEY_AI_THINKING, thinking).apply()
-        Log.i(TAG, "AI thinking mode = $thinking")
+    /** 切思考深度：mode 串 + 旧布尔两键同步写，isThinkingEnabled() 的消费方零改动 */
+    fun setThinkMode(mode: String) {
+        thinkMode = mode
+        prefs.edit()
+            .putString(KEY_AI_THINK_MODE, mode)
+            .putBoolean(KEY_AI_THINKING, mode == "deep")
+            .apply()
+        Log.i(TAG, "AI thinking mode = $mode")
     }
+
+    // ── 供应商 / 思考深度弹出面板 + 输入栏供应商图标 ──────────────
+    // 面板互斥（同时只开一块），都以普通卡片形式插在输入栏上方（见 ChatBottomPanels）。
+    // 状态与 refreshActiveProvider 声明在本文件靠前处（局部函数不能前向引用）。
+    LaunchedEffect(Unit) { refreshActiveProvider() }
 
     /**
      * 刚收尾那一轮的**轮号 + token 成本**，一起落到那条 AI 消息上。
@@ -389,7 +588,14 @@ internal fun ChatModule(app: LabApplication) {
      *   由调用方传入而不是在这里取：调用方添加用户消息时需要知道"这一轮会是几号"，
      *   而 `beginTurn` 是在服务层异步执行的 —— 轮号是 `turnBefore + 1`，只能在派发前定下。
      */
-    fun dispatchAi(text: String, turnBefore: Int) {
+    fun dispatchAi(
+        text: String,
+        turnBefore: Int,
+        /** 随本轮一起注入的额外上下文（当前用于「用户上传的文件」正文） */
+        contextText: String? = null,
+        /** 多模态图片（JPEG base64，不带 data: 前缀） */
+        imageBase64: String? = null,
+    ) {
         if (sending) return
         sending = true
         val session = try {
@@ -409,6 +615,8 @@ internal fun ChatModule(app: LabApplication) {
             try {
                 session.sendAiTextMessage(
                     text,
+                    contextText = contextText,
+                    imageBase64 = imageBase64,
                     // 保留回复文字在眼镜上的显示：不发 TTS_AudioFinished（避免官方会话
                     // 在长语音播完前被 AudioFinishedHandler→startNewTalk 重置清屏）
                     skipTtsAudioFinished = true,
@@ -472,11 +680,80 @@ internal fun ChatModule(app: LabApplication) {
         dispatchAi(text, turnBefore)
     }
 
+    /**
+     * 带附件发送：图片走多模态分片、文件正文注入上下文（两者可同时带）。
+     *
+     * 几个刻意的取舍：
+     *  - **图 + 文**：用户只选了图没写字时补一句默认提问，否则模型收到一张图却没有指令
+     *    （「这是什么」这种默认语在多数模型上比空文本稳）。
+     *  - **文件不塞进气泡正文**：几万字往气泡里一放，聊天列表就没法看了；正文只进上下文，
+     *    气泡里显示"📄 文件名"级别的说明（用户仍能从附件条看到自己发了什么）。
+     *  - **发完即清附件状态**，但把这一份记到 [lastFile]/[lastImage] —— 失败时面板里有
+     *    「重发上次附件」一键还原，不用再翻一次相册/文件管理器。
+     *
+     * ⚠️ 必须声明在 [send] **之前**（Kotlin 局部函数不能前向引用）。
+     */
+    fun sendWithAttachments() {
+        if (sending) return
+        val img = pendingImage
+        val file = pendingFile
+        val quote = quoted
+        val typed = input.trim()
+        val text = typed.ifBlank {
+            when {
+                img != null -> ctx.getString(R.string.chat_attach_image_default_ask)
+                file != null -> ctx.getString(R.string.chat_attach_file_default_ask)
+                quote != null -> ctx.getString(R.string.chat_quote_only_send)
+                else -> ""
+            }
+        }
+        if (text.isBlank()) return
+        val turnBefore = AgentSessionManager.currentTurn()
+        // 气泡：图片消息用图片卡片（caption = 用户文字，**带轮号** ⇒ 也能编辑重发）；
+        // 文件消息用文件卡（只读，正文在磁盘上）；引用消息用文字气泡
+        when {
+            img != null -> ChatStateHolder.addImage(true, img.fileUrl, text, turn = turnBefore + 1)
+            file != null && file.savedPath != null -> ChatStateHolder.addFile(
+                isUser = true,
+                path = file.savedPath,
+                name = file.name,
+                chars = file.text.length,
+                caption = text,
+                turn = turnBefore + 1,
+            )
+
+            else -> appendMsg(true, text, turn = turnBefore + 1)
+        }
+        // 上下文：文件正文 + 引用原文（都走同一个「额外上下文」槽位，服务层会与知识库结果合并）
+        val context = buildString {
+            file?.let { append(ctx.getString(R.string.chat_attach_context_header, it.name) + "\n" + it.text) }
+            quote?.let {
+                if (isNotEmpty()) append("\n\n")
+                append(ctx.getString(R.string.chat_quote_context_header))
+                append("\n")
+                append(it.content)
+            }
+        }.ifBlank { null }
+        lastFile = file
+        lastImage = img
+        pendingImage = null
+        pendingImageThumb = null
+        pendingFile = null
+        quoted = null
+        input = ""
+        dispatchAi(text, turnBefore, contextText = context, imageBase64 = img?.base64Jpeg)
+    }
+
     /** 发送输入框内容（回车 / 发送按钮）。编辑态下发送 = 编辑重发 */
     fun send() {
+        val target = editingTarget
+        // 编辑重发不带附件/引用（改的是历史里那条文字）；附件只在"新发一条"时生效
+        if (target == null && (pendingFile != null || pendingImage != null || quoted != null)) {
+            sendWithAttachments()
+            return
+        }
         val text = input.trim()
         if (text.isEmpty() || sending) return
-        val target = editingTarget
         if (target != null) {
             editingTarget = null
             draftBeforeEdit = ""
@@ -652,15 +929,7 @@ internal fun ChatModule(app: LabApplication) {
             .navigationBarsPadding(),
     ) {
         ChatHeader(
-            onPhotoAsk = { askPhotoAi() },
-            onOpenKb = { showKbDialog = true },
             onOpenSettings = { showSettings = true },
-            onClearChat = {
-                if (ChatStateHolder.messages.isNotEmpty()) {
-                    showClearConfirm = true
-                }
-            },
-            localOnly = localOnly,
             onToggleLocalOnly = {
                 // 立即落盘 + 更新内存标志：开关按「每次发送时读取」实现，
                 // 因此下一步发消息就生效，不用重连、也不会打断正在进行的对话。
@@ -668,6 +937,10 @@ internal fun ChatModule(app: LabApplication) {
                 localOnly = next
                 app.setChatLocalOnlyEnabled(next)
             },
+            onClearChat = {
+                if (ChatStateHolder.messages.isNotEmpty()) showClearConfirm = true
+            },
+            localOnly = localOnly,
             sessionTitle = currentSessionTitle,
             onOpenSessions = { showSessions = true },
         )
@@ -706,7 +979,9 @@ internal fun ChatModule(app: LabApplication) {
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                // 水平 16dp：与顶栏、输入区统一（UI-DESIGN.md §1.4「页面水平 padding 16dp」），
+                // 三处各写一个数字是这类"看起来差一点"的根源
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(messages, key = { it.id }) { msg ->
@@ -785,128 +1060,363 @@ internal fun ChatModule(app: LabApplication) {
             }
         }
 
-        // 底部输入行
-        Row(
+        // 本机网页预览条：容器里有常驻网页服务时显示（点击打开内嵌 WebView 预览）。
+        // 数据源是 WebPreviewManager.previews（StateFlow），无服务时整体不渲染。
+        WebPreviewBar()
+
+        // 供应商 / 思考深度弹出面板：改为 ModalBottomSheet 上拉层（2026-09-25，与附件菜单同款
+        // 交互——点遮罩关闭、从底部滑入），不再以卡片形式插在输入栏上方。两者互斥，同时只开一块。
+        if (showProviderPanel) {
+            ProviderPickPanel(
+                app = app,
+                onSwitched = { name, model ->
+                    showProviderPanel = false
+                    refreshActiveProvider()
+                    Toast.makeText(
+                        ctx,
+                        ctx.getString(R.string.chat_provider_switched, "$name · $model"),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                },
+                onManage = {
+                    showProviderPanel = false
+                    settingsOpenProvider = true
+                    showSettings = true
+                },
+                onDismiss = { showProviderPanel = false },
+            )
+        }
+        if (showThinkPanel) {
+            ThinkPickPanel(
+                current = thinkMode,
+                onSelect = { mode ->
+                    setThinkMode(mode)
+                    showThinkPanel = false
+                },
+                onDismiss = { showThinkPanel = false },
+            )
+        }
+
+        // 引用条（把某条历史消息挂到下一轮当上下文）
+        quoted?.let { q ->
+            PendingAttachBar(
+                fileName = null,
+                fileTruncated = false,
+                imageThumb = null,
+                imageName = null,
+                quoteText = q.content,
+                quoteFromUser = q.isUser,
+                onRemoveFile = {},
+                onRemoveImage = {},
+                onRemoveQuote = { quoted = null },
+            )
+        }
+
+        // 待发送附件提示条（选了文件/图片但还没发）
+        if (pendingFile != null || pendingImageThumb != null) {
+            // 上下文占比：文件正文字数 / 当前模型的上下文窗口（同一份能力结论驱动压缩阈值，
+            // 这里只是把它提前显示给用户 —— 免得"发完才发现被截断"）
+            val ctxWindow = com.rokidlab.phone.ai.llm.LlmRegistry
+                .capabilities(
+                    try { app.cxrL.getAiConfig() } catch (e: Exception) {
+                        com.rokidlab.phone.domain.AiConfig()
+                    },
+                    ctx,
+                )
+                .contextWindow
+            PendingAttachBar(
+                fileName = pendingFile?.name,
+                fileTruncated = pendingFile?.truncated == true,
+                fileChars = pendingFile?.text?.length,
+                contextWindow = ctxWindow,
+                imageThumb = pendingImageThumb,
+                imageName = pendingImage?.let { ctx.getString(R.string.chat_attach_image) },
+                quoteText = null,
+                quoteFromUser = false,
+                onRemoveFile = { pendingFile = null },
+                onRemoveImage = {
+                    pendingImage = null
+                    pendingImageThumb = null
+                },
+                onRemoveQuote = {},
+            )
+        }
+
+        // 底部输入区：上层 = 文字输入；下层 = 工具行（供应商 / 思考 / 拍照 / 知识库 / 附件 / 发送）
+        //
+        // ⚠️ 尺寸必须**对齐 UI-DESIGN.md §1.4 的全局规范**，别再自己拍数字：
+        //    · 页面水平 padding **16dp**（原先输入区 14 / 消息列表 14 / 顶栏 16 三套并存 ⇒ 已统一）
+        //    · 圆角走刻度 `BrewShapeLarge(16dp)`、按钮 `BrewShapeStandard(12dp)`（别硬编码数字，
+        //      刻度一改全站跟着走；上一版手写的 39dp 是刻度外的野值）
+        //    · 边框**全站统一 1dp**（1.5x 那版写了 1.5dp，违反规范）
+        //    · 内边距 16dp
+        // ⚠️ 2026-09-24 两轮才收敛的教训：字号 + 圆角 + 按钮尺寸**别同时放大**，
+        //    22sp + 39dp + 45/57dp 叠起来就是"膨胀的胶囊"（用户原话"又大了"）。
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 16.dp)
                 // 顺序很重要：clip 必须在 background/border **之前**。
                 // 旧顺序先画了方形背景再 clip，背景不被裁剪 → 圆角外露出灰色方角。
-                .clip(RoundedCornerShape(26.dp))
+                .clip(BrewShapeLarge)
                 .background(BrewPanel)
-                .border(1.dp, BrewBorder, RoundedCornerShape(26.dp))
-                .padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .border(1.dp, BrewBorder, BrewShapeLarge)
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         ) {
+            // 上层：文字输入占满整行
+            // 字号 18sp（2026-09-25 用户指定）：输入区是当前焦点，明显大于正文（14sp）是
+            // 刻意的层级表达；行高按 1.4 倍给 25sp，多行时不会挤。
+            // 最小高度 38dp（2026-09-25 用户反馈"输入窗口也提高一点"）：单行时只有 ~25sp 高，
+            // 比下面 38dp 的工具行薄一截，视觉上不协调 ⇒ 与工具行按钮同高起底，单行垂直居中
             BasicTextField(
                 value = input,
                 onValueChange = { input = it },
                 modifier = Modifier
-                    .weight(1f)
+                    .fillMaxWidth()
+                    .heightIn(min = 38.dp)
                     // 进入编辑态时自动聚焦（否则键盘不弹，用户还得再点一下输入框）
                     .focusRequester(inputFocus),
-                textStyle = TextStyle(color = BrewTextBright, fontSize = 15.sp),
+                textStyle = TextStyle(color = BrewTextBright, fontSize = 18.sp, lineHeight = 25.sp),
                 cursorBrush = SolidColor(BrewChat),
                 singleLine = false,
                 maxLines = 4,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { send() }),
                 decorationBox = { inner ->
-                    Box {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        // 单行（≤最小高度）时居中；多行后内容撑满，对齐方式不再起作用
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
                         if (input.isEmpty()) {
                             Text(
                                 text = stringResource(R.string.chat_input_hint),
                                 color = BrewMuted,
-                                fontSize = 15.sp,
+                                fontSize = 18.sp,
                             )
                         }
                         inner()
                     }
                 },
             )
-            Spacer(Modifier.width(8.dp))
-            // 「思考」开关：纯图标切换，点亮=开启在线模型长思考（DeepSeek V4/V3.2，多步复杂任务建议开启，
-            // 常规问答/生成代码默认关闭，避免推理吞预算导致工具调用空轮）；状态与 AI 设置页共用槽位
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(RoundedCornerShape(19.dp))
-                    .background(if (thinking) BrewAmber.copy(alpha = 0.18f) else BrewPanelHi)
-                    .border(
-                        width = 1.dp,
-                        color = if (thinking) BrewAmber.copy(alpha = 0.6f) else BrewBorder,
-                        shape = RoundedCornerShape(19.dp),
-                    )
-                    .clickable { toggleThinking() },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = if (thinking) Icons.Filled.Psychology else Icons.Outlined.Psychology,
-                    contentDescription = stringResource(if (thinking) R.string.chat_think_on else R.string.chat_think_off),
-                    tint = if (thinking) BrewAmber else BrewMuted,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = {
-                    if (sending) {
-                        // 停止当前回复：取消模型生成 + 停眼镜端播报（abortCurrentAi 内含
-                        // tts_stop 下行，放后台线程避免阻塞主线程）
-                        sending = false
-                        val sess = try { app.cxrL } catch (e: Exception) { null }
-                        if (sess != null) {
-                            scope.launch(Dispatchers.IO) {
-                                sess.abortCurrentAi()
-                            }
-                        }
+            Spacer(Modifier.height(8.dp))
+            // 下层工具行：左＝供应商图标（已配置则画该品牌图标，未配置默认云图标）+ 思考深度（默认自动）
+            // + 原顶部标题栏的四个功能图标（本机模式 / 拍照 / 知识库 / 清空，风格与左边两个统一）；
+            // 右＝附件（上拉菜单：文件 / 图片）+ 发送/停止（纯图标圆钮）
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 供应商图标：已配置在线槽位（有密钥）时显示品牌图标，否则默认云图标
+                val providerRes = activeProviderId?.let { ProviderIcons.resOf(it) } ?: 0
+                val providerAccent =
+                    activeProviderId?.let { providerAccentOf(it) } ?: BrewMuted
+                ToolBarIcon(
+                    selected = showProviderPanel,
+                    accent = providerAccent,
+                    description = stringResource(R.string.chat_provider_pick_title),
+                    onClick = {
+                        showProviderPanel = !showProviderPanel
+                        showThinkPanel = false
+                    },
+                ) {
+                    if (providerRes != 0) {
+                        Icon(
+                            painter = painterResource(providerRes),
+                            contentDescription = null,
+                            tint = providerAccent,
+                            modifier = Modifier.size(18.dp),
+                        )
                     } else {
-                        send()
+                        Icon(
+                            imageVector = Icons.Filled.Cloud,
+                            contentDescription = null,
+                            tint = if (showProviderPanel) providerAccent else BrewMuted,
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
-                },
-                enabled = if (sending) true else input.isNotBlank(),
-                modifier = Modifier.height(42.dp),
-                shape = RoundedCornerShape(21.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (sending) BrewRed else BrewChat,
-                    contentColor = BrewBg,
-                    disabledContainerColor = BrewPanelHi,
-                    disabledContentColor = BrewMuted,
-                ),
-            ) {
-                if (sending) {
+                }
+                Spacer(Modifier.width(8.dp))
+                // 思考深度：图标色与拍照/知识库统一（BrewChat，2026-09-25 用户要求"跟左侧另外三个同色"），
+                // 选中态只靠背景高亮表达，不再用琥珀色单独立异
+                ToolBarIcon(
+                    selected = thinkMode == "deep",
+                    accent = BrewChat,
+                    description = stringResource(R.string.chat_think_mode_title),
+                    onClick = {
+                        showThinkPanel = !showThinkPanel
+                        showProviderPanel = false
+                    },
+                ) {
                     Icon(
-                        imageVector = Icons.Filled.Clear,
+                        imageVector = when (thinkMode) {
+                            "deep" -> Icons.Filled.Psychology
+                            "off" -> Icons.Filled.PsychologyAlt
+                            else -> Icons.Outlined.Psychology
+                        },
                         contentDescription = null,
-                        modifier = Modifier.size(15.dp),
+                        tint = BrewChat,
+                        modifier = Modifier.size(20.dp),
                     )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = stringResource(R.string.chat_stop),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                } else {
+                }
+                Spacer(Modifier.width(8.dp))
+                // 拍照 / 知识库留在输入栏（发消息前的取材动作）；本机模式与清空已挪回顶栏
+                ToolBarIcon(
+                    selected = false,
+                    accent = BrewChat,
+                    description = stringResource(R.string.chat_photo_ask),
+                    onClick = { askPhotoAi() },
+                ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        imageVector = Icons.Filled.PhotoCamera,
                         contentDescription = null,
-                        modifier = Modifier.size(15.dp),
+                        tint = BrewChat,
+                        modifier = Modifier.size(20.dp),
                     )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = stringResource(R.string.chat_send),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
+                }
+                Spacer(Modifier.width(8.dp))
+                ToolBarIcon(
+                    selected = false,
+                    accent = BrewChat,
+                    description = stringResource(R.string.chat_kb),
+                    onClick = { showKbDialog = true },
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Folder,
+                        contentDescription = null,
+                        tint = BrewChat,
+                        modifier = Modifier.size(20.dp),
                     )
+                }
+                Spacer(Modifier.weight(1f))
+                // 附件键：与发送键**同尺寸同形状**（都是圆形 38dp）——
+                // 它俩是同一类动作（对"这条消息"的操作），尺寸一致才读成一个组；
+                // 左侧 4 个工具钮是方形小圆角（另一组：设置类动作）。用户明确要求"大小一致"。
+                // 激活色 = BrewRed（2026-09-25 用户要求与发送键"停止"态同色）：红色在本栏的
+                // 语义被统一为"这条消息的进行时/待决动作"，紫色退场后全栏只剩 3 个功能色
+                ToolBarCircleButton(
+                    selected = showAttachSheet,
+                    accent = BrewRed,
+                    description = stringResource(R.string.chat_attach_title),
+                    enabled = !sending && !readingAttach,
+                    onClick = { showAttachSheet = true },
+                ) {
+                    if (readingAttach) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = BrewRed,
+                        )
+                    } else {
+                        // 图标用「加号」而不是回形针：这一排按钮读的是"下一步动作"，
+                        // ＋ 的语义（添加素材）比回形针（表示"这是个附件"）更直接
+                        Icon(
+                            imageVector = Icons.Filled.Add,
+                            contentDescription = null,
+                            tint = if (showAttachSheet) BrewRed else BrewMuted,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                // 发送 / 停止：右下角圆形图标钮（**与附件键同尺寸 38dp**，只图标无文字）
+                val canSend = sending || input.isNotBlank() || pendingFile != null || pendingImage != null
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(19.dp))
+                        .background(
+                            when {
+                                sending -> BrewRed
+                                canSend -> BrewChat
+                                else -> BrewPanelHi
+                            }
+                        )
+                        .clickable(enabled = canSend) {
+                            if (sending) {
+                                // 停止当前回复：取消模型生成 + 停眼镜端播报（abortCurrentAi 内含
+                                // tts_stop 下行，放后台线程避免阻塞主线程）
+                                sending = false
+                                val sess = try { app.cxrL } catch (e: Exception) { null }
+                                if (sess != null) {
+                                    scope.launch(Dispatchers.IO) {
+                                        sess.abortCurrentAi()
+                                    }
+                                }
+                            } else {
+                                send()
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val active = canSend
+                    if (sending) {
+                        Icon(
+                            imageVector = Icons.Filled.Clear,
+                            contentDescription = stringResource(R.string.chat_stop),
+                            tint = BrewBg,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = stringResource(R.string.chat_send),
+                            tint = if (active) BrewBg else BrewMuted,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
             }
         }
     }
 
+    // 上拉菜单：发送给大模型（文件 / 图片 / 拍照，可选重发上次附件）
+    if (showAttachSheet) {
+        ChatAttachSheet(
+            // 选择器只放行**能识别的格式**（与读取侧白名单同源，见 ChatAttachments.pickerMimes）：
+            // 放行再拒绝会让用户觉得"能选却发不出去"，比一开始看不到更困惑
+            onPickFile = {
+                showAttachSheet = false
+                runCatching { filePicker.launch(ChatAttachments.pickerMimes) }
+            },
+            onPickImage = {
+                showAttachSheet = false
+                runCatching { imagePicker.launch(ChatAttachments.pickerImageMimes) }
+            },
+            onTakePhoto = {
+                showAttachSheet = false
+                launchCamera()
+            },
+            onRetryLast = if (lastFile != null || lastImage != null) {
+                {
+                    showAttachSheet = false
+                    pendingFile = lastFile
+                    pendingImage = lastImage
+                    if (lastImage != null) {
+                        scope.launch {
+                            pendingImageThumb = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    android.graphics.BitmapFactory.decodeFile(
+                                        lastImage!!.fileUrl.removePrefix("file://"),
+                                    )
+                                }.getOrNull()
+                            }
+                        }
+                    }
+                }
+            } else {
+                null
+            },
+            onDismiss = { showAttachSheet = false },
+        )
+    }
+
     if (showSettings) {
         ChatSettingsDialog(
             app = app,
-            onDismiss = { showSettings = false },
+            onDismiss = {
+                showSettings = false
+                // 下次从齿轮进入时回到设置页首页
+                settingsOpenProvider = false
+            },
+            openProviderPage = settingsOpenProvider,
         )
     }
 
@@ -970,11 +1480,17 @@ internal fun ChatModule(app: LabApplication) {
         )
     }
 
-    // 消息级操作：复制 / 编辑重发 / 重新生成 / 删除
+    // 消息级操作：引用 / 复制 / 编辑重发 / 重新生成 / 删除
     actionTarget?.let { target ->
         ChatMessageActionsDialog(
             msg = target,
             canRegenerate = isLastAiMessage(target),
+            onQuote = {
+                // 引用 = 把这条原文挂到下一轮上下文里。比"复制 → 粘到输入框"少一步，
+                // 而且不会把原文混进用户自己写的问题里（模型能分清"引用的材料"与"我的指令"）。
+                quoted = target
+                actionTarget = null
+            },
             onCopy = {
                 copyText(target.content)
                 actionTarget = null

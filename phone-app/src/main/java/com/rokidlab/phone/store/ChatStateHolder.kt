@@ -488,6 +488,44 @@ internal object ChatStateHolder {
     }
 
     /**
+     * 添加一条**文件消息**（用户上传的文本文件 / AI 用 `run_shell` 写出的文件）。
+     *
+     * 与 [addImage] 的区别（刻意不同）：
+     *  - **不往本轮 AI 气泡上挂**：文件是"一份独立的东西"，可能一轮产出好几个 ——
+     *    挂到同一条气泡上只能显示一个，且会把正文和文件混在一起；
+     *  - 路径/名字/字数落在消息上，正文留在磁盘（见 [ChatMsg.filePath] 的说明）。
+     *
+     * @param turn 事件流轮号（AI 产出文件时传当前轮，用户上传时传 turnBefore + 1）
+     */
+    fun addFile(
+        isUser: Boolean,
+        path: String,
+        name: String,
+        chars: Int?,
+        caption: String = "",
+        turn: Int? = null,
+    ): ChatMsg {
+        val id = msgIdCounter.incrementAndGet()
+        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val msg = ChatMsg(
+            id = id,
+            isUser = isUser,
+            content = caption,
+            time = time,
+            isStatus = false,
+            filePath = path,
+            fileName = name,
+            fileChars = chars,
+            turn = turn,
+        )
+        messages.add(msg)
+        trimIfNeeded()
+        persist(msg)
+        touchSession()
+        return msg
+    }
+
+    /**
      * 原地更新末尾状态消息（用于 OCR 模型下载百分比等高频进度）。
      * 末尾是状态消息就覆盖内容（不新增气泡、不落盘，避免每 1% 刷一条 + 高频写文件）；
      * 末尾不是状态消息时退化为新增一条状态消息。必须在主线程调用。
@@ -515,8 +553,12 @@ internal object ChatStateHolder {
      * 落点顺序：① 本轮锚点（[traceAnchorIndex]）→ ② 末尾那条"看起来属于本轮的 AI 气泡"
      * （非用户/非状态，且**带过程**或**正文还空**）。都不满足说明这是历史回复之外的一次
      * 独立展示 ⇒ 另起一条（保留旧行为，如"再给我看张图"）。
+     *
+     * @param turn 这一轮在事件流里的轮号（见 [ChatMsg.turn]）。用户从相册/拍照发的图也要带 ——
+     *   不带的话它在会话记录图里找不到对应轮次，只能"复制"，**不能编辑重发/删除**
+     *   （图片恰恰是最需要重发的一类消息：发错图、图不清楚）。
      */
-    fun addImage(isUser: Boolean, imageUrl: String, caption: String): ChatMsg {
+    fun addImage(isUser: Boolean, imageUrl: String, caption: String, turn: Int? = null): ChatMsg {
         val anchorAt = if (isUser) -1 else traceAnchorIndex()
         val idx = if (anchorAt >= 0) {
             anchorAt
@@ -545,7 +587,7 @@ internal object ChatStateHolder {
         }
         val id = msgIdCounter.incrementAndGet()
         val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-        val msg = ChatMsg(id, isUser, caption, time, isStatus = false, imageUrl = imageUrl)
+        val msg = ChatMsg(id, isUser, caption, time, isStatus = false, imageUrl = imageUrl, turn = turn)
         messages.add(msg)
         trimIfNeeded()
         persist(msg)

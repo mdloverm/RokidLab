@@ -1,6 +1,7 @@
 package com.rokidlab.phone.settings
 
 import com.rokidlab.phone.R
+import com.rokidlab.phone.access.LabAccessibility
 import com.rokidlab.phone.design.*
 import com.rokidlab.phone.platform.ExecResult
 import com.rokidlab.phone.platform.NodeAddon
@@ -19,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Code
@@ -419,6 +421,60 @@ internal fun LocalExecScreen(onBack: () -> Unit) {
             }
         }
 
+        // ════════ 屏幕操作权限（无障碍服务）════════
+        // 不受「环境已装」门控：免弹窗截屏与读屏/点击只依赖这个开关，与 Linux 环境是否
+        // 已安装无关 —— 只是排布上跟在共享文件夹卡的后面。
+        // ⚠️ 但要受「扫描完成」门控（!loading）：readStatus 在已装环境时要起一次 proot
+        // 探测组件，期间 status 还是默认快照（accessOn=false）⇒ 不挡的话这张卡会带着
+        // 琥珀色"开通"按钮提前露脸，扫描完又闪变成对勾 —— 跟其他卡一样等扫描完再显示。
+        if (!loading) {
+            Spacer(Modifier.height(20.dp))
+            PanelCard(
+                clickable = !status.accessOn,
+                onClick = { ManufacturerUtils.openAccessibilitySettings(ctx) },
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LeadingIcon(
+                        Icons.Outlined.AccessibilityNew,
+                        if (status.accessOn) BrewSuccess else BrewAmber,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            ctx.getString(R.string.local_exec_access_title),
+                            color = BrewTextBright,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = ctx.getString(
+                                if (status.accessOn) R.string.local_exec_access_on
+                                else R.string.local_exec_access_off,
+                            ),
+                            color = BrewMuted,
+                            fontSize = 12.sp,
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    if (status.accessOn) {
+                        Icon(
+                            Icons.Outlined.CheckCircle,
+                            contentDescription = null,
+                            tint = BrewSuccess,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    } else {
+                        BrewCompactButton(
+                            text = ctx.getString(R.string.local_exec_enable),
+                            color = BrewAmber,
+                            onClick = { ManufacturerUtils.openAccessibilitySettings(ctx) },
+                        )
+                    }
+                }
+            }
+        }
+
         // ── 错误原因（任何任务失败都留在这里）──
         errorMsg?.let { msg ->
             Spacer(Modifier.height(12.dp))
@@ -755,6 +811,7 @@ private data class StatusSnapshot(
     val nodeReady: Boolean = false,
     val gitReady: Boolean = false,
     val sharePublic: Boolean = false,
+    val accessOn: Boolean = false,
 ) {
     /** 共享文件夹卡是否可点「开通」（Android 11+ 且尚未直通） */
     val shareCanOpen: Boolean
@@ -785,6 +842,7 @@ private suspend fun readStatus(ctx: Context): StatusSnapshot = withContext(Dispa
         nodeReady = probe["node"] == true,
         gitReady = probe["git"] == true,
         sharePublic = share.publicDownload,
+        accessOn = LabAccessibility.isEnabled(ctx),
     )
 }
 
