@@ -3,6 +3,9 @@
 build/
 !gradle/wrapper/gradle-wrapper.jar
 
+# Kotlin 2.x 构建会话目录（Linux/CI 上在项目根生成，属构建产物不入库）
+.kotlin/
+
 # IDE
 .idea/
 *.iml
