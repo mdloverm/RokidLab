@@ -32,7 +32,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
       ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
       ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
       ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
@@ -56,6 +55,8 @@ jobs:
         run: |
           echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
           chmod 600 "$RUNNER_TEMP/release.keystore"
+          # runner 上下文在 job 级 env 不可用，keystore 路径在这里写入后续步骤可见的环境
+          echo "ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
 
       - name: 屏蔽 CI 内重建的内嵌眼镜端包对工作区的影响
         run: |

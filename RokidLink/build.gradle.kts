@@ -24,13 +24,23 @@ apply(from = "../gradle/local-gates.gradle.kts")
 fun optionalSigningProperty(name: String, fallback: String? = null): String? =
     providers.gradleProperty(name).orNull?.takeIf { it.isNotBlank() } ?: fallback
 
+/**
+ * 解析 keystore 文件：绝对路径直接用；相对路径相对根工程解析。
+ * 刻意不走 rootProject.file()：在 Linux/CI 上遇到 Windows 盘符路径（默认值
+ * D:\rokidapp\release.keystore）会被 Gradle 当成 URI 解析而抛 URISyntaxException
+ * （2026-09-26 GitHub Actions 实测），java.io.File 构造则跨平台安全。
+ * 与 phone-app/build.gradle.kts 中的同名函数逐字一致（改动请双改）。
+ */
+fun resolveKeystore(path: String): File =
+    File(path).let { if (it.isAbsolute) it else File(rootProject.projectDir, path) }
+
 /** release keystore 默认路径（非机密项，允许回退；实际位置用 RELEASE_KEYSTORE_PATH 覆盖） */
 val defaultReleaseKeystorePath = "D:\\rokidapp\\release.keystore"
 
 /** 当前缺失的 release 签名材料清单（空列表 = 齐备）。供 [releaseSigningGate] 生成报错。 */
 fun releaseSigningProblems(): List<String> = buildList {
     val path = optionalSigningProperty("RELEASE_KEYSTORE_PATH", defaultReleaseKeystorePath)!!
-    if (!rootProject.file(path).isFile) {
+    if (!resolveKeystore(path).isFile) {
         add("keystore 文件不存在：$path（用 RELEASE_KEYSTORE_PATH 指定实际位置）")
     }
     if (optionalSigningProperty("RELEASE_KEYSTORE_PASSWORD") == null) {
@@ -102,7 +112,7 @@ android {
             // （此处不得抛异常：本块在配置阶段无条件执行，抛了会误伤 debug 构建，理由见其上注释）。
             // ⚠️ 两端必须用同一个 keystore / alias，否则眼镜端 APK 无法随 phone-app 一同安装。
             val keystorePath = optionalSigningProperty("RELEASE_KEYSTORE_PATH", defaultReleaseKeystorePath)!!
-            val ksFile = rootProject.file(keystorePath)
+            val ksFile = resolveKeystore(keystorePath)
             if (ksFile.isFile) storeFile = ksFile
             storePassword = optionalSigningProperty("RELEASE_KEYSTORE_PASSWORD")
             keyAlias = optionalSigningProperty("RELEASE_KEY_ALIAS")
