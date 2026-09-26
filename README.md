@@ -1,6 +1,10 @@
 # RokidLab
 
+[简体中文](./README.md) | [English](./README.en.md)
+
 Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、乐奇工具（双向投屏 / 文件管理 / ADB 工具）、蓝牙手柄等功能。
+
+> **English** — A companion Android app for Rokid AR glasses: an app store, the Leqi AI assistant, two-way screen mirroring, a file manager, an ADB toolkit, a Bluetooth gamepad and more. See the [English introduction](./README.en.md).
 
 > 设计师请参考 [UI-DESIGN.md](./UI-DESIGN.md)，开发者请参考 [DEV_GUIDE.md](./DEV_GUIDE.md)。
 
