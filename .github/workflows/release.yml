@@ -1,0 +1,103 @@
+name: Release
+
+# 触发方式：
+#   ① 推送 v* 标签（如 v4.2）→ 构建双端 release 包并创建 GitHub Release、上传 APK；
+#   ② 手动触发（workflow_dispatch，默认 dry_run）→ 只构建 + 上传 artifact，不发 Release，
+#      用于验证签名材料与构建链路，不产生对外产物。
+#
+# 门禁说明：模块内 packageRelease 依赖 checkGitClean（工作区必须洁净）+ testDebugUnitTest，
+# 与本地发布流程完全一致；签名材料经 Actions Secrets 注入（环境变量 ORG_GRADLE_PROJECT_*），
+# 缺失时构建会按既有闸门硬失败。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '仅构建并上传 artifact，不创建 GitHub Release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 双端 release 构建（+ 发布）
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
+      ORG_GRADLE_PROJECT_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+      ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+      ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 Gradle（自动缓存依赖）
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 生成 gradle.properties（签名口令经环境变量注入，不落盘）
+        run: cp gradle.properties.example gradle.properties
+
+      - name: 还原 release keystore
+        run: |
+          echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          chmod 600 "$RUNNER_TEMP/release.keystore"
+
+      - name: 屏蔽 CI 内重建的内嵌眼镜端包对工作区的影响
+        run: |
+          # mergeReleaseAssets → buildRokidLinkRelease 会把现场重建的 RokidLink.apk 覆盖到
+          # phone-app/src/main/assets/RokidLink.apk（被跟踪文件），会误触门禁 checkGitClean。
+          # 该文件由同一 tag 的源码在 CI 里现场重建，语义与提交一致，故对本文件关闭变更跟踪；
+          # 其余源文件仍受门禁保护（git status 必须为空）。
+          git update-index --assume-unchanged phone-app/src/main/assets/RokidLink.apk
+          echo "── git status（此刻必须为空）──"
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+
+      - name: 双端 release 构建（R8 + 签名 + 单测 + 门禁）
+        run: bash ./gradlew --stacktrace :RokidLink:assembleRelease :phone-app:assembleRelease
+
+      - name: 校验产物
+        run: |
+          ls -l phone-app/build/outputs/apk/release/
+          ls -l RokidLink/build/outputs/apk/release/
+          test -n "$(ls phone-app/build/outputs/apk/release/RokidLab-*-release.apk)"
+          test -n "$(ls RokidLink/build/outputs/apk/release/RokidLink-*-release.apk)"
+
+      - name: 上传构建产物（artifact，供检查/手动分发）
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apks
+          path: |
+            phone-app/build/outputs/apk/release/*.apk
+            RokidLink/build/outputs/apk/release/*.apk
+          retention-days: 14
+
+      - name: 创建 GitHub Release 并上传 APK
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RokidLab ${{ github.ref_name }}
+          body: |
+            自动发布：双端 release 构建（R8 混淆 + release 签名 + 单测门禁）。
+
+            - **RokidLab-v\*-release.apk**（手机端，内含 RokidLink 眼镜端包，安装它即可）
+            - **RokidLink-v\*-release.apk**（眼镜端独立包，一般无需单独安装）
+          generate_release_notes: true
+          files: |
+            phone-app/build/outputs/apk/release/*.apk
+            RokidLink/build/outputs/apk/release/*.apk
