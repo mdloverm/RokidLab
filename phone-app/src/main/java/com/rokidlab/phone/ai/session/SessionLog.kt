@@ -108,6 +108,9 @@ internal class SessionLog(
         private const val KEY_PROMPT_TOKENS = "promptTokens"
         private const val KEY_COMPLETION_TOKENS = "completionTokens"
         private const val KEY_MODEL_CALLS = "modelCalls"
+
+        /** 前缀缓存命中的输入 token（可空；2026-09-26 新增，旧文件读不到 = null） */
+        private const val KEY_CACHE_HIT = "cacheHitTokens"
     }
 
     /** 已分配的最大 seq 缓存（-1 = 尚未从文件加载）。写操作与读操作都在 [lock] 内访问 */
@@ -204,6 +207,7 @@ internal class SessionLog(
                 e.promptTokens?.let { o.put(KEY_PROMPT_TOKENS, it) }
                 e.completionTokens?.let { o.put(KEY_COMPLETION_TOKENS, it) }
                 e.modelCalls?.let { o.put(KEY_MODEL_CALLS, it) }
+                e.promptCacheHitTokens?.let { o.put(KEY_CACHE_HIT, it) }
             }
 
             is UserMessage -> {
@@ -296,6 +300,7 @@ internal class SessionLog(
                 // 绝不能兜成 0：那会让面板显示"本轮 0 token"这种错误信息
                 promptTokens = if (o.has(KEY_PROMPT_TOKENS)) o.optInt(KEY_PROMPT_TOKENS) else null,
                 completionTokens = if (o.has(KEY_COMPLETION_TOKENS)) o.optInt(KEY_COMPLETION_TOKENS) else null,
+                promptCacheHitTokens = if (o.has(KEY_CACHE_HIT)) o.optInt(KEY_CACHE_HIT) else null,
                 modelCalls = if (o.has(KEY_MODEL_CALLS)) o.optInt(KEY_MODEL_CALLS) else null,
             )
 

@@ -289,6 +289,18 @@ class CxrLHiRokidSession(
         }
     }
 
+    /**
+     * 环境音监听协调器（双模式：工具一次性听一段 / 顶栏耳朵按钮持续录入，必须在 asrBridge 之前初始化）。
+     * onFinalSentence 用 lambda 捕获 aiConversation —— 延迟执行，无初始化顺序问题。
+     */
+    internal val ambientListen = AmbientListenCoordinator(
+        appScope = appScope,
+        linkProvider = { cxrLink },
+        linkAlive = { cxrlConnected },
+        cmdLock = aiCmdLock,
+        onFinalSentence = { text -> aiConversation.dispatchGlassesAsrText(text, fromAmbient = true) },
+    )
+
     /** ASR 桥接协调器（双通道接收/去重/控制标记/下行 ping，从本类拆出，职责见其文档） */
     internal val asrBridge = AsrBridgeCoordinator(
         appContext = appContext,
@@ -308,6 +320,8 @@ class CxrLHiRokidSession(
         // 连续对话续听：眼镜端 Lab 回复 TTS 播完 → 手机端下发 TTS_AudioFinished，
         // 触发官方 AudioFinishedHandler → startNewTalk 重开拾音（必须在手机侧发，见常量注释）。
         onContinueDialog = { requestGlassesContinueDialog() },
+        // 环境音转写：眼镜端官方字幕链路结果 → AmbientListenCoordinator 收集
+        onAmbientText = { json -> ambientListen.onAmbientFrame(json) },
         // 兜底轮询复用全 App 共享 ADB 会话：自建会话会挤断用户正在用的 ADB 工具/投屏会话。
         // 长连接（屏幕镜像/手机投屏/文件浏览）占用隧道时让路 —— 返回 null 触发退避，
         // 避免这条「兜底」通道反而把用户正在用的长连接挤断。
@@ -1017,6 +1031,8 @@ class CxrLHiRokidSession(
         glassesProbeJob?.cancel()
         glassesProbeJob = null
         asrBridge.stop()
+        // 环境音监听随链路停（状态不持久，默认关 —— 重连后由用户显式再开）
+        ambientListen.markLinkDown()
         // 补漏：取消其余遗留协程任务（原实现漏取消导致后台任务残留）
         aiConfig.cancelPushJob()
         photoQuizService.cancelPhotoRequestTimeout()
@@ -1324,6 +1340,17 @@ class CxrLHiRokidSession(
         delay(PROBE_ACK_TIMEOUT_MS)
         if (GlassesHandshake.lastHelloAtMs > before) {
             Log.d(TAG, "probe: glasses resident service healthy (hello refreshed)")
+            // IMU 流活性兜底：会话恢复（probe 复活）不走 onOpenAppResult，imu_start 可能永远补不上；
+            // 眼镜端 IMU 默认关 + 断连自停 —— 数据 stale > 15s 时补发拉流（眼镜端幂等，重复 start 会被忽略）
+            appScope.launch(Dispatchers.IO) {
+                runCatching {
+                    val staleMs = System.currentTimeMillis() - (MotionBuffer.latest()?.t ?: 0L)
+                    if (staleMs > 15_000L) {
+                        val r = deviceControl.sendImuControl(true)
+                        Log.i(TAG, "probe: imu stale ${staleMs}ms, re-armed -> $r")
+                    }
+                }
+            }
             return
         }
 

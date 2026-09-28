@@ -49,6 +49,9 @@ internal class CxrBridgeCoordinator(
     /** 是否处于「断线武装」状态：onDisconnected 置 true，重连成功后启动观察窗口 */
     private var reconnectArmed = false
 
+    /** 环境音监听（官方字幕链路白嫖）：跨断线重连持有会话状态与看门狗，见其文档 */
+    private val ambient = AmbientListenController(core)
+
     /** 重连成功时刻：观察窗口起点，窗口内无下行则判定路由失效 */
     private var reconnectAtMs = 0L
 
@@ -74,8 +77,8 @@ internal class CxrBridgeCoordinator(
                 override fun onConnected(name: String, address: String, type: Int) {
                     Log.i(TAG, "CXR connected: name=$name, address=$address, type=$type")
                     core.bridgeConnected = true
-                    // 常驻观测（幂等）：不能只靠下面的 reconnectArmed —— 路由 stale 时
-                    // onDisconnected 根本不会回调，那条"断线武装"的路永远等不到（见 armDownlinkWatch）
+                    // 常驻观测幂等兜底：init() 已无条件武装，正常路径此处直接 return；
+                    // 仅防「断线重连先于 reconnect 任务的 init() 完成回调」的极窄窗口
                     armDownlinkWatch()
                     // 连接建立后若已连 WiFi，立即上行眼镜 IP（首次/重连后让手机端尽快拿到）
                     ipReporter.sendGlassesIp()
@@ -153,6 +156,8 @@ internal class CxrBridgeCoordinator(
                 core.markDownlink()
                 Log.i(TAG, "Received tts_stop, stopping local TTS")
                 TtsPlaybackHelper.stop()
+                // 播报被打断：环境音 TTS 硬闸同步解除（真实播完回调不会再触发）
+                AmbientListenController.ttsPlaying = false
             })
             Log.i(TAG, "subscribe(${KeyButtonService.TTS_STOP_TOPIC}) -> $ttsStopResult")
 
@@ -284,8 +289,35 @@ internal class CxrBridgeCoordinator(
             )
             Log.i(TAG, "subscribe(${AiChannel.TOPIC_OPEN_APP}) -> $openAppResult")
 
+            // 环境音监听控制（手机端 → 眼镜端）：start/stop 官方字幕链路（远场麦），见 AmbientListenController
+            val ambientCtrlResult = core.bridge?.subscribe(
+                LinkProtocol.TOPIC_AMBIENT_CTRL,
+                CXRServiceBridge.MsgCallback { _, args, _ ->
+                    core.markDownlink()
+                    ambient.handleControl(args)
+                }
+            )
+            Log.i(TAG, "subscribe(${LinkProtocol.TOPIC_AMBIENT_CTRL}) -> $ambientCtrlResult")
+
+            // 官方字幕频道广播：活跃会话期间把字幕 ASR JSON 经推送通道上行手机端
+            val ambientAsrResult = core.bridge?.subscribe(
+                LinkProtocol.CXR_CHANNEL_ACCESSIBILITY,
+                CXRServiceBridge.MsgCallback { _, args, value ->
+                    ambient.handleAccessibility(args, value)
+                }
+            )
+            Log.i(TAG, "subscribe(${LinkProtocol.CXR_CHANNEL_ACCESSIBILITY}) -> $ambientAsrResult")
+
             // 服务就绪：主动握手通告一次（手机端据此免探测获知眼镜端能力）
             announceHello()
+
+            // 常驻观测在 init() 无条件武装（幂等）：不能只在 onConnected 里 arm ——
+            // 2026-09-26 真机取证：进程启动时 cxr-service flora 侧已 stale，握手永远完不成、
+            // onConnected 永不回调 ⇒ watch 永不武装，三道自愈防线（reconnectArmed 观察窗 /
+            // downlink watch / watchdog 心跳）同时失效，故障静默存活到进程被外力重启。
+            // init 期武装后，「手机在场（AsrPushServer.hasClient）+ 桥未连成 + 零下行」
+            // 180s 即自愈重启；onConnected 里的 arm 因幂等守卫无副作用。
+            armDownlinkWatch()
         } catch (e: Exception) {
             Log.e(TAG, "initCxrBridge failed", e)
         }

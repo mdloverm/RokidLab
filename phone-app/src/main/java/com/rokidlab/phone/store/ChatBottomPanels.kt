@@ -82,7 +82,8 @@ import kotlinx.coroutines.launch
 /** 头像底色与 ProviderManagePage 共用 providerAccentOf（Lab 色板，按 PRESETS 顺序轮换） */
 
 /** 弹出面板里每家供应商最多直出的模型行数；更多模型引导去管理页（那里上限 60） */
-private const val PICK_MODEL_ROWS = 10
+/** 面板内每家供应商展示的模型行数：只展示最新几个（listModels 已按 created 倒序） */
+private const val PICK_MODEL_ROWS = 8
 
 /**
  * 供应商 / 模型选择**上拉层**：列出**配置好的**供应商及其支持的模型，行尾是账户余额。
@@ -114,7 +115,7 @@ internal fun ProviderPickPanel(
     var activeCfg by remember { mutableStateOf(session?.getOnlineAiConfig()) }
     // id → 余额展示串（不支持查余额的品牌不进这个 map，行尾显示 "--"）
     var balances by remember { mutableStateOf(mapOf<String, String>()) }
-    // id → 模型列表（初始为空 = 用预设推荐清单；拉到 /models 后整组替换）
+    // id → 模型列表（预置推荐清单已移除：填 key 后实拉 /models，最新优先；拉取失败则只显示在用模型）
     var models by remember { mutableStateOf(mapOf<String, List<String>>()) }
 
     LaunchedEffect(Unit) {
@@ -128,7 +129,7 @@ internal fun ProviderPickPanel(
             }
         }
         entries = merged.mapNotNull { c -> ProviderCatalog.byId(c.id)?.let { it to c } }
-        // 并行拉：余额（仅支持的品牌）+ 实时模型列表（失败静默回落预设清单）
+        // 并行拉：余额（仅支持的品牌）+ 实时模型列表（最新优先；失败静默，仅显示在用模型）
         merged.forEach { c ->
             val preset = ProviderCatalog.byId(c.id) ?: return@forEach
             if (preset.supportsBalance) {
@@ -213,9 +214,10 @@ internal fun ProviderPickPanel(
                         }
                         // 模型行：当前在用的高亮，点击即切换。
                         // ⚠️ 先把**当前配置里的模型**并进列表：手输的模型名（自定义端点常见）可能不在
-                        //   预设清单也不在 /models 返回里，不并进来就会出现"在用但列表里看不到"。
+                        //   /models 返回里，不并进来就会出现"在用但列表里看不到"。
+                        //   预置推荐清单已移除，拉取失败时只有手输/在用的那一个模型可选。
                         val list = (
-                            listOf(cfg.model) + (models[cfg.id] ?: preset.models)
+                            listOf(cfg.model) + models[cfg.id].orEmpty()
                             ).filter { it.isNotBlank() }.distinct()
                         list.take(PICK_MODEL_ROWS).forEach { m ->
                             val isActive = activeCfg?.let {

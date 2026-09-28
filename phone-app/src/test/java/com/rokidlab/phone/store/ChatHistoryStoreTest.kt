@@ -305,6 +305,21 @@ class ChatHistoryStoreTest {
     }
 
     @Test
+    fun `缓存命中字段往返保留`() {
+        // 2026-09-26 P0：前缀缓存命中量随用量一起落盘（"h" 键）；旧文件没有该键读回 null
+        val src = msg(7, "答").copy(
+            usage = MsgUsage(inputTokens = 1000, outputTokens = 50, promptCacheHitTokens = 800, modelCalls = 1, elapsedMs = null),
+        )
+        val back = ChatHistoryStore.parse(ChatHistoryStore.toLine(src)).single()
+        assertEquals(800, back.usage?.promptCacheHitTokens)
+        // 旧历史（无 "h" 键）读回 null，不是 0
+        val old = msg(8, "答").copy(
+            usage = MsgUsage(inputTokens = 10, outputTokens = 1, promptCacheHitTokens = null, modelCalls = 1, elapsedMs = null),
+        )
+        assertNull(ChatHistoryStore.parse(ChatHistoryStore.toLine(old)).single().usage?.promptCacheHitTokens)
+    }
+
+    @Test
     fun `拿不到的用量读回 null 而不是 0`() {
         // 服务端不返回 usage 时 token 数是 null = "不知道"。落盘再读回来必须还是 null：
         // 面板上写「输入 0 / 输出 0」是**错误信息**，比不显示更糟（用户会拿它当账单）。
@@ -327,7 +342,9 @@ class ChatHistoryStoreTest {
 
     @Test
     fun `四个字段全空时整组不落盘`() {
-        val empty = msg(6, "答").copy(usage = MsgUsage(null, null, null, null))
+        val empty = msg(6, "答").copy(
+            usage = MsgUsage(inputTokens = null, outputTokens = null, promptCacheHitTokens = null, modelCalls = null, elapsedMs = null),
+        )
         assertFalse("全空不该留下一个空对象", ChatHistoryStore.toLine(empty).contains("usage"))
         assertNull(ChatHistoryStore.parse(ChatHistoryStore.toLine(empty)).single().usage)
     }

@@ -30,6 +30,9 @@ internal class AgentTurn internal constructor(
     // ===== 本轮的模型调用成本（累加，收尾时落到 [TurnEnd] 上）=====
     private var promptTotal = 0
     private var completionTotal = 0
+    /** 前缀缓存命中的输入 token 合计（2026-09-26 P0，随 [TurnEnd] 落盘供面板展示） */
+    private var cacheHitTotal = 0
+    private var cacheHitSeen = false
 
     /** 服务端**至少给过一次** usage 才报数字；一次都没给就保持 null（不知道，不是 0） */
     private var usageSeen = false
@@ -67,6 +70,12 @@ internal class AgentTurn internal constructor(
         usageSeen = true
         promptTotal += usage.promptTokens
         completionTotal += usage.completionTokens
+        // 缓存命中单独累加：它的口径是「省了多少钱」，与总输入分开看才有意义。
+        // 服务端给过该字段（哪怕 0）就置 seen —— 长期为 0 恰恰是前缀稳定性退化的警报。
+        usage.promptCacheHitTokens?.let {
+            cacheHitTotal += it
+            cacheHitSeen = true
+        }
     }
 
     /** 请求装配用的历史（**不含**本轮 —— 本轮用户消息要单独构造，多模态时是分片数组） */
@@ -89,6 +98,7 @@ internal class AgentTurn internal constructor(
             detail = detail,
             promptTokens = if (usageSeen) promptTotal else null,
             completionTokens = if (usageSeen) completionTotal else null,
+            promptCacheHitTokens = if (cacheHitSeen) cacheHitTotal else null,
             // 调用次数是**我们自己的事实**（不依赖服务端），所以哪怕拿不到 usage 也报
             modelCalls = if (modelCalls > 0) modelCalls else null,
         )

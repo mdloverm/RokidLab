@@ -87,6 +87,16 @@ object LocationTools {
             "请确认手机已打开定位开关（下拉通知栏的「位置信息」）后重试"
     }
 
+    /**
+     * 供天气等工具「自动定位兜底」用：返回系统定位坐标（缓存→实时定位），
+     * 权限缺失或无可用定位时返回 null（不打扰用户，调用方自行降级）。
+     */
+    fun currentLocation(context: Context): android.location.Location? {
+        if (!hasLocationPermission(context)) return null
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
+        return bestLocation(lm)
+    }
+
     // ═══════════════════════════ 取坐标 ═══════════════════════════
 
     private fun hasLocationPermission(context: Context): Boolean =

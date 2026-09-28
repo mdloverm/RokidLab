@@ -163,9 +163,10 @@ internal fun ProviderManagePage(
             return
         }
         val base = editBase.trim().ifBlank { preset.baseUrl }
-        val model = editModel.trim().ifBlank { preset.models.firstOrNull().orEmpty() }
+        // ⚠️ 预置推荐清单已移除：模型只能来自手输或实拉 /models，没有兜底值可回退
+        val model = editModel.trim()
         if (base.isBlank() || model.isBlank()) {
-            // 自定义供应商必须给地址与模型；预设品牌两者都有兜底，走不到这里
+            // 自定义供应商必须给地址与模型；预设品牌地址有兜底，但模型必须手输或点选拉取结果
             Toast.makeText(ctx, ctx.getString(R.string.chat_settings_provider_need_base_model), Toast.LENGTH_SHORT).show()
             return
         }
@@ -301,7 +302,16 @@ internal fun ProviderManagePage(
                                 onValueChange = { editKey = it },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .onFocusChanged { keyFocused = it.isFocused },
+                                    .onFocusChanged {
+                                        keyFocused = it.isFocused
+                                        // 填完 key 移开焦点即自动拉取模型清单（「刷新」按钮仍保留）：
+                                        // 预置推荐清单已移除，拉取是模型点选列表的唯一来源
+                                        if (!it.isFocused && editKey.isNotBlank() &&
+                                            fetchedModels.isEmpty() && !fetching && preset.id != "custom"
+                                        ) {
+                                            fetchModels(preset)
+                                        }
+                                    },
                                 label = { Text(stringResource(R.string.chat_settings_api_key), color = BrewMuted, fontSize = 12.sp) },
                                 placeholder = { Text("sk-...", color = BrewMuted, fontSize = 13.sp) },
                                 singleLine = true,
@@ -352,8 +362,7 @@ internal fun ProviderManagePage(
                                 modifier = Modifier.fillMaxWidth(),
                                 placeholder = {
                                     Text(
-                                        text = preset.models.firstOrNull()
-                                            ?: stringResource(R.string.chat_settings_provider_model_manual_hint),
+                                        text = stringResource(R.string.chat_settings_provider_model_manual_hint),
                                         color = BrewMuted,
                                         fontSize = 13.sp,
                                     )
@@ -363,11 +372,11 @@ internal fun ProviderManagePage(
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, keyboardType = KeyboardType.Text),
                                 colors = providerFieldColors(),
                             )
-                            val modelChoices = (if (fetchedModels.isNotEmpty()) {
-                                fetchedModels.take(PROVIDER_MAX_MODEL_ROWS)
-                            } else {
-                                preset.models
-                            }).filter { it != editModel }
+                            // 预置推荐清单已移除：只展示实拉 /models 的结果（最新优先，listModels 已按
+                            // created 倒序），截前 8 条 —— "填入 key 后只显示最新的几个模型"
+                            val modelChoices = fetchedModels
+                                .take(PROVIDER_MAX_MODEL_ROWS)
+                                .filter { it != editModel }
                             if (modelChoices.isNotEmpty()) {
                                 Spacer(Modifier.height(6.dp))
                             }
@@ -433,8 +442,8 @@ internal fun ProviderManagePage(
     }
 }
 
-/** 单页模型行上限：聚合站（OpenRouter 等）/models 会返回几百条，全铺会把页面拖成无穷长 */
-private const val PROVIDER_MAX_MODEL_ROWS = 60
+/** 单页模型行上限：只展示最新几个（listModels 已按 created 倒序，这里直接截前 8 条） */
+private const val PROVIDER_MAX_MODEL_ROWS = 8
 
 /** 本页输入框统一配色（Lab 视觉口径） */
 @Composable

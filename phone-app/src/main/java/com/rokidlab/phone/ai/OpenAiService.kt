@@ -80,6 +80,34 @@ class OpenAiService(
         private val streamUsageUnsupported: MutableSet<String> =
             java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
 
+        /**
+         * 已知**不接受自定义 temperature** 的「模型@端点」组合。
+         *
+         * 为什么要记：思考系模型只允许服务端默认采样参数 —— Moonshot 思考系（kimi-k2.5/2.6 等）
+         * 带 `temperature: 0.7` 会整请求 400 `invalid temperature: only 1 is allowed for this model`。
+         * 与 [streamUsageUnsupported] 同策略：先带上试，被拒就撤掉重试并记住，之后不再带。
+         *
+         * 粒度是**模型级**（`model@host`）而不是端点级：同一端点上普通模型仍接受 0.7，
+         * 不能因为一个思考模型被拒就剥夺其他模型的采样控制。
+         * 进程内缓存即可（理由同 [streamUsageUnsupported]）：丢了大不了重探一次。
+         */
+        private val temperatureRestricted: MutableSet<String> =
+            java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+        /** 「模型@端点」标识（temperature 限制是模型级的，见 [temperatureRestricted]） */
+        private fun temperatureKey(baseUrl: String, model: String): String =
+            "${model.trim().lowercase()}@${endpointHost(baseUrl)}"
+
+        /** 该模型当前是否应附带自定义 temperature（已被拒过的不再带） */
+        private fun includeTemperature(baseUrl: String, model: String): Boolean =
+            temperatureKey(baseUrl, model) !in temperatureRestricted
+
+        /** 判断是否为「服务端拒绝自定义 temperature」类 4xx（如 Moonshot 思考系模型只允许 1） */
+        private fun isTemperatureRejection(e: Exception): Boolean =
+            e is com.rokidlab.phone.util.HttpStatusException &&
+                e.code in 400..499 &&
+                e.body.lowercase().contains("temperature")
+
         /** 端点标识（host 拿不到时退化成去掉尾斜杠的 baseUrl） */
         private fun endpointHost(baseUrl: String): String {
             val base = baseUrl.trimEnd('/')
@@ -126,6 +154,16 @@ class OpenAiService(
                     "这次要输出的内容超出了单轮上限，请把需求拆小一点再试"
                 b.contains("authentication") || b.contains("invalid api key") ->
                     "AI 密钥无效或已过期，请在乐奇聊天设置里重新填写接口密钥"
+                // 火山方舟特有：模型未在控制台开通。Ark 对「没开通的模型」也返回 404
+                // （正文 code=ModelNotOpen）—— 用户该做的是去方舟控制台开通模型服务，
+                // 不是核对接口地址；不识别这条就会把模型问题误报成「接口地址不对」
+                // （2026-09-28 实测：有效 key + 未开通模型 → HTTP 404 ModelNotOpen）。
+                b.contains("modelnotopen") || b.contains("has not activated the model") ->
+                    "这个模型还没在火山方舟控制台开通，请开通该模型服务后再试"
+                // 火山方舟特有：模型/接入点不存在或账号无权限（code=InvalidEndpointOrModel.NotFound），
+                // 同为 404 —— 常见于选了已下线/即将下线（Retiring）的模型，指向模型名而非地址。
+                b.contains("invalidendpointormodel") || b.contains("does not exist") ->
+                    "AI 不认识这个模型名，请在乐奇聊天设置里刷新模型列表后重选"
                 b.contains("model not exist") || b.contains("model_not_found") ||
                     b.contains("model not found") ->
                     "AI 不认识这个模型名，请在乐奇聊天设置里刷新模型列表后重选"
@@ -141,13 +179,18 @@ class OpenAiService(
         }
     }
 
-    /** 将用户自定义 JSON 逐字段合并进请求体；结构性字段（model/messages/stream/tools）忽略 */
-    private fun mergeExtraBody(body: JSONObject, extra: JSONObject?) {
+    /**
+     * 将用户自定义 JSON 逐字段合并进请求体；结构性字段（model/messages/stream/tools）忽略。
+     * [dropTemperature]=true 时连用户自定义的 temperature 一并跳过：该模型已被服务端拒绝过
+     * 自定义采样参数（见 [temperatureRestricted]），再合并只会继续 400 —— 用服务端默认值反而能用。
+     */
+    private fun mergeExtraBody(body: JSONObject, extra: JSONObject?, dropTemperature: Boolean = false) {
         if (extra == null) return
         val iter = extra.keys()
         while (iter.hasNext()) {
             val k = iter.next()
             if (k == "model" || k == "messages" || k == "stream" || k == "tools") continue
+            if (dropTemperature && k == "temperature") continue
             body.put(k, extra.get(k))
         }
     }
@@ -170,36 +213,25 @@ class OpenAiService(
     }
 
     /**
-     * 构造 system 消息：Agent 人设 + 工具使用准则 + 眼镜播报风格，
-     * 可选注入知识库检索资料（RAG）与额外指令（如答题要求）
+     * 构造 system 消息（**稳定头部**）：Agent 人设 + 工具使用准则 + 眼镜播报风格。
      *
-     * @param memories 长期记忆文本（跨会话的用户事实/偏好，注入 <memories> 段）；
-     *                 null 表示无记忆不注入（省 token）
-     * @param lessons Agent 自己的经验教训（跨会话积累的坑与有效做法，注入 <lessons> 段）；
-     *                与 [memories] 分开注入的理由见 [LongTermMemoryManager] 类注释。null 表示不注入
-     * @param skills 用户自定义技能清单（注入 <skills> 段，name+description 第 1 层披露）；
-     *               模型命中描述时须调用 load_skill 加载完整步骤再执行。null 表示无技能不注入
+     * ★ 2026-09-26 拆分（P0 缓存优化）：本消息必须做到**逐字节稳定** ——
+     *   DeepSeek / OpenAI 服务端按请求前缀自动做 prompt caching（DeepSeek 命中部分
+     *   计价约为 miss 的 2%），而缓存的判定起点是 messages[0]。记忆（`<memories>` 按当轮
+     *   检索变化）、RAG 资料、答题指令这些**每轮都变**的内容原先混在这里，等于每轮
+     *   从 system 消息中间开始全部按 miss 价计费 —— 越聊越贵。变的部分现在走
+     *   [buildContextTailMessage]，由调用方插在**历史之后、本轮输入之前**：
+     *   `system(稳定) + history(追加式，前缀不变) + tail(轮变) + user`，
+     *   于是 system + 整段历史都落进缓存前缀。
+     *
      * @param localMode 本地轻量模式：使用精简人设（无工具准则段），明确告知模型无联网/无工具，
      *                  涉及设备操作/实时信息/联网任务时如实说明并引导切回在线模式（配合空工具集使用）
+     * @param availableTools 本次请求**真正下发**给模型的工具名集合（含伪工具）；null = 不做闸门（全量条款）。
+     *        ⚠️ 同一会话内装配集合变化（如 AIUI 精简模式切换）会让稳定头部失效一次 —— 属预期，
+     *        切换是低频事件，换来的省 token 远大于一次缓存 miss。
      */
     fun buildSystemMessage(
-        contextText: String? = null,
-        instruction: String? = null,
-        memories: String? = null,
-        lessons: String? = null,
-        skills: String? = null,
-        budget: String? = null,
         localMode: Boolean = false,
-        /**
-         * **本会话**的附加提示词（用户在会话设置里写的，见 `ChatSessionMeta.systemPrompt`）。
-         *
-         * ⚠️ 是**追加**而不是替换（刻意如此）：全局那段人设与工具准则里装着
-         * "不能编造工具结果""多步任务先 update_plan"这些**功能正确性**规则，
-         * 让一段用户随手写的文字把它们顶掉，代价是模型开始乱来 ——
-         * 而用户想要的多半只是"用中文回答""别啰嗦"这类风格约束。
-         * 因此它放在最后、并明说优先级更高，只覆盖风格与偏好。
-         */
-        sessionPrompt: String? = null,
         /**
          * 本次请求**真正下发**给模型的工具名集合（含伪工具）；null = 不做闸门（全量条款）。
          *
@@ -261,6 +293,13 @@ class OpenAiService(
                 }
                 if (has("schedule_agent_task")) {
                     append("\n- 用户想要「每天/每周固定时间由你主动做点什么再告诉他」（如「每天早上播报天气和日程」），或想到点**真的播放某首歌**（如「16 点放首《断桥残雪》」）时，不要用 manage_timer 的 create（那只会念一句写死的话，放不了音乐），改用 schedule_agent_task 创建自主任务；创建时如实说明该任务执行时只有查询类只读能力，外加在手机上播放/停止音乐，不会自动拨号、安装或改设置")
+                    if (com.rokidlab.phone.proactive.ProactiveGate.isFollowupEnabled()) {
+                        append("\n- 【主动回访】用户提到**明确的未来事件或约定**（「明天下午面试」「周五要交报告」「下周二是我妈生日」）时，主动提议帮他记一个回访，经同意后用 schedule_agent_task 建到点自主任务：prompt 必须**自包含**——写清事件内容、用户原话和今天的日期（如「用户在 9 月 26 日提到 9 月 27 日下午有面试，到点主动问一句进展如何，给予真诚的关心或建议，不要说教」），到点你会像老朋友一样主动跟进。模糊表述（「以后有空」「改天再说」）不要建；一天最多建一个；创建后用一句话确认建好了什么、到点会问什么")
+                    }
+                }
+                // 对话内陪伴：用户连续敷衍回复 → 这轮主动换个话题/追问，取走即清零
+                if (com.rokidlab.phone.proactive.ProactiveGate.takeDryStreakHint()) {
+                    append("\n- 【话题枯竭】用户最近几条回复都很敷衍（嗯/哈哈/不知道之类），说明当前话题让他没话说了。这轮自然地换一个有趣的新话题，或追问一个让他想聊的细节；语气轻松，别质问「你怎么不理我」")
                 }
                 if (has("look_at_view")) {
                     append("\n- 用户想让你「看到」眼前的东西（「看看面前有什么」「这是什么牌子」「帮我念一下这个」）时，调用 look_at_view 用眼镜拍一张再回答。**没有连接眼镜**时它会告诉你连不上，此时如实说「需要连接眼镜我才能看到」；**绝不要把原因说成「没有相机权限」** —— 那是错的，会把用户引去改一个没用的设置")
@@ -290,6 +329,11 @@ class OpenAiService(
                     append("\n- 写代码分两种场景，不要混用：① 用户只是想看/学/要一段代码（「写个快排」「给我一段 Python 示例」「这个函数怎么写」）→ 直接在回复正文里用围栏代码块输出（手机会渲染成可复制、可保存、可运行的卡片），**不要**调用 save_code_file；② 用户明确要生成项目/页面/应用/多个文件，或要求保存成文件 → 用 save_code_file 逐个写入手机「下载/项目名/」目录（一次一个文件、逐个调用），生成前告知「正在生成 文件名…」，最终只做简短结论（如「已生成 4 个文件，保存在下载目录的 xxx 项目」），正文里不要再贴源码")
                 }
             }
+            // 【关系状态】亲密度背景数据（陪伴 streak + 当日互动），首日无真实交互记录时不注入
+            com.rokidlab.phone.proactive.ProactiveGate.relationSnapshot()?.let { rel ->
+                append("\n\n【关系状态】你和这位用户已连续陪伴 ${rel.streakDays} 天，今天已经聊了 ${rel.interactionsToday} 次。")
+                append("语气可以随默契自然亲近，但不要刻意提这些数字，也不要用它邀功或讨关注")
+            }
             append("\n\n【回复风格】（手机端富文本 + 眼镜端语音播报）")
             append("\n- 口语化、简短自然，正文一般不超过 3 句话；不要用表情符号")
             append("\n- 手机界面支持 Markdown：展示代码必须用带语言标注的围栏代码块（```python 这种）；需要分点或强调时可用列表、标题、加粗")
@@ -299,53 +343,101 @@ class OpenAiService(
             // 这里显式禁止；消费侧还有 ReplySanitizer 兜底，两道防线都要留。
             append("\n- 不要用任何标签或标记包裹回复（如 <answer>…</answer>），直接输出正文")
             append("\n- 直接给结论，不要复述问题，不要描述「根据工具结果」这类过程")
-            if (!memories.isNullOrBlank()) {
-                append("\n\n<memories>\n")
-                append(memories)
-                append("\n</memories>\n以下是与用户相关的长期记忆，回答时如有涉及请据此个性化；与当前问题无关可忽略。")
-            }
-            // 教训段紧跟记忆段：两者都是"跨会话累积的自我提示"，但性质不同 ——
-            // 记忆是"关于用户的事实"（可忽略），教训是"你自己踩过的坑"（该照做，不是可选项）。
-            if (!lessons.isNullOrBlank()) {
-                // 末尾那句「可用 manage_memory 更新或删除」要点名工具，所以按闸门给 ——
-                // 本地轻量模式不装配 manage_memory，提它等于让模型去找一个不存在的工具。
-                val tail = if (has("manage_memory")) {
-                    "不要重复已经失败过的做法；若已确认某条不再成立，可用 manage_memory 更新或删除。"
-                } else {
-                    "不要重复已经失败过的做法。"
-                }
-                append("\n\n<lessons>\n")
-                append(lessons)
-                append("\n</lessons>\n以上是你自己过去在这台设备上积累的经验教训。做同类事情时按它来，")
-                append(tail)
-            }
-            if (!skills.isNullOrBlank()) {
-                append("\n\n<skills>\n")
-                append(skills)
-                append("\n</skills>")
-            }
-            if (!budget.isNullOrBlank()) {
-                append("\n\n")
-                append(budget)
-            }
-            if (!contextText.isNullOrBlank()) {
-                append("\n\n以下是知识库中检索到的参考资料，请优先基于这些资料回答用户问题；如果资料与问题无关，可忽略：\n")
-                append(contextText)
-            }
-            if (!instruction.isNullOrBlank()) {
-                append("\n\n请遵守以下答题要求：\n")
-                append(instruction)
-            }
-            // 会话附加要求放**最后**：位置本身就是优先级信号（越靠后越贴近本次请求），
-            // 而且它明说了"优先遵守"——否则模型会把它当成与人设并列的一段普通说明而忽略。
-            if (!sessionPrompt.isNullOrBlank()) {
-                append("\n\n【本会话的附加要求】用户为这次对话单独指定，**优先遵守**（仅覆盖表达与偏好，"
-                    + "不得违反上面的工具使用准则）：\n")
-                append(sessionPrompt.trim())
-            }
         }
         systemMsg.put("content", systemContent)
         return systemMsg
+    }
+
+    /**
+     * 构造**上下文尾随消息**（轮变内容，2026-09-26 从 [buildSystemMessage] 拆出）：
+     * 长期记忆 / 经验教训 / 技能清单 / 任务说明 / 知识库资料 / 答题要求 / 会话附加要求。
+     *
+     * 由调用方插在 `system(稳定) + history` 之后、本轮 user 消息之前 —— 这些内容**每轮都变**
+     * （`<memories>` 按当轮检索、RAG 按当轮问题），混进首条 system 会从中间打断服务端的
+     * 前缀缓存（DeepSeek 自动缓存命中价 ≈ miss 价的 2%）；放在历史之后，每轮变动的只有请求
+     * **尾部**，system + 整段历史（追加式）都能命中缓存。各段文案与拆分前逐字一致，行为不变。
+     *
+     * @return 全部参数都为空白时返回 null（无内容不下发空消息）
+     */
+    fun buildContextTailMessage(
+        contextText: String? = null,
+        instruction: String? = null,
+        memories: String? = null,
+        lessons: String? = null,
+        skills: String? = null,
+        budget: String? = null,
+        /**
+         * **本会话**的附加提示词（用户在会话设置里写的，见 `ChatSessionMeta.systemPrompt`）。
+         *
+         * ⚠️ 是**追加**而不是替换（刻意如此）：全局那段人设与工具准则里装着
+         * "不能编造工具结果""多步任务先 update_plan"这些**功能正确性**规则，
+         * 让一段用户随手写的文字把它们顶掉，代价是模型开始乱来 ——
+         * 而用户想要的多半只是"用中文回答""别啰嗦"这类风格约束。
+         * 因此它放在最后、并明说优先级更高，只覆盖风格与偏好。
+         */
+        sessionPrompt: String? = null,
+        /** 可选能力条款闸门（口径与 [buildSystemMessage] 一致），仅影响 lessons 段尾句 */
+        availableTools: Set<String>? = null,
+    ): JSONObject? {
+        if (contextText.isNullOrBlank() && instruction.isNullOrBlank() &&
+            memories.isNullOrBlank() && lessons.isNullOrBlank() &&
+            skills.isNullOrBlank() && budget.isNullOrBlank() && sessionPrompt.isNullOrBlank()
+        ) {
+            return null
+        }
+        fun has(tool: String): Boolean = availableTools == null || tool in availableTools
+        val msg = JSONObject()
+        msg.put("role", "system")
+        msg.put(
+            "content",
+            buildString {
+                if (!memories.isNullOrBlank()) {
+                    append("<memories>\n")
+                    append(memories)
+                    append("\n</memories>\n以下是与用户相关的长期记忆，回答时如有涉及请据此个性化；与当前问题无关可忽略。")
+                }
+                // 教训段紧跟记忆段：两者都是"跨会话累积的自我提示"，但性质不同 ——
+                // 记忆是"关于用户的事实"（可忽略），教训是"你自己踩过的坑"（该照做，不是可选项）。
+                if (!lessons.isNullOrBlank()) {
+                    // 末尾那句「可用 manage_memory 更新或删除」要点名工具，所以按闸门给 ——
+                    // 本地轻量模式不装配 manage_memory，提它等于让模型去找一个不存在的工具。
+                    val lessonTail = if (has("manage_memory")) {
+                        "不要重复已经失败过的做法；若已确认某条不再成立，可用 manage_memory 更新或删除。"
+                    } else {
+                        "不要重复已经失败过的做法。"
+                    }
+                    append("\n\n<lessons>\n")
+                    append(lessons)
+                    append("\n</lessons>\n以上是你自己过去在这台设备上积累的经验教训。做同类事情时按它来，")
+                    append(lessonTail)
+                }
+                if (!skills.isNullOrBlank()) {
+                    append("\n\n<skills>\n")
+                    append(skills)
+                    append("\n</skills>")
+                }
+                if (!budget.isNullOrBlank()) {
+                    append("\n\n")
+                    append(budget)
+                }
+                if (!contextText.isNullOrBlank()) {
+                    append("\n\n以下是知识库中检索到的参考资料，请优先基于这些资料回答用户问题；如果资料与问题无关，可忽略：\n")
+                    append(contextText)
+                }
+                if (!instruction.isNullOrBlank()) {
+                    append("\n\n请遵守以下答题要求：\n")
+                    append(instruction)
+                }
+                // 会话附加要求放**最后**：位置本身就是优先级信号（越靠后越贴近本次请求），
+                // 而且它明说了"优先遵守"——否则模型会把它当成与人设并列的一段普通说明而忽略。
+                if (!sessionPrompt.isNullOrBlank()) {
+                    append("\n\n【本会话的附加要求】用户为这次对话单独指定，**优先遵守**（仅覆盖表达与偏好，"
+                        + "不得违反上面的工具使用准则）：\n")
+                    append(sessionPrompt.trim())
+                }
+            },
+        )
+        return msg
     }
 
     /**
@@ -360,7 +452,8 @@ class OpenAiService(
         tools: List<JSONObject>? = null,
     ): ChatTurn {
         val messages = JSONArray()
-        messages.put(buildSystemMessage(contextText))
+        // 稳定头部 + 历史之后插轮变上下文（P0 缓存优化，见 buildContextTailMessage 的 KDoc）
+        messages.put(buildSystemMessage())
         // 历史对话
         history.forEach { msg ->
             val m = JSONObject()
@@ -368,6 +461,8 @@ class OpenAiService(
             m.put("content", msg.content)
             messages.put(m)
         }
+        // 轮变上下文（RAG 资料）插在历史之后、本轮输入之前：保住 system+history 的缓存前缀
+        buildContextTailMessage(contextText = contextText)?.let { messages.put(it) }
         // 当前用户消息
         val userMsg = JSONObject()
         userMsg.put("role", "user")
@@ -471,6 +566,22 @@ class OpenAiService(
                 // 直接抛出，让上层拿到状态码给出可行动的提示。
                 val hopeless = e is com.rokidlab.phone.util.HttpStatusException &&
                     e.code in 400..499 && e.code != 408 && e.code != 429
+                // ★ 可选字段（temperature）被拒 ≠ 这轮对话失败：撤掉它**原地重来一次**
+                //   （不计入重试次数），并按「模型@端点」记住以后不再带。
+                //   放在 stream_options 兜底**之前**：错误正文能精确归因（"invalid temperature: …"），
+                //   否则会被下面的通用兜底误判成 stream_options 被拒 —— 真机复现（kimi-k2.6）：
+                //   撤错字段后重试仍 400，整轮对话失败。
+                if (hopeless && isTemperatureRejection(e) &&
+                    includeTemperature(baseUrl, model) && !accumulator.hasEmittedContent()
+                ) {
+                    temperatureRestricted.add(temperatureKey(baseUrl, model))
+                    Log.w(
+                        TAG,
+                        "chatTurnStream: 端点拒绝自定义 temperature（${e.message}）" +
+                            "—— 撤掉该字段重试同一轮（不计重试次数，之后该模型不再带）",
+                    )
+                    continue
+                }
                 // ★ 可选字段（stream_options）被拒 ≠ 这轮对话失败：撤掉它**原地重来一次**
                 //   （不计入重试次数），并记住这个端点以后不再带。
                 //   没有这条兜底，一个"严格校验未知字段"的兼容实现就会让整轮对话 400 ——
@@ -544,7 +655,10 @@ class OpenAiService(
             // （2026-09-14 真机日志：9 次空轮全部 reasoning≥2.5 万，成功轮 reasonng≤1.1 万）。
             // 两处必须共用同一套取值，见 MAX_TOKENS_DEFAULT / MAX_TOKENS_THINKING。
             put("max_tokens", if (thinkingEnabled) MAX_TOKENS_THINKING else MAX_TOKENS_DEFAULT)
-            put("temperature", 0.7)
+            // 思考系模型只允许服务端默认采样参数（如 Moonshot kimi-k2.5/2.6 只接受 temperature=1）：
+            // 被拒过的「模型@端点」不再附带（含用户自定义值，见 mergeExtraBody），否则整请求 400
+            val withTemperature = includeTemperature(baseUrl, model)
+            if (withTemperature) put("temperature", 0.7)
             if (!tools.isNullOrEmpty()) put("tools", JSONArray(tools))
             // 真实 token 用量：OpenAI 协议要求**显式开**这个开关，流末才会带 usage。
             // ⚠️ 它是个可选字段，少数兼容实现会因为它整请求 400 —— 对此有兜底：
@@ -555,13 +669,14 @@ class OpenAiService(
                 put("thinking", JSONObject().put("type", "disabled"))
             }
             // 用户自定义请求参数（本地 Ollama 调参）：最后合并，覆盖上面的默认值
-            mergeExtraBody(this, extraBody)
+            mergeExtraBody(this, extraBody, dropTemperature = !withTemperature)
         }
         // 预算与思考状态打点：finish=length 空轮的第一现场，排障不该靠猜
         Log.i(
             TAG,
             "chatTurnStream request: model=$model max_tokens=${requestBody.optInt("max_tokens")} " +
                 "thinking=${if (requestBody.has("thinking")) "disabled" else "server-default"} " +
+                "temperature=${if (requestBody.has("temperature")) "0.7" else "server-default"} " +
                 "tools=${tools?.size ?: 0}",
         )
         val headers = mapOf(
@@ -603,6 +718,29 @@ class OpenAiService(
         tools: List<JSONObject>? = null,
         readTimeout: Int? = null,
     ): ChatTurn {
+        return try {
+            chatTurnOnceInternal(messages, tools, readTimeout, includeTemperature(baseUrl, model))
+        } catch (e: Exception) {
+            // temperature 被拒：记住该「模型@端点」后撤掉字段重试一次（与流式路径兜底同款）
+            if (isTemperatureRejection(e) && includeTemperature(baseUrl, model)) {
+                temperatureRestricted.add(temperatureKey(baseUrl, model))
+                Log.w(
+                    TAG,
+                    "chatTurn: 端点拒绝自定义 temperature（${e.message}）" +
+                        "—— 撤掉该字段重试一次（之后该模型不再带）",
+                )
+                return chatTurnOnceInternal(messages, tools, readTimeout, false)
+            }
+            throw e
+        }
+    }
+
+    private fun chatTurnOnceInternal(
+        messages: JSONArray,
+        tools: List<JSONObject>?,
+        readTimeout: Int?,
+        withTemperature: Boolean,
+    ): ChatTurn {
         // baseUrl 兼容：带 /v1 或已含完整 /chat/completions 的填法
         val base = baseUrl.trimEnd('/')
         val endpoint = when {
@@ -617,14 +755,15 @@ class OpenAiService(
         // 思考开启时预算放大（reasoning 与正文/工具参数共享该上限），关闭思考时默认值即可。
         // 取值与流式路径共用同一套常量，避免两条路径预算不一致（曾导致流式空轮、非流式正常）
         requestBody.put("max_tokens", if (thinkingEnabled) MAX_TOKENS_THINKING else MAX_TOKENS_DEFAULT)
-        requestBody.put("temperature", 0.7)
+        // 思考系模型只允许服务端默认采样参数，同流式路径（见 streamOnce 的 withTemperature）
+        if (withTemperature) requestBody.put("temperature", 0.7)
         if (!tools.isNullOrEmpty()) requestBody.put("tools", JSONArray(tools))
         // 关闭思考：不附加关思考字段时，服务端按默认开启思考（reasoning 会耗尽输出预算导致空轮），同流式路径
         if (!thinkingEnabled && supportsThinkingDisabled(model)) {
             requestBody.put("thinking", JSONObject().put("type", "disabled"))
         }
         // 用户自定义请求参数（本地 Ollama 调参）：最后合并，覆盖上面的默认值
-        mergeExtraBody(requestBody, extraBody)
+        mergeExtraBody(requestBody, extraBody, dropTemperature = !withTemperature)
 
         val headers = mapOf(
             "Authorization" to "Bearer $apiKey",
@@ -635,6 +774,7 @@ class OpenAiService(
             TAG,
             "chatTurn request: model=$model max_tokens=${requestBody.optInt("max_tokens")} " +
                 "thinking=${if (requestBody.has("thinking")) "disabled" else "server-default"} " +
+                "temperature=${if (requestBody.has("temperature")) "0.7" else "server-default"} " +
                 "tools=${tools?.size ?: 0}",
         )
         val response = HttpClient.postString(
@@ -692,6 +832,8 @@ class OpenAiService(
     /**
      * 获取该服务商支持的全部模型 ID 列表（GET {base}/models）。
      * 在 IO 线程调用（阻塞方法），失败时抛出异常（由调用方兜底为手动输入）。
+     * 排序：最新优先（按 created 倒序；已下线/即将下线的按 status 过滤），
+     * 调用方一般只取前几条展示。
      */
     fun listModels(): List<String> {
         val base = baseUrl.trimEnd('/')
@@ -706,11 +848,29 @@ class OpenAiService(
         val json = JSONObject(response)
         val data = json.optJSONArray("data")
             ?: throw Exception("no data in response: ${response.take(200)}")
-        val ids = mutableListOf<String>()
+        val parsed = mutableListOf<Pair<String, Long>>()
         for (i in 0 until data.length()) {
-            val id = data.optJSONObject(i)?.optString("id").orEmpty()
-            if (id.isNotBlank()) ids.add(id)
+            val obj = data.optJSONObject(i) ?: continue
+            // 火山方舟的 /models 会把已下线（Shutdown）/即将下线（Retiring）的模型也列出来，
+            // 调这些模型必然 404（InvalidEndpointOrModel.NotFound）—— 带 status 字段就按它过滤；
+            // 其他厂商不返回该字段（空串），不受影响。
+            when (obj.optString("status").lowercase()) {
+                "shutdown", "retiring" -> continue
+            }
+            // 非聊天模型也调不了 chat/completions（Ark 的 /models 连图像/视频/向量模型一起列）：
+            // 带 domain 字段时按已知非聊天域过滤；LLM/VLM/未知域一律保留，不做过度过滤。
+            when (obj.optString("domain")) {
+                "Embedding", "ImageGeneration", "VideoGeneration",
+                "TextToSpeech", "SpeechSynthesis", "SpeechToText", "Rerank",
+                -> continue
+            }
+            val id = obj.optString("id")
+            if (id.isNotBlank()) parsed.add(id to obj.optLong("created", 0L))
         }
+        // 「最新优先」：按 created 倒序。UI 侧只展示前几条（见 ProviderManagePage /
+        // ChatBottomPanels 的行数上限）。无 created 字段的厂商（值为 0）经稳定排序
+        // 保持原始返回顺序，不会被打乱。
+        val ids = parsed.sortedByDescending { it.second }.map { it.first }
         Log.i(TAG, "listModels: ${ids.size} models: ${ids.take(8)}")
         return ids
     }
@@ -752,6 +912,15 @@ data class TokenUsage(
     /** 输出（completion）token，含 reasoning 与被 max_tokens 截断前的实际产出 */
     val completionTokens: Int,
     val totalTokens: Int = promptTokens + completionTokens,
+    /**
+     * 命中服务端**前缀缓存**的输入 token 数（2026-09-26 P0）。
+     * 来源：DeepSeek 顶层 `prompt_cache_hit_tokens`（自动缓存，命中价 ≈ miss 价 2%），
+     * 兜底 OpenAI `prompt_tokens_details.cached_tokens`。null = 服务端没给该字段。
+     *
+     * ★ 为什么值得单独记：前缀缓存命中率是「system 消息逐字节稳定」这项优化的直接度量 ——
+     *   连续命中 = 前缀稳定化生效；长期为 0 = 某处把轮变内容又混回了请求头部。
+     */
+    val promptCacheHitTokens: Int? = null,
 )
 
 /**
@@ -774,7 +943,12 @@ internal fun parseTokenUsage(json: JSONObject?): TokenUsage? {
     val prompt = if (hasPrompt) u.optInt("prompt_tokens") else 0
     val completion = if (hasCompletion) u.optInt("completion_tokens") else 0
     val total = if (u.has("total_tokens")) u.optInt("total_tokens") else prompt + completion
-    return TokenUsage(prompt, completion, total)
+    // 前缀缓存命中：DeepSeek 顶层字段优先，OpenAI 嵌套 details 兜底；都没有 = null（服务端没给）
+    val cacheHit = when {
+        u.has("prompt_cache_hit_tokens") -> u.optInt("prompt_cache_hit_tokens")
+        else -> u.optJSONObject("prompt_tokens_details")?.optInt("cached_tokens")
+    }
+    return TokenUsage(prompt, completion, total, cacheHit)
 }
 
 /** 一次对话轮次的结果：要么是纯文本回复（[content]），要么请求调用工具（[toolCalls]） */

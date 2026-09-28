@@ -362,6 +362,7 @@
     <string name="chat_events_cat_cut">作废</string>
     <string name="chat_events_cat_lifecycle">过程</string>
     <string name="chat_trace_cost_tokens">Token 用量 %1$s</string>
+    <string name="chat_trace_cost_cache_hit">缓存命中 %1$s</string>
     <string name="chat_trace_cost_calls">%1$d 次模型调用</string>
     <string name="chat_trace_cost_elapsed">耗时 %1$s</string>
     <string name="chat_trace_cost_unknown">本轮用量未知（服务端未返回）</string>
@@ -499,9 +500,6 @@
     <!-- 思考全文展开 -->
     <string name="chat_think_expand">展开全文</string>
     <string name="chat_think_collapse">收起</string>
-    <!-- 眼镜端计划单行进度 -->
-    <string name="glasses_plan_progress">计划 %1$d/%2$d · %3$s</string>
-    <string name="glasses_plan_done">计划已完成</string>
 
     <!-- 乐奇聊天 - AI 服务设置 -->
     <string name="chat_settings">AI 设置</string>
@@ -595,6 +593,8 @@
     <string name="mcp_field_name">名称（可选）</string>
     <string name="mcp_field_url">服务器地址</string>
     <string name="mcp_field_url_hint">例如 https://example.com/mcp（自建本地服务可填 http://127.0.0.1:8181/mcp）</string>
+    <string name="mcp_field_stdio">本地 stdio 命令（可选）</string>
+    <string name="mcp_field_stdio_hint">填了就按容器内进程连接（需本机执行环境与 python3）；可直接粘贴标准 JSON 配置（mcpServers / command+args），地址栏可留空</string>
     <string name="mcp_url_must_be_https">只支持 https 地址（系统禁止明文流量；明文 http 仅回环地址 localhost / 127.0.0.1 可用）</string>
     <string name="mcp_field_token">访问令牌（可选）</string>
     <string name="mcp_field_token_hint">填入后作为 Authorization 请求头发送</string>
@@ -710,6 +710,8 @@
 
     <!-- 乐奇聊天 - 清空对话 -->
     <string name="chat_clear">清空对话</string>
+    <string name="chat_ambient_listen">持续听周围</string>
+    <string name="chat_subtitle_ambient">聆听模式 · 眼镜播报</string>
     <string name="chat_clear_confirm">清空当前对话的聊天记录？清空后不可恢复，同时会清空该对话的 AI 上下文记忆。</string>
 
     <!-- 乐奇聊天 - Agent 会话记忆 -->
@@ -832,6 +834,89 @@
     <string name="keep_alive_on">已开启</string>
     <string name="keep_alive_off">已关闭</string>
 
+    <!-- 空闲闲聊（副标题随闲聊频率档实时换算） -->
+    <string name="settings_idle_greeting">空闲闲聊</string>
+
+    <!-- 主动回访（记忆回访） -->
+    <string name="settings_followup">主动回访</string>
+    <string name="settings_followup_on">聊到的约定，到点主动问进展</string>
+
+    <!-- 日程简报（日历事件源） -->
+    <string name="settings_calendar_briefing">日程简报</string>
+    <string name="settings_calendar_briefing_on">提前 2 小时提醒即将开始的日程</string>
+
+    <!-- 走走拍拍（环境视觉，固定 15 分钟一拍） -->
+    <string name="settings_ambient_vision">走走拍拍</string>
+
+    <!-- 聊天输入栏「主动性」下弹面板 -->
+    <string name="chat_proactive_title">主动性</string>
+    <string name="chat_proactive_subtitle">陪伴方式与频率 · 随你的回应自动调频</string>
+
+    <!-- 陪伴场景（5 格单选，切走再切回自动恢复各自的功能组合） -->
+    <string name="proactive_section_scene">陪伴方式</string>
+    <string name="proactive_scene_mute">勿扰</string>
+    <string name="proactive_scene_mute_desc">不主动开口</string>
+    <string name="proactive_scene_schedule">日程助手</string>
+    <string name="proactive_scene_schedule_desc">早安、日程、晚安</string>
+    <string name="proactive_scene_light">轻陪伴</string>
+    <string name="proactive_scene_light_desc">关心作息与状态</string>
+    <string name="proactive_scene_friend">朋友</string>
+    <string name="proactive_scene_friend_desc">有感而发地聊两句</string>
+    <string name="proactive_scene_full">全陪</string>
+    <string name="proactive_scene_full_desc">闲聊更勤 + 走走拍拍</string>
+
+    <!-- 闲聊频率档（只管空闲闲聊一层，其他三层不占额度） -->
+    <string name="proactive_section_freq">闲聊频率</string>
+    <string name="proactive_freq_silent">安静</string>
+    <string name="proactive_freq_silent_desc">不闲聊</string>
+    <string name="proactive_freq_moderate">适中</string>
+    <string name="proactive_freq_moderate_desc">一天约 3 句</string>
+    <string name="proactive_freq_often">勤快</string>
+    <string name="proactive_freq_often_desc">一天约 6 句</string>
+    <string name="proactive_freq_constant">形影不离</string>
+    <string name="proactive_freq_constant_desc">一天约 12 句</string>
+
+    <!-- 额度头卡：今天还能真发出去几条 -->
+    <string name="proactive_quota_left">今天还可发 %1$d 条</string>
+    <string name="proactive_quota_none">今天不再打扰，明早见</string>
+    <string name="proactive_quota_muted">已静音，乐奇不会主动开口</string>
+
+    <!-- 免打扰时段 -->
+    <string name="proactive_quiet_title">免打扰时段</string>
+    <string name="proactive_quiet_hint">该时段内主动消息顺延</string>
+    <string name="proactive_quiet_start">开始时间</string>
+    <string name="proactive_quiet_end">结束时间</string>
+    <string name="proactive_quiet_input_error">时间格式不对</string>
+
+    <!-- 决策门状态行（与准入链同序：冷却 → 收敛 → 免打扰 → 运行中） -->
+    <string name="proactive_gate_cooldown">静默冷却中 · 剩约 %1$d 小时</string>
+    <string name="proactive_gate_penalty_h">主动收敛期 · 剩约 %1$d 小时</string>
+    <string name="proactive_gate_penalty_m">主动收敛期 · 剩约 %1$d 分钟</string>
+    <string name="proactive_gate_quiet">免打扰时段中，主动消息顺延</string>
+    <string name="proactive_gate_running">主动消息运行中 · 免打扰时段自动顺延</string>
+
+    <!-- 主动功能（6 行开关，副标题写真实触发条件） -->
+    <string name="proactive_section_features">主动功能</string>
+    <string name="proactive_ritual">早晚安</string>
+    <string name="proactive_feat_ritual_desc">按你的作息说早安晚安</string>
+    <string name="proactive_vision_every">行走中每 15 分钟看一眼</string>
+    <string name="proactive_soft_note">早晚安、日程、关怀、回访各有自己的时机，不占闲聊额度</string>
+
+    <!-- 关怀提醒（IMU 统一入口：事件检测 + AI 判断说法，阈值固定） -->
+    <string name="proactive_care">关怀提醒</string>
+    <string name="proactive_care_desc">坐久、走久或低头久时提醒你</string>
+    <string name="proactive_care_limits_fmt">走 %1$d 分 / 坐 %2$d 分 / 低头 %3$d 分会提醒</string>
+    <string name="proactive_chat_companion">会话内陪伴</string>
+    <string name="proactive_nudge_times_fmt">没声了最多追 %1$d 次</string>
+    <string name="proactive_nudge_off">聊天中不主动追问</string>
+
+    <!-- 频率换算文案 -->
+    <string name="proactive_duration_hours">约每 %1$d 小时一句</string>
+    <string name="proactive_duration_minutes">约每 %1$d 分钟一句</string>
+
+    <!-- 陪伴默契（亲密度） -->
+    <string name="settings_relation_stats">连续陪伴 %1$d 天 · 今日 %2$d 次</string>
+
     <!-- AI 工具（ToolRegistry 设置页展示） -->
     <string name="ai_tool_search_knowledge_base_name">知识库检索</string>
     <string name="ai_tool_search_knowledge_base_desc">检索已导入的文档资料</string>
@@ -915,6 +1000,8 @@
     <!-- 视觉：用眼镜摄像头看真实世界 -->
     <string name="ai_tool_look_at_view_name">看画面</string>
     <string name="ai_tool_look_at_view_desc">用眼镜摄像头看眼前的东西</string>
+    <string name="ai_tool_listen_ambient_name">环境音应答</string>
+    <string name="ai_tool_listen_ambient_desc">开启后自动听周围说话并回答</string>
     <!-- 头动感知：眼镜 IMU 数据查询（v1） -->
     <string name="ai_tool_get_head_pose_name">头部姿态</string>
     <string name="ai_tool_get_head_pose_desc">通过眼镜 IMU 获取用户当前的头部姿态（俯仰/偏航/横滚与角速度），回答「我抬头了吗」这类问题或需要结合头部朝向判断时使用</string>
@@ -1601,6 +1688,10 @@
     <string name="local_exec_node_hint">运行 JS 与 npx 工具 · 约 58 MB</string>
     <string name="local_exec_node_ready_hint">可运行 JavaScript 与 npx 工具</string>
     <string name="local_exec_git_name">Git</string>
+    <string name="local_exec_uv_name">uv / uvx</string>
+    <string name="local_exec_uv_hint">Python 工具运行器，uvx 即取即用 PyPI 生态的 MCP server · 约 35 MB</string>
+    <string name="local_exec_uv_ready_hint">已就绪：MCP 配置里写 uvx 命令即可使用</string>
+    <string name="local_exec_pip_install">pip 安装中（清华镜像）</string>
     <string name="local_exec_git_hint">克隆与管理仓库 · 约 10 MB</string>
     <string name="local_exec_git_ready_hint">可克隆与管理仓库</string>
     <string name="local_exec_addon_install">安装</string>

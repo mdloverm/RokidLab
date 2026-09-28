@@ -223,6 +223,7 @@ internal class SessionProjection(private val records: List<SessionRecord>) {
                     turn = e.turn,
                     promptTokens = e.promptTokens,
                     completionTokens = e.completionTokens,
+                    promptCacheHitTokens = e.promptCacheHitTokens,
                     modelCalls = e.modelCalls,
                     elapsedMs = startTs[e.turn]?.let { r.ts - it },
                     reason = e.reason,
@@ -268,6 +269,8 @@ internal data class TurnStat(
     val turn: Int,
     val promptTokens: Int?,
     val completionTokens: Int?,
+    /** 输入中命中服务端前缀缓存的部分（null = 服务端没给；连续为 0 = 前缀稳定性退化） */
+    val promptCacheHitTokens: Int?,
     /** 本轮的模型调用次数（>1 = 走了工具循环） */
     val modelCalls: Int?,
     val elapsedMs: Long?,

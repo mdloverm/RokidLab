@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -62,7 +63,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 失败原因留在屏幕上（[errorMsg]），不吞掉。
  */
 
-private enum class Task { NONE, INSTALL, PYTHON, NODE, GIT, SELFTEST, UNINSTALL }
+private enum class Task { NONE, INSTALL, PYTHON, NODE, GIT, UV, SELFTEST, UNINSTALL }
 
 /**
  * 一张组件卡在安装中要显示的东西。
@@ -167,6 +168,68 @@ internal fun LocalExecScreen(onBack: () -> Unit) {
                 errorMsg = ctx.getString(
                     R.string.local_exec_state_failed,
                     r.stderrTail(4).ifBlank { r.summary() },
+                )
+            }
+            status = readStatus(ctx)
+            task = Task.NONE
+        }
+    }
+
+    // ── uv / uvx（PyPI 生态的「npx」，stdio MCP 的主要运行器）──
+    // ⚠️ noble 的 apt 源没有 uv 包（25.04 才收录）⇒ 走 pip：uv 本体是 Rust 静态二进制
+    //    的 manylinux wheel，不拖任何 Python 依赖；镜像用清华 PyPI（与 rootfs 下载同源策略）。
+    fun installUv() {
+        if (task != Task.NONE) return
+        task = Task.UV
+        scope.launch {
+            errorMsg = null
+            report = null
+            addon = null
+            // ① pip 本体：noble 系统不带 pip，先补 python3-pip（python3 已就绪则 apt 秒过）
+            val apt = withContext(Dispatchers.IO) {
+                ProotShell.installPackages(
+                    ctx,
+                    listOf("python3", "python3-pip", "ca-certificates"),
+                ) { p ->
+                    addon = AddonProgress(p.percent, aptPhaseLabel(ctx, p), p.detail)
+                }
+            }
+            if (apt.ok) {
+                // ② uv 本体走 pip。⚠️ noble 系统 pip 被 PEP 668 标记 externally-managed，
+                //    不带 --break-system-packages 必然被拒
+                addon = AddonProgress(-1, ctx.getString(R.string.local_exec_pip_install), "")
+                val pip = withContext(Dispatchers.IO) {
+                    ProotShell.runCommand(
+                        ctx,
+                        "python3 -m pip install --break-system-packages " +
+                            "-i https://pypi.tuna.tsinghua.edu.cn/simple uv",
+                        timeoutSec = 600L,
+                        // ⚠️ 具名传参：runCommand 尾参是 onStderrLine，尾随 lambda 会绑错
+                        onStdoutLine = { line ->
+                            addon = AddonProgress(-1, ctx.getString(R.string.local_exec_pip_install), line)
+                        },
+                    )
+                }
+                if (pip.ok) {
+                    // ③ 验证：uvx 落在 /usr/local/bin（系统 pip 的脚本目录，天然在 PATH 上）
+                    val check = withContext(Dispatchers.IO) {
+                        ProotShell.runCommand(ctx, "command -v uvx >/dev/null && uv --version")
+                    }
+                    if (check.ok) {
+                        report = check.stdout
+                    } else {
+                        errorMsg = ctx.getString(R.string.local_exec_state_failed, check.summary())
+                    }
+                } else {
+                    errorMsg = ctx.getString(
+                        R.string.local_exec_state_failed,
+                        pip.stderrTail(4).ifBlank { pip.summary() },
+                    )
+                }
+            } else {
+                errorMsg = ctx.getString(
+                    R.string.local_exec_state_failed,
+                    apt.stderrTail(4).ifBlank { apt.summary() },
                 )
             }
             status = readStatus(ctx)
@@ -344,6 +407,23 @@ internal fun LocalExecScreen(onBack: () -> Unit) {
                 enabled = task == Task.NONE,
                 onInstall = { installNode() },
                 onCancel = { cancelFlag.set(true) },
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            // ── uv / uvx：PyPI 生态的「npx」，stdio MCP server 的主要运行器。
+            //    排在 Git 前：接 MCP server 的使用频率远高于克隆仓库 ──
+            AddonCard(
+                icon = Icons.Outlined.Bolt,
+                title = ctx.getString(R.string.local_exec_uv_name),
+                hint = ctx.getString(
+                    if (status.uvReady) R.string.local_exec_uv_ready_hint
+                    else R.string.local_exec_uv_hint,
+                ),
+                ready = status.uvReady,
+                progress = if (task == Task.UV) addon else null,
+                enabled = task == Task.NONE,
+                onInstall = { installUv() },
             )
 
             Spacer(Modifier.height(10.dp))
@@ -810,6 +890,7 @@ private data class StatusSnapshot(
     val pythonReady: Boolean,
     val nodeReady: Boolean = false,
     val gitReady: Boolean = false,
+    val uvReady: Boolean = false,
     val sharePublic: Boolean = false,
     val accessOn: Boolean = false,
 ) {
@@ -832,7 +913,7 @@ private data class StatusSnapshot(
 private suspend fun readStatus(ctx: Context): StatusSnapshot = withContext(Dispatchers.IO) {
     val installed = ProotInstaller.isInstalled(ctx)
     val share = ProotShell.shareStatus(ctx)
-    val probe = if (installed) ProotShell.probeCommands(ctx, listOf("python3", "node", "git")) else emptyMap()
+    val probe = if (installed) ProotShell.probeCommands(ctx, listOf("python3", "node", "git", "uv")) else emptyMap()
     StatusSnapshot(
         installed = installed,
         version = if (installed) ProotInstaller.installedVersion(ctx) else null,
@@ -841,6 +922,7 @@ private suspend fun readStatus(ctx: Context): StatusSnapshot = withContext(Dispa
         pythonReady = probe["python3"] == true,
         nodeReady = probe["node"] == true,
         gitReady = probe["git"] == true,
+        uvReady = probe["uv"] == true,
         sharePublic = share.publicDownload,
         accessOn = LabAccessibility.isEnabled(ctx),
     )

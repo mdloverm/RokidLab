@@ -253,6 +253,9 @@ class LabApplication : Application() {
         // 活跃性过滤）依赖的正是这里建立的连接状态。
         // 单个 server 失败不影响其它（各自把错误记进自己的 ServerState），故不抛出。
         com.rokidlab.phone.util.namedThread("mcp-autosync", daemon = true, start = true) {
+            // 先清上一轮 App 被杀遗留的 stdio 桥野进程（rl-mcp- 标记），再按配置重连
+            runCatching { com.rokidlab.phone.ai.mcp.McpStdioBridge.sweepOrphans() }
+                .onFailure { Log.w(TAG, "MCP bridge sweep failed: ${it.message}") }
             runCatching { com.rokidlab.phone.ai.mcp.McpRegistry.syncAll(this) }
                 .onFailure { Log.w(TAG, "MCP auto-sync failed: ${it.message}") }
         }
@@ -266,6 +269,15 @@ class LabApplication : Application() {
         registerWifiRouteCacheInvalidator()
 
         timerScheduler = TimerScheduler(this)
+        // 空闲问候自检闹钟（主动式陪伴 #2；开关/免打扰/冷却/每日上限由 ProactiveGate 把关）
+        com.rokidlab.phone.proactive.IdleGreeter.get(this).start()
+        // 走走拍拍会话恢复（#6：进程被杀后重建 15 分钟一次性闹钟链；开关关时内部自行取消）
+        com.rokidlab.phone.proactive.AmbientVisionController.get(this).start()
+        // 陪伴场景落地：把当前场景记住的能力组合铺到各开关（首次启动也借此统一默认态）
+        // 必须放在 ProactiveGate 单例构造完成之后（applyScene 会回读各宿主开关）
+        runCatching {
+            com.rokidlab.phone.proactive.ProactiveGate.get(this).applyScene()
+        }.onFailure { Log.w("LabApplication", "applyScene failed: ${it.message}") }
 
         prefs = getSharedPreferences("rokidbrew", MODE_PRIVATE)
         
@@ -515,6 +527,7 @@ class LabApplication : Application() {
         try {
             if (::cxrL.isInitialized) {
                 runCatching { cxrL.asrBridge.start() }
+                // 环境音录入不自动恢复：默认关、由用户显式开启
                 return
             }
             val hostApp = runCatching {
@@ -536,6 +549,7 @@ class LabApplication : Application() {
                 return
             }
             runCatching { session.asrBridge.start() }
+            // 环境音录入不自动恢复：默认关、由用户显式开启
             Log.i(TAG, "headless CXR-L session restored, ASR bridge started")
         } catch (e: Exception) {
             Log.w(TAG, "ensureHeadlessSession failed: ${e.message}")

@@ -8,6 +8,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -226,33 +227,70 @@ class GoldenAgentEvalTest {
     }
 
     @Test
-    fun `C5 memories 段按需注入`() {
-        val with = service.buildSystemMessage(memories = "用户喜欢周杰伦").getString("content")
+    fun `C5 memories 段按需注入（在轮变尾随消息里）`() {
+        // 2026-09-26 P0：memories 每轮按检索变化，已从稳定 system 头拆到 buildContextTailMessage
+        val with = service.buildContextTailMessage(memories = "用户喜欢周杰伦")!!.getString("content")
         assertTrue(with.contains("<memories>"))
         assertTrue(with.contains("用户喜欢周杰伦"))
-        val without = service.buildSystemMessage().getString("content")
-        assertFalse("无记忆时不注入空段（省 token）", without.contains("<memories>"))
+        val without = service.buildContextTailMessage()
+        assertNull("无记忆时不下发空尾随消息", without)
     }
 
     @Test
-    fun `C6 skills 与知识库资料按需注入`() {
-        val with = service.buildSystemMessage(
+    fun `C6 skills 与知识库资料按需注入（在轮变尾随消息里）`() {
+        val with = service.buildContextTailMessage(
             contextText = "知识库资料：xxx",
             skills = "skill: demo",
-        ).getString("content")
+        )!!.getString("content")
         assertTrue(with.contains("<skills>"))
         assertTrue(with.contains("知识库中检索到的参考资料"))
-        val without = service.buildSystemMessage().getString("content")
-        assertFalse(without.contains("<skills>"))
-        assertFalse(without.contains("知识库中检索到的参考资料"))
+        val without = service.buildContextTailMessage()
+        assertNull(without)
     }
 
     @Test
-    fun `C7 答题指令按需注入`() {
-        val with = service.buildSystemMessage(instruction = "只给出最终答案").getString("content")
+    fun `C7 答题指令按需注入（在轮变尾随消息里）`() {
+        val with = service.buildContextTailMessage(instruction = "只给出最终答案")!!.getString("content")
         assertTrue(with.contains("只给出最终答案"))
-        val without = service.buildSystemMessage().getString("content")
-        assertFalse(without.contains("请遵守以下答题要求"))
+        val without = service.buildContextTailMessage()
+        assertNull(without)
+    }
+
+    @Test
+    fun `C11 稳定 system 头不掺轮变内容（前缀缓存前提）`() {
+        // ★ P0 契约（2026-09-26）：buildSystemMessage 的输出必须逐字节稳定 —— DeepSeek/OpenAI
+        //   服务端按请求前缀自动 prompt caching（DeepSeek 命中价 ≈ miss 价 2%），而 messages[0]
+        //   是前缀的起点。记忆/RAG/答题指令/会话要求这些每轮都变的内容一旦混回来，
+        //   system+history 的缓存就全部作废。回归表现 = 面板「缓存命中」长期为 0。
+        val sys = service.buildSystemMessage().getString("content")
+        assertFalse(sys.contains("<memories>"))
+        assertFalse(sys.contains("<lessons>"))
+        assertFalse(sys.contains("<skills>"))
+        assertFalse(sys.contains("知识库中检索到的参考资料"))
+        assertFalse(sys.contains("请遵守以下答题要求"))
+        assertFalse(sys.contains("【本会话的附加要求】"))
+        // 尾随消息携带这些轮变内容，且角色也是 system（保持"系统消息=可信指令源"的判定）
+        val tail = service.buildContextTailMessage(
+            memories = "m", lessons = "l", skills = "s", contextText = "c",
+            instruction = "i", budget = "b", sessionPrompt = "p",
+        )!!
+        assertEquals("system", tail.getString("role"))
+        assertTrue(tail.getString("content").contains("【本会话的附加要求】"))
+    }
+
+    @Test
+    fun `C12 lessons 尾句的 manage_memory 提示随装配收窄`() {
+        val with = service.buildContextTailMessage(
+            lessons = "别用旧参数",
+            availableTools = setOf("manage_memory"),
+        )!!.getString("content")
+        assertTrue(with.contains("可用 manage_memory 更新或删除"))
+        val without = service.buildContextTailMessage(
+            lessons = "别用旧参数",
+            availableTools = setOf(ToolRegistry.TOOL_CODE_FILE),
+        )!!.getString("content")
+        assertFalse("未装配 manage_memory 时不得点名", without.contains("可用 manage_memory 更新或删除"))
+        assertTrue(without.contains("不要重复已经失败过的做法"))
     }
 
     @Test

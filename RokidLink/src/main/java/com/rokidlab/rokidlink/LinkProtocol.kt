@@ -20,6 +20,15 @@ object LinkProtocol {
     const val CXR_CHANNEL_AI_RENDER = "Ai_RenderPayload"
 
     /**
+     * 官方字幕（远场环境音 ASR）频道：官方 AssistServer 用它向 cxr-service 下发
+     * 开/关指令（caps = `Accessibility_start` / `Accessibility_end`），cxr-service 收到
+     * start 后打开远场麦（denoise → opus → 云端 ASR），识别结果再从同一频道广播回来
+     * （JSON：`{audio_path, content, final, number, role}`）。真机 logcat 已实证，
+     * Lab 作为普通 CXR 客户端订阅该频道即可白嫖整条字幕链路。
+     */
+    const val CXR_CHANNEL_ACCESSIBILITY = "Accessibility"
+
+    /**
      * Lab 回复来源标记：`Ai` 频道 `TTS_Result` 帧的**第 3 个元素**（caps[2]）。
      *
      * 为什么需要它：`Ai` 频道是**广播式**的 —— 官方 App 自己的回复正文（TTS_Result）
@@ -40,6 +49,17 @@ object LinkProtocol {
     const val MARKER_PHOTO_ASK = "__LAB_PHOTO_ASK__"
     const val MARKER_TOOL_CALL = "__LAB_TOOL__"
     const val MARKER_ASR_READY = "__LAB_ASR_READY__"
+
+    /**
+     * 环境音转写文字上行（眼镜端 → 手机端）：**前缀** + JSON 载荷 `{content, final, number}`。
+     * 眼镜端订阅官方字幕频道（[CXR_CHANNEL_ACCESSIBILITY]）拿到识别结果后，
+     * 活跃会话期间经 AsrPushServer 推送通道上行；手机端 AmbientListenCoordinator 按前缀分流。
+     */
+    const val MARKER_AMBIENT_TEXT = "__LAB_AMBIENT_TEXT__"
+
+    // ── 环境音监听控制（手机端 → 眼镜端）──
+    /** 控制下行：caps[0] = "start" / "stop"。眼镜端据此开/关官方字幕链路（远场麦）。 */
+    const val TOPIC_AMBIENT_CTRL = "rokidlab_ambient_ctrl"
 
     /**
      * 连续对话（多轮免唤醒）续听请求：**眼镜端 → 手机端**，经 RFCOMM 推送通道上行。
@@ -99,8 +119,10 @@ object LinkProtocol {
         const val SHOW_IMAGE = 1 shl 4
         /** 支持按手机端指令拉起眼镜端页面（[AiChannel.TOPIC_OPEN_APP]，如系统音乐页/歌词页） */
         const val OPEN_APP = 1 shl 5
+        /** 支持环境音监听（[TOPIC_AMBIENT_CTRL] + 官方字幕链路白嫖，[CXR_CHANNEL_ACCESSIBILITY]） */
+        const val AMBIENT_LISTEN = 1 shl 6
         /** 当前版本眼镜端默认能力全集 */
-        const val ALL = TOOL_CONFIRM or LYRIC_OVERLAY or AIUI_HOST or SELF_HEAL_PING or SHOW_IMAGE or OPEN_APP
+        const val ALL = TOOL_CONFIRM or LYRIC_OVERLAY or AIUI_HOST or SELF_HEAL_PING or SHOW_IMAGE or OPEN_APP or AMBIENT_LISTEN
     }
 
     /**

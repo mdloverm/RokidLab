@@ -15,6 +15,10 @@ import java.io.File
  *                  release 包默认禁止明文，但回环在 `res/xml/network_security_config.xml` 的白名单里、
  *                  且两份变体行为一致 —— 所以"自建本地 MCP"这条调试路径是通的，
  *                  判定**只看** [McpRegistry.isUrlAllowed]，别在这里另写一份 https 检查（会把它堵死）。
+ *                  ⚠️ [stdioCommand] 非空时本字段为空 —— 连接地址由桥动态分配（见 [McpStdioBridge]）。
+ * @param stdioCommand stdio 形态的启动命令（如 `npx -y @modelcontextprotocol/server-xxx`）。
+ *                  非空 = 本地 stdio server：经 proot 拉起 [McpStdioBridge] 包成回环 http；
+ *                  空 = 普通 URL server。
  * @param headers   附加请求头（鉴权 token 等）。⚠️ 明文存盘、不得写进日志，见 [McpServerStore]
  * @param enabled   server 级总开关（关掉 ⇒ 它的工具全部不下发）
  * @param trusted   信任标记：true ⇒ 工具风险档降为 `LOCAL_SIDE_EFFECT`（免确认）；
@@ -25,11 +29,15 @@ internal data class McpServerConfig(
     val id: String,
     val name: String,
     val url: String,
+    val stdioCommand: String = "",
     val headers: Map<String, String> = emptyMap(),
     val enabled: Boolean = true,
     val trusted: Boolean = false,
     val addedAt: Long = 0L,
-)
+) {
+    /** 是否为本地 stdio server（命令非空即 stdio，url 字段此时无意义） */
+    val isStdio: Boolean get() = stdioCommand.isNotBlank()
+}
 
 /**
  * MCP server 配置的持久化（`files/mcp_servers.json`）。
@@ -91,7 +99,9 @@ internal object McpServerStore {
         if (o == null) return null
         val id = o.optString("id")
         val url = o.optString("url")
-        if (id.isBlank() || url.isBlank()) return null
+        // stdio 形态没有 url（连接地址由桥动态分配），所以这里只要求「url 或命令至少有一个」
+        val stdio = o.optString("stdioCommand")
+        if (id.isBlank() || (url.isBlank() && stdio.isBlank())) return null
         val headersJson = o.optJSONObject("headers")
         val headers = buildMap {
             headersJson?.keys()?.forEach { k ->
@@ -101,8 +111,9 @@ internal object McpServerStore {
         }
         return McpServerConfig(
             id = id,
-            name = o.optString("name").ifBlank { url },
+            name = o.optString("name").ifBlank { url.ifBlank { stdio } },
             url = url,
+            stdioCommand = stdio,
             headers = headers,
             enabled = o.optBoolean("enabled", true),
             trusted = o.optBoolean("trusted", false),
@@ -115,13 +126,15 @@ internal object McpServerStore {
         // 而配置来自用户输入，将来加字段很容易带进 null —— 那时是"保存静默失败"，最难查。
         val headersJson = JSONObject()
         c.headers.forEach { (k, v) -> headersJson.put(k, v) }
-        return JSONObject()
+        val json = JSONObject()
             .put("id", c.id)
             .put("name", c.name)
             .put("url", c.url)
+            .put("stdioCommand", c.stdioCommand)
             .put("headers", headersJson)
             .put("enabled", c.enabled)
             .put("trusted", c.trusted)
             .put("addedAt", c.addedAt)
+        return json
     }
 }

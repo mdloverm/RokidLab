@@ -50,7 +50,9 @@ object RomAdapter {
             return Capability.Unavailable("setFrameRatePowerSavingsBalanced 需要 API 35+（当前 ${Build.VERSION.SDK_INT}）")
         }
         return runCatching {
-            val wlpClass = Class.forName("android.view.WindowLayoutParams")
+            // ⚠️ 类名是 WindowManager$LayoutParams（内部类），不存在 android.view.WindowLayoutParams
+            // 这个类 —— 写错会导致 ClassNotFoundException，本 API 35 分支在所有设备上永远 Unavailable。
+            val wlpClass = Class.forName("android.view.WindowManager\$LayoutParams")
             val method = wlpClass.getMethod("setFrameRatePowerSavingsBalanced", Boolean::class.java)
             method.invoke(attrs, balanced)
             Capability.Available(Unit)

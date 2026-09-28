@@ -12,7 +12,7 @@ import java.net.URI
  * 品牌供应商目录 + 每家配置的本地存储（「模型供应商」功能的数据面）。
  *
  * 定位（参考 rikkahub 的多供应商设计，按 Lab 风格落地）：
- *  - [ProviderCatalog]：内置主流品牌预设（OpenAI 兼容端点 + 常见模型推荐清单 + 是否支持查余额），
+ *  - [ProviderCatalog]：内置主流品牌预设（OpenAI 兼容端点 + 是否支持查余额），
  *    是「选择品牌 → 填密钥 → 选模型」这条路径的**静态半边**；
  *  - [ProviderStore]：每家供应商的动态半边（baseUrl / apiKey / model，密钥走 Keystore 加密），
  *    支持同时配置多家 —— 聊天输入栏的供应商面板据此展示「配置好的供应商及其模型」。
@@ -30,8 +30,6 @@ data class ProviderPreset(
     val name: String,
     /** OpenAI 兼容 baseUrl（chat 端点 = base + /chat/completions，与 OpenAiService 口径一致） */
     val baseUrl: String,
-    /** 内置推荐模型清单：拉取 /models 之前/失败时也有东西可选 */
-    val models: List<String>,
     /** 是否支持余额查询（有专属余额端点的才查，其余显示 --） */
     val supportsBalance: Boolean = false,
 )
@@ -50,92 +48,71 @@ internal object ProviderCatalog {
     /**
      * 品牌预设表（顺序即展示顺序）。
      * baseUrl 一律给到可直接拼 /chat/completions 的完整前缀（与 OpenAiService 的口径一致）。
+     *
+     * ⚠️ 不再内置「推荐模型清单」（2026-09-28 用户指令移除）：预置清单必然过期
+     * （火山方舟两个预置模型 Retiring 后用户一选就 404 即为例证），模型一律以
+     * 填入 key 后实拉 /models 的结果为准（最新优先，见 OpenAiService.listModels）。
      */
     val PRESETS: List<ProviderPreset> = listOf(
         ProviderPreset(
             id = "deepseek",
             name = "DeepSeek 深度求索",
             baseUrl = "https://api.deepseek.com",
-            models = listOf("deepseek-chat", "deepseek-reasoner"),
             supportsBalance = true,
         ),
         ProviderPreset(
             id = "moonshot",
             name = "月之暗面 Kimi",
             baseUrl = "https://api.moonshot.cn/v1",
-            models = listOf("kimi-k2-0905-preview", "kimi-k2-turbo-preview", "moonshot-v1-8k", "moonshot-v1-32k"),
         ),
         ProviderPreset(
             id = "dashscope",
             name = "阿里云百炼 · 通义千问",
             baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            models = listOf("qwen-max", "qwen-plus", "qwen-turbo", "qwen3-vl-plus", "qwen3-coder-plus"),
         ),
         ProviderPreset(
             id = "zhipu",
             name = "智谱 GLM",
             baseUrl = "https://open.bigmodel.cn/api/paas/v4",
-            models = listOf("glm-4.5", "glm-4.5-air", "glm-4-plus", "glm-4-flash", "glm-4v-plus"),
         ),
         ProviderPreset(
             id = "volces",
             name = "火山方舟 · 豆包",
             baseUrl = "https://ark.cn-beijing.volces.com/api/v3",
-            models = listOf("doubao-seed-1-6-250615", "doubao-1-5-pro-32k-250115"),
         ),
         ProviderPreset(
             id = "siliconflow",
             name = "硅基流动 SiliconFlow",
             baseUrl = "https://api.siliconflow.cn/v1",
-            models = listOf(
-                "deepseek-ai/DeepSeek-V3.2",
-                "Qwen/Qwen3-235B-A22B",
-                "Qwen/Qwen2.5-72B-Instruct",
-            ),
             supportsBalance = true,
         ),
         ProviderPreset(
             id = "openai",
             name = "OpenAI",
             baseUrl = "https://api.openai.com/v1",
-            models = listOf("gpt-4.1", "gpt-4o", "gpt-4o-mini", "o3"),
         ),
         ProviderPreset(
             id = "anthropic",
             name = "Anthropic Claude",
             baseUrl = "https://api.anthropic.com/v1",
-            models = listOf(
-                "claude-sonnet-4-5",
-                "claude-opus-4-1",
-                "claude-3-7-sonnet-latest",
-                "claude-3-5-haiku-latest",
-            ),
         ),
         ProviderPreset(
             id = "gemini",
             name = "Google Gemini",
             baseUrl = "https://generativelanguage.googleapis.com/v1beta/openai",
-            models = listOf("gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"),
         ),
         ProviderPreset(
             id = "xai",
             name = "xAI Grok",
             baseUrl = "https://api.x.ai/v1",
-            models = listOf("grok-4", "grok-3", "grok-3-mini"),
         ),
         ProviderPreset(
             id = "openrouter",
             name = "OpenRouter",
             baseUrl = "https://openrouter.ai/api/v1",
-            models = listOf(
-                "openrouter/auto",
-                "deepseek/deepseek-chat-v3.1",
-                "anthropic/claude-sonnet-4.5",
-                "google/gemini-2.5-pro",
-            ),
         ),
         // 兜底项：任何 OpenAI 兼容端点 / 聚合站 / 自建代理
-        ProviderPreset(id = "custom", name = "自定义（OpenAI 兼容）", baseUrl = "", models = emptyList()),
+        ProviderPreset(id = "custom", name = "自定义（OpenAI 兼容）", baseUrl = ""),
     )
 
     fun byId(id: String): ProviderPreset? = PRESETS.firstOrNull { it.id == id }

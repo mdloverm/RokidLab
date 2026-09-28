@@ -44,6 +44,16 @@ class MainActivity : Activity() {
      */
     private var showUi = false
 
+    /**
+     * BLUETOOTH_CONNECT 授权请求在途：为 true 时禁止「隐形自退后台」。
+     *
+     * 隐形实例（!showUi）聚焦后约 2.3s 就 finish()，会把系统权限弹框一并取消 —— 真机实证
+     * （2026-09-28 重装眼镜端）：13:00:28 弹出申请 → 13:00:33 finish() → 授权/拒绝回调
+     * 均未触发，权限始终未授予；随之 BT 隧道 listen 抛 SecurityException、ASR 推送通道
+     * 整条起不来（环境音/按键答题文字全推不上手机）。等用户答复后再退后台。
+     */
+    private var btPermissionPending = false
+
     // 网络状态实时监听（WiFi/以太网）
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -214,7 +224,8 @@ class MainActivity : Activity() {
 
         // 蓝牙运行时权限（重装后会被清空）：缺失时蓝牙隧道/ASR push/WiFi adb 全部不可用，
         // 需在 Activity 内申请。授权后 BtTunnelService 的 3s 重试会自动恢复隧道，无需重启。
-        requestBluetoothConnectPermissionIfNeeded(this)
+        // 申请在途时锁定本页不自动 finish，否则弹框会被跟着取消（见 btPermissionPending）
+        btPermissionPending = requestBluetoothConnectPermissionIfNeeded(this)
 
         // 兜底：若 3 秒内未收到窗口焦点（眼镜 ROM 可能不回调 onWindowFocusChanged），直接启动服务
         Handler(Looper.getMainLooper()).postDelayed({
@@ -224,7 +235,7 @@ class MainActivity : Activity() {
                 // 延迟 finish：给服务 onCreate/startForeground 留出时间，
                 // 避免 app 立即退后台导致 startForeground 被系统拒绝
                 // （实测日志：Service.startForeground() not allowed due to bg restriction）
-                if (!showUi) Handler(Looper.getMainLooper()).postDelayed({
+                if (!showUi && !btPermissionPending) Handler(Looper.getMainLooper()).postDelayed({
                     runCatching { finish() }
                 }, 2000)
             }
@@ -291,7 +302,8 @@ class MainActivity : Activity() {
                 // finish() 只移除本（隐形）实例，显示实例不受影响。
                 // 延迟 2s 再 finish：给服务 onCreate/startForeground 留出时间，
                 // 否则 app 立即退后台导致 startForeground 被 bg restriction 拒绝。
-                if (!showUi) Handler(Looper.getMainLooper()).postDelayed({
+                // btPermissionPending 时先不退：退后台会把权限弹框一起取消（见字段注释）
+                if (!showUi && !btPermissionPending) Handler(Looper.getMainLooper()).postDelayed({
                     runCatching { finish() }
                 }, 2000)
             }, 300)
@@ -350,6 +362,12 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         handleBluetoothPermissionResult(this, requestCode, grantResults)
         if (requestCode == REQ_BLUETOOTH_CONNECT) {
+            // 用户已答复：解除「不自动退后台」锁定。隐形实例此时才退后台，
+            // 否则它会一直占着顶层（本页正是为申请权限才留在前台）。
+            btPermissionPending = false
+            if (!showUi) Handler(Looper.getMainLooper()).postDelayed({
+                runCatching { finish() }
+            }, 500)
             // 授权成功但服务尚未运行时补启；已在运行时由 3s 重试自动恢复隧道
             if (btConnectGrantedOnce && !isServiceRunning(BtTunnelService::class.java)) {
                 Log.i(TAG, "Starting BtTunnelService after permission granted")

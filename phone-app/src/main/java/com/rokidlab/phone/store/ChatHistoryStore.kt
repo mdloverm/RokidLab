@@ -56,7 +56,7 @@ internal object ChatHistoryStore {
     private fun usageToJson(u: MsgUsage?): JSONObject? {
         if (u == null) return null
         if (u.inputTokens == null && u.outputTokens == null &&
-            u.modelCalls == null && u.elapsedMs == null
+            u.modelCalls == null && u.elapsedMs == null && u.promptCacheHitTokens == null
         ) {
             return null
         }
@@ -65,6 +65,7 @@ internal object ChatHistoryStore {
             u.outputTokens?.let { put("o", it) }
             u.modelCalls?.let { put("c", it) }
             u.elapsedMs?.let { put("e", it) }
+            u.promptCacheHitTokens?.let { put("h", it) }
         }
     }
 
@@ -74,11 +75,12 @@ internal object ChatHistoryStore {
         val u = MsgUsage(
             inputTokens = if (o.has("i")) o.optInt("i") else null,
             outputTokens = if (o.has("o")) o.optInt("o") else null,
+            promptCacheHitTokens = if (o.has("h")) o.optInt("h") else null,
             modelCalls = if (o.has("c")) o.optInt("c") else null,
             elapsedMs = if (o.has("e")) o.optLong("e") else null,
         )
         if (u.inputTokens == null && u.outputTokens == null &&
-            u.modelCalls == null && u.elapsedMs == null
+            u.modelCalls == null && u.elapsedMs == null && u.promptCacheHitTokens == null
         ) {
             return null
         }

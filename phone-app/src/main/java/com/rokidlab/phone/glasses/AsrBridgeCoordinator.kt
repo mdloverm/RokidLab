@@ -59,6 +59,12 @@ internal class AsrBridgeCoordinator(
      */
     private val onContinueDialog: () -> Unit = {},
     /**
+     * 收到「环境音转写」帧（[LinkProtocol.MARKER_AMBIENT_TEXT] 前缀 + JSON 载荷）：
+     * 眼镜端订阅官方字幕频道拿到远场环境音 ASR 结果，活跃会话期间经推送通道上行。
+     * 由 AmbientListenCoordinator.onAmbientFrame 消费（收集句子/触发尾窗停止）。
+     */
+    private val onAmbientText: (String) -> Unit = {},
+    /**
      * 全 App 共享的 ADB 会话提供者（= `app.cxrL::getAdbShellClient`）。
      *
      * 兜底轮询**必须**复用它，绝不能自建会话：手机侧蓝牙栈对「同一设备 + 同一 SCN」
@@ -115,6 +121,11 @@ internal class AsrBridgeCoordinator(
          * [LinkProtocol.MARKER_CONTINUE_DIALOG] 与 [onContinueDialog]）。
          */
         private val CONTINUE_DIALOG_MARKER = LinkProtocol.MARKER_CONTINUE_DIALOG
+        /**
+         * 环境音转写上行（眼镜端 → 手机端）：前缀 + JSON 载荷 {content, final, number}。
+         * 与 TOOL_CALL 一样是【前缀】而非整条相等。
+         */
+        private val AMBIENT_TEXT_PREFIX = LinkProtocol.MARKER_AMBIENT_TEXT
 
         /**
          * 相同文字的「回声抑制」窗口（毫秒）。
@@ -399,6 +410,19 @@ internal class AsrBridgeCoordinator(
                             Log.e(TAG, "onContinueDialog failed", e)
                         }
                     }.apply { name = "continue-dialog"; isDaemon = true }.start()
+                    return@AsrPushClient
+                }
+                // 环境音转写帧：眼镜端官方字幕链路的结果（前缀 + JSON）。切后台线程：
+                // onAmbientFrame 做 JSON 解析，且不能阻塞 RFCOMM 读线程。
+                if (text.startsWith(AMBIENT_TEXT_PREFIX)) {
+                    val payload = text.substring(AMBIENT_TEXT_PREFIX.length)
+                    Thread {
+                        try {
+                            onAmbientText(payload)
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "onAmbientText failed", e)
+                        }
+                    }.apply { name = "ambient-text"; isDaemon = true }.start()
                     return@AsrPushClient
                 }
                 // 更新去重游标：推送文字无真实时间戳，用接收时刻作为游标，

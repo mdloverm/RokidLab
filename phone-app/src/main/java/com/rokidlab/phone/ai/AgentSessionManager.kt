@@ -337,6 +337,7 @@ internal object AgentSessionManager {
                     turn = it.turn,
                     inputTokens = it.promptTokens,
                     outputTokens = it.completionTokens,
+                    promptCacheHitTokens = it.promptCacheHitTokens,
                     outputChars = it.replyChars,
                     modelCalls = it.modelCalls,
                     elapsedMs = it.elapsedMs,
@@ -388,6 +389,8 @@ data class ContextUsage(
         val turn: Int,
         val inputTokens: Int?,
         val outputTokens: Int?,
+        /** 输入中命中服务端前缀缓存的部分（null = 服务端没给；连续为 0 = 前缀稳定性退化警报） */
+        val promptCacheHitTokens: Int? = null,
         /** 这一轮回复的字符数（拿不到 token 时的估算口径） */
         val outputChars: Int,
         /** 本轮模型调用次数（>1 = 走了工具循环，用量偏高时的第一解释） */

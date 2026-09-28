@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- debug 源集专用：M0 音频流 spike 的调试广播入口，release 构建不含此文件 -->
+<!-- debug 源集专用：调试广播入口（音频 spike + 主动式功能自检触发），release 构建不含此文件 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application>
@@ -9,6 +9,14 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="com.rokidlab.phone.debug.AUDIO_SPIKE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name="com.rokidlab.phone.debug.ProactiveDebugReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.rokidlab.phone.debug.PROACTIVE_TICK" />
             </intent-filter>
         </receiver>
 

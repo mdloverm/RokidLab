@@ -37,6 +37,12 @@ class LabKeepAliveService : Service() {
 
         /** 定时任务闹钟投递：[com.rokidlab.phone.adb.TimerAlarmReceiver] 到点把任务 id 送进本服务执行 */
         const val ACTION_FIRE_TIMER = "com.rokidlab.phone.action.FIRE_TIMER"
+
+        /** 空闲问候自检投递：[com.rokidlab.phone.proactive.IdleCheckReceiver] 周期把自检请求送进本服务执行 */
+        const val ACTION_IDLE_CHECK = "com.rokidlab.phone.action.IDLE_CHECK"
+
+        /** 会话内陪伴·沉默追击检查点投递：[com.rokidlab.phone.proactive.NudgeCheckReceiver] 一次性闹钟到点 */
+        const val ACTION_NUDGE_CHECK = "com.rokidlab.phone.action.NUDGE_CHECK"
         const val EXTRA_TASK_ID = "task_id"
     }
 
@@ -80,6 +86,18 @@ class LabKeepAliveService : Service() {
                     (application as LabApplication).timerScheduler.fireTask(taskId)
                 }.onFailure { Log.w(TAG, "fire timer task failed: ${it.message}") }
             }
+        }
+        // 空闲问候自检：条件判定与执行都在 IdleGreeter（长任务走 TimerScheduler 协程，WakeLock 托底）
+        if (intent?.action == ACTION_IDLE_CHECK) {
+            runCatching {
+                com.rokidlab.phone.proactive.IdleGreeter.get(application).onCheck()
+            }.onFailure { Log.w(TAG, "idle check failed: ${it.message}") }
+        }
+        // 沉默追击检查点：判定在 CompanionNudge（追击轮走 TimerScheduler 协程，WakeLock 托底）
+        if (intent?.action == ACTION_NUDGE_CHECK) {
+            runCatching {
+                com.rokidlab.phone.proactive.CompanionNudge.onNudgeCheck(application)
+            }.onFailure { Log.w(TAG, "nudge check failed: ${it.message}") }
         }
         // START_STICKY：系统回收进程后自动重建服务，实现保活自愈
         return START_STICKY

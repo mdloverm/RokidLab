@@ -56,6 +56,7 @@ import com.rokidlab.phone.design.BrewTextBright
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.util.UUID
 
 // ===== MCP 服务器管理子页面 =====
@@ -245,11 +246,11 @@ internal fun McpServersPage(
 
     deleting?.let { target ->
         ConfirmDeleteDialog(
-            name = target.name.ifBlank { target.url },
+            name = target.name.ifBlank { target.stdioCommand.ifBlank { target.url } },
             onDismiss = { deleting = null },
             onConfirm = {
                 servers = McpServerStore.remove(ctx, target.id)
-                McpRegistry.disconnect(target.id)
+                McpRegistry.disconnect(ctx, target.id)
                 reloadStates()
                 deleting = null
             },
@@ -306,12 +307,18 @@ private fun ServerCard(
             Spacer(Modifier.size(8.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = cfg.name.ifBlank { cfg.url },
+                    text = cfg.name.ifBlank { cfg.stdioCommand.ifBlank { cfg.url } },
                     color = BrewTextBright,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                 )
-                Text(text = cfg.url, color = BrewMuted, fontSize = 11.sp)
+                // stdio server 没有 url（端口动态分配），副标题展示它的启动命令
+                Text(
+                    text = cfg.stdioCommand.ifBlank { cfg.url },
+                    color = BrewMuted,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                )
             }
             Switch(
                 checked = cfg.enabled,
@@ -421,14 +428,18 @@ private fun ServerEditDialog(
 ) {
     var name by remember { mutableStateOf(initial.name) }
     var url by remember { mutableStateOf(initial.url) }
+    // 本地 stdio 命令（可选）：填了就按容器内进程连接，url 留空
+    var stdio by remember { mutableStateOf(initial.stdioCommand) }
     // 令牌只支持单一 Authorization 头（第一版不做任意 header 表，多出来的复杂度换不来什么）
     var token by remember { mutableStateOf(initial.headers["Authorization"].orEmpty()) }
     var trusted by remember { mutableStateOf(initial.trusted) }
 
     // 判定与后端**共用** `McpRegistry.isUrlAllowed`：两边各写一份 startsWith 迟早分叉。
     // 它允许 https 与「回环 http」（自建本地 MCP 走这条），非回环 http 一律拒。
-    val urlOk = McpRegistry.isUrlAllowed(url)
-    val canSave = urlOk
+    // stdio 形态不需要 url：命令非空即可（端口由桥动态分配）。
+    val isStdio = stdio.isNotBlank()
+    val urlOk = isStdio || url.isBlank() || McpRegistry.isUrlAllowed(url)
+    val canSave = urlOk && (isStdio || url.isNotBlank())
 
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -500,6 +511,33 @@ private fun ServerEditDialog(
             Spacer(Modifier.height(10.dp))
 
             OutlinedTextField(
+                value = stdio,
+                onValueChange = { stdio = it.trim() },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.mcp_field_stdio), color = BrewMuted, fontSize = 13.sp) },
+                placeholder = {
+                    Text("npx -y @modelcontextprotocol/server-xxx", color = BrewMuted, fontSize = 13.sp)
+                },
+                supportingText = {
+                    Text(
+                        text = stringResource(R.string.mcp_field_stdio_hint),
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                    )
+                },
+                singleLine = true,
+                textStyle = TextStyle(color = BrewTextBright, fontSize = 14.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = BrewChat,
+                    unfocusedBorderColor = BrewBorder,
+                    focusedTextColor = BrewTextBright,
+                    unfocusedTextColor = BrewTextBright,
+                    cursorColor = BrewChat,
+                ),
+            )
+            Spacer(Modifier.height(10.dp))
+
+            OutlinedTextField(
                 value = token,
                 onValueChange = { token = it },
                 modifier = Modifier.fillMaxWidth(),
@@ -558,10 +596,16 @@ private fun ServerEditDialog(
                         } else {
                             mapOf("Authorization" to token)
                         }
+                        val stdioInput = stdio.trim()
+                        // 粘贴的是标准 MCP JSON 配置（{"mcpServers":{...}} / {"command":...,"args":[...]}) 时
+                        // 自动拍平成命令行；普通命令行原样透传
+                        val (jsonName, stdioCmd) = parseMcpJsonConfig(stdioInput)
+                            ?: (null to stdioInput)
                         onSave(
                             initial.copy(
-                                name = name.trim().ifBlank { url },
-                                url = url.trim(),
+                                name = name.trim().ifBlank { jsonName ?: url.trim().ifBlank { stdioCmd } },
+                                url = if (isStdio) "" else url.trim(),
+                                stdioCommand = stdioCmd,
                                 headers = headers,
                                 trusted = trusted,
                             ),
@@ -578,6 +622,64 @@ private fun ServerEditDialog(
         }
     }
 }
+
+/**
+ * 把用户粘贴的**标准 MCP JSON 配置**拍平成容器内命令行；不是 JSON / 没有 command ⇒ null（按普通命令行处理）。
+ *
+ * 兼容两种形态（Claude Desktop / Cline 同款格式）：
+ *  - `{"mcpServers": {"uno": {"command": "uvx", "args": [...], "env": {...}}}}` —— 多 server 时取**第一个**；
+ *    返回 server 键名供默认命名；
+ *  - `{"command": "uvx", "args": [...]}` —— 单 server 直写。
+ *
+ * env 以 `KEY=value` 前缀并入命令行（命令经容器内 sh 执行，天然支持）；含空格/特殊字符的词单引号包裹。
+ */
+private fun parseMcpJsonConfig(input: String): Pair<String?, String>? {
+    val t = input.trim()
+    if (!t.startsWith("{") || !t.endsWith("}")) return null
+    val root = runCatching { JSONObject(t) }.getOrNull() ?: return null
+    val servers = root.optJSONObject("mcpServers")
+    val entry: JSONObject = if (servers != null) {
+        var first: JSONObject? = null
+        val keys = servers.keys()
+        while (keys.hasNext() && first == null) {
+            first = servers.optJSONObject(keys.next())
+        }
+        first ?: return null
+    } else {
+        root
+    }
+    val cmd = entry.optString("command").trim()
+    if (cmd.isBlank()) return null
+    val sb = StringBuilder()
+    entry.optJSONObject("env")?.let { env ->
+        env.keys().forEach { k ->
+            val v = env.optString(k)
+            if (k.isNotBlank() && v.isNotBlank()) sb.append(shellWord("$k=$v")).append(' ')
+        }
+    }
+    sb.append(shellWord(cmd))
+    entry.optJSONArray("args")?.let { arr ->
+        for (i in 0 until arr.length()) {
+            val a = arr.optString(i).trim()
+            if (a.isNotEmpty()) sb.append(' ').append(shellWord(a))
+        }
+    }
+    // server 键名（如 "uno"）——多 server JSON 只接第一个，键名留作默认显示名
+    var jsonName: String? = null
+    if (servers != null) {
+        val keys = servers.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            if (servers.optJSONObject(k) != null) { jsonName = k; break }
+        }
+    }
+    return jsonName to sb.toString()
+}
+
+/** sh 词法引述：安全字符集直接裸写，其余单引号包裹（内部单引号按 `'\''` 转义） */
+private fun shellWord(w: String): String =
+    if (w.matches(Regex("[A-Za-z0-9_@%+=:,./-]+"))) w
+    else "'" + w.replace("'", "'\\''") + "'"
 
 /** 删除确认：删掉 server 等于把它的工具从模型可见清单里摘掉，值得一次确认 */
 @Composable

@@ -65,6 +65,11 @@ internal object McpRegistry {
         val error: String?,
         /** 被丢弃的工具及原因（schema 不合规 / 撞名），供设置页展示 */
         val rejected: List<String>,
+        /**
+         * 实际通信端点。普通 server = config.url；stdio server = 桥动态分配的回环地址
+         * （config.url 为空 —— 端口每次连接才定）。调用分发**只看这里**，别回头读 config.url。
+         */
+        val endpoint: String = config.url,
     ) {
         /** 这个 server 的工具当前是否应该下发给模型 */
         val usable: Boolean get() = connected && error == null
@@ -107,7 +112,7 @@ internal object McpRegistry {
         if (!st.usable) {
             return "MCP server「${st.config.name}」当前不可用：${st.error ?: "已断开"}"
         }
-        return McpClient.callTool(st.config.url, st.sessionId, st.config.headers, originalName, args)
+        return McpClient.callTool(st.endpoint, st.sessionId, st.config.headers, originalName, args)
     }
 
     // ═══════════════════ 状态查询（设置页） ═══════════════════
@@ -122,31 +127,43 @@ internal object McpRegistry {
     /**
      * 连接一个 server 并注册它的工具。
      *
-     * ⚠️ **同步阻塞**（发 2 个 HTTP 请求）⇒ 必须在后台线程调用（UI 侧用 `Dispatchers.IO`），
-     * 不要在 Compose 组合里直接调。
+     * ⚠️ **同步阻塞**（stdio server 还要先拉桥 + 健康检查，最多再等 ~10s）
+     * ⇒ 必须在后台线程调用（UI 侧用 `Dispatchers.IO`），不要在 Compose 组合里直接调。
      *
      * @return **null = 成功**；非 null = 失败原因（已面向用户措辞，可直接展示）
      */
     fun connect(ctx: Context, config: McpServerConfig): String? {
-        validateUrl(config.url)?.let { reason ->
-            put(config, ServerState(config, false, null, emptyList(), reason, emptyList()))
+        // stdio server：先把桥拉起来，拿到动态回环端口；后续 HTTP 流程与普通 server 完全同一条路
+        var endpoint = config.url
+        if (config.isStdio) {
+            val started = McpStdioBridge.ensureStarted(ctx, config)
+            val port = started.getOrNull()
+            if (port == null) {
+                val reason = started.exceptionOrNull()?.message ?: "stdio 桥启动失败"
+                put(config, ServerState(config, false, null, emptyList(), reason, emptyList()))
+                return reason
+            }
+            endpoint = "http://127.0.0.1:$port"
+        }
+        validateUrl(endpoint)?.let { reason ->
+            put(config, ServerState(config, false, null, emptyList(), reason, emptyList(), endpoint))
             return reason
         }
         val sessionId = try {
-            McpClient.initialize(config.url, config.headers)
+            McpClient.initialize(endpoint, config.headers)
         } catch (e: Exception) {
             val reason = "连接失败：${e.message ?: e.javaClass.simpleName}"
-            // ⚠️ 只打 URL 不打 headers —— headers 可能含 token
-            Log.w(TAG, "connect ${config.url} failed: ${e.message}")
-            put(config, ServerState(config, false, null, emptyList(), reason, emptyList()))
+            // ⚠️ 只打 endpoint 不打 headers —— headers 可能含 token
+            Log.w(TAG, "connect $endpoint failed: ${e.message}")
+            put(config, ServerState(config, false, null, emptyList(), reason, emptyList(), endpoint))
             return reason
         }
         val defs = try {
-            McpClient.listTools(config.url, sessionId, config.headers)
+            McpClient.listTools(endpoint, sessionId, config.headers)
         } catch (e: Exception) {
             val reason = "获取工具列表失败：${e.message ?: e.javaClass.simpleName}"
-            Log.w(TAG, "listTools ${config.url} failed: ${e.message}")
-            put(config, ServerState(config, false, sessionId, emptyList(), reason, emptyList()))
+            Log.w(TAG, "listTools $endpoint failed: ${e.message}")
+            put(config, ServerState(config, false, sessionId, emptyList(), reason, emptyList(), endpoint))
             return reason
         }
         val (registered, rejected) = buildTools(ctx, config, defs)
@@ -159,15 +176,17 @@ internal object McpRegistry {
                 tools = registered,
                 error = null,
                 rejected = rejected,
+                endpoint = endpoint,
             ),
         )
         Log.i(TAG, "connected ${config.name}: ${registered.size} tools, ${rejected.size} rejected")
         return null
     }
 
-    /** 断开并移除某个 server（它的工具随即从模型可见清单消失） */
-    fun disconnect(serverId: String) {
+    /** 断开并移除某个 server（它的工具随即从模型可见清单消失；stdio 桥一并停掉） */
+    fun disconnect(ctx: Context, serverId: String) {
         states = states - serverId
+        McpStdioBridge.stop(ctx, serverId)
         rebuildIndex()
     }
 
@@ -179,8 +198,10 @@ internal object McpRegistry {
      */
     fun syncAll(ctx: Context) {
         val configs = McpServerStore.load(ctx)
-        // 配置里已删除的 server 状态一并清掉
-        states = states.filterKeys { id -> configs.any { it.id == id } }
+        val keptIds = configs.map { it.id }.toSet()
+        // 配置里已删除的 server：状态与 stdio 桥一并清掉（桥是常驻进程，不能跟着配置变成孤儿）
+        states.keys.filter { it !in keptIds }.forEach { McpStdioBridge.stop(ctx, it) }
+        states = states.filterKeys { it in keptIds }
         rebuildIndex()
         configs.filter { it.enabled }.forEach { cfg ->
             runCatching { connect(ctx, cfg) }
@@ -191,7 +212,7 @@ internal object McpRegistry {
     /** 配置变更（改地址/开关/信任标记）后：断开旧的、按新配置重连 */
     fun reload(ctx: Context, config: McpServerConfig) {
         if (!config.enabled) {
-            disconnect(config.id)
+            disconnect(ctx, config.id)
             return
         }
         connect(ctx, config)

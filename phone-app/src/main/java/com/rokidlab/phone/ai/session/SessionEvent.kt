@@ -163,6 +163,9 @@ internal data class TurnStart(
  *
  * @param promptTokens 本轮**所有模型调用**的输入 token 合计（多轮工具循环 = 多次请求，成本要累加）
  * @param completionTokens 同上，输出 token 合计
+ * @param promptCacheHitTokens 输入中命中服务端前缀缓存的部分（DeepSeek 自动缓存；null = 服务端没给）。
+ *        与 [promptTokens] 分开记的原因：命中率是「请求前缀逐字节稳定」优化的直接度量，
+ *        连续为 0 = 前缀稳定性退化，要看警报而不是翻账单
  * @param modelCalls 本轮的模型调用次数（>1 说明走了工具循环，用量偏高时这是第一解释）
  */
 internal data class TurnEnd(
@@ -173,6 +176,7 @@ internal data class TurnEnd(
     val detail: String? = null,
     val promptTokens: Int? = null,
     val completionTokens: Int? = null,
+    val promptCacheHitTokens: Int? = null,
     val modelCalls: Int? = null,
 ) : SessionEvent {
     override val kind: SessionEventKind get() = SessionEventKind.TURN_END

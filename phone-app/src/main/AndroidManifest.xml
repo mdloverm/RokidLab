@@ -157,6 +157,14 @@
             android:name=".adb.TimerAlarmReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".proactive.IdleCheckReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".proactive.NudgeCheckReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

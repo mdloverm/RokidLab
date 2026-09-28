@@ -57,6 +57,16 @@ object ToolRegistry {
      */
     const val DOMAIN_VISION = "vision"
     /**
+     * 听觉域：用眼镜远场麦克风听环境音并转成文字（`listen_ambient`，白嫖官方字幕链路）。
+     *
+     * 与 [DOMAIN_VISION] 同理单独成域：眼镜域是"管理"能力，这条是"替用户听"，
+     * 且涉及远场麦克风（隐私敏感），用户想关掉时的心智是「别让它偷听周围」，
+     * 而不是「别看眼镜状态」。域装配上与视觉域同口径：进主 Agent 全量域
+     * （[SESSION_AGENT_DOMAINS] ⊇ [DOMAIN_ALL]），不进 AIUI 会话子集（[SESSION_AIUI_DOMAINS]）
+     * —— 第三方页面不该有静默开麦的能力。
+     */
+    const val DOMAIN_HEARING = "hearing"
+    /**
      * 本机执行域：在手机自己的 Linux 用户态环境（proot + Ubuntu rootfs）里跑命令。
      *
      * 单独成域而不是塞进 [DOMAIN_FILES]：它是**唯一一条"任意命令执行"**能力
@@ -130,7 +140,7 @@ object ToolRegistry {
     val DOMAIN_ALL: Set<String> = setOf(
         DOMAIN_INFO, DOMAIN_KNOWLEDGE, DOMAIN_GLASSES, DOMAIN_TIMER,
         DOMAIN_MEDIA, DOMAIN_DISPLAY, DOMAIN_WEB, DOMAIN_FILES, DOMAIN_AIUI, DOMAIN_PHONE,
-        DOMAIN_RESEARCH, DOMAIN_VISION, DOMAIN_SHELL, DOMAIN_MCP, DOMAIN_BROWSER, DOMAIN_SCREEN,
+        DOMAIN_RESEARCH, DOMAIN_VISION, DOMAIN_HEARING, DOMAIN_SHELL, DOMAIN_MCP, DOMAIN_BROWSER, DOMAIN_SCREEN,
     )
 
     /** 主 Agent 会话（眼镜语音/手机聊天，在线模型）装配的工具域 */
@@ -193,6 +203,7 @@ object ToolRegistry {
         com.rokidlab.phone.ai.tools.SubagentToolProvider,
         com.rokidlab.phone.ai.tools.VisionToolProvider,
         com.rokidlab.phone.ai.tools.MotionToolProvider,
+        com.rokidlab.phone.ai.tools.HearingToolProvider,
         com.rokidlab.phone.ai.tools.BrowserToolProvider,
         com.rokidlab.phone.ai.tools.ScreenOpToolProvider,
     )
@@ -757,12 +768,23 @@ object ToolRegistry {
     internal val UNATTENDED_MEDIA_ALLOWLIST: Set<String> = setOf("control_music")
 
     /**
-     * 无人值守工具名集合（纯函数，可单测）：[readOnlyToolNames] ∪ [UNATTENDED_MEDIA_ALLOWLIST]。
+     * 无人值守工具名集合（纯函数，可单测）：[readOnlyToolNames] ∪ [UNATTENDED_MEDIA_ALLOWLIST]
+     * ∪（「走走拍拍」会话开启时的 look_at_view）。
      *
      * 除白名单外的副作用工具（拨号/装机/写文件/设定时/开眼镜应用）依旧不在名单里，
      * 即「自主任务绝不会自己拨号或改设置」这条承诺不变。
+     *
+     * look_at_view 的放行条件：用户显式开启「走走拍拍」会话（[AmbientVisionController.isSessionActive]）。
+     * 该工具风险档是 LOCAL_SIDE_EFFECT（物理启动相机），常规无人值守任务里依旧不可见；
+     * 仅当用户主动要求「外出时偶尔拍看周围」的会话期间才可见——显式授权即隐私边界。
      */
-    internal fun unattendedToolNames(): Set<String> = readOnlyToolNames() + UNATTENDED_MEDIA_ALLOWLIST
+    internal fun unattendedToolNames(): Set<String> =
+        readOnlyToolNames() + UNATTENDED_MEDIA_ALLOWLIST +
+            (if (com.rokidlab.phone.proactive.AmbientVisionController.isSessionActive()) {
+                setOf(com.rokidlab.phone.ai.tools.VisionToolProvider.TOOL_LOOK)
+            } else {
+                emptySet()
+            })
 
     /**
      * 无人值守工具声明：全域 ∩ 已开启 ∩ [unattendedToolNames]。
@@ -794,6 +816,14 @@ object ToolRegistry {
             } else {
                 "正在执行 $name…"
             }
+
+    /**
+     * 完成态短语：由 [statusText] 派生（剥「正在」前缀与「…」尾缀），
+     * 供眼镜端过程行的「√ / ×」结果行使用（「→ 正在查询电量…」→「√ 查询电量」）。
+     * 派生失败兜底为工具名。
+     */
+    fun doneText(name: String): String =
+        statusText(name).removePrefix("正在").removeSuffix("…").trim().ifBlank { name }
 
     /** 组装单个工具的 JSON Schema（internal：金标评测单测直接校验声明内容） */
     internal fun buildSchema(meta: ToolMeta): JSONObject =

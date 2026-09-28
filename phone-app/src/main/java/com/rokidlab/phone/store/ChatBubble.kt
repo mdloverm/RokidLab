@@ -330,7 +330,7 @@ private fun TraceCostLine(usage: MsgUsage?) {
  * @return null = 没有任何可展示的信息（USAGE 全空）；否则返回要显示的一行
  */
 internal fun usageCostText(context: Context, usage: MsgUsage): String? {
-    val parts = ArrayList<String>(3)
+    val parts = ArrayList<String>(4)
     val input = usage.inputTokens
     val output = usage.outputTokens
     if (input != null || output != null) {
@@ -342,6 +342,11 @@ internal fun usageCostText(context: Context, usage: MsgUsage): String? {
                 (if (partial) "≥" else "") + fmtTokens(total),
             )
         )
+    }
+    // 前缀缓存命中（2026-09-26 P0）：只在服务端给过该字段时显示 —— 它是「system 消息
+    // 逐字节稳定」优化的直接度量，连续为 0 说明前缀稳定性退化了（轮变内容又混回了头部）
+    usage.promptCacheHitTokens?.let {
+        parts.add(context.getString(R.string.chat_trace_cost_cache_hit, fmtTokens(it)))
     }
     usage.modelCalls?.takeIf { it > 0 }?.let {
         parts.add(context.getString(R.string.chat_trace_cost_calls, it))

@@ -273,7 +273,8 @@ object WebPreviewManager {
      * 先 SIGTERM 子进程与自己，宽限期后对幸存者 SIGKILL。
      * 用于孤儿清扫——那棵树上没有 Java `Process` 句柄，只能按 pid 动手。
      */
-    private fun killTree(pid: Int) {
+    /** 杀掉一棵进程树（同 UID 进程）。internal：MCP stdio 桥的孤儿清扫复用同一实现。 */
+    internal fun killTree(pid: Int) {
         val children = childPids(pid)
         children.forEach { Process.sendSignal(it, 15) } // SIGTERM
         Process.sendSignal(pid, 15)
@@ -286,8 +287,8 @@ object WebPreviewManager {
         if (procAlive(pid)) Process.killProcess(pid)
     }
 
-    /** 直接子进程 pid 列表（读 `/proc/<pid>/stat` 的 ppid 字段） */
-    private fun childPids(parentPid: Int): List<Int> =
+    /** 直接子进程 pid 列表（读 `/proc/<pid>/stat` 的 ppid 字段）。internal：供 MCP 桥清扫复用 */
+    internal fun childPids(parentPid: Int): List<Int> =
         File("/proc").listFiles()
             ?.filter { it.name.matches(Regex("\\d+")) }
             ?.mapNotNull { f ->

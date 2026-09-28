@@ -5,6 +5,7 @@ import com.rokidlab.phone.adb.ui.TimerSchedule
 import com.rokidlab.phone.adb.ui.TimerTask
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.connection.ConnectionRoute
+import com.rokidlab.phone.proactive.ProactiveGatePolicy
 import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -62,6 +63,10 @@ class TimerScheduler(private val appContext: Context) {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** 主动派发互斥：同一时刻只允许一个系统主动轮在跑（见 [runProactiveAgentTask]） */
+    private val proactiveInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
     // 任务**执行中**的协程表（fireTask 期间占用）：stopTask/shutdown 时可中断执行体。
     // 等待触发不再靠协程 delay，而由系统 AlarmManager 承载。
     private val jobs = ConcurrentHashMap<String, Job>()
@@ -249,6 +254,24 @@ class TimerScheduler(private val appContext: Context) {
         }
         val job = scope.launch {
             try {
+                // 决策门：只拦自主任务（AgentPrompt）。免打扰时段顺延到时段结束再跑（不推进计数）；
+                // 冷却期跳过本次但照常推进链路。普通提醒是闹钟语义，永不过门。
+                if (task.actions.any { it is TimerAction.AgentPrompt }) {
+                    when (val d = com.rokidlab.phone.proactive.ProactiveGate.get(appContext)
+                        .onScheduledAgentFire()) {
+                        is com.rokidlab.phone.proactive.GateDecision.Defer -> {
+                            Log.i(TAG, "agent task deferred by gate to ${d.deferUntil}: ${task.name}")
+                            arm(taskId, d.deferUntil)
+                            return@launch
+                        }
+                        is com.rokidlab.phone.proactive.GateDecision.Suppress -> {
+                            Log.i(TAG, "agent task suppressed by gate (${d.reason}): ${task.name}")
+                            afterFired(taskId)
+                            return@launch
+                        }
+                        com.rokidlab.phone.proactive.GateDecision.Pass -> Unit
+                    }
+                }
                 executeActions(task.actions)
                 // 推进计数并安排下一次（动作跑完后再做，崩溃在中途 ⇒ 恢复时补跑）
                 afterFired(taskId)
@@ -437,21 +460,76 @@ class TimerScheduler(private val appContext: Context) {
      * 若恰好与用户正在进行的对话撞车，用户那条请求会被打断。定时任务通常落在整点/早晚
      * 固定时刻，撞车概率低；彻底解耦需要独立的后台生成通道，属另一档工程。
      */
-    private suspend fun runAgentTask(prompt: String) {
+    private suspend fun runAgentTask(
+        prompt: String,
+        failureNotice: Boolean = true,
+        titleOverride: String? = null,
+        recordHistory: Boolean = false,
+        onSkip: (() -> Unit)? = null,
+    ) {
         if (prompt.isBlank()) return
-        val reply = withContext(Dispatchers.IO) { requestAgentReply(prompt) }
+        val reply = withContext(Dispatchers.IO) { requestAgentReply(prompt, recordHistory) }
         if (reply.isNullOrBlank()) {
             Log.w(TAG, "runAgentTask: no reply from agent, notify failure")
-            postLocalNotification(
-                appContext.getString(com.rokidlab.phone.R.string.timer_agent_task_failed_title),
-                prompt.take(60),
-            )
+            if (failureNotice) {
+                postLocalNotification(
+                    appContext.getString(com.rokidlab.phone.R.string.timer_agent_task_failed_title),
+                    prompt.take(60),
+                )
+            }
+            return
+        }
+        // 时机内容绑定：模型判定「这个时刻没什么值得说的」（只回 [SKIP]）→ 静默收回——
+        // 不通知、不播报，由调用方回退决策门计数（时机不对不消耗每日上限）。
+        if (ProactiveGatePolicy.isSkipReply(reply)) {
+            Log.i(TAG, "runAgentTask: agent skipped (no timely content)")
+            onSkip?.invoke()
             return
         }
         Log.i(TAG, "runAgentTask: reply ${reply.length} chars")
-        // 本地通知保证「离线可见、绝对可靠」；眼镜播报走 tts_play（RokidLink 本地合成）
-        postLocalNotification(appContext.getString(com.rokidlab.phone.R.string.timer_agent_task_title), reply)
-        speakOnGlass(reply)
+        // 本地通知保证「离线可见、绝对可靠」；眼镜播报由 sendAiTextMessage 的下行链路
+        // （AiConversationService 步骤4.5 的 tts_play）负责——这里不能再 speakOnGlass：
+        // 同一句回复会下发两条 tts_play（真机实测相隔 17ms），眼镜端 TtsPlaybackHelper
+        // 无文本去重，已 invoke 进 TtsService 的块播完后第二条整段重播（播报两遍）。
+        postLocalNotification(
+            titleOverride ?: appContext.getString(com.rokidlab.phone.R.string.timer_agent_task_title),
+            reply,
+        )
+    }
+
+    /**
+     * 系统侧主动触发（空闲问候等）的统一入口：与自主任务同一执行体（无人值守只读工具
+     * 白名单 + 本地通知 + 眼镜播报）。与用户显式创建任务的差别由参数表达：
+     * - [failureNotice]=false：失败**不**发通知（主动搭话是「可有可无」的，静默跳过即可）；
+     * - [titleOverride]：通知标题（默认沿用定时任务标题）；
+     * - [onSkip]：本轮「没开口」时回调（模型回 [SKIP]，或被主动派发互斥挤掉），调用方在此
+     *   回退决策门记账（没说话不该消耗每日上限）。
+     *
+     * **主动派发互斥**：同一时刻只允许一个系统主动轮在跑。自检链一个 tick 会顺序触发
+     * 日程简报/关怀提醒/空闲问候等多个派发，而每次 sendAiTextMessage 都会 bump AI 代际号，
+     * 后发的会把先发的回复打断（真机实测：双方都拿不到回复还各扣一条上限）。
+     * 互斥被挤掉的一方静默放弃（回退记账），等下一轮自检（30 分钟）再试。
+     */
+    fun runProactiveAgentTask(
+        prompt: String,
+        failureNotice: Boolean = false,
+        titleOverride: String? = null,
+        recordHistory: Boolean = false,
+        onSkip: (() -> Unit)? = null,
+    ) {
+        if (prompt.isBlank()) return
+        if (!proactiveInFlight.compareAndSet(false, true)) {
+            Log.i(TAG, "proactive dispatch busy, drop silently: ${prompt.take(30)}...")
+            onSkip?.invoke()
+            return
+        }
+        scope.launch {
+            try {
+                runAgentTask(prompt, failureNotice, titleOverride, recordHistory, onSkip)
+            } finally {
+                proactiveInFlight.set(false)
+            }
+        }
     }
 
     /**
@@ -464,7 +542,7 @@ class TimerScheduler(private val appContext: Context) {
      * 但 `skipTtsAudioFinished=true` 保留回复留在屏上；`showAsrResult=true` 让眼镜端
      * 能看到「问了什么」—— 主动播报若只出声不显示，用户会莫名听到一段话无从对照。
      */
-    private fun requestAgentReply(prompt: String): String? {
+    private fun requestAgentReply(prompt: String, recordHistory: Boolean = false): String? {
         val app = appContext as? LabApplication ?: return null
         if (!app.hasCxrL()) {
             Log.w(TAG, "requestAgentReply: cxrL not ready")
@@ -477,11 +555,14 @@ class TimerScheduler(private val appContext: Context) {
                 text = prompt,
                 onResult = { _, _ -> latch.countDown() },
                 onReply = { r -> out.set(r) },
-                interruptOfficialFirst = false,
+                // 先让出官方 AI 会话：无人值守轮次若走完整 ASR 回注，官方 AI 会把 prompt
+                // 当用户提问自己答一遍（眼镜播官方回复 + Lab 解说 = 回复两次）
+                interruptOfficialFirst = true,
                 skipTtsAudioFinished = true,
-                showAsrResult = true,
+                // 不在眼镜端重发 ASR_Result：官方 AI 无感知，杜绝双响应
+                showAsrResult = false,
                 localTakeover = false,
-                recordHistory = false,
+                recordHistory = recordHistory,
                 readOnlyTools = true,
             )
         } catch (e: Exception) {

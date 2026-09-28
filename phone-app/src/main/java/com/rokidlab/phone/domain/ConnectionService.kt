@@ -302,7 +302,10 @@ class ConnectionService(private val session: com.rokidlab.phone.glasses.CxrLHiRo
                         //   图片下发被当成"眼镜未连接"丢弃）。故每次 connected=true 都重新登记。
                         if (connected) com.rokidlab.phone.ai.GlassToolConfirmChannel.bind(session)
                         if (operation.showConnectionStatus) session.onStatus(session.appContext.getString(R.string.cxrl_service_connected, connected.toString()))
-                        if (connected) session.asrBridge.start() else session.asrBridge.stop()
+                        if (connected) {
+                            session.asrBridge.start()
+                            // 环境音录入不自动恢复：默认关、由用户显式开启（顶栏耳朵按钮/工具）
+                        } else session.asrBridge.stop()
                         session.notifyConnectionChanged()
                         maybeRunPendingOperation()
                     }
@@ -376,6 +379,7 @@ class ConnectionService(private val session: com.rokidlab.phone.glasses.CxrLHiRo
         android.util.Log.i("CxrLInstall", "connectAndRun: bindRokidHostService OK, waiting for connected+btConnected...")
         // 直接启动 AI 文字轮询（不依赖 onCXRLConnected：实测该回调在部分会话中不触发）
         session.asrBridge.start()
+        // 环境音录入不自动恢复：默认关、由用户显式开启（顶栏耳朵按钮/工具）
         // 连接建立后补发一次 AI 配置到眼镜端（setAiConfig 时可能尚未连接）
         session.aiConfig.pushAiConfigToGlass(session.getAiConfig())
     }

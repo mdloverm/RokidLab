@@ -832,6 +832,13 @@ object ProotShell {
         ctx: Context,
         script: String,
         previewPort: Int,
+        /**
+         * 脚本文件名标记：孤儿清扫按它认领"是我们起的 proot"。不同用途用不同标记，
+         * 避免互相误杀（网页预览 = rl-preview-，MCP stdio 桥 = rl-mcp-）。
+         * ⚠️ 必须排在 `onLine` **之前**：尾随 lambda 绑定最后一个参数，
+         * 若标记在末尾，调用方的 `{ line -> … }` 会被当成 String 咬住（已实测编译错）。
+         */
+        scriptMarker: String = "rl-preview-",
         onLine: ((String) -> Unit)? = null,
     ): ResidentProcess? {
         if (!rootfsReady(ctx)) {
@@ -844,7 +851,7 @@ object ProotShell {
             return null
         }
         ensureGuestDirs(ctx)
-        val name = "rl-preview-${scriptSeq.incrementAndGet()}-${System.currentTimeMillis() % 100000}.sh"
+        val name = "$scriptMarker${scriptSeq.incrementAndGet()}-${System.currentTimeMillis() % 100000}.sh"
         val file = File(tmp, name)
         return try {
             // CRLF 教训同 runScriptLocked（Windows 侧传进来的脚本）

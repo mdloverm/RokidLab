@@ -147,6 +147,10 @@ internal fun SettingsScreen(
                 keepAliveEnabled = labApp.keepAliveEnabled
             },
         )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // 主动式功能开关已收编进聊天输入栏「主动性」下弹面板（档位 + 功能开关唯一入口）；
+        // 陪伴默契统计也已挪为该面板副标题（2026-09-28 用户要求），设置页不再展示。
         Spacer(modifier = Modifier.height(24.dp))
 
         // ── 眼镜端服务 ──
@@ -166,7 +170,7 @@ internal fun SettingsScreen(
             enabled = !state.screenMirrorState.isInstallingRokidLink,
             onClick = actions.onSettingsReinstallRokidLink,
         )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // ── 更多 ──
         SectionTitle(ctx.getString(R.string.more_section), BrewCoral)

@@ -34,59 +34,71 @@ object WeatherTools {
     }
 
     /**
-     * 查询指定城市天气。
+     * 查询指定城市天气；城市为空时自动定位兜底（自主任务/无人值守场景模型没有位置上下文）。
      *
-     * @param city 城市名（中文/拼音/英文均可，如「杭州」「Shanghai」）
+     * @param city 城市名（中文/拼音/英文均可，如「杭州」「Shanghai」）；空串 = 自动定位
      * @param date 可选日期：today（默认）/ tomorrow / 后天；不传返回「实况 + 3 日预报」
      * @return 给模型的中文天气文本；失败时返回可如实转告的失败原因
      */
-    fun getWeather(city: String, date: String? = null): String {
+    fun getWeather(context: android.content.Context, city: String, date: String? = null): String {
         val c = city.trim()
-        if (c.isEmpty()) return "请提供要查询的城市名称"
-        return try {
-            // 1) 地理编码：城市名 → 经纬度（language=zh 优先中文地名）
-            val geoUrl = "https://geocoding-api.open-meteo.com/v1/search?name=" +
-                java.net.URLEncoder.encode(c, "UTF-8") + "&count=1&language=zh&format=json"
-            val geo = JSONObject(HttpClient.getString(geoUrl, readTimeout = 10000))
-            val results = geo.optJSONArray("results")
-            if (results == null || results.length() == 0) {
-                return "没有找到城市“$c”，请确认城市名称（可用全名，如「杭州市」）"
-            }
+        if (c.isNotEmpty()) return queryByCity(c, date)
+        // 自动定位：系统定位缓存 → 实时定位（LocationTools 内 6s 预算）
+        val loc = LocationTools.currentLocation(context)
+            ?: return "请提供要查询的城市名称（自动定位不可用，请确认手机已开启定位并授权）"
+        Log.i(TAG, "auto-locate for weather: ${loc.latitude},${loc.longitude}")
+        return queryByCoords(loc.latitude, loc.longitude, "当前位置", date)
+    }
+
+    private fun queryByCity(c: String, date: String?): String = try {
+        // 1) 地理编码：城市名 → 经纬度（language=zh 优先中文地名）
+        val geoUrl = "https://geocoding-api.open-meteo.com/v1/search?name=" +
+            java.net.URLEncoder.encode(c, "UTF-8") + "&count=1&language=zh&format=json"
+        val geo = JSONObject(HttpClient.getString(geoUrl, readTimeout = 10000))
+        val results = geo.optJSONArray("results")
+        if (results == null || results.length() == 0) {
+            "没有找到城市“$c”，请确认城市名称（可用全名，如「杭州市」）"
+        } else {
             val hit = results.getJSONObject(0)
-            val resolvedName = hit.optString("name", c)
-            val lat = hit.optDouble("latitude")
-            val lon = hit.optDouble("longitude")
-
-            // 2) 预报：实况 + 4 日（today 起 daily 数组含今天，多取一天覆盖「后天」）
-            val forecastUrl = "https://api.open-meteo.com/v1/forecast" +
-                "?latitude=$lat&longitude=$lon" +
-                "&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m" +
-                "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
-                "&timezone=auto&forecast_days=4"
-            val fc = JSONObject(HttpClient.getString(forecastUrl, readTimeout = 15000))
-            val current = fc.optJSONObject("current") ?: return "天气服务返回异常，请稍后再试"
-            val daily = fc.optJSONObject("daily") ?: return "天气服务返回异常，请稍后再试"
-
-            val dayLabel = date?.trim()?.lowercase()
-            if (dayLabel == "today" || dayLabel == "今天") {
-                return buildToday(resolvedName, current, daily, 0)
-            }
-            if (dayLabel == "tomorrow" || dayLabel == "明天") {
-                return buildDailyLine(resolvedName, daily, 1, "明天")
-            }
-            if (dayLabel == "后天") {
-                return buildDailyLine(resolvedName, daily, 2, "后天")
-            }
-            // 默认：实况 + 3 日预报
-            val sb = StringBuilder()
-            sb.append(buildToday(resolvedName, current, daily, 0))
-            sb.append("\n").append(buildDailyLine(resolvedName, daily, 1, "明天"))
-            sb.append("\n").append(buildDailyLine(resolvedName, daily, 2, "后天"))
-            return sb.toString()
-        } catch (e: Exception) {
-            Log.w(TAG, "getWeather failed: ${e.message}")
-            "天气查询失败：${e.message ?: "网络异常"}"
+            queryByCoords(hit.optDouble("latitude"), hit.optDouble("longitude"), hit.optString("name", c), date)
         }
+    } catch (e: Exception) {
+        Log.w(TAG, "geocode failed: ${e.message}")
+        "天气查询失败：${e.message ?: "网络异常"}"
+    }
+
+    private fun queryByCoords(lat: Double, lon: Double, name: String, date: String?): String {
+        return try {
+        // 2) 预报：实况 + 4 日（today 起 daily 数组含今天，多取一天覆盖「后天」）
+        val forecastUrl = "https://api.open-meteo.com/v1/forecast" +
+            "?latitude=$lat&longitude=$lon" +
+            "&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m" +
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+            "&timezone=auto&forecast_days=4"
+        val fc = JSONObject(HttpClient.getString(forecastUrl, readTimeout = 15000))
+        val current = fc.optJSONObject("current") ?: return "天气服务返回异常，请稍后再试"
+        val daily = fc.optJSONObject("daily") ?: return "天气服务返回异常，请稍后再试"
+
+        val dayLabel = date?.trim()?.lowercase()
+        if (dayLabel == "today" || dayLabel == "今天") {
+            return buildToday(name, current, daily, 0)
+        }
+        if (dayLabel == "tomorrow" || dayLabel == "明天") {
+            return buildDailyLine(name, daily, 1, "明天")
+        }
+        if (dayLabel == "后天") {
+            return buildDailyLine(name, daily, 2, "后天")
+        }
+        // 默认：实况 + 3 日预报
+        val sb = StringBuilder()
+        sb.append(buildToday(name, current, daily, 0))
+        sb.append("\n").append(buildDailyLine(name, daily, 1, "明天"))
+        sb.append("\n").append(buildDailyLine(name, daily, 2, "后天"))
+        sb.toString()
+    } catch (e: Exception) {
+        Log.w(TAG, "getWeather failed: ${e.message}")
+        "天气查询失败：${e.message ?: "网络异常"}"
+    }
     }
 
     private fun buildToday(name: String, current: JSONObject, daily: JSONObject, idx: Int): String {

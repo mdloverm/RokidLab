@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -62,6 +63,10 @@ internal fun ChatHeader(
     onToggleLocalOnly: () -> Unit,
     /** 清空当前对话 */
     onClearChat: () -> Unit,
+    /** 环境音持续录入开关：点击开启/关闭（默认关，状态不持久） */
+    onToggleAmbient: () -> Unit,
+    /** 环境音持续录入当前是否开启 */
+    ambientActive: Boolean,
     /** 本机模式（不连眼镜也能聊）当前是否开启；见 [LabApplication.chatLocalOnlyEnabled] */
     localOnly: Boolean,
     /** 当前会话标题（取代固定的「乐奇聊天」：多会话下用户需要知道自己在哪个对话里） */
@@ -102,12 +107,16 @@ internal fun ChatHeader(
                 )
             }
             Text(
-                // 本机模式是一句话就能说清的全局状态，直接写在副标题上 ——
-                // 只靠一个换了的图标容易被忽略，而它会让「眼镜端不再收到回复」，必须显眼
+                // 副标题一句话说清当前全局态：本机模式 > 聆听模式（环境音持续录入）> 默认；
+                // 前两者都是「眼镜端行为被改变了」的状态，必须显眼（琥珀色）
                 text = stringResource(
-                    if (localOnly) R.string.chat_subtitle_local_only else R.string.chat_subtitle,
+                    when {
+                        localOnly -> R.string.chat_subtitle_local_only
+                        ambientActive -> R.string.chat_subtitle_ambient
+                        else -> R.string.chat_subtitle
+                    },
                 ),
-                color = if (localOnly) BrewAmber else BrewMuted,
+                color = if (localOnly || ambientActive) BrewAmber else BrewMuted,
                 fontSize = 11.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -130,6 +139,17 @@ internal fun ChatHeader(
                     modifier = Modifier.size(ICON_SIZE),
                 )
             }
+        }
+        // 环境音持续录入：图标本身就是状态（开=琥珀「聆听模式」/ 关=与其他三钮同色同大小）。
+        // Hearing 字形比自绘 ic_glasses 视觉偏大，用 20dp 与另外三钮视觉平衡。
+        // 开启后眼镜远场麦听到的每句话自动作为新消息进对话；默认关、不持久（App 重启回到关闭态）。
+        IconButton(onClick = onToggleAmbient, modifier = Modifier.size(ICON_BUTTON_SIZE)) {
+            Icon(
+                imageVector = Icons.Filled.Hearing,
+                contentDescription = stringResource(R.string.chat_ambient_listen),
+                tint = if (ambientActive) BrewAmber else BrewChat,
+                modifier = Modifier.size(20.dp),
+            )
         }
         IconButton(onClick = onClearChat, modifier = Modifier.size(ICON_BUTTON_SIZE)) {
             Icon(

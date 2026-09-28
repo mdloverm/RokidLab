@@ -359,6 +359,7 @@
     <string name="chat_events_cat_cut">Invalidated</string>
     <string name="chat_events_cat_lifecycle">Lifecycle</string>
     <string name="chat_trace_cost_tokens">Tokens: %1$s</string>
+    <string name="chat_trace_cost_cache_hit">Cache hit: %1$s</string>
     <string name="chat_trace_cost_calls">%1$d model calls</string>
     <string name="chat_trace_cost_elapsed">%1$s</string>
     <string name="chat_trace_cost_unknown">Token usage unknown (server did not report it)</string>
@@ -496,9 +497,6 @@
     <!-- Reasoning full-text expand -->
     <string name="chat_think_expand">Show full reasoning</string>
     <string name="chat_think_collapse">Collapse</string>
-    <!-- One-line plan progress on glasses -->
-    <string name="glasses_plan_progress">Plan %1$d/%2$d · %3$s</string>
-    <string name="glasses_plan_done">Plan complete</string>
     <string name="chat_settings">AI Settings</string>
     <string name="chat_settings_title">AI Service Settings</string>
     <string name="chat_settings_hint">Supports OpenAI-compatible APIs (DeepSeek / Qwen / Kimi / Ollama, etc.)</string>
@@ -590,6 +588,8 @@
     <string name="mcp_field_name">Name (optional)</string>
     <string name="mcp_field_url">Server URL</string>
     <string name="mcp_field_url_hint">e.g. https://example.com/mcp (local servers may use http://127.0.0.1:8181/mcp)</string>
+    <string name="mcp_field_stdio">Local stdio command (optional)</string>
+    <string name="mcp_field_stdio_hint">Runs inside the local container (needs local exec env and python3); a standard JSON config (mcpServers / command+args) can be pasted directly; URL may be left empty</string>
     <string name="mcp_url_must_be_https">https only (cleartext http is blocked; plain http works for loopback only: localhost / 127.0.0.1)</string>
     <string name="mcp_field_token">Access token (optional)</string>
     <string name="mcp_field_token_hint">Sent as the Authorization header</string>
@@ -704,6 +704,8 @@
 
     <!-- LeQi Chat - Clear Chat -->
     <string name="chat_clear">Clear Chat</string>
+    <string name="chat_ambient_listen">Listen nearby</string>
+    <string name="chat_subtitle_ambient">Listening · Glass Playback</string>
     <string name="chat_clear_confirm">Clear messages of this conversation? This cannot be undone. The AI context memory of this conversation is cleared too.</string>
 
     <!-- LeQi Chat - Agent Memory -->
@@ -826,6 +828,89 @@
     <string name="keep_alive_on">Enabled</string>
     <string name="keep_alive_off">Disabled</string>
 
+    <!-- Idle chat (subtitle scales with chat frequency) -->
+    <string name="settings_idle_greeting">Idle chat</string>
+
+    <!-- Proactive follow-up (memory revisit) -->
+    <string name="settings_followup">Proactive follow-up</string>
+    <string name="settings_followup_on">Asks about plans when they come due</string>
+
+    <!-- Calendar briefing (calendar event source) -->
+    <string name="settings_calendar_briefing">Schedule briefing</string>
+    <string name="settings_calendar_briefing_on">Nudges 2h before an event starts</string>
+
+    <!-- Walk & Look (ambient vision, fixed 15-min pace) -->
+    <string name="settings_ambient_vision">Walk &amp; Look</string>
+
+    <!-- Proactivity bottom sheet (chat input bar) -->
+    <string name="chat_proactive_title">Proactivity</string>
+    <string name="chat_proactive_subtitle">Companionship style and pace · adapts to your replies</string>
+
+    <!-- Companionship scenes (5 cells; each remembers its own feature set) -->
+    <string name="proactive_section_scene">Companionship</string>
+    <string name="proactive_scene_mute">Do not disturb</string>
+    <string name="proactive_scene_mute_desc">Never speaks first</string>
+    <string name="proactive_scene_schedule">Schedule aide</string>
+    <string name="proactive_scene_schedule_desc">Good morning, agenda, good night</string>
+    <string name="proactive_scene_light">Light company</string>
+    <string name="proactive_scene_light_desc">Cares about your routine</string>
+    <string name="proactive_scene_friend">Friend</string>
+    <string name="proactive_scene_friend_desc">Chats when something comes up</string>
+    <string name="proactive_scene_full">Always on</string>
+    <string name="proactive_scene_full_desc">Chats often + Walk &amp; Look</string>
+
+    <!-- Chat frequency (idle chat layer only; other layers don't use the quota) -->
+    <string name="proactive_section_freq">Chat frequency</string>
+    <string name="proactive_freq_silent">Quiet</string>
+    <string name="proactive_freq_silent_desc">No small talk</string>
+    <string name="proactive_freq_moderate">Moderate</string>
+    <string name="proactive_freq_moderate_desc">About 3 a day</string>
+    <string name="proactive_freq_often">Frequent</string>
+    <string name="proactive_freq_often_desc">About 6 a day</string>
+    <string name="proactive_freq_constant">Inseparable</string>
+    <string name="proactive_freq_constant_desc">About 12 a day</string>
+
+    <!-- Quota header: how many can really be sent today -->
+    <string name="proactive_quota_left">%1$d left today</string>
+    <string name="proactive_quota_none">No more today, see you tomorrow</string>
+    <string name="proactive_quota_muted">Muted, Leqi won\'t speak first</string>
+
+    <!-- Quiet hours -->
+    <string name="proactive_quiet_title">Quiet hours</string>
+    <string name="proactive_quiet_hint">Proactive messages deferred in this window</string>
+    <string name="proactive_quiet_start">Start time</string>
+    <string name="proactive_quiet_end">End time</string>
+    <string name="proactive_quiet_input_error">Invalid time format</string>
+
+    <!-- Gate status line (same order as admission: cooldown → adapting → quiet → running) -->
+    <string name="proactive_gate_cooldown">Cooling down · ~%1$d h left</string>
+    <string name="proactive_gate_penalty_h">Adapting down · ~%1$d h left</string>
+    <string name="proactive_gate_penalty_m">Adapting down · ~%1$d min left</string>
+    <string name="proactive_gate_quiet">In quiet hours, proactive messages deferred</string>
+    <string name="proactive_gate_running">Proactive messages on · auto-deferred in quiet hours</string>
+
+    <!-- Proactive features (6 switches, subtitles are real triggers) -->
+    <string name="proactive_section_features">Proactive features</string>
+    <string name="proactive_ritual">Good morning / night</string>
+    <string name="proactive_feat_ritual_desc">Greets you around your own schedule</string>
+    <string name="proactive_vision_every">Looks around every 15 min while moving</string>
+    <string name="proactive_soft_note">Rituals, schedule, care and follow-up keep their own timing, not the chat quota</string>
+
+    <!-- Care nudges (unified IMU entry: event detection + AI wording, fixed thresholds) -->
+    <string name="proactive_care">Care nudges</string>
+    <string name="proactive_care_desc">Nudges you after sitting, walking or head-down too long</string>
+    <string name="proactive_care_limits_fmt">Nudges after %1$d min walking / %2$d min sitting / %3$d min head-down</string>
+    <string name="proactive_chat_companion">In-chat companionship</string>
+    <string name="proactive_nudge_times_fmt">Nudges up to %1$d times if you go quiet</string>
+    <string name="proactive_nudge_off">Won\'t follow up in chat</string>
+
+    <!-- Frequency wording -->
+    <string name="proactive_duration_hours">roughly every %1$d h</string>
+    <string name="proactive_duration_minutes">roughly every %1$d min</string>
+
+    <!-- Companionship (intimacy) -->
+    <string name="settings_relation_stats">%1$d-day streak · %2$d chats today</string>
+
     <!-- AI Tools (ToolRegistry settings display) -->
     <string name="ai_tool_search_knowledge_base_name">Knowledge Search</string>
     <string name="ai_tool_search_knowledge_base_desc">Search imported documents</string>
@@ -907,6 +992,8 @@
     <string name="ai_tool_delete_script_desc">Remove a script from the script library</string>
     <string name="ai_tool_look_at_view_name">Look Ahead</string>
     <string name="ai_tool_look_at_view_desc">See what is in front of you via the glasses camera</string>
+    <string name="ai_tool_listen_ambient_name">Ambient Answer</string>
+    <string name="ai_tool_listen_ambient_desc">Auto-listen and answer nearby speech</string>
     <!-- Head motion sensing: glasses IMU data query (v1) -->
     <string name="ai_tool_get_head_pose_name">Head Pose</string>
     <string name="ai_tool_get_head_pose_desc">Read the current head pose from the glasses IMU (pitch/yaw/roll and angular velocity); use for questions like: am I looking up? Or whenever head orientation matters</string>
@@ -1592,6 +1679,10 @@
     <string name="local_exec_node_hint">Run JS and npx tools · about 58 MB</string>
     <string name="local_exec_node_ready_hint">Ready for JavaScript and npx tools</string>
     <string name="local_exec_git_name">Git</string>
+    <string name="local_exec_uv_name">uv / uvx</string>
+    <string name="local_exec_uv_hint">Python tool runner; uvx runs PyPI MCP servers on demand · about 35 MB</string>
+    <string name="local_exec_uv_ready_hint">Ready — use uvx commands in stdio MCP configs</string>
+    <string name="local_exec_pip_install">Installing via pip (TUNA mirror)</string>
     <string name="local_exec_git_hint">Clone and manage repos · about 10 MB</string>
     <string name="local_exec_git_ready_hint">Ready to clone and manage repos</string>
     <string name="local_exec_addon_install">Install</string>

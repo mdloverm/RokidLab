@@ -125,7 +125,7 @@ internal object InfoToolProvider : ToolProvider {
             "get_weather" -> {
                 val city = args.optString("city").trim()
                 val date = args.optString("date", "today").trim()
-                WeatherTools.getWeather(city, date)
+                WeatherTools.getWeather(context, city, date)
             }
 
             "calculate" -> {

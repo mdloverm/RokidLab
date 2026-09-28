@@ -47,6 +47,8 @@ internal class AiTakeoverCoordinator(
          * 400ms 与 [TtsPlaybackHelper] 内部的块间稳定延时同量级。
          */
         private const val CONTINUE_DIALOG_DELAY_MS = 400L
+        /** 环境音 TTS 硬闸播完后的尾音窗：覆盖扬声器余音 + 云端 ASR 已起流那半句的收尾 */
+        private const val TTS_SHIELD_TAIL_MS = 1_500L
         /**
          * 官方 startNewTalk 生效延时：眼镜端推续听标记后，要经
          * 手机端（RFCOMM 上行 → CXR 下行）再交官方 `AudioFinishedHandler →
@@ -412,12 +414,25 @@ internal class AiTakeoverCoordinator(
                 // 新一轮播报覆盖上一轮：先撤掉上一轮遗留的续听任务（本轮播完会重新调度）
                 cancelPendingContinueDialog()
                 lastLabReply = text
+                // 环境音 TTS 硬闸：播报期间远场麦必拾到自己的声音，字幕帧一律丢弃
+                AmbientListenController.ttsPlaying = true
+                armTtsShieldReset(text.length)
                 // 播完回调 = 连续对话（多轮免唤醒）的触发点，见 [onLabReplyPlaybackFinished]
                 TtsPlaybackHelper.play(service, text) { onLabReplyPlaybackFinished() }
             }
         } catch (e: Exception) {
             Log.e(TAG, "handleTtsPlay error", e)
         }
+    }
+
+    /**
+     * TTS 硬闸兜底复位：真实播完回调（[onLabReplyPlaybackFinished]）若因 TTS 引擎异常
+     * 未触发，硬闸会永远卡死环境音 —— 按字数保守估时强制解除（450ms/字 + 6s 余量，
+     * 远大于正常语速 3~5 字/秒）。真实回调先到也无害（幂等置 false）。
+     */
+    private fun armTtsShieldReset(textLen: Int) {
+        val task = Runnable { AmbientListenController.ttsPlaying = false }
+        core.mainHandler.postDelayed(task, textLen * 450L + 6_000L)
     }
 
     /**
@@ -434,6 +449,12 @@ internal class AiTakeoverCoordinator(
      * 立刻开麦会被自己的尾音喂进一次误识别。
      */
     private fun onLabReplyPlaybackFinished() {
+        // TTS 硬闸解除延后一个尾音窗：停播瞬间扬声器仍有尾音，立即解锁会被
+        // 远场字幕麦拾进一次误识别（与 CONTINUE_DIALOG_DELAY_MS 同理）。
+        core.mainHandler.postDelayed(
+            { AmbientListenController.ttsPlaying = false },
+            TTS_SHIELD_TAIL_MS,
+        )
         if (!core.isCustomAiMode()) {
             Log.i(TAG, "continue dialog: skipped (official ai mode)")
             return

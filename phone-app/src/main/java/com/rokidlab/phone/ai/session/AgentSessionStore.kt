@@ -196,6 +196,7 @@ internal class AgentSessionStore(
         detail: String? = null,
         promptTokens: Int? = null,
         completionTokens: Int? = null,
+        promptCacheHitTokens: Int? = null,
         modelCalls: Int? = null,
     ): CompactionResult? {
         val end = TurnEnd(
@@ -204,6 +205,7 @@ internal class AgentSessionStore(
             detail = detail,
             promptTokens = promptTokens,
             completionTokens = completionTokens,
+            promptCacheHitTokens = promptCacheHitTokens,
             modelCalls = modelCalls,
         )
         return when (reason) {

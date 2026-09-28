@@ -77,6 +77,21 @@ object SkillRegistry {
     /** 解压单文件大小上限（320KB ≈ 10 万中文字符的 SKILL.md，防 zip bomb） */
     private const val MAX_ENTRY_BYTES = 320L * 1024
 
+    /**
+     * 技能目录里允许落盘的**非 .md 附件**扩展名（小写）。
+     *
+     * 为什么要放行脚本：Anthropic 生态的技能包常带 `scripts/`（python/shell），只收 .md
+     * 意味着"装得进、跑不了"。脚本只是文本，最终仍经 `run_shell`（受管工具）执行 ——
+     * 技能本身依旧不能注册工具、不能绕过审批闸门，安全模型不变。
+     */
+    private val ASSET_EXTENSIONS = setOf("py", "sh", "js", "mjs", "json", "txt", "yaml", "yml")
+
+    /** 文件是否为技能可携带的附件（.md 参考手册 + 脚本/数据类附件） */
+    fun isSkillAssetFile(fileName: String): Boolean {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return ext == "md" || ext in ASSET_EXTENSIONS
+    }
+
     /** 单技能安装结果 */
     data class SkillMeta(
         val name: String,
@@ -244,35 +259,45 @@ object SkillRegistry {
         return listSkills(context).filter { it.enabled }.joinToString("、") { it.name }.ifEmpty { "（无）" }
     }
 
-    /** 技能目录内全部 .md 文件名（含 SKILL.md），目录缺失返回空列表 */
+    /** 技能目录内全部可携带文件（含 SKILL.md、参考手册与脚本），带相对路径，目录缺失返回空列表 */
     fun listSkillFileNames(context: Context, name: String): List<String> {
-        val dir = File(skillsDir(context), name)
-        if (!dir.isDirectory) return emptyList()
-        return dir.listFiles()?.asSequence()
-            ?.filter { it.isFile && it.name.endsWith(".md", ignoreCase = true) }
-            ?.map { it.name }
-            ?.sorted()
-            ?.toList()
-            .orEmpty()
+        val root = File(skillsDir(context), name)
+        if (!root.isDirectory) return emptyList()
+        val out = mutableListOf<String>()
+        fun walk(dir: File, prefix: String) {
+            dir.listFiles()?.forEach { f ->
+                if (f.isDirectory) {
+                    walk(f, "$prefix${f.name}/")
+                } else if (isSkillAssetFile(f.name)) {
+                    out.add("$prefix${f.name}")
+                }
+            }
+        }
+        walk(root, "")
+        return out.sorted()
     }
 
-    /** 读取技能目录内指定参考文件全文；文件不存在/非法返回 null */
+    /** 读取技能目录内指定文件全文；文件不存在/非法返回 null（相对路径，允许子目录） */
     fun readSkillFileText(context: Context, name: String, fileName: String): String? {
         val safe = safeFileName(fileName) ?: return null
         val file = File(skillsDir(context), name).resolve(safe)
-        return if (file.isFile) runCatching { file.readText(Charsets.UTF_8) }.getOrNull() else null
+        if (!file.isFile) return null
+        // 防符号链接/越界：规范化后必须仍在技能目录内
+        val root = File(skillsDir(context), name).canonicalFile
+        if (!file.canonicalFile.path.startsWith(root.path)) return null
+        return runCatching { file.readText(Charsets.UTF_8) }.getOrNull()
     }
 
     /**
-     * 校验技能目录内文件名：仅允许「字母/数字/点/下划线/连字符」组成的 .md 文件名，
-     * 拒绝路径分隔符与 ..（防目录穿越），拒绝隐藏文件名。
+     * 校验技能目录内文件相对路径：目录名与文件名只允许「字母/数字/点/下划线/连字符/斜杠」，
+     * 扩展名必须在附件白名单内；拒绝路径穿越（..）、绝对路径与隐藏文件。
      */
     fun safeFileName(fileName: String): String? {
         val f = fileName.trim()
-        if (f.length > 64 || f.startsWith(".")) return null
-        if (!Regex("^[A-Za-z0-9._-]+\\.md$").matches(f)) return null
+        if (f.isEmpty() || f.length > 128 || f.startsWith(".")) return null
         if (f.contains("..")) return null
-        return f
+        if (!Regex("^[A-Za-z0-9._/\\-]+$").matches(f)) return null
+        return if (isSkillAssetFile(f)) f else null
     }
 
     private fun parseFile(file: File): SkillMarkdown.ParsedSkill? {
@@ -441,7 +466,12 @@ object SkillRegistry {
                 }.getOrDefault(0L)
                 sb.append("- ").append(f).append("（约 ").append(size / 512 + 1).append("KB）")
                 val purpose = refPurpose(f)
-                if (purpose != null) sb.append("：").append(purpose)
+                if (purpose != null) {
+                    sb.append("：").append(purpose)
+                } else if (!f.endsWith(".md", ignoreCase = true)) {
+                    sb.append("：脚本/数据附件。用 load_skill_section（file=\"$f\"，section=任意值）取全文，")
+                        .append("再经 run_shell 写盘后执行")
+                }
                 sb.append('\n')
             }
             sb.append("\n写代码任务（开发 AIUI）执行顺序：先遵守运行须知（lab-runtime 第 0/1 节），")
@@ -500,6 +530,15 @@ object SkillRegistry {
             "SKILL.md" to (loadFullText(context, name)
                 ?: return "未找到技能「$name」，可用的技能名：" +
                     listSkills(context).joinToString("、") { it.name }.ifEmpty { "（无）" })
+        }
+        // 脚本/数据类附件（非 .md）：整文件即内容，不按章节切 —— 模型拿到后经 run_shell 写盘执行
+        if (!fileName.equals("SKILL.md", ignoreCase = true) && !fileName.endsWith(".md", ignoreCase = true)) {
+            return if (full.length <= SkillMarkdown.MAX_SECTION_CHARS) {
+                "「$name/$fileName」共 ${full.length} 字符，完整内容：\n\n${full.trim()}"
+            } else {
+                "「$name/$fileName」共 ${full.length} 字符，已截断为前 ${SkillMarkdown.MAX_SECTION_CHARS} 字符：" +
+                    "\n\n${full.take(SkillMarkdown.MAX_SECTION_CHARS)}"
+            }
         }
         // 参考文件通常无 frontmatter，整段即正文；主文件则剥离 frontmatter
         val parsed = SkillMarkdown.parse(full)
@@ -652,10 +691,13 @@ object SkillRegistry {
     }
 
     /**
-     * 从 zip 字节安装技能包：扫描包内所有 .md 文件，仅安装 frontmatter 合法的技能。
+     * 从 zip 字节安装技能包：识别包内带合法 frontmatter 的 SKILL.md，并把**同一技能目录**
+     * （SKILL.md 所在目录及其子目录）内的参考手册与脚本一并落盘 —— 保留相对路径结构。
      * - 目录结构不限（顶层 / skills/name/ / name/ 均可）；
-     * - 文件名不限（SKILL.md / xxx.md），技能名一律取 frontmatter 的 name；
-     * - zipslip 防护：拒绝 ../ 与绝对路径条目；单文件与总量均限流，防 zip bomb。
+     * - 技能名一律取 frontmatter 的 name，不信路径；
+     * - 嵌套技能（更深层的 SKILL.md）各自成技能，其文件归属**最近的**祖先 SKILL.md；
+     * - zipslip 防护：拒绝 ../ 与绝对路径条目；单文件与总量均限流，防 zip bomb；
+     * - 扩展名白名单：.md 参考手册 + [ASSET_EXTENSIONS] 脚本/数据（后者供 run_shell 执行）。
      *
      * @return 每个安装结果（成功/失败逐条返回，供 UI 展示汇总）
      */
@@ -663,8 +705,8 @@ object SkillRegistry {
         if (zipBytes.size > MAX_ZIP_BYTES) {
             return listOf(InstallResult(null, false, "技能包过大（>${MAX_ZIP_BYTES / 1024}KB），仅支持纯文本技能包"))
         }
-        val results = mutableListOf<InstallResult>()
-        var anyParsed = false
+        // ① 读完包内全部可携带文件（路径 → 文本）；越限/非法条目直接丢
+        val files = LinkedHashMap<String, String>()
         // 不用 ZipInputStream.use{}：其 inline lambda 内不允许 break/continue，改显式 try/finally
         val zip = ZipInputStream(ByteArrayInputStream(zipBytes))
         try {
@@ -674,35 +716,86 @@ object SkillRegistry {
                 // zipslip 防护
                 val unsafe = rawName.startsWith("/") ||
                     rawName.split('/').any { it == ".." } ||
-                    !entry.isDirectory && !rawName.endsWith(".md", ignoreCase = true)
+                    !entry.isDirectory && !isSkillAssetFile(rawName.substringAfterLast('/'))
                 if (unsafe) { zip.closeEntry(); continue }
-                if (entry.isDirectory || !rawName.endsWith(".md", ignoreCase = true)) {
+                if (entry.isDirectory || !isSkillAssetFile(rawName.substringAfterLast('/'))) {
                     zip.closeEntry()
                     continue
                 }
                 if (entry.size > MAX_ENTRY_BYTES) { zip.closeEntry(); continue }
                 val text = readLimited(zip, MAX_ENTRY_BYTES)
-                if (text == null) {
-                    zip.closeEntry()
-                    continue
-                }
+                if (text != null) files[rawName.trimStart('/')] = text
                 zip.closeEntry()
-                // 只收 frontmatter 合法的技能文件（README/说明 md 自然被过滤）
-                val doc = SkillMarkdown.parse(text)
-                if (doc == null) continue
-                anyParsed = true
-                results.add(installFromMarkdown(context, text))
             }
         } catch (e: Exception) {
             Log.e(TAG, "zip install failed", e)
-            if (results.isNotEmpty()) return results
             return listOf(InstallResult(null, false, "技能包解析失败（不是合法的 zip 或内容损坏）"))
         } finally {
             runCatching { zip.close() }
         }
-        if (results.isEmpty()) {
-            val msg = if (anyParsed) "zip 内没有可安装的技能" else "zip 内未找到含 name/description 的 SKILL.md 技能文件"
-            return listOf(InstallResult(null, false, msg))
+        if (files.isEmpty()) {
+            return listOf(InstallResult(null, false, "zip 内未找到可携带的技能文件（.md 或脚本类）"))
+        }
+
+        // ② 找出全部技能根（合法 SKILL.md 的所在目录），技能名取 frontmatter
+        data class SkillRoot(val dir: String, val name: String, val mdText: String)
+        val roots = files.filterKeys { it.substringAfterLast('/').equals("SKILL.md", ignoreCase = true) }
+            .mapNotNull { (path, text) ->
+                val doc = SkillMarkdown.parse(text) ?: return@mapNotNull null
+                SkillRoot(path.substringBeforeLast('/', ""), doc.name, text)
+            }
+        if (roots.isEmpty()) {
+            return listOf(InstallResult(null, false, "zip 内未找到含 name/description 的 SKILL.md 技能文件"))
+        }
+
+        // ③ 文件归属：按"最近的祖先 SKILL.md 目录"归组（根目录按长度降序匹配）
+        val sortedRoots = roots.sortedByDescending { it.dir.length }
+        val assetsByRoot = mutableMapOf<String, MutableList<Pair<String, String>>>() // dir → (相对路径, 文本)
+        for ((path, text) in files) {
+            if (path.substringAfterLast('/').equals("SKILL.md", ignoreCase = true)) continue
+            val dir = path.substringBeforeLast('/', "")
+            val owner = sortedRoots.firstOrNull { dir == it.dir || dir.startsWith("${it.dir}/") }
+            if (owner != null) {
+                // 相对技能根的路径（根为空 = 顶层平铺）
+                val rel = if (owner.dir.isEmpty()) path else path.removePrefix("${owner.dir}/")
+                assetsByRoot.getOrPut(owner.dir) { mutableListOf() }.add(rel to text)
+            }
+        }
+
+        // ④ 逐技能安装：SKILL.md 走既有校验管线；附件按相对路径落盘
+        if (count(context) + roots.size > MAX_SKILLS) {
+            return listOf(InstallResult(null, false, "技能数量将达到上限（$MAX_SKILLS 个），请先删除部分技能"))
+        }
+        val results = mutableListOf<InstallResult>()
+        for (root in roots.distinctBy { it.name }) {
+            val res = installFromMarkdown(context, root.mdText)
+            results.add(res)
+            if (!res.success) continue
+            val skillName = res.skillName ?: root.name
+            var copied = 0
+            var failed = 0
+            for ((rel, text) in assetsByRoot[root.dir].orEmpty()) {
+                // SKILL.md 已由管线落盘；附件名再过一遍安全校验（防 zip 内手写的怪路径）
+                if (rel.equals("SKILL.md", ignoreCase = true)) continue
+                if (safeFileName(rel) == null) { failed++; continue }
+                try {
+                    val target = File(skillsDir(context), skillName).resolve(rel)
+                    target.parentFile?.mkdirs()
+                    target.writeText(text, Charsets.UTF_8)
+                    copied++
+                } catch (e: Exception) {
+                    Log.w(TAG, "zip asset write $skillName/$rel failed: ${e.message}")
+                    failed++
+                }
+            }
+            if (copied > 0 || failed > 0) {
+                val note = buildString {
+                    append(res.message)
+                    if (copied > 0) append("，附带 $copied 个参考/脚本文件")
+                    if (failed > 0) append("（$failed 个附件因路径不合法被跳过）")
+                }
+                results[results.lastIndex] = res.copy(message = note)
+            }
         }
         return results
     }
@@ -724,8 +817,9 @@ object SkillRegistry {
             put(
                 "description",
                 "安装一个自定义技能（SKILL.md 说明书）到手机上，装好后可被 load_skill 加载。" +
-                    "两种给法，二选一：① url = 技能包地址（支持 .zip 直链、.md/raw 单文件直链、" +
-                    "GitHub/Gitee 仓库或目录页）；② markdown = SKILL.md 全文（用户直接把内容贴进对话时用）。" +
+                    "两种给法，二选一：① url = 技能包地址（支持 .zip 直链（可含参考手册与脚本，" +
+                    "脚本经 run_shell 执行）、.md/raw 单文件直链、GitHub/Gitee 仓库或目录页）；" +
+                    "② markdown = SKILL.md 全文（用户直接把内容贴进对话时用）。" +
                     "用户说「把这个技能装上」「我发个链接你装一下」「记住这套流程」时调用。" +
                     "⚠️ SKILL.md 必须带 frontmatter（--- 之间的 name 与 description），" +
                     "技能名只能用中英文/数字/下划线/连字符。失败时把工具返回的原因如实告诉用户。",

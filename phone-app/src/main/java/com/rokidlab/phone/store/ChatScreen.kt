@@ -40,14 +40,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.PsychologyAlt
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -190,6 +191,8 @@ internal data class MsgUsage(
     val inputTokens: Int?,
     /** 本轮**所有**模型调用的输入 token 合计（工具循环 = 多次请求，输入每轮都要重发，它才是大头） */
     val outputTokens: Int?,
+    /** 输入中命中服务端前缀缓存的部分（null = 服务端没给；连续为 0 = 前缀稳定性退化警报） */
+    val promptCacheHitTokens: Int? = null,
     /** 本轮模型调用次数（>1 = 走了工具循环） */
     val modelCalls: Int?,
     val elapsedMs: Long?,
@@ -231,6 +234,7 @@ internal fun ChatModule(app: LabApplication) {
     var photoAsking by remember { mutableStateOf(false) }
     // 知识库管理弹窗
     var showKbDialog by remember { mutableStateOf(false) }
+    var showProactivePanel by remember { mutableStateOf(false) }
     // AI 设置弹窗（AI 服务地址/密钥/模型 + 按键答题开关）
     var showSettings by remember { mutableStateOf(false) }
     // 「过程」区块默认展开（设置页里的「展开过程」，默认开）。
@@ -299,6 +303,9 @@ internal fun ChatModule(app: LabApplication) {
     // 「本机模式」开关（不连眼镜也能聊）：状态源是 LabApplication（每次发送时读取），
     // 这里只做 UI 镜像，因此首次组合时取当前值即可。
     var localOnly by remember { mutableStateOf(app.chatLocalOnlyEnabled) }
+    // 环境音持续录入（顶栏耳朵按钮）：默认关、状态不持久。状态源在协调器（snapshot state），
+    // 静默 10s 自动停等后台触发的关闭也会自动反映到 UI，无需手动镜像。
+    val ambientActive = runCatching { app.cxrL }.getOrNull()?.ambientListen?.uiActive ?: false
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
@@ -572,6 +579,7 @@ internal fun ChatModule(app: LabApplication) {
             usage = MsgUsage(
                 inputTokens = snap.inputTokens,
                 outputTokens = snap.outputTokens,
+                promptCacheHitTokens = snap.promptCacheHitTokens,
                 modelCalls = snap.modelCalls,
                 elapsedMs = snap.elapsedMs,
             ),
@@ -940,6 +948,20 @@ internal fun ChatModule(app: LabApplication) {
             onClearChat = {
                 if (ChatStateHolder.messages.isNotEmpty()) showClearConfirm = true
             },
+            onToggleAmbient = {
+                // 环境音持续录入：状态源是协调器 uiActive（snapshot state），
+                // 开/关成功与否都由协调器自己写状态，UI 自动重组（静默自动停同款路径）。
+                // 开启要下发 CXR 指令（蓝牙半开时可能阻塞），放 IO 线程。
+                val session = runCatching { app.cxrL }.getOrNull()
+                if (ambientActive) {
+                    session?.ambientListen?.stopContinuous("chat header")
+                } else {
+                    scope.launch(Dispatchers.IO) {
+                        session?.ambientListen?.startContinuous("chat header")
+                    }
+                }
+            },
+            ambientActive = ambientActive,
             localOnly = localOnly,
             sessionTitle = currentSessionTitle,
             onOpenSessions = { showSessions = true },
@@ -1278,10 +1300,30 @@ internal fun ChatModule(app: LabApplication) {
                     description = stringResource(R.string.chat_kb),
                     onClick = { showKbDialog = true },
                 ) {
+                    // 书本图标（2026-09-28 用户要求）：与 Agent 过程里「知识库」步骤同款（MenuBook），
+                    // 语义直读"读书/文档"，比文件夹更贴知识库
                     Icon(
-                        imageVector = Icons.Filled.Folder,
+                        imageVector = Icons.Outlined.MenuBook,
                         contentDescription = null,
                         tint = BrewChat,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                // 主动性面板：陪伴场景 + 闲聊频率 + 主动功能开关（早晚安/简报/关怀/回访/闲聊/走走拍拍）
+                // 图标即状态：勿扰场景时按钮不点亮、Bolt 转灰，避免「以为开着其实全关」
+                // （非 snapshot state，靠 showProactivePanel 等状态变化触发重算，够用）
+                val proactiveOff = com.rokidlab.phone.proactive.ProactiveGate.get(ctx).isMuted()
+                ToolBarIcon(
+                    selected = !proactiveOff,
+                    accent = BrewChat,
+                    description = stringResource(R.string.chat_proactive_title),
+                    onClick = { showProactivePanel = true },
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Bolt,
+                        contentDescription = null,
+                        tint = if (proactiveOff) BrewMuted else BrewChat,
                         modifier = Modifier.size(20.dp),
                     )
                 }
@@ -1436,6 +1478,9 @@ internal fun ChatModule(app: LabApplication) {
 
     if (showKbDialog) {
         KbManageDialog(onDismiss = { showKbDialog = false })
+    }
+    if (showProactivePanel) {
+        ProactivePanel(onDismiss = { showProactivePanel = false })
     }
 
     if (showSessions) {
