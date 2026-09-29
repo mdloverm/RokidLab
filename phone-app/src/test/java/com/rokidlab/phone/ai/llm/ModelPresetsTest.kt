@@ -62,9 +62,22 @@ class ModelPresetsTest {
         assertFalse(ModelPresets.supportsThinkingDisabled("deepseek-reasoner"))
         assertFalse(ModelPresets.supportsThinkingDisabled("deepseek-r1"))
         assertFalse(ModelPresets.supportsThinkingDisabled("r1-0528"))
-        // 非 DeepSeek 端点收到该字段会 400 → 一律不发
+        // 非 DeepSeek/方舟系端点收到该字段会 400 → 一律不发
         assertFalse(ModelPresets.supportsThinkingDisabled("gpt-4o"))
         assertFalse(ModelPresets.supportsThinkingDisabled("qwen2.5:7b"))
+        // ★ 2026-09-29 扩展：火山方舟 doubao seed/thinking 系是默认开思考的深度思考模型，
+        //   与 DeepSeek 共用 thinking:{"type":"disabled"} 语法 —— 不发的话思考开关两个方向
+        //   都是安慰剂（关不掉、每轮 reasoning 烧上万输出 token）
+        assertTrue(ModelPresets.supportsThinkingDisabled("doubao-seed-1.6-250615"))
+        assertTrue(ModelPresets.supportsThinkingDisabled("doubao-seed-2-1-pro-260915"))
+        assertTrue(ModelPresets.supportsThinkingDisabled("doubao-1.5-thinking-pro"))
+        assertTrue(ModelPresets.supportsThinkingDisabled("Doubao-Seed-1.6-Flash"))
+        // 老 doubao（pro/lite 纯文本模型）无思考能力 → 字段语义未知时不发，避免整请求 400
+        assertFalse(ModelPresets.supportsThinkingDisabled("doubao-pro-32k"))
+        assertFalse(ModelPresets.supportsThinkingDisabled("doubao-lite-4k"))
+        // 内置能力表与请求路径同口径（设置页展示用）
+        assertTrue(ModelPresets.lookup("doubao-seed-1.6-250615")!!.supportsThinkingDisable)
+        assertFalse(ModelPresets.lookup("doubao-pro-32k")!!.supportsThinkingDisable)
     }
 
     // ═══════════ B. 视觉家族识别 ═══════════

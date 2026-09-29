@@ -67,14 +67,14 @@ internal object InfoToolProvider : ToolProvider {
             statusText = "正在查询天气…",
             schema = toolSchema(
                 name = "get_weather",
-                description = "查询指定城市的天气（实况温度/体感/湿度/风力 + 未来两天预报）。凡用户问「今天天气怎么样」「明天会下雨吗」「杭州冷不冷」等天气问题时必须调用本工具，严禁自行编造天气。",
+                description = "查询指定城市的天气（实况温度/体感/湿度/风力 + 未来两天预报）。凡用户问「今天天气怎么样」「明天会下雨吗」「杭州冷不冷」等天气问题时必须调用本工具，严禁自行编造天气。⚠️ 用户没说城市（「这里的天气」「现在的天气」）时**直接调用本工具、city 留空**——工具内部会自动定位当前位置，**不要**为此先调 get_location；只有用户明确问了别的城市才传 city。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
-                        "city" to mapOf("type" to "string", "description" to "城市名称，如「杭州」「上海」；用户没说城市时问一句或按记忆中的常居城市"),
+                        "city" to mapOf("type" to "string", "description" to "城市名称，如「杭州」「上海」。可省略：省略时自动定位手机当前位置（用户问「这里/现在/本地」的天气就省略它）"),
                         "date" to mapOf("type" to "string", "enum" to listOf("today", "tomorrow", "all"), "description" to "today=只报今天（默认），tomorrow=只报明天，all=实况+未来两天"),
                     ),
-                    "required" to listOf("city"),
+                    "required" to listOf<String>(),
                 ),
             ),
         ),

@@ -90,6 +90,29 @@ internal object ModelPresets {
             thinkingDisable = true,
         ),
 
+        // ── 火山方舟 doubao：seed/thinking 系是深度思考模型（默认开思考），与 DeepSeek
+        //    共用 thinking:{"type":"disabled"} 关思考语法 → 必须排在通用 doubao 规则前；
+        //    seed 系是多模态融合架构（吃图按"未知、允许尝试"处理，失败自动回退 OCR）。
+        //    与 supportsThinkingDisabled 的按名分支保持同一口径（family 内部分歧时
+        //    各写一条，见该函数 KDoc 的 2026-09-29 扩展说明）。
+        Preset(
+            match = { m -> m.contains("doubao") && (m.contains("seed") || m.contains("thinking")) },
+            family = "doubao-thinking",
+            contextWindow = 256000,
+            image = null,
+            tools = true,
+            thinkingDisable = true,
+        ),
+        // 老 doubao（pro/lite 纯文本）：无思考能力可言，关思考字段不下发
+        Preset(
+            match = { m -> m.contains("doubao") },
+            family = "doubao",
+            contextWindow = 128000,
+            image = null,
+            tools = true,
+            thinkingDisable = false,
+        ),
+
         // ── 视觉通用规则：名字里带视觉标记的一律按支持图像处理
         Preset(
             match = { m -> VISION_MARKERS.any { m.contains(it) } },
@@ -223,13 +246,27 @@ internal object ModelPresets {
      * 用户在聊天设置里关掉「长思考」后，请求其实没带关思考字段，服务端照样开思考，
      * 表现为「开关关了却仍被 reasoning 吃光预算」（2026-09-14 真机日志复现）。
      *
+     * ★ 2026-09-29 扩到火山方舟 doubao：seed / thinking 系是**默认开启深度思考**的模型，
+     *   且用的就是与 DeepSeek 同款 `thinking:{"type":"disabled"}` 语法（火山官方文档：
+     *   Chat API 传 thinking.type=disabled 关深度思考）。改造前只认 "deepseek"，
+     *   doubao 模型上思考开关**两个方向都是安慰剂** —— 关不掉（每轮 reasoning 烧上万
+     *   输出 token，简单对话也巨贵）、开也不变化（本来就一直开着）。这是
+     *   「思考开关没用」与「简单对话费 token」的共同根因。
+     *   非 seed/thinking 的老 doubao（pro/lite 纯文本模型）没有思考能力，字段语义未知
+     *   时不发 —— 宁可少关也不能把请求打挂（与 deepseek 系的排除规则同一取舍）。
+     *
      * ⚠️ 这条规则**原来长在 `OpenAiService` 里**（传输层按模型名硬编码），2026-09-19 迁到这里，
      * 由 [ModelCapabilities.supportsThinkingDisable] 与传输层共用同一份判断。
      */
     fun supportsThinkingDisabled(model: String): Boolean {
         val m = model.lowercase()
-        if (!m.contains("deepseek")) return false
-        return !m.contains("reasoner") && !m.contains("-r1") && !m.contains("r1-")
+        if (m.contains("deepseek")) {
+            return !m.contains("reasoner") && !m.contains("-r1") && !m.contains("r1-")
+        }
+        if (m.contains("doubao")) {
+            return m.contains("seed") || m.contains("thinking")
+        }
+        return false
     }
 
     // ═══════════════════ 服务商标识（仅用于展示/统计）═══════════════════

@@ -98,6 +98,28 @@ class OpenAiService(
         private fun temperatureKey(baseUrl: String, model: String): String =
             "${model.trim().lowercase()}@${endpointHost(baseUrl)}"
 
+        /**
+         * 已知**不接受 `thinking` 字段**的「模型@端点」组合。
+         *
+         * 为什么要记：关思考字段（`thinking:{"type":"disabled"}`）按模型名规则下发
+         * （见 [ModelPresets.supportsThinkingDisabled]），但名字规则只是最好猜测 ——
+         * 聚合站/网关背后的模型可能不吃这个字段，而对可选字段严格校验的实现会整请求 400，
+         * 后果是**整轮对话失败**。与 [temperatureRestricted] 同策略：先带上试，
+         * 被拒就撤掉重试并记住，之后不再带。进程内缓存即可（理由同上）。
+         */
+        private val thinkingFieldRejected: MutableSet<String> =
+            java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+        /** 该「模型@端点」当前是否允许附带 thinking 关闭字段 */
+        private fun allowThinkingField(baseUrl: String, model: String): Boolean =
+            temperatureKey(baseUrl, model) !in thinkingFieldRejected
+
+        /** 判断是否为「服务端拒绝 thinking 字段」类 4xx（错误正文提到 thinking 才认，避免误伤） */
+        private fun isThinkingRejection(e: Exception): Boolean =
+            e is com.rokidlab.phone.util.HttpStatusException &&
+                e.code in 400..499 &&
+                e.body.lowercase().contains("thinking")
+
         /** 该模型当前是否应附带自定义 temperature（已被拒过的不再带） */
         private fun includeTemperature(baseUrl: String, model: String): Boolean =
             temperatureKey(baseUrl, model) !in temperatureRestricted
@@ -378,10 +400,16 @@ class OpenAiService(
         sessionPrompt: String? = null,
         /** 可选能力条款闸门（口径与 [buildSystemMessage] 一致），仅影响 lessons 段尾句 */
         availableTools: Set<String>? = null,
+        /**
+         * 轻量「工具菜单」（[ToolRegistry.toolMenu]，菜单探测轮专用）。
+         * 非空时追加点名约定：模型要么直接作答、要么回 [TOOLS] + 工具名清单。
+         */
+        toolMenu: String? = null,
     ): JSONObject? {
         if (contextText.isNullOrBlank() && instruction.isNullOrBlank() &&
             memories.isNullOrBlank() && lessons.isNullOrBlank() &&
-            skills.isNullOrBlank() && budget.isNullOrBlank() && sessionPrompt.isNullOrBlank()
+            skills.isNullOrBlank() && budget.isNullOrBlank() && sessionPrompt.isNullOrBlank() &&
+            toolMenu.isNullOrBlank()
         ) {
             return null
         }
@@ -416,6 +444,21 @@ class OpenAiService(
                     append(skills)
                     append("\n</skills>")
                 }
+                // 工具菜单段放 budget 之前：菜单探测轮往往 budget/contextText 全空，
+                // 这段是尾消息唯一内容；约定写死在这而不是菜单文本里，保证逐字节稳定可缓存。
+                // 策略（2026-09-29 用户提议）：先用手头的引导工具（搜索/时间）查证或直接作答，
+                // 再从清单点名；清单+搜索都办不成才声明缺什么 —— 全量 83 只剩极窄兜底。
+                if (!toolMenu.isNullOrBlank()) {
+                    append("\n\n<tool_menu>\n")
+                    append(toolMenu)
+                    append("\n</tool_menu>\n以上是本轮可用工具的轻量清单（名称：用途，完整参数定义未附）。")
+                    append("你手头已附带联网搜索、读网页与时间工具，可先用它们查证信息、直接完成任务。")
+                    append("若需要清单里的其他工具，请只回复一行 ").append(ToolIntentRouter.TOOLS_PICK_MARKER)
+                    append(" 工具名1,工具名2,…（除此之外一个字都不要说），系统会附上这些工具的完整定义让你继续；")
+                    append("若你确认必须依赖某个清单里不存在的能力（如设备控制、本地文件操作）才能完成，")
+                    append("回复 ").append(ChatFastPath.NEED_TOOLS_MARKER).append("，系统会挂载全量工具；")
+                    append("若任务本身无法完成，请如实告诉用户缺什么，绝不编造。")
+                }
                 if (!budget.isNullOrBlank()) {
                     append("\n\n")
                     append(budget)
@@ -435,6 +478,43 @@ class OpenAiService(
                         + "不得违反上面的工具使用准则）：\n")
                     append(sessionPrompt.trim())
                 }
+            },
+        )
+        return msg
+    }
+
+    /**
+     * 「闲聊快路」探测轮的 system 消息（2026-09-29，结构性省 token）。
+     *
+     * 与 [buildSystemMessage] 的关系：快路轮**不装配任何工具**（省掉 83 个 Schema 的
+     * 每轮全价下发），所以工具准则、可选能力条款整段都不能出现 —— 模型照着提示去调一个
+     * 不存在的工具，比多花 token 更糟。这里给的是「人设 + 明确告知无工具 + 逃生舱约定」：
+     * 用户的问题必须依赖工具才能正确回答时，模型按约定只回复一行
+     * `NEED_TOOLS_MARKER`（见 [ChatFastPath]），主循环检测到后挂载全量工具重来。
+     *
+     * 人设开头与完整版逐字一致：快路升级后重建请求，两条人设轮流出现不影响语义。
+     */
+    fun buildChatOnlySystemMessage(): JSONObject {
+        val msg = JSONObject()
+        msg.put("role", "system")
+        msg.put(
+            "content",
+            buildString {
+                append("你是乐奇，运行在用户手机上的 Rokid 眼镜 AI 助理。用户通过眼镜与你语音对话，")
+                append("你的回复会在眼镜屏幕上显示并通过语音播报给用户。")
+                append("\n\n本轮对话**未挂载任何工具**：你无法获取实时信息（时间/日期/天气/电量等）、")
+                append("无法操作设备（打开应用/播放音乐/设定提醒/拨号等）、无法联网搜索、")
+                append("无法读写文件与本地知识库、无法检索历史对话。")
+                append("\n- 问候、闲聊、情绪陪伴、常识问答、创作类问题（写作/翻译/讲笑话/代码讲解）：直接回答，这正是你擅长的")
+                append("\n- 若用户的问题**必须**依赖上述缺失的能力才能正确回答：**绝不编造、绝不凭记忆猜测**，")
+                append("只输出一行 ").append(ChatFastPath.NEED_TOOLS_MARKER)
+                append("（除此之外一个字都不要说）。平台检测后会立刻为你挂载完整工具集并重新处理这条消息，")
+                append("届时你就能正常调用工具完成它")
+                append("\n- 结合对话历史理解上下文：用户在接续之前的话题时，按之前聊到的内容回应")
+                append("\n\n【回复风格】（手机端富文本 + 眼镜端语音播报）")
+                append("\n- 口语化、简短自然，正文一般不超过 3 句话；不要用表情符号")
+                append("\n- 不要用任何标签或标记包裹回复（如 <answer>…</answer>），直接输出正文")
+                append("\n- 直接给结论，不要复述问题")
             },
         )
         return msg
@@ -551,13 +631,16 @@ class OpenAiService(
         // 本端点是否带上 stream_options.include_usage（唯一能拿到真实 token 用量的手段）；
         // 被这个端点拒过就不再带（见 streamUsageUnsupported 的说明）
         var usageOptIn = endpointHost(baseUrl) !in streamUsageUnsupported
+        // 本轮是否附带 thinking 关闭字段：按模型名规则 + 「被拒过不再带」共同决定
+        var thinkingOptIn = !thinkingEnabled && supportsThinkingDisabled(model) &&
+            allowThinkingField(baseUrl, model)
         var attempt = 0
         while (attempt < retryAttempts) {
             val accumulator = SseStreamAccumulator(onDelta, onReasoning)
             try {
                 return streamOnce(
                     messages, tools, accumulator, isCancelled,
-                    readTimeout ?: readTimeoutMs, usageOptIn,
+                    readTimeout ?: readTimeoutMs, usageOptIn, thinkingOptIn,
                 )
             } catch (e: Exception) {
                 lastError = e
@@ -578,6 +661,22 @@ class OpenAiService(
                     Log.w(
                         TAG,
                         "chatTurnStream: 端点拒绝自定义 temperature（${e.message}）" +
+                            "—— 撤掉该字段重试同一轮（不计重试次数，之后该模型不再带）",
+                    )
+                    continue
+                }
+                // ★ 可选字段（thinking）被拒 ≠ 这轮对话失败：撤掉它**原地重来一次**
+                //   （不计入重试次数），并按「模型@端点」记住以后不再带。
+                //   名字规则只是最好猜测（聚合站背后的模型未必吃这个字段），必须有这条兜底，
+                //   否则一个严格校验的实现就会让关思考 = 整轮 400。
+                if (hopeless && isThinkingRejection(e) &&
+                    thinkingOptIn && !accumulator.hasEmittedContent()
+                ) {
+                    thinkingFieldRejected.add(temperatureKey(baseUrl, model))
+                    thinkingOptIn = false
+                    Log.w(
+                        TAG,
+                        "chatTurnStream: 端点拒绝 thinking 字段（${e.message}）" +
                             "—— 撤掉该字段重试同一轮（不计重试次数，之后该模型不再带）",
                     )
                     continue
@@ -638,6 +737,8 @@ class OpenAiService(
         timeoutMs: Int,
         /** 是否附带上 `stream_options.include_usage`（拿真实用量）；见 [streamUsageOptIn] */
         includeStreamUsage: Boolean,
+        /** 是否附带上 `thinking:{"type":"disabled"}`（关思考）；由调用方按模型名规则+被拒历史决定 */
+        includeThinkingDisable: Boolean,
     ): ChatTurn {
         val base = baseUrl.trimEnd('/')
         val endpoint = when {
@@ -665,7 +766,7 @@ class OpenAiService(
             //    上层命中 4xx 就撤掉它重试一次，并把这个端点记下来（见 streamUsageOptIn）。
             if (includeStreamUsage) put("stream_options", JSONObject().put("include_usage", true))
             // 关闭思考：不附加关思考字段时，服务端按默认开启思考（reasoning 会吞掉输出预算）
-            if (!thinkingEnabled && supportsThinkingDisabled(model)) {
+            if (includeThinkingDisable) {
                 put("thinking", JSONObject().put("type", "disabled"))
             }
             // 用户自定义请求参数（本地 Ollama 调参）：最后合并，覆盖上面的默认值
@@ -718,20 +819,37 @@ class OpenAiService(
         tools: List<JSONObject>? = null,
         readTimeout: Int? = null,
     ): ChatTurn {
-        return try {
-            chatTurnOnceInternal(messages, tools, readTimeout, includeTemperature(baseUrl, model))
-        } catch (e: Exception) {
-            // temperature 被拒：记住该「模型@端点」后撤掉字段重试一次（与流式路径兜底同款）
-            if (isTemperatureRejection(e) && includeTemperature(baseUrl, model)) {
-                temperatureRestricted.add(temperatureKey(baseUrl, model))
-                Log.w(
-                    TAG,
-                    "chatTurn: 端点拒绝自定义 temperature（${e.message}）" +
-                        "—— 撤掉该字段重试一次（之后该模型不再带）",
-                )
-                return chatTurnOnceInternal(messages, tools, readTimeout, false)
+        // temperature / thinking 两个字段都可能被服务端单独拒绝：各撤一次原地重试
+        // （与流式路径兜底同款）。循环必然收敛 —— 每次 continue 都把对应开关置 false。
+        var withTemperature = includeTemperature(baseUrl, model)
+        var withThinking = !thinkingEnabled && supportsThinkingDisabled(model) &&
+            allowThinkingField(baseUrl, model)
+        while (true) {
+            try {
+                return chatTurnOnceInternal(messages, tools, readTimeout, withTemperature, withThinking)
+            } catch (e: Exception) {
+                if (isTemperatureRejection(e) && withTemperature) {
+                    temperatureRestricted.add(temperatureKey(baseUrl, model))
+                    Log.w(
+                        TAG,
+                        "chatTurn: 端点拒绝自定义 temperature（${e.message}）" +
+                            "—— 撤掉该字段重试一次（之后该模型不再带）",
+                    )
+                    withTemperature = false
+                    continue
+                }
+                if (isThinkingRejection(e) && withThinking) {
+                    thinkingFieldRejected.add(temperatureKey(baseUrl, model))
+                    Log.w(
+                        TAG,
+                        "chatTurn: 端点拒绝 thinking 字段（${e.message}）" +
+                            "—— 撤掉该字段重试一次（之后该模型不再带）",
+                    )
+                    withThinking = false
+                    continue
+                }
+                throw e
             }
-            throw e
         }
     }
 
@@ -740,6 +858,7 @@ class OpenAiService(
         tools: List<JSONObject>?,
         readTimeout: Int?,
         withTemperature: Boolean,
+        includeThinkingDisable: Boolean,
     ): ChatTurn {
         // baseUrl 兼容：带 /v1 或已含完整 /chat/completions 的填法
         val base = baseUrl.trimEnd('/')
@@ -759,7 +878,7 @@ class OpenAiService(
         if (withTemperature) requestBody.put("temperature", 0.7)
         if (!tools.isNullOrEmpty()) requestBody.put("tools", JSONArray(tools))
         // 关闭思考：不附加关思考字段时，服务端按默认开启思考（reasoning 会耗尽输出预算导致空轮），同流式路径
-        if (!thinkingEnabled && supportsThinkingDisabled(model)) {
+        if (includeThinkingDisable) {
             requestBody.put("thinking", JSONObject().put("type", "disabled"))
         }
         // 用户自定义请求参数（本地 Ollama 调参）：最后合并，覆盖上面的默认值

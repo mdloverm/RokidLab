@@ -30,8 +30,8 @@ enum class CapabilitySource {
  * 「模型支持什么」这件事在代码里根本没有表达 —— 它散落在三处各自为政的猜测里：
  *  1. 图像理解开关：**完全靠用户自己判断**"我配的那个模型支不支持看图"，猜错了要等
  *     拍照失败一轮才知道（服务端拒绝 → 回退 OCR，用户白等十几秒）；
- *  2. `OpenAiService.supportsThinkingDisabled()`：按模型名里有没有 `deepseek` 判断能否下发
- *     关思考字段，是**模型名硬编码在传输层**里；
+ *  2. `OpenAiService.supportsThinkingDisabled()`：按模型名硬编码判断能否下发
+ *     关思考字段（当时只认 `deepseek`，是**模型名硬编码在传输层**里）；
  *  3. 会话压缩阈值写死 6000 字符，跟模型真实的上下文窗口毫无关系。
  * 于是「换一个模型」实际上要在三个地方各改一点，加一个本地模型（Ollama）更是只能靠默认值瞎蒙。
  *
@@ -46,7 +46,7 @@ enum class CapabilitySource {
  *   这是与改造前行为兼容的保守选择，不能因为不认识就剥夺用户已有能力。
  * @param supportsStreaming 是否支持 `stream=true` 的 SSE 增量返回
  * @param supportsThinkingDisable 是否接受 `thinking:{"type":"disabled"}` 关思考字段
- *   （DeepSeek 专有；发给别的端点会 400）
+ *   （DeepSeek 与火山方舟 doubao seed/thinking 系接受；其他端点语义未知，一律不发）
  * @param source 本结论的来源/可信度，UI 据此决定措辞与是否提供「检测」入口
  */
 data class ModelCapabilities(
