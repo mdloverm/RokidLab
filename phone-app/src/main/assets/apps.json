@@ -1,23 +1,20 @@
 {
     "schemaVersion":  1,
     "generatedAt":  "2026-09-28T00:00:00.000Z",
-    "brewVersion":  "4.2",
-    "brewVersionCode":  27,
+    "brewVersion":  "4.3",
+    "brewVersionCode":  28,
     "brewIconUrl":  "",
-    "brewApkUrl":  "https://gitee.com/dlover1314/RokidLab/releases/download/v4.2/RokidLab-v4.2-release.apk",
-    "brewReleaseUrl":  "https://gitee.com/dlover1314/RokidLab/releases/tag/v4.2",
-    "brewNotes":  "主动式陪伴 + 环境聆听 + MCP stdio",
+    "brewApkUrl":  "https://gitee.com/dlover1314/RokidLab/releases/download/v4.3/RokidLab-v4.3-release.apk",
+    "brewReleaseUrl":  "https://gitee.com/dlover1314/RokidLab/releases/tag/v4.3",
+    "brewNotes":  "聆听模式持续对话 + 闲聊快路省 token",
     "brewChanges":  [
-                        "主动式陪伴：聊天输入栏新增「主动性」面板，5 种陪伴场景 + 4 档闲聊频率",
-                        "7 项主动能力：早晚安、空闲闲聊、主动回访、日程简报、走走拍拍、关怀提醒、会话内陪伴",
-                        "决策门统一准入：静默冷却 / 收敛期 / 免打扰 / 每日额度，说一句「别烦我」全局静默 24 小时",
-                        "响应率自适应调频 + 时机内容绑定（无内容不硬开口）+ 主动派发互斥（不重复打扰）",
-                        "免打扰时段支持打字输入（23:00 / 2300 / 9:30 / 930）",
-                        "环境聆听：对 AI 说「帮我听听周围在说什么」即持续听周围并应答",
-                        "MCP 本地 stdio：容器内拉起 stdio 型 MCP server，可直接粘贴 mcpServers JSON；本机执行环境新增 uv / uvx",
-                        "长期记忆混合检索：词法 + 向量 RRF 融合，老数据后台懒回填，失败自动退回词法",
-                        "修复 Moonshot kimi 模型 temperature 报错、眼镜端下行观测静默失效",
-                        "内嵌眼镜端更新为 4.2 R8 release 包"
+                        "聆听模式重构：点耳朵持续听，说完一句自动回答，播完自动续听，不手动关就一直在线",
+                        "回答期间真闭麦：AI 生成与播报时不拾音，播完秒级恢复接收",
+                        "2 秒停顿视同一句话：连说的碎片自动合并，不再出现一句拆成多问",
+                        "持续说话满 60 秒自动截断送答，防止 AI 永远插不上话",
+                        "闲聊快路：纯闲聊轮不再全量下发 83 个工具，响应更快、token 大幅下降",
+                        "工具意图路由：查天气、查时间等高置信任务轮按需装配工具",
+                        "内嵌眼镜端更新为 4.3 R8 release 包（需重装眼镜端生效）"
                     ],
     "apps":  [
                  {
