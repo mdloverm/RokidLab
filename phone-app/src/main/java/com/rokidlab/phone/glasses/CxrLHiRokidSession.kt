@@ -322,6 +322,8 @@ class CxrLHiRokidSession(
         onContinueDialog = { requestGlassesContinueDialog() },
         // 环境音转写：眼镜端官方字幕链路结果 → AmbientListenCoordinator 收集
         onAmbientText = { json -> ambientListen.onAmbientFrame(json) },
+        // 环境音回复播完：眼镜端 Lab 回复 TTS 真正播完时上行，静默定时对表回 10s
+        onAmbientTtsDone = { ambientListen.onAiRoundDone() },
         // 兜底轮询复用全 App 共享 ADB 会话：自建会话会挤断用户正在用的 ADB 工具/投屏会话。
         // 长连接（屏幕镜像/手机投屏/文件浏览）占用隧道时让路 —— 返回 null 触发退避，
         // 避免这条「兜底」通道反而把用户正在用的长连接挤断。

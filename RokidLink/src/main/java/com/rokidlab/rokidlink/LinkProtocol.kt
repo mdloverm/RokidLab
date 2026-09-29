@@ -57,6 +57,14 @@ object LinkProtocol {
      */
     const val MARKER_AMBIENT_TEXT = "__LAB_AMBIENT_TEXT__"
 
+    /**
+     * 环境音回复播完上行（眼镜端 → 手机端）：Lab 回复的 TTS **真正播完**时推送。
+     * 手机端 AmbientListenCoordinator 据此把静默自动停定时器对表回 10s ——
+     * AI 回合（生成+播报）期间远场字幕帧被眼镜端硬闸全丢，若仍按「提问后 10s」计时
+     * 会在第一轮答完前误判静默自动停，表现为聆听模式只能对话一轮。
+     */
+    const val MARKER_AMBIENT_TTS_DONE = "__LAB_AMBIENT_TTS_DONE__"
+
     // ── 环境音监听控制（手机端 → 眼镜端）──
     /** 控制下行：caps[0] = "start" / "stop"。眼镜端据此开/关官方字幕链路（远场麦）。 */
     const val TOPIC_AMBIENT_CTRL = "rokidlab_ambient_ctrl"

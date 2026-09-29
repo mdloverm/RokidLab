@@ -227,6 +227,8 @@ internal class CxrBridgeCoordinator(
             // ping 一旦到达即证明路由健康；观察窗口到期仍收不到则 Alarm 重启进程自愈。
             val pingResult = core.bridge?.subscribe(AiChannel.TOPIC_PING, CXRServiceBridge.MsgCallback { _, _, _ ->
                 core.markDownlink()
+                // 空闲常开保活：聆听中时刷新 15min 失联看门狗（手机崩溃/失联后 ping 停止，自然到期关麦）
+                ambient.onPhoneAlive()
                 Log.i(TAG, "Received ping — downlink route healthy")
             })
             Log.i(TAG, "subscribe(${AiChannel.TOPIC_PING}) -> $pingResult")

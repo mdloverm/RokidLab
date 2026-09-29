@@ -65,6 +65,13 @@ internal class AsrBridgeCoordinator(
      */
     private val onAmbientText: (String) -> Unit = {},
     /**
+     * 收到「环境音回复播完」标记（[LinkProtocol.MARKER_AMBIENT_TTS_DONE]）：
+     * 眼镜端 Lab 回复 TTS 真正播完时上行，AmbientListenCoordinator 据此把静默自动停
+     * 定时器对表回 10s —— AI 回合（生成+播报）期间远场字幕帧被眼镜端硬闸全丢，
+     * 按「提问后 10s」计时会在第一轮答完前误判静默自动停（只能对话一轮的根因）。
+     */
+    private val onAmbientTtsDone: () -> Unit = {},
+    /**
      * 全 App 共享的 ADB 会话提供者（= `app.cxrL::getAdbShellClient`）。
      *
      * 兜底轮询**必须**复用它，绝不能自建会话：手机侧蓝牙栈对「同一设备 + 同一 SCN」
@@ -126,6 +133,8 @@ internal class AsrBridgeCoordinator(
          * 与 TOOL_CALL 一样是【前缀】而非整条相等。
          */
         private val AMBIENT_TEXT_PREFIX = LinkProtocol.MARKER_AMBIENT_TEXT
+        /** 环境音回复播完标记（整条相等，见 [onAmbientTtsDone]） */
+        private val AMBIENT_TTS_DONE_MARKER = LinkProtocol.MARKER_AMBIENT_TTS_DONE
 
         /**
          * 相同文字的「回声抑制」窗口（毫秒）。
@@ -410,6 +419,19 @@ internal class AsrBridgeCoordinator(
                             Log.e(TAG, "onContinueDialog failed", e)
                         }
                     }.apply { name = "continue-dialog"; isDaemon = true }.start()
+                    return@AsrPushClient
+                }
+                // 环境音回复播完标记：眼镜端 Lab 回复 TTS 真正播完时上行，
+                // 手机端把聆听模式静默定时对表回 10s（切后台线程，不阻塞 RFCOMM 读线程）。
+                if (text == AMBIENT_TTS_DONE_MARKER) {
+                    Log.i(TAG, "ambient tts-done marker received via RFCOMM push (re-arm silence timer)")
+                    Thread {
+                        try {
+                            onAmbientTtsDone()
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "onAmbientTtsDone failed", e)
+                        }
+                    }.apply { name = "ambient-tts-done"; isDaemon = true }.start()
                     return@AsrPushClient
                 }
                 // 环境音转写帧：眼镜端官方字幕链路的结果（前缀 + JSON）。切后台线程：

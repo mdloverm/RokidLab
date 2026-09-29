@@ -455,6 +455,15 @@ internal class AiTakeoverCoordinator(
             { AmbientListenController.ttsPlaying = false },
             TTS_SHIELD_TAIL_MS,
         )
+        // 聆听模式（环境音持续录入）进行中：下一句入口是远场麦，绝不能走 startNewTalk ——
+        // 官方 AIUI_SpeechLease 会占住语音租约，10s 无唤醒词即 round=closed 并连带
+        // stopRecord(subtitle) 把远场拾音掐掉（2026-09-28 实证）。只上行「播完」标记，
+        // 让手机端把静默自动停定时器对表到真实播完时刻（否则第一轮答完就被 10s 静默停误关）。
+        if (AmbientListenController.sessionActive) {
+            val ok = AsrPushServer.pushControl(LinkProtocol.MARKER_AMBIENT_TTS_DONE)
+            Log.i(TAG, "ambient tts-done marker -> $ok (phone re-arms silence timer)")
+            return
+        }
         if (!core.isCustomAiMode()) {
             Log.i(TAG, "continue dialog: skipped (official ai mode)")
             return

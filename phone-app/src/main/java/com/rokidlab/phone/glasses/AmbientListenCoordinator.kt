@@ -65,11 +65,23 @@ internal class AmbientListenCoordinator(
         /** 一次性模式：在时长上限基础上多留的收尾余量（下发 stop 与链路抖动） */
         private const val STOP_MARGIN_MS = 1_000L
         /**
-         * 持续模式静默自动停：开启后（或最后一句 final 后）持续这么久没听到新句子
-         * 就自动关麦回关闭态 —— 对话结束不该让远场麦空转（2026-09-28 用户定稿 10s）。
-         * 眼镜端 15min 看门狗仅作手机崩溃/失联的隐私兜底。
+         * 持续模式句子聚合尾窗：官方远场 ASR 会把一段连续发言切成多个 final（number 递增），
+         * 逐句立即分发会让 AI 收到碎片（实测「劳动合同」三个字单独成问，模型只能反问）。
+         * 收到 final 后不立即分发，尾窗内到达的相邻 final 合并为一条消息；到点整体分发。
+         * 2026-09-29 用户定稿 2s：停顿不超过 2 秒视同一句话；代价是说完后等 2s 才开始回答。
          */
-        private const val SILENCE_STOP_MS = 10_000L
+        private const val CONTINUOUS_TAIL_MS = 2_000L
+        /**
+         * 单句聚合上限（2026-09-29 用户定稿 60s）：从本段第一个 final 入缓冲起跑，
+         * 到点强制截断、把已聚合内容整体分发 —— 防止有人不停说话导致 AI 永远没机会回答。
+         */
+        private const val UTTERANCE_CAP_MS = 60_000L
+        /**
+         * 闭麦恢复兜底：回答期间真闭麦（远场字幕链路 stop），正常由眼镜端播完标记
+         * （MARKER_AMBIENT_TTS_DONE → [onAiRoundDone]）重开麦；本兜底覆盖标记丢失
+         * （旧版眼镜端 / TTS 异常）的场景，到点强制恢复接收，不会永久聋掉。
+         */
+        private const val RESUME_FALLBACK_MS = 150_000L
         /**
          * 停麦后仍接收上行的收尾窗口（略大于眼镜端 DRAIN_MS）：远场字幕的**最后一句 final
          * 往往在关麦之后才广播回来**（实测差 50ms），不留窗口会把「刚说完就点关」的那句话丢掉。
@@ -102,8 +114,24 @@ internal class AmbientListenCoordinator(
     /** 已上行的最后一个 final 句子编号（官方可能重发同一句，按 number 去重） */
     private var lastFinalNumber = -1
 
-    /** 静默自动停定时：开启时起跑，每收到新 final 刷新；到点自动关麦（stop/断线时取消） */
-    private var silenceJob: Job? = null
+    /** 聚合缓冲（[stateLock] 保护）：尾窗内待合并的 final 句子 */
+    private val pendingSentences = ArrayList<String>()
+
+    /** 句子聚合尾窗定时（每收到 final 刷新；到点 flushPendingSentence 整体分发） */
+    private var sentenceFlushJob: Job? = null
+
+    /** 单句聚合上限定时（本段第一个 final 入缓冲时起跑；到点强制 flush，见 [UTTERANCE_CAP_MS]） */
+    private var utteranceCapJob: Job? = null
+
+    /** 闭麦恢复兜底定时（回答开始时起跑；播完标记到达即取消，见 [RESUME_FALLBACK_MS]） */
+    private var resumeFallbackJob: Job? = null
+
+    /**
+     * 回答期间闭麦中（2026-09-29 用户定稿）：flush 分发后远场字幕链路已 stop，
+     * 期间到达的帧（收尾窗口残留）一律丢弃；眼镜端播完标记到达后恢复接收。
+     */
+    @Volatile
+    private var suspended = false
 
     /** UI 可观察的持续模式状态（耳朵图标/副标题据此点亮与熄灭） */
     var uiActive by mutableStateOf(false)
@@ -202,8 +230,11 @@ internal class AmbientListenCoordinator(
         }
         mode = Mode.CONTINUOUS
         active = true
-        synchronized(stateLock) { lastFinalNumber = -1 }
-        armSilenceStop()
+        suspended = false
+        synchronized(stateLock) {
+            lastFinalNumber = -1
+            pendingSentences.clear()  // 开新会话：丢弃上次会话可能残留的未分发句子
+        }
         Log.i(TAG, "ambient continuous ON ($reason)")
         return true
     }
@@ -216,53 +247,86 @@ internal class AmbientListenCoordinator(
         }
         // 作废进行中的 startContinuous（其助手拉起尚未返回时，别让它随后把麦打开）
         synchronized(genLock) { gen++ }
-        cancelSilenceStop()
+        cancelUtteranceCap()
+        resumeFallbackJob?.cancel()
+        resumeFallbackJob = null
+        suspended = false
         sendStop(reason)
     }
 
     /**
-     * 静默自动停：从现在起 [SILENCE_STOP_MS] 内没有新 final 句子就自动关麦回关闭态。
-     * 开启时起跑；每收到一句 final 由 onAmbientFrame 刷新。对话结束后远场麦不空转。
+     * 回答期间闭麦（2026-09-29 用户定稿）：ambient 问答分发前把远场字幕链路 stop ——
+     * AI 生成 + 播报期间真闭麦（不再靠 TTS 硬闸丢帧模拟），不拾旁人插话、更省电；
+     * 只发命令不改会话状态（uiActive 保持点亮：用户视角聆听仍在进行）。
+     * 正常路径由眼镜端播完标记 → [onAiRoundDone] 恢复接收；标记丢失由
+     * [RESUME_FALLBACK_MS] 兜底强制恢复，不会永久聋掉。
      */
-    private fun armSilenceStop() {
-        cancelSilenceStop()
-        silenceJob = appScope.launch(Dispatchers.IO) {
-            kotlinx.coroutines.delay(SILENCE_STOP_MS)
-            if (active && mode == Mode.CONTINUOUS) {
-                Log.i(TAG, "ambient continuous auto-stop after ${SILENCE_STOP_MS / 1000}s silence")
-                stopContinuous("silence timeout")
-            }
+    fun onAiRoundStart() {
+        if (!active || mode != Mode.CONTINUOUS) return
+        suspended = true
+        // ⚠️ 必须发 "pause" 而非 "stop"：stop 会把眼镜端 sessionActive 清掉，
+        // 回复播完时 onLabReplyPlaybackFinished 判定 ambient 不活跃、不推播完标记，
+        // 手机端要等 150s 兜底才重开麦 →「第二轮听不到」（2026-09-29 12:59 实证）。
+        // pause 只关麦、会话保持，resume 随播完标记到达。
+        sendCtrl("pause", "paused for reply")
+        resumeFallbackJob?.cancel()
+        resumeFallbackJob = appScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(RESUME_FALLBACK_MS)
+            Log.w(TAG, "tts-done marker lost, force resume after ${RESUME_FALLBACK_MS / 1000}s")
+            resumeAfterReply()
         }
     }
 
-    private fun cancelSilenceStop() {
-        silenceJob?.cancel()
-        silenceJob = null
+    /** 眼镜端回复播报完成（MARKER_AMBIENT_TTS_DONE）或回答失败：恢复远场接收，进入下一轮。 */
+    fun onAiRoundDone() {
+        if (!suspended) return
+        resumeFallbackJob?.cancel()
+        resumeFallbackJob = null
+        resumeAfterReply()
+    }
+
+    private fun resumeAfterReply() {
+        suspended = false
+        if (active && mode == Mode.CONTINUOUS) {
+            sendCtrl("resume", "resume listening")
+            // 官方字幕管道随 resume 重开，number 可能重新计数 —— 重置去重游标，
+            // 避免新一轮首个 final 与上一轮尾号相同被误判为重发丢弃
+            synchronized(stateLock) { lastFinalNumber = -1 }
+            Log.i(TAG, "ambient resume listening after reply")
+        }
+    }
+
+    private fun cancelUtteranceCap() {
+        utteranceCapJob?.cancel()
+        utteranceCapJob = null
     }
 
     // ──────────────────────────────────────────────
     //  会话底层
     // ──────────────────────────────────────────────
 
-    private fun sendStart(reason: String): Boolean {
+    /**
+     * 下发环境音控制命令（"start"/"stop"），返回发送是否成功。
+     * 会话开关（sendStart/sendStop）与回答期闭麦/恢复（onAiRoundStart/onAiRoundDone）共用底层。
+     */
+    private fun sendCtrl(cmd: String, reason: String): Boolean {
         val link = linkProvider() ?: run {
-            Log.w(TAG, "start($reason): no CXR link")
+            Log.w(TAG, "$cmd($reason): no CXR link")
             return false
         }
         if (!linkAlive()) {
-            Log.w(TAG, "start($reason): link not alive")
+            Log.w(TAG, "$cmd($reason): link not alive")
             return false
         }
-        val caps = Caps().also { it.write("start") }
+        val caps = Caps().also { it.write(cmd) }
         val r = runCatching {
             synchronized(cmdLock) { link.sendCustomCmd(LinkProtocol.TOPIC_AMBIENT_CTRL, caps) }
         }.getOrDefault(-3)
-        if (r != 0) {
-            Log.w(TAG, "start($reason): sendCustomCmd -> $r")
-            return false
-        }
-        return true
+        if (r != 0) Log.w(TAG, "$cmd($reason): sendCustomCmd -> $r")
+        return r == 0
     }
+
+    private fun sendStart(reason: String): Boolean = sendCtrl("start", reason)
 
     private fun sendStop(reason: String) {
         val wasActive = active
@@ -276,13 +340,9 @@ internal class AmbientListenCoordinator(
         }
         // 一次性等待者可能还在阻塞：唤醒让它带着结果退出
         waitLock.withLock { waitCond.signalAll() }
-        val link = linkProvider()
-        if (link != null && linkAlive()) {
-            val caps = Caps().also { it.write("stop") }
-            val r = runCatching {
-                synchronized(cmdLock) { link.sendCustomCmd(LinkProtocol.TOPIC_AMBIENT_CTRL, caps) }
-            }.getOrDefault(-3)
-            Log.i(TAG, "ambient listen OFF($reason) -> $r")
+        if (linkProvider() != null && linkAlive()) {
+            val ok = sendCtrl("stop", reason)
+            Log.i(TAG, "ambient listen OFF($reason) -> ${if (ok) 0 else "send failed"}")
         } else {
             Log.w(TAG, "ambient listen OFF($reason): link gone, glasses watchdog will close mic")
         }
@@ -290,7 +350,13 @@ internal class AmbientListenCoordinator(
 
     /** 链路断开/会话清理：回到关闭态（无持久化，不自动恢复）。 */
     fun markLinkDown() {
-        cancelSilenceStop()
+        cancelUtteranceCap()
+        resumeFallbackJob?.cancel()
+        resumeFallbackJob = null
+        suspended = false
+        sentenceFlushJob?.cancel()
+        sentenceFlushJob = null
+        synchronized(stateLock) { pendingSentences.clear() }
         if (active) {
             mode = Mode.IDLE
             active = false
@@ -310,6 +376,8 @@ internal class AmbientListenCoordinator(
      * 只处理 final 帧：partial 流式更新对两种模式都无意义。
      */
     fun onAmbientFrame(json: String) {
+        // 回答期间闭麦：远场字幕链路已 stop，收尾窗口内的残留帧一律丢弃（说了也听不见）
+        if (suspended) return
         if (!active && System.currentTimeMillis() > acceptUntilMs) return
         val obj = runCatching { JSONObject(json) }.getOrNull() ?: run {
             Log.w(TAG, "ambient frame not JSON: ${json.take(80)}")
@@ -350,15 +418,52 @@ internal class AmbientListenCoordinator(
                         if (number == lastFinalNumber) return  // 官方重发去重
                         lastFinalNumber = number
                     }
+                    if (pendingSentences.isEmpty()) {
+                        // 本段第一句：起跑 60s 聚合上限（防不停说话导致 AI 永远插不上话）
+                        cancelUtteranceCap()
+                        utteranceCapJob = appScope.launch(Dispatchers.IO) {
+                            kotlinx.coroutines.delay(UTTERANCE_CAP_MS)
+                            Log.i(TAG, "utterance cap ${UTTERANCE_CAP_MS / 1000}s reached, force flush")
+                            flushPendingSentence()
+                        }
+                    }
+                    pendingSentences.add(content)
                 }
                 val late = if (active) "" else " (drained after stop)"
                 Log.i(TAG, "ambient final (#$number)$late: $content")
-                // 有人说话 → 静默计时重跑（说完 10s 没下一句才自动停）
-                if (active && mode == Mode.CONTINUOUS) armSilenceStop()
-                runCatching { onFinalSentence(content) }
-                    .onFailure { Log.e(TAG, "onFinalSentence failed", it) }
+                // 重跑尾窗：官方把一段连续发言切成多个 final，停顿 ≤2s 视同一句话，
+                // 尾窗内合并成一条消息整体分发（逐句分发会让 AI 收到碎片，见 CONTINUOUS_TAIL_MS）
+                armSentenceFlush()
             }
             Mode.IDLE -> {}
         }
+    }
+
+    /**
+     * 句子聚合尾窗：最后一句 final 后 [CONTINUOUS_TAIL_MS] 内没有新句子就整体分发。
+     * 每收到 final 重跑；stopContinuous **不取消**本定时 —— 用户手动关闭后，
+     * 收尾窗口（DRAIN_MS）内迟到的最后一句也要照常得到回答。
+     */
+    private fun armSentenceFlush() {
+        sentenceFlushJob?.cancel()
+        sentenceFlushJob = appScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(CONTINUOUS_TAIL_MS)
+            flushPendingSentence()
+        }
+    }
+
+    /** 把聚合缓冲里的句子合并成一条消息分发（幂等：并发/重复触发时缓冲为空直接返回）。 */
+    private fun flushPendingSentence() {
+        val merged = synchronized(stateLock) {
+            if (pendingSentences.isEmpty()) return
+            val text = pendingSentences.joinToString("").trim()
+            pendingSentences.clear()
+            text
+        }
+        cancelUtteranceCap()  // 本段已截断发送，60s 聚合上限随之结束（下一段重新起跑）
+        if (merged.isEmpty()) return
+        Log.i(TAG, "ambient flush (${merged.length} chars): $merged")
+        runCatching { onFinalSentence(merged) }
+            .onFailure { Log.e(TAG, "onFinalSentence failed", it) }
     }
 }

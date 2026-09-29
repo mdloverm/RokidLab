@@ -43,8 +43,9 @@ internal class AmbientListenController(
         private const val OFFICIAL_END = "Accessibility_end"
         /**
          * 自动关麦看门狗：远场麦是持续隐私敏感面，手机端若崩溃/失联没发 stop，
-         * 字幕模式会一直开着。持续应答模式下正常会话可跑很久（30s 尾窗/句），
-         * 15 分钟只作手机端崩溃/失联的隐私兜底，正常路径由手机端 stop 收尾。
+         * 字幕模式会一直开着。空闲常开模式下（2026-09-29 定稿：不手动关就一直听），
+         * 手机端每 60s 下行 ping（rokidlab_ping）续期一次；只有连续 [WATCHDOG_MS]
+         * 收不到任何下行（手机真崩溃/失联）才强制关麦 —— 语义仍是失联隐私兜底。
          */
         private const val WATCHDOG_MS = 15 * 60_000L
         /** 官方字幕模式开麦的 intent（logcat：`openAudioRecord2: codec 1, mode 6, intent subtitle`；
@@ -65,6 +66,15 @@ internal class AmbientListenController(
          */
         @Volatile
         internal var ttsPlaying = false
+
+        /**
+         * 环境音监听会话活跃（进程级镜像，与实例 [listening] 同步置位/复位）：
+         * 供 AiTakeoverCoordinator 等外部模块判断（实例由 CxrBridgeCoordinator 私有持有，
+         * 外部拿不到引用）。Lab 回复播完回调据此区分「聆听模式的回复」（上行播完标记、
+         * 跳过官方续听）与普通回复。
+         */
+        @Volatile
+        internal var sessionActive = false
     }
 
     /** 是否处于监听会话中（控制上行推送与看门狗） */
@@ -78,6 +88,16 @@ internal class AmbientListenController(
      */
     @Volatile
     private var stopRequested = false
+
+    /**
+     * 回答期间闭麦中（2026-09-29 定稿）：手机端 AI 问答分发前下发 pause，播完下发 resume。
+     * 与 stop 的本质区别：**listening / sessionActive 保持 true** —— 播完标记的判定
+     * （AiTakeoverCoordinator.onLabReplyPlaybackFinished 检查 sessionActive）依赖它；
+     * 若复用 stop 会话状态被清，播完 marker 不再上行，手机端要等 150s 兜底才重开麦，
+     * 表现为「第二轮听不到」（2026-09-29 12:59 实证）。
+     */
+    @Volatile
+    private var paused = false
 
     /** 收尾窗口截止时刻（停麦后仍放行上行的时长，见 [DRAIN_MS]） */
     @Volatile
@@ -111,6 +131,8 @@ internal class AmbientListenController(
                 stopRequested = true
                 ctlExecutor.execute { stop("phone requested") }
             }
+            "pause" -> ctlExecutor.execute { pause() }
+            "resume" -> ctlExecutor.execute { resume() }
             else -> Log.w(TAG, "ambient ctrl unknown cmd: $cmd")
         }
     }
@@ -125,6 +147,7 @@ internal class AmbientListenController(
     fun handleAccessibility(args: Caps?, value: ByteArray?) {
         // 收尾窗口内（刚停麦）仍放行：最后一句 final 常在 closeAudioRecord 之后才广播
         if (!listening && System.currentTimeMillis() > drainUntilMs) return
+        if (paused) return  // 回答期间闭麦：残帧一律丢弃（说了也听不见）
         if (ttsPlaying) return
         val json = extractJson(args, value) ?: return
         val obj = runCatching { org.json.JSONObject(json) }.getOrNull() ?: return
@@ -167,6 +190,7 @@ internal class AmbientListenController(
         Log.i(TAG, "ambient start: sendMessage($OFFICIAL_START) -> $r")
         if (r != 0) return
         listening = true
+        sessionActive = true
         synchronized(this) { lastFinalNumber = -1 }
         armWatchdog()
     }
@@ -175,6 +199,8 @@ internal class AmbientListenController(
         // 不因 listening=false 提前返回：开麦指令与关闭指令走不同通道，cxr-service 可能
         // 先处理关闭、后处理开麦（实测竞态），关闭序列一律下发兜底，避免残留开麦。
         listening = false
+        sessionActive = false
+        paused = false
         // 开收尾窗口：关麦后官方才广播最后一句 final（实测差 50ms），窗口内继续上行
         drainUntilMs = System.currentTimeMillis() + DRAIN_MS
         cancelWatchdog()
@@ -198,6 +224,58 @@ internal class AmbientListenController(
         Log.i(TAG, "ambient stop($reason): stopAudioStream=$streamStopped end -> $r")
     }
 
+    /**
+     * 回答期间闭麦（手机端 AI 问答分发前下发）：只执行关麦序列，**不清会话状态** ——
+     * listening / sessionActive 保持 true（播完标记判定依赖，见 [paused] 注释），
+     * 收尾窗口不开（paused 期间 handleAccessibility 直接丢帧，无需 drain）。
+     * 看门狗不动：pause 只覆盖一轮回答（秒级~2 分钟），手机端 ping 保活照常续期。
+     */
+    private fun pause() {
+        if (paused || !listening) {
+            Log.i(TAG, "ambient pause: skipped (paused=$paused listening=$listening)")
+            return
+        }
+        paused = true
+        val b = core.bridge ?: run {
+            Log.w(TAG, "ambient pause: bridge gone")
+            return
+        }
+        val streamStopped = runCatching {
+            core.aiSendExecutor.submit<Int> {
+                runCatching { b.stopAudioStream(SUBTITLE_INTENT) }
+                    .onFailure { Log.w(TAG, "ambient pause: stopAudioStream failed: ${it.message}") }
+                0
+            }.get(2, TimeUnit.SECONDS)
+        }.onFailure { Log.w(TAG, "ambient pause: stopAudioStream timeout: ${it.message}") }
+            .getOrDefault(-1)
+        val caps = Caps().also { it.write(OFFICIAL_END) }
+        val r = core.sendCxrWithTimeout(b, LinkProtocol.CXR_CHANNEL_ACCESSIBILITY, caps)
+        Log.i(TAG, "ambient pause: stopAudioStream=$streamStopped end -> $r (session kept alive)")
+    }
+
+    /**
+     * 回答播完恢复接收（手机端收到 MARKER_AMBIENT_TTS_DONE 后下发）：重发 Accessibility_start
+     * 重开远场拾音。listening 已是 true，不走 [start]（其 stopRequested/幂等检查不适用）；
+     * 重置 lastFinalNumber —— 官方字幕管道重开后 number 可能重新计数，与上一轮尾号
+     * 相同时会把新句子误判为重发丢弃。
+     */
+    private fun resume() {
+        if (!paused) {
+            Log.i(TAG, "ambient resume: not paused, ignore")
+            return
+        }
+        paused = false
+        val b = core.bridge ?: run {
+            Log.w(TAG, "ambient resume: bridge gone, mic stays closed")
+            return
+        }
+        val caps = Caps().also { it.write(OFFICIAL_START) }
+        val r = core.sendCxrWithTimeout(b, LinkProtocol.CXR_CHANNEL_ACCESSIBILITY, caps)
+        Log.i(TAG, "ambient resume: sendMessage($OFFICIAL_START) -> $r")
+        if (r != 0) return
+        synchronized(this) { lastFinalNumber = -1 }
+    }
+
     private fun armWatchdog() {
         cancelWatchdog()
         val task = Runnable {
@@ -206,6 +284,15 @@ internal class AmbientListenController(
         }
         watchdog = task
         core.mainHandler.postDelayed(task, WATCHDOG_MS)
+    }
+
+    /**
+     * 手机端存活保活（空闲常开模式）：收到手机端任意下行（60s 周期 ping）时重置看门狗。
+     * 手机崩溃/失联后 ping 停止，看门狗在 [WATCHDOG_MS] 内自然到期关麦（隐私兜底）。
+     * 未在监听时调用无副作用（看门狗本就不在跑）。
+     */
+    fun onPhoneAlive() {
+        if (listening) armWatchdog()
     }
 
     private fun cancelWatchdog() {

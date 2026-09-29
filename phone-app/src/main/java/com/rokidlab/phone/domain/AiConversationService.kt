@@ -190,6 +190,17 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
     private val aiSendLock = Any()
 
     /**
+     * 上一轮对话是否用过工具（进程内观测位）。
+     *
+     * ⚠️ 2026-09-29 第六轮起**不再拦截**三层省 token 装配（快路/路由/菜单探测）：三层的
+     * 逃生舱（[NEED_TOOLS] 升级、菜单点名）已齐，粘滞位只剩「衔接句少一次探测 RTT」的
+     * 延迟收益，却让「查天气→谢谢/那上海呢」这类最高频的后续轮全价发 83 个 Schema，
+     * 方舟无缓存端点下净亏。保留落账供日志观测与未来策略使用。
+     */
+    @Volatile
+    private var lastTurnHadToolCalls = false
+
+    /**
      * AI 生成代际计数：每次新的 sendAiTextMessage（语音唤醒/聊天/拍照答题）进入即 +1。
      * 执行中或排队中的旧请求检测到自身代际已过期（用户已发起新请求）即放弃继续生成，
      * 避免旧的多步工具任务长时间占用 aiSendLock 链路，让新语音/消息尽快接管
@@ -441,6 +452,10 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         // sendAiTextMessage 是异步回调式：onResult 在 AI 下行结束（成功/失败）时回调，
         // 此处据此复位 handling；AsrBridgeCoordinator 内还有 90s 超时兜底，防异常路径标志卡死。
         session.asrBridge.markAsrHandling(true)
+        // 环境音链路：AI 回合开始 —— 先真闭麦（远场字幕链路 stop）再分发，回答期间不拾音；
+        // 眼镜端播完标记（MARKER_AMBIENT_TTS_DONE）到达后自动重开麦进入下一轮，
+        // 标记丢失由 150s 兜底强制恢复（AmbientListenCoordinator.onAiRoundStart）。
+        if (fromAmbient) session.ambientListen.onAiRoundStart()
         try {
             Log.i(TAG, "dispatchGlassesAsrText: $text")
             // 用户提问同步到聊天窗口（轮询在 IO 线程，需切回主线程更新 Compose 状态）
@@ -450,6 +465,8 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 onResult = { success, err ->
                     Log.i(TAG, "handleGlassesAiAsrText sendAiTextMessage: success=$success err=$err")
                     session.asrBridge.markAsrHandling(false)
+                    // 失败/被抢占路径没有播报、也就没有播完标记，立即恢复远场接收
+                    if (fromAmbient && !success) session.ambientListen.onAiRoundDone()
                 },
                 onReply = { reply ->
                     Log.i(TAG, "handleGlassesAiAsrText reply: ${reply.take(40)}")
@@ -899,6 +916,50 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         },
                     )
                 }
+                // ★ 闲聊快路（2026-09-29，结构性省 token）：高置信纯闲聊轮不装配任何工具 ——
+                // 83 个工具 Schema 每轮 ~2 万 input token 是闲聊场景的成本大头（方舟等无
+                // 前缀缓存的端点每轮全价）。误判兜底=精简人设里的逃生舱：模型声明
+                // [NEED_TOOLS] 时主循环自动挂载全量工具原地重来（见下方升级分支）。
+                // 触发条件：只读自主任务/图片/答题指令不走。
+                // ⚠️ 2026-09-29 第六轮：撤掉「上一轮用过工具就跳过」的粘滞位 —— 三层的逃生舱
+                // 已齐（[NEED_TOOLS] 升级/菜单点名），粘滞位只剩延迟收益，却让「查天气→谢谢/
+                // 那上海呢」这类最高频的后续轮全价发 83 个 Schema（方舟无缓存端点尤其亏）。
+                var fastPathActive = !localLight && !readOnlyTools && imageBase64 == null &&
+                    instruction == null &&
+                    com.rokidlab.phone.ai.ChatFastPath.isPureChat(text)
+                if (fastPathActive) {
+                    Log.i(TAG, "chat fast path armed: pure-chat turn, tools withheld (probe mode)")
+                }
+                // ★ 意图路由（第二刀，2026-09-29）：高置信任务意图 → 只装配命中意图的工具子集
+                //（按工具名截取，不按粗域）。天气问题带 3 个 Schema 而不是 83 个。与快路同款
+                // 护栏（本机/只读/图片/答题不走）；结构排除（写代码/生成页面/翻译等）在路由器
+                // 内部兜底。误判逃生舱与快路共用 [NEED_TOOLS]：模型喊标记或子集轮空响应 →
+                // 升级全量（见下方升级分支）。子集**贯穿本轮不扩全量**（2026-09-29 第七轮，
+                // 实测 42.4k 账单教训）：扩全量让工具循环的每一轮都背全价 83 个 Schema，
+                // 还会打断缓存前缀；多步意图由路由并集覆盖（「查天气然后提醒我」= 天气∪提醒），
+                // 清单外能力由 escapeNote 里的 [NEED_TOOLS] 约定兜底。粘滞位已撤（第六轮）。
+                var routedToolNames: Set<String>? = if (!fastPathActive && !localLight &&
+                    !readOnlyTools && imageBase64 == null && instruction == null
+                ) {
+                    com.rokidlab.phone.ai.ToolIntentRouter.route(text)
+                } else {
+                    null
+                }
+                if (routedToolNames != null) {
+                    Log.i(TAG, "tool intent routed: ${routedToolNames.size} schemas ($routedToolNames)")
+                }
+                // ★ 菜单模式（第三层兜底，2026-09-29）：关键词路由没命中的任务轮，不再无脑
+                // 全量 83 个 Schema —— 发轻量「工具菜单」（名称+一句话用途，≈2k token）+
+                // 引导工具集（搜索/读网页/时间，见 BOOTSTRAP_TOOLS），模型先查证、再点名
+                // [TOOLS]，点中后按名装配完整 Schema。菜单模式贯穿本轮所有轮次（模型随时可
+                // 追加点名）；全量 83 只剩 [NEED_TOOLS]（模型坚持要清单外能力）与探测轮空响应
+                // 两种窄兜底。护栏与快路/路由同款；粘滞位已撤（同快路，2026-09-29 第六轮）——
+                // 「那上海呢」「再来一首」这类工具对话衔接句现在走菜单点名（多一次探测 RTT，
+                // 换每轮 ~1.8 万 input token 的节省，方舟无缓存端点下净赚）。
+                var menuModeActive = !fastPathActive && routedToolNames == null && !localLight &&
+                    !readOnlyTools && imageBase64 == null && instruction == null
+                // 探测轮 = 菜单模式的第一轮（不流式；响应后菜单收束，后续轮转常规处理）
+                var menuProbeActive = menuModeActive
                 // 可用工具随会话推进可变：主 Agent 全量域起步；命中 AIUI 生成场景后切到精简
                 // AIUI 子集，每轮少发 ~14 个无关工具 Schema（省 input session.token、加快 prefill）。
                 // buildTools 按域装配，并附上仅在线 Agent 的长期记忆 manage_memory 与技能
@@ -939,10 +1000,34 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                     auditToolSchemas(built)
                     built
                 }
-                var activeTools = buildTools(
-                    if (localLight) ToolRegistry.SESSION_LOCAL_DOMAINS
-                    else ToolRegistry.SESSION_AGENT_DOMAINS,
-                )
+                var activeTools = when {
+                    fastPathActive -> mutableListOf()
+                    // 菜单探测轮：只挂引导工具集（搜索/读网页/时间），全量清单以菜单文本
+                    // 进上下文尾（见 buildMessages）—— 模型可先查证再点名，不空手探测
+                    menuProbeActive -> {
+                        val boot = com.rokidlab.phone.ai.ToolIntentRouter.BOOTSTRAP_TOOLS
+                        buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
+                            .filter { schema ->
+                                ToolRegistry.namesOf(listOf(schema)).firstOrNull()
+                                    ?.let { it in boot } == true
+                            }
+                            .toMutableList()
+                    }
+                    // 意图路由子集：从全量装配里按名截取（设置页禁用状态照旧生效，auditToolSchemas
+                    // 校验也照跑）；伪工具（长期记忆/任务计划/技能）本轮一律不挂 —— 求最小 Schema 面。
+                    routedToolNames != null -> {
+                        val routed = routedToolNames!!
+                        buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
+                            .filter { schema ->
+                                ToolRegistry.namesOf(listOf(schema)).firstOrNull()?.let { it in routed } == true
+                            }
+                            .toMutableList()
+                    }
+                    else -> buildTools(
+                        if (localLight) ToolRegistry.SESSION_LOCAL_DOMAINS
+                        else ToolRegistry.SESSION_AGENT_DOMAINS,
+                    )
+                }
                 // 本次请求**真正下发**的工具名（装配侧的唯一投影，供系统提示做能力闸门）。
                 // 切换域子集（aiuiMode）时一并更新 —— 见下面两处 buildTools 调用。
                 var assembledToolNames: Set<String> = ToolRegistry.namesOf(activeTools)
@@ -959,9 +1044,11 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         // 前缀自动做 prompt caching，首条 system 一旦掺入每轮变化的记忆/资料，
                         // 缓存就从那里断掉 —— 命中价 ≈ miss 价的 2%，差距是真金白银。
                         put(
-                            service.buildSystemMessage(
+                            // 闲聊快路：精简人设（无工具准则，含 [NEED_TOOLS] 逃生舱约定）；
+                            // 正常轮：完整人设，可选能力条款按**本次真正下发的**工具做闸门
+                            if (fastPathActive) service.buildChatOnlySystemMessage()
+                            else service.buildSystemMessage(
                                 localMode = localLight,
-                                // 人设里点名的工具条款按**本次真正下发的**工具做闸门（见该参数 KDoc）
                                 availableTools = assembledToolNames,
                             ),
                         )
@@ -984,9 +1071,28 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             memories = longTermContext,
                             lessons = lessonsContext,
                             skills = skillsContext,
-                            budget = listOfNotNull(taskNote, budgetNote).joinToString("\n\n").ifBlank { null },
+                            // 闲聊快路不下发预算说明：那段讲的是"工具调用轮次"，本轮压根没有工具，
+                            // 提它等于诱导模型去找不存在的额度机制
+                            budget = if (fastPathActive) {
+                                null
+                            } else {
+                                // 路由轮多注入一条逃生舱说明：模型发现子集不够用 → 回 [NEED_TOOLS]
+                                listOfNotNull(
+                                    taskNote,
+                                    budgetNote,
+                                    routedToolNames?.let {
+                                        com.rokidlab.phone.ai.ToolIntentRouter.escapeNote(it)
+                                    },
+                                ).joinToString("\n\n").ifBlank { null }
+                            },
                             sessionPrompt = sessionPrompt,
                             availableTools = assembledToolNames,
+                            // 菜单探测轮：83 个完整 Schema 换成轻量菜单 + 点名约定
+                            toolMenu = if (menuProbeActive) {
+                                ToolRegistry.toolMenu(session.appContext, excludeGlassesTools = phoneOnly)
+                            } else {
+                                null
+                            },
                         )?.let { put(it) }
                         put(userMsg)
                     }
@@ -1132,6 +1238,9 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 }
 
                 var reply = ""
+                // 本轮是否出现过工具调用（含快路升级）：收尾时写入 lastTurnHadToolCalls
+                // 观测位（2026-09-29 第六轮起它不再拦截三层装配，仅作日志观测）
+                var turnUsedTools = false
                 // 连续空轮计数：空轮 = 既无工具调用也无正文，说明模型在"只思考不出手"。
                 // 实测每轮空转 60-75s，若放任空轮到预算用尽要数分钟，用户侧表现就是"一直等待回复"。
                 var emptyRounds = 0
@@ -1200,7 +1309,9 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         service.chatTurnStream(
                             messages,
                             tools = activeTools,
-                            onDelta = onDelta,
+                            // 闲聊快路/菜单探测轮不流式：模型可能按约定回复 [NEED_TOOLS]/[TOOLS] 标记，
+                            // 流出去会闪现在聊天气泡里（探测回复都很短，损失可忽略）
+                            onDelta = if (fastPathActive || menuProbeActive) null else onDelta,
                             isCancelled = isSuperseded,
                             // 本地 Ollama 不重试：首字慢是「加载/思考中」而非抖动，重试只会重复加载翻倍等待；
                             // 远程 3 次配合指数退避（500ms→1s→2s），重放安全边界=尚无 content 推给 UI
@@ -1269,6 +1380,107 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         ),
                     )
                     truncatedLastRound = turn.finishReason == "length"
+                    // ★ 菜单模式标记收束（探测轮 + 后续轮通用）：模型要么直接作答（无标记 →
+                    // 落到下方最终回复路径）；要么点名 [TOOLS] → 按名装配完整 Schema；
+                    // 要么 [NEED_TOOLS]/空响应（仅探测轮）/"[" 开头的变形标记 → 全量兜底。
+                    // ⚠️ 探测轮（menuProbeActive）尚无 in-flight assistant/tool 消息，重建
+                    // 消息序列是协议安全的（顺带摘掉菜单文本、换上正式人设）；后续轮只换
+                    // tools 不重建 —— in-flight 的 tool 配对在 messages 里，重建会劈散 → 400。
+                    // 菜单贯穿本轮（在轮 0 的尾消息里），模型随时可追加点名；
+                    // 用量已在上面 recordModelCall 落账，多花的只是 ~3k token 的探测成本。
+                    if (menuModeActive && turn.toolCalls.isEmpty()) {
+                        val probeRound = menuProbeActive
+                        val menuContent = turn.content
+                        val menuTrimmed = menuContent?.trim().orEmpty()
+                        val knownNames = ToolRegistry.toolList.map { it.name }.toSet()
+                        val picks = com.rokidlab.phone.ai.ToolIntentRouter.parseToolPick(menuContent, knownNames)
+                        val wantsFull = com.rokidlab.phone.ai.ChatFastPath.needsUpgrade(menuContent) ||
+                            (com.rokidlab.phone.ai.ToolIntentRouter.isMarkerLike(menuContent) &&
+                                picks.isNullOrEmpty()) ||
+                            (probeRound && menuTrimmed.isEmpty())
+                        if (wantsFull) {
+                            menuModeActive = false
+                            menuProbeActive = false
+                            turnUsedTools = true
+                            routedToolNames = null
+                            activeTools = buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
+                            assembledToolNames = ToolRegistry.namesOf(activeTools)
+                            // 探测轮：整体重建（摘菜单文本）；后续轮只换表（in-flight 消息不可重建）
+                            if (probeRound) messages = buildMessages()
+                            Log.i(
+                                TAG,
+                                "tool menu -> full toolset (${activeTools.size} schemas, " +
+                                    "content=${menuTrimmed.take(40)}, finish=${turn.finishReason})",
+                            )
+                            continue
+                        }
+                        if (picks != null && picks.isNotEmpty()) {
+                            turnUsedTools = true
+                            // 点名 ∪ 引导集：搜索/时间常是后续轮的辅助，保留在场
+                            val wanted = picks + com.rokidlab.phone.ai.ToolIntentRouter.BOOTSTRAP_TOOLS
+                            routedToolNames = wanted
+                            val routed = wanted
+                            activeTools = buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
+                                .filter { schema ->
+                                    ToolRegistry.namesOf(listOf(schema)).firstOrNull()
+                                        ?.let { it in routed } == true
+                                }
+                                .toMutableList()
+                            if (activeTools.isEmpty()) {
+                                // 点的名全被设置页禁用 → 全量兜底（装配侧尊重用户开关，
+                                // 但不能因此一个工具都没有）
+                                routedToolNames = null
+                                activeTools = buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
+                            }
+                            assembledToolNames = ToolRegistry.namesOf(activeTools)
+                            if (probeRound) {
+                                // 探测轮：整体重建（摘掉菜单文本，人设/闸门按新工具集重算）
+                                menuProbeActive = false
+                                messages = buildMessages()
+                            }
+                            Log.i(
+                                TAG,
+                                "tool menu -> ${activeTools.size} schemas picked ($routedToolNames)",
+                            )
+                            continue
+                        }
+                        // 其余情况 = 模型直接作答（无任何标记）：落到下方最终回复收尾路径
+                    }
+                    menuProbeActive = false
+                    // ★ 快路/路由升级判定（探测轮只生效一次）：模型声明需要工具（[NEED_TOOLS]）、
+                    // 或探测轮干脆没出声（无法确认能作答）、或回复以 "[" 开头（约定标记的变形
+                    // —— 子集轮正常作答不会这样开头），都按"需要工具"处理 —— 全量重装、
+                    // 整体重建消息序列原地重来。此时本轮尚无 in-flight 的 assistant/tool 消息，
+                    // 重建是协议安全的。探测/子集轮的用量已在上面 recordModelCall 落账，
+                    // 升级后多花的只是千级 token 的探测成本；换来的保障是**绝不因省 token 丢能力**。
+                    // 菜单模式不走此分支：标记/空响应/点名已由上方菜单分支收束
+                    val probeMode = !menuModeActive && (fastPathActive || routedToolNames != null)
+                    if (probeMode && turn.toolCalls.isEmpty() &&
+                        (com.rokidlab.phone.ai.ChatFastPath.needsUpgrade(turn.content) ||
+                            turn.content.isNullOrBlank() ||
+                            com.rokidlab.phone.ai.ToolIntentRouter.isMarkerLike(turn.content))
+                    ) {
+                        fastPathActive = false
+                        routedToolNames = null
+                        turnUsedTools = true
+                        activeTools = buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
+                        assembledToolNames = ToolRegistry.namesOf(activeTools)
+                        messages = buildMessages()
+                        Log.i(
+                            TAG,
+                            "chat probe upgraded: model requested tools " +
+                                "(content=${turn.content?.take(40)}, finish=${turn.finishReason}), " +
+                                "full toolset attached (${activeTools.size} schemas)",
+                        )
+                        continue
+                    }
+                    fastPathActive = false
+                    // ⚠️ 路由子集**不再自动扩全量**（2026-09-29 第七轮，实测教训：一条天气消息
+                    // 42.4k token，其中 ~30k 是扩全量后第 2/3 轮的全价 83 Schema，且扩全量打断
+                    // 缓存前缀让第 2 轮全 miss）。子集贯穿本轮：多步意图由路由并集覆盖；模型中途
+                    // 发现需要清单外工具时，按 escapeNote 约定回 [NEED_TOOLS] → 上方升级分支
+                    // 挂全量重答（重建消息序列会丢本轮 in-flight 工具结果，模型会重新查 ——
+                    // 这是罕见路径，为它常驻全价不划算）。escapeNote 每轮都在（tail 稳定可缓存）。
                     if (turn.toolCalls.isEmpty()) {
                         // 有正文：最终回复，收尾
                         if (!turn.content.isNullOrBlank()) {
@@ -1318,6 +1530,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                     }
                     // 本轮有工具调用 = 模型正常出手，连续空轮计数归零
                     emptyRounds = 0
+                    turnUsedTools = true
                     // 回填 assistant 消息（OpenAI 协议要求原样带上 tool_calls）
                     val assistantMsg = JSONObject()
                     assistantMsg.put("role", "assistant")
@@ -1766,6 +1979,8 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 // 真机事故（2026-09-17 15:11）：眼镜上直接显示 `<answer>西安明天晴，最高31度…`。
                 reply = com.rokidlab.phone.ai.ReplySanitizer.sanitize(reply)
                 replyRef.set(reply)
+                // 粘滞位落账：本轮用过工具（含收尾阶段的 save_code_file）→ 下一轮闲聊快路避让
+                lastTurnHadToolCalls = turnUsedTools || codeGenUsed
                 // 收尾本轮事件流：落 [AssistantMessage] + [TurnEnd]，并做压力裁剪
                 // （= 改造前 recordTurn 里那一步 trim）。工具轨迹不再单独存一份字符串列表 ——
                 // 它由本轮的 ToolCall 事件派生（同一条事实只留一个出处）。
