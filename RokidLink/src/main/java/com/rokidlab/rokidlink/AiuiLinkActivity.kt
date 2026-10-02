@@ -134,11 +134,18 @@ class AiuiLinkActivity : Activity() {
             mainHandler.post { deliverToolResult(cbId, false, null, "bad arguments") }
             return
         }
-        val sent = AsrPushServer.pushControl(AsrPushServer.CTRL_TOOL_CALL + payload)
-        if (!sent) {
-            // 手机端未连接：立刻回传失败，否则页面要干等到超时才知道
-            Log.w(TAG, "callTool push failed: no phone connection (cbId=$cbId)")
-            mainHandler.post { deliverToolResult(cbId, false, null, "phone not connected") }
+        val outcome = AsrPushServer.pushControlDetailed(AsrPushServer.CTRL_TOOL_CALL + payload)
+        if (outcome != AsrPushServer.PushOutcome.SENT) {
+            // 上行失败：立刻按原因回传，否则页面要干等到超时才知道（闭环审计 R9 ——
+            // 原来所有失败一律报 "phone not connected"，写线程堆积/帧超限时排查方向被带偏）。
+            val reason = when (outcome) {
+                AsrPushServer.PushOutcome.NO_CLIENT -> "phone not connected"
+                AsrPushServer.PushOutcome.TOO_LARGE -> "tool call too large for link frame"
+                AsrPushServer.PushOutcome.WRITER_BUSY -> "phone link busy, try again shortly"
+                else -> "phone link error"
+            }
+            Log.w(TAG, "callTool push failed: $outcome (cbId=$cbId)")
+            mainHandler.post { deliverToolResult(cbId, false, null, reason) }
         }
     }
 
@@ -337,6 +344,12 @@ class AiuiLinkActivity : Activity() {
                                 val result = queue.poll(SYNC_TOOL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                                 if (result == null) {
                                     Log.w(TAG, "tool_call_sync timeout cbId=$cbId")
+                                    // ⚠️ 本响应在页面 Lab 桥下**没有消费者**（fire-and-forget fetch，
+                                    // 绝不 await/.then —— 见 lab-page-bridge.js 头部），只回 textResponse
+                                    // 页面永远收不到 ⇒ pending[cbId] 永挂、loading 永转（闭环审计 R8）。
+                                    // 错误必须同时经 dispatchHostMessage 派发进 onMessage 通道
+                                    // （deliverToolResult 顺带写入轮询缓存，兼容旧轮询桥）。
+                                    deliverToolResult(cbId, false, null, "tool timed out")
                                     textResponse(syncErrorJson(cbId, "tool timed out"))
                                 } else {
                                     Log.i(TAG, "tool_call_sync return cbId=$cbId")
@@ -440,8 +453,12 @@ class AiuiLinkActivity : Activity() {
         val code = keyCodeToInk(event)
         Log.i(TAG, "key ${if (event.action == KeyEvent.ACTION_UP) "up" else "down"} kc=${event.keyCode} code=$code")
         if (code != null) {
-            // BACK → Backspace 已注入页面；若页面不消费，双击 BACK 逃生退出宿主
-            if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN) {
+            // BACK → Backspace 已注入页面；若页面不消费，双击 BACK 逃生退出宿主。
+            // 双击判定只认**首次按下**（repeatCount==0）：长按 BACK 时系统约 50ms 连发
+            // ACTION_DOWN，不过滤 repeat 的话按住 1.5s 必然被误判成双击 → 强退宿主
+            if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_DOWN &&
+                event.repeatCount == 0
+            ) {
                 val now = System.currentTimeMillis()
                 if (now - lastBackMs < 1_500L) {
                     finish()
@@ -494,7 +511,10 @@ class AiuiLinkActivity : Activity() {
         // 工具结果的缓存与唤醒已上移到 [dispatchMessageToActive]（静态），本方法只负责投递页面：
         // 原来在这里做缓存时，缓存逻辑整块被包在「字符串 contains type=toolResult」判断里，
         // 且只在前台宿主实例上执行 —— 两条都可能让结果静默丢失，页面只能等到超时。
-        val js = "window.__aiuiHost && window.__aiuiHost.hostMessage($json)"
+        // U+2028/U+2029 是合法 JSON 字符但 JSONObject.toString() 不转义，而它们在 JS 源码里
+        // 是行终止符：直接内插会让 evaluateJavascript 语法错误静默失败（页面 Promise 挂到超时）
+        val safeJson = json.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+        val js = "window.__aiuiHost && window.__aiuiHost.hostMessage($safeJson)"
         runOnUiThread { webView?.evaluateJavascript(js, null) }
     }
 
@@ -525,6 +545,40 @@ class AiuiLinkActivity : Activity() {
         const val EXTRA_AIX_PATH = "aix_path"
         /** 启动参数（JSON 对象字符串）：由手机端 open 命令携带，页面 boot 后作为首条 hostMessage 下发 */
         const val EXTRA_LAUNCH_PARAMS = "launch_params"
+
+        /**
+         * 换包重开专用：companion 级 Handler 不随实例 onDestroy 的
+         * removeCallbacksAndMessages(null) 被清队（实例 mainHandler 会被全清）。
+         * 任务只捕获 applicationContext，无 Activity 泄漏。
+         */
+        private val reopenHandler = Handler(Looper.getMainLooper())
+
+        init {
+            // R9：push 写线程 IOException 的页面侧消费钩子（类加载时注册一次，幂等）。
+            // SENT 只代表"已提交写线程"——半开 socket 下真正 write 才失败，此时调用方早已返回；
+            // 只有这个回调能把失败按 cbId 送回页面（否则页面只能等到超时，且零真因）。
+            // dispatchMessageToActive 自带"缓存 + 唤醒同步等待 + 投递前台宿主"三件事，直接复用。
+            AsrPushServer.onWriteFailed = { text ->
+                if (text.startsWith(AsrPushServer.CTRL_TOOL_CALL)) {
+                    val cbId = runCatching {
+                        JSONObject(text.removePrefix(AsrPushServer.CTRL_TOOL_CALL)).optString("cbId")
+                    }.getOrDefault("")
+                    if (cbId.isNotBlank()) {
+                        Log.w(TAG, "tool call frame write failed (cbId=$cbId)")
+                        runCatching {
+                            dispatchMessageToActive(
+                                JSONObject()
+                                    .put("type", "toolResult")
+                                    .put("cbId", cbId)
+                                    .put("ok", false)
+                                    .put("error", "phone link write failed")
+                                    .toString(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         private val lock = Any()
         private var activeActivity: AiuiLinkActivity? = null
@@ -700,7 +754,10 @@ class AiuiLinkActivity : Activity() {
         }
         val app = applicationContext
         finish()
-        mainHandler.postDelayed({ open(app, p, params) }, 150L)
+        // 必须投到 companion 级 Handler：实例的 mainHandler 在 onDestroy 里
+        // removeCallbacksAndMessages(null) 全量清队，finish → onDestroy 通常远小于
+        // 150ms，重开任务会被一并撤掉 → 换包后旧宿主关了、新包永远不打开（黑屏）
+        reopenHandler.postDelayed({ open(app, p, params) }, 150L)
     }
 
     /**

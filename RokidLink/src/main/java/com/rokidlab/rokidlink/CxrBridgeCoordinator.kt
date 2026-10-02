@@ -46,28 +46,36 @@ internal class CxrBridgeCoordinator(
         private const val SELF_HEAL_MIN_GAP_MS = 15 * 60_000L
     }
 
-    /** 是否处于「断线武装」状态：onDisconnected 置 true，重连成功后启动观察窗口 */
+    /** 是否处于「断线武装」状态：onDisconnected 置 true，重连成功后启动观察窗口。
+     *  ⚠️ CXR 回调（binder 线程）与主线程都会读写，必须 @Volatile（KeyServiceCore 同款约束） */
+    @Volatile
     private var reconnectArmed = false
 
     /** 环境音监听（官方字幕链路白嫖）：跨断线重连持有会话状态与看门狗，见其文档 */
     private val ambient = AmbientListenController(core)
 
     /** 重连成功时刻：观察窗口起点，窗口内无下行则判定路由失效 */
+    @Volatile
     private var reconnectAtMs = 0L
 
     /** 自愈检查任务引用（主线程 Handler），cancel 用 */
+    @Volatile
     private var selfHealCheck: Runnable? = null
 
     /** B1：去重断连重建任务，避免堆叠导致订阅倍发 */
+    @Volatile
     private var pendingReconnect: Runnable? = null
 
     /** 常驻下行观测任务引用（主线程 Handler），cancel 用 */
+    @Volatile
     private var downlinkWatch: Runnable? = null
 
     /** 观测基准时刻：此刻起算「零下行」（收到下行或本轮跳过判定时前移） */
+    @Volatile
     private var downlinkBaseMs = 0L
 
     /** 上次自愈时刻（限流用） */
+    @Volatile
     private var lastSelfHealMs = 0L
 
     fun init() {
@@ -205,8 +213,6 @@ internal class CxrBridgeCoordinator(
                 aiTakeover.handleAiChannel(args)
             })
             Log.i(TAG, "subscribe(${KeyButtonService.AI_TOPIC}) -> $aiResult")
-            // 订阅手机端轮询拉取通道（请求-响应，绕过 AI App 上行过滤）
-            subscribeAiAsrPoll()
             // 订阅显示状态页指令：手机端「打开 RokidLink」时带 EXTRA_SHOW_UI 显示 IP 状态页
             val showMainResult = core.bridge?.subscribe(KeyButtonService.SHOW_MAIN_TOPIC, CXRServiceBridge.MsgCallback { _, _, _ ->
                 core.markDownlink()
@@ -370,23 +376,29 @@ internal class CxrBridgeCoordinator(
      * 只能用 [AsrPushServer.hasClient]（不经过 cxr-service）作为「手机真的在场」的证据。
      */
     private fun armDownlinkWatch() {
-        if (downlinkWatch != null) return
-        downlinkBaseMs = System.currentTimeMillis()
-        val task = object : Runnable {
-            override fun run() {
-                runCatching { checkDownlinkHealth() }
-                core.mainHandler.postDelayed(this, DOWNLINK_WATCH_INTERVAL_MS)
+        // onConnected（binder 回调线程）与 init()（主线程）都可能进入：
+        // 「判空 + 赋值」必须原子，否则双双通过 → 两个自续 Runnable 叠跑（双份健康检查/自愈判定）
+        synchronized(this) {
+            if (downlinkWatch != null) return
+            downlinkBaseMs = System.currentTimeMillis()
+            val task = object : Runnable {
+                override fun run() {
+                    runCatching { checkDownlinkHealth() }
+                    core.mainHandler.postDelayed(this, DOWNLINK_WATCH_INTERVAL_MS)
+                }
             }
+            downlinkWatch = task
+            core.mainHandler.postDelayed(task, DOWNLINK_WATCH_INTERVAL_MS)
         }
-        downlinkWatch = task
-        core.mainHandler.postDelayed(task, DOWNLINK_WATCH_INTERVAL_MS)
         Log.i(TAG, "downlink watch armed (interval=${DOWNLINK_WATCH_INTERVAL_MS}ms, " +
             "limit=${DOWNLINK_SILENT_LIMIT_MS}ms)")
     }
 
     private fun cancelDownlinkWatch() {
-        downlinkWatch?.let { core.mainHandler.removeCallbacks(it) }
-        downlinkWatch = null
+        synchronized(this) {
+            downlinkWatch?.let { core.mainHandler.removeCallbacks(it) }
+            downlinkWatch = null
+        }
     }
 
     private fun checkDownlinkHealth() {
@@ -477,22 +489,6 @@ internal class CxrBridgeCoordinator(
                 "bootstrap+${SELF_HEAL_RESTART_DELAY_MS + SELF_HEAL_BOOTSTRAP_DELAY_MS}ms)")
         } catch (e: Exception) {
             Log.e(TAG, "selfHealRestart failed", e)
-        }
-    }
-
-    /** 手机端轮询拉取 ASR 文字（可回复订阅，请求-响应机制）。
-     *  文字主通道为 RFCOMM 长连接（AsrPushServer），本通道保留空响应占位。 */
-    private fun subscribeAiAsrPoll() {
-        val b = core.bridge ?: return
-        try {
-            val r = b.subscribe(KeyButtonService.AI_ASR_POLL_TOPIC, CXRServiceBridge.MsgReplyCallback { _, _, _, reply ->
-                core.markDownlink()
-                reply.end(Caps())
-                Log.d(TAG, "AI poll reply: empty")
-            })
-            Log.i(TAG, "subscribe(${KeyButtonService.AI_ASR_POLL_TOPIC}) -> $r")
-        } catch (e: Exception) {
-            Log.e(TAG, "subscribeAiAsrPoll error", e)
         }
     }
 

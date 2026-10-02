@@ -330,35 +330,72 @@ object AsrPushServer {
     }
 
     /**
+     * 推送结果（闭环审计 R9）：原来四种失败全部折叠成一个 Boolean「false」，
+     * 页面与日志都只能看到"手机没连"——半开 socket 场景写线程堆积时，排查方向被带偏，
+     * 且每次白等超时。现在区分原因，调用方按原因给文案/兜底。
+     */
+    enum class PushOutcome {
+        /** 已提交写线程（不保证对端收到——半开 socket 由 [onWriteFailed] 异步通知） */
+        SENT,
+        /** 无手机连接（RFCOMM / WiFi 都没接入） */
+        NO_CLIENT,
+        /** 空文本（调用方 bug，不会发生在外发路径） */
+        EMPTY,
+        /** 帧超协议上限（>64KB），破坏对端解析，必须走文件兜底 */
+        TOO_LARGE,
+        /** 写线程被半开 socket 卡死、排队已满（≥[MAX_PENDING_FRAMES]），链路忙 */
+        WRITER_BUSY,
+    }
+
+    /**
+     * 异步写失败回调（R9）：写线程 IOException 时以**原始文本**回调。
+     *
+     * 消费方（AiuiLinkActivity）据此把 `CTRL_TOOL_CALL` 帧的失败按 cbId 回传给页面——
+     * 不通知的话页面只能等到眼镜端超时才知道，且零真因。
+     * 回调运行在写线程，消费方自行切线程。
+     */
+    @Volatile
+    var onWriteFailed: ((text: String) -> Unit)? = null
+
+    /**
      * 推送一条控制指令（如拍照答题意图），与 ASR 文字共用同一帧协议。
-     * 返回 true 表示已发送（客户端连接存在）；未连接时返回 false，调用方自行处理兜底。
+     * 返回 true 表示已提交发送（客户端连接存在）；未连接时返回 false，调用方自行处理兜底。
      */
     fun pushControl(cmd: String): Boolean {
-        val sent = push(cmd)
-        Log.i(TAG, "pushControl($cmd) -> $sent")
-        return sent
+        val outcome = pushControlDetailed(cmd)
+        return outcome == PushOutcome.SENT
+    }
+
+    /** 带原因版 [pushControl]（新代码优先用这个；Boolean 版为既有调用方保留） */
+    fun pushControlDetailed(cmd: String): PushOutcome {
+        val outcome = pushDetailed(cmd)
+        Log.i(TAG, "pushControl(${cmd.take(40)}...) -> $outcome")
+        return outcome
     }
 
     /**
      * 推送一条 ASR 文字。返回 true 表示已发送（客户端连接存在）。
      * 连接未建立/已断开时返回 false，调用方应兜底走文件通道。
      */
-    fun push(text: String): Boolean {
-        val out = clientOut ?: return false
-        if (text.isEmpty()) return false
+    fun push(text: String): Boolean = pushDetailed(text) == PushOutcome.SENT
+
+    /** 带原因版 [push]（原因语义见 [PushOutcome]） */
+    fun pushDetailed(text: String): PushOutcome {
+        val out = clientOut ?: return PushOutcome.NO_CLIENT
+        if (text.isEmpty()) return PushOutcome.EMPTY
         val bytes = text.toByteArray(Charsets.UTF_8)
         // 超长拒绝：超过协议帧上限会破坏对端解析（截断还会破坏 UTF-8 边界），交由调用方走文件兜底
         if (bytes.size > MAX_FRAME) {
             Log.w(TAG, "ASR push text too long (${bytes.size} > $MAX_FRAME), dropped")
-            return false
+            return PushOutcome.TOO_LARGE
         }
         // 防堆积：写线程被卡死（socket 半开）时拒绝继续排队，调用方走文件兜底
         if (pendingFrames >= MAX_PENDING_FRAMES) {
             Log.w(TAG, "ASR push writer busy ($pendingFrames queued), fallback requested")
-            return false
+            return PushOutcome.WRITER_BUSY
         }
         synchronized(pushLock) {
-            if (clientOut !== out) return false
+            if (clientOut !== out) return PushOutcome.NO_CLIENT
             pendingFrames++
         }
         // 提交到独立写线程：绝不在 CXR 回调线程同步 write（半开 socket 无超时会永久卡死回调线程）
@@ -378,11 +415,12 @@ object AsrPushServer {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "ASR push write failed: ${e.message}")
+                onWriteFailed?.invoke(text)
             } finally {
                 pendingFrames--
             }
         }
-        return true
+        return PushOutcome.SENT
     }
 
     fun stop() {

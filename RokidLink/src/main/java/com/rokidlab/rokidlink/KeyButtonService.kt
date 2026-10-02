@@ -187,11 +187,6 @@ class KeyButtonService : Service() {
          * 手机收到后停音乐 + 下发 tts_stop 停眼镜播报 + 取消运行中的 Lab 模型请求
          */
         internal const val ABORT_AI_MARKER = LinkProtocol.MARKER_ABORT_AI
-        /**
-         * AI 文字轮询通道（手机端 → 眼镜端）：RokidLab 定时 sendCustomCmd 轮询，
-         * 眼镜端可回复订阅返回 ASR 文字。采用请求-响应机制以绕过 AI App 对未知上行指令的过滤。
-         */
-        internal const val AI_ASR_POLL_TOPIC = "rokidlab_ai_asr_poll"
         /** AI 频道（手机端 → 眼镜端，AssistServer 全局订阅） */
         internal const val AI_TOPIC = LinkProtocol.CXR_CHANNEL_AI
         /** 显示状态页指令通道（手机端 → 眼镜端）：用户点「打开 RokidLink」后，MainActivity 带 EXTRA_SHOW_UI 显示 IP 状态页 */

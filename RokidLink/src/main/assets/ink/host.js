@@ -216,11 +216,13 @@ async function boot(config) {
 /**
  * Lab 工具口：AIUI 页面调用手机端工具的唯一入口。
  *
- * 页面只写 await Lab.callTool('play_song', { songName: '西厢' })，
- * 不必关心 RFCOMM 上行、cbId 配对、结果回传等底层细节（全部在此封装）。
+ * ⚠️ 页面侧用的是**回调式**注入桥（lab-page-bridge，见 lab-runtime.md §9.0）：
+ * 正确写法是 globalThis.Lab.callTool('control_music', { action: 'play', ... }, function (结果, 错误) { … })。
+ * 注意本宿主**无事件循环**，`await` / `.then` 的回调永不执行 —— 不要照抄 Promise 写法。
+ * 工具名为注册表实际名字（音乐是 `control_music`，没有 `play_song`/`stop_music`）。
  *
- * 无 bridge 时（官方 Sys_AIUI_Start / AgentStore 渲染环境）callTool 会 reject，
- * 页面必须 try/catch 降级，不能让整个页面挂掉。
+ * 无 bridge 时（官方 Sys_AIUI_Start / AgentStore 渲染环境）callTool 会回调报错，
+ * 页面必须判错降级，不能让整个页面挂掉。
  */
 (function () {
   let seq = 0;
