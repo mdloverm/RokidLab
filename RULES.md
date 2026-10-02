@@ -472,19 +472,13 @@ adb/
 
 - **AIUI 页面调用手机端工具的唯一入口**是 `ToolGateway.call()`，不得绕过
 - **`ALLOWED_DOMAINS` 基线是全部域开放**（用户 2026-09-09 拍板），收窄/放宽都只改这一处。
-  ⚠️ **2026-09-22 起摘除 `shell` 域**（`DOMAIN_ALL - DOMAIN_SHELL`）：本机执行域里是
-  `run_shell`（任意命令执行）与 `install_packages`（任意装包，2026-09-23 新增），
-  二者都是**能力原语**，页面（对话生成／商店导入的 `.aix`）属第三方制品 ——
-  开放它等于把"在用户手机上跑任意命令/装任意软件"交给页面作者。对话路径保留该能力。
-  **要放开就删掉 `PageScope.ALLOWED_DOMAINS` 上那一个减法**（一处，`ApprovalGateTest.H6` 会跟着失败）。
-  之所以走域而不走黑名单：域是装配单位，摘掉后页面拿到的**工具清单**里也不会有它。
-  ⚠️ 同域的 `save_script` / `list_scripts` / `run_script` / `delete_script` 一并被摘除 ——
-  这是有意的：脚本库只是"把命令存下来再跑"，留着它等于给页面留一条任意命令执行的侧门。
-  ⚠️ **2026-09-23 起同时摘除 `screen` 域**（`DOMAIN_ALL - DOMAIN_SHELL - DOMAIN_SCREEN`）：
-  屏幕操作域里是 `tap_screen`（**在整台手机上注入任意触摸**）、`type_text`、`read_screen`（读任意 App
-  的界面文字），判据与 `shell` 域完全一致 —— 它是"把整机交给页面作者"的能力原语，
-  而不是"某个工具危险"。对话路径（用户在场、可追问、可撤销）保留全部能力。
-  要放开同样只改 `PageScope.ALLOWED_DOMAINS` 上那一个减法（`ScreenOpToolTest` 会跟着失败）。
+  ⚠️ **2026-10-01 起恢复全域开放（"带闸门开放"政策，用户拍板）**：`shell` 域与 `screen` 域
+  曾于 2026-09-22/23 被整域摘除（判据：`run_shell`＝任意命令执行、`tap_screen`＝整机触摸注入，
+  都是能力原语，不该静默交给页面作者）——摘域的真实代价是 **AIUI 页面路径执行断链**（眼镜上能说不能做）。
+  现在的边界表达换成**知情同意**：域回到白名单（页面工具清单可见、可调），但页面路径的每一次
+  shell/screen 调用都过 `PageElevatedDomainGuard` 的**用户确认**（fail-closed：眼镜/手机都问不到就拒），
+  对话路径（用户在场）维持原语义不变。两个回归用例同步改判：`ApprovalGateTest.H6`、
+  `ScreenOpToolTest.屏幕操作域对页面开放但必须确认`。
 - **`DENY_TOOLS` 只放技术故障工具**（如 `open_aiui_app` 自指递归），**不放"危险"工具**，安全边界由 `isEnabled` 总开关负责；按"危险"收窄要落在**域**白名单上（见上一条），不加进这张表
 - **结果截断 8000 字符**：RFCOMM 单帧上限 64KB，且页面渲染不下超长文本
 - **15s 超时后不 interrupt**：工具可能持有文件/网络资源，强中断留下半写状态，让线程自己跑完（daemon 线程不阻塞进程退出）
@@ -580,11 +574,18 @@ adb/
 >    （硬拒会让功能表现为"被安全策略挡住"，正是 2026-09-11 打不出电话那次事故的方向）。
 >  - 缺省值按风险档派生：`EXTERNAL_SIDE_EFFECT` ⇒ `BLOCK`，其余 ⇒ `PROCEED`。
 > ⚠️ **只有用户显式取消**（`wasCancelled()`）在两条分支上都拒绝 —— 那是唯一真正的"用户说不"。
+> ⚠️ **AIUI 页面路径对上面两条都有一层收紧（2026-09-30，闭环审计 R7）**：来源 = `AIUI_PAGE` 时
+> ①确认等待上限压到 18s（`ApprovalGate.PAGE_CONFIRM_TIMEOUT_MS`，页窗 25s − 开销 − 执行余量，
+> 通道只收紧不放宽）；②**超时未确认一律拒绝**（fail-closed，不看 `confirmPolicy`）—— 否则用户
+> 超窗后才确认，副作用会在页面已报失败后执行（「报超时却执行」）。配套：`ToolGateway` 对页面
+> 路径用**动态 join 预算**（23s 总预算 − 已耗时），把「确认+执行」总时长压进页窗，让真实错误
+> 也能在页窗内回页。测试 F4a / F4b 钉住。对话路径行为不变。
 > ⚠️ 未知名（模型幻觉）的 `confirmPolicy` 兜底也是 `BLOCK`（"未知即最保守"），但它会先被
 > `UnknownToolGuard` 单调拒绝，因此不会真的拖用户进一次注定超时的确认。<br>
-> 现状更新（2026-09-23）：**走确认闸门的内置工具恰为四个** —— `delete_file`、`delete_script`、
-> `install_packages`、`send_sms`（`ApprovalGateTest` 的 **E1** 钉住这份名单；E3b / E3c 钉住
-> 前三个的确认摘要要读出被操作对象）。**新增 EXTERNAL 档内置工具时必须同步 E1 + 补一条摘要用例**，
+> 现状更新（2026-09-30）：**走确认闸门的内置工具恰为六个** —— `delete_file`、`delete_script`、
+> `delete_knowledge_doc`、`install_packages`、`manage_glasses_app`、`send_sms`（`ApprovalGateTest` 的
+> **E1** 钉住这份名单；E3b / E3c / E3d 钉住确认摘要要读出被操作对象）。**新增 EXTERNAL 档内置工具时
+> 必须同步 E1 + 补一条摘要用例，且必须跑 ApprovalGateTest**（2026-09-29 曾只编译漏跑，第二天才暴露），
 > 否则 E1 会失败 —— 那正是提醒信号。前三个的 `confirmPolicy` 是显式 `PROCEED`（本机可重做），
 > 这一点会被 `check_tool_wiring.py` 作为**提示**列出来（它有 `EXTERNAL_FAIL_OPEN_ALLOWLIST` 豁免表，
 > 每加一个都必须写明理由）。
@@ -883,3 +884,46 @@ proot 容器里的命令（`curl` / `wget` / `apt` / `pip` …）以 **App 自�
   ③ `readStatus` 那次 `probeCommands` 的探测命令（**三个组件合成一条**，别各起一次 proot）；
   ④ 中英 strings（`local_exec_<组件>_*`）；⑤ `run_shell` schema 里"可用组件"那句话
   （模型据此判断该自己 `install_packages` 还是指引用户去设置页）。
+
+---
+
+# 13. Agent 协作工作流（2026-10-02 定稿）
+
+面向 AI 协作自身的质量与 token 纪律，来源：2026-10-02 agent 体检 + 工具齐全度审查复盘。
+
+### 1. API 引用先验证
+
+引用任何 struct / API / 常量前，**必须先 grep 其定义**确认字段与可见性，禁止凭记忆写引用代码。
+教训：`ToolRegistry.toolList` 元素是裁剪过的 `ToolMeta` 而非 `ToolEntry`，凭记忆写测试编译失败一次。
+
+### 2. 修复必须横扫同类
+
+修完一个 bug，先问「这个**成因类别**还可能在哪」，全表横扫同类（护栏单测 + 同 pattern grep），
+点修一个实例不算完成。
+教训：`delete_knowledge_doc` 漏标 `sideEffect` 是一致性护栏单测（`ToolRiskMapTest`）抓到的
+——护栏先行 > 事后点修。
+
+### 3. Token 纪律
+
+- 检索一律 **Grep 定位 → 只读命中行段**（offset/limit），禁止整文件倾倒进上下文
+- token 花在**验证**（构建 / 测试 / 复核）上，不花在重读已知代码上
+- 无验证闭环不交付：改动后必须跑 `testDebugUnitTest` + `assembleDebug`
+
+### 4. 大改动 plan-first
+
+超过 3 个文件的改动，先出计划（文件清单 + 每处改什么）确认后再动手——把返工前移到最便宜的阶段。
+
+### 5. 任务分流（模型选择建议）
+
+| 任务类型 | 建议 |
+|----------|------|
+| 架构设计 / 并发竞态审查 / 跨 10+ 文件重构 | 切换强模型执行 |
+| 日常增删改、文案、双语同步 | 默认模型即可 |
+
+原则：DeepSeek 天花板 + 完整脚手架（rules / memory / 护栏测试 / 构建闭环）≈ 一线模型下限；
+最难的 20% 任务决定整体质量。
+
+### 6. 取舍记账
+
+「决定不做 / 保守处理」必须留痕（代码注释 + TODO 文档），不允许沉默债；
+每个取舍写明**为什么不做**和**重开条件**。
