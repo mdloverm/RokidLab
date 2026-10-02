@@ -74,6 +74,21 @@ object AiuiProject {
     fun packageFile(context: Context, agentId: String): File =
         File(packageDir(context), "$agentId.aix")
 
+    /**
+     * 删除某 agentId 的**全部**本地包文件（绿色包 + 彩色预览包），返回删除个数。
+     *
+     * 为什么不能只删 [packageFile]：buildAix(colorTheme=true) 会另产 `<agentId>.color.aix`
+     * （手机全彩预览专用，与绿色包并存）；删除项目/注销记录时只删绿包的话，
+     * 彩色包会永久残留 —— 真机取证时 aiui_packages/ 里已堆了 5 个此类孤儿文件。
+     */
+    fun deletePackageFiles(context: Context, agentId: String): Int {
+        if (agentId.isBlank()) return 0
+        var n = 0
+        listOf(packageFile(context, agentId), File(packageDir(context), "$agentId.color.aix"))
+            .forEach { f -> if (f.isFile && f.delete()) n++ }
+        return n
+    }
+
     /** 全部本机 AIUI 项目名（有 app.json 才算一个项目；含**还没打包送到眼镜**的） */
     fun localProjects(context: Context): List<String> {
         val root = File(context.filesDir, "aiui_projects")

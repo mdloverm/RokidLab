@@ -155,6 +155,10 @@ internal object McpClient {
         } else {
             text.ifBlank { "MCP 工具 $toolName 执行成功，但没有返回内容。" }
         }
+    } catch (e: McpUnauthorizedException) {
+        // 专门的前缀标记：McpRegistry.call 靠它识别 401 并触发 OAuth 静默续期重试
+        Log.w(TAG, "callTool $toolName unauthorized: ${e.message}")
+        "MCP 工具 $toolName 未授权（401）：${e.message}"
     } catch (e: Exception) {
         Log.w(TAG, "callTool $toolName failed: ${e.message}")
         "MCP 工具 $toolName 调用失败：${e.message ?: e.javaClass.simpleName}"
@@ -198,6 +202,9 @@ internal object McpClient {
             }
         }
 
+        // 401 的响应体往往不是 JSON-RPC envelope（WWW-Authenticate 才是正文），也可能勉强能
+        // 解析出个对象 —— 以 HTTP 状态码为准，别让"解析出了个东西"掩盖了未授权的事实
+        if (stream.code == 401) throw McpUnauthorizedException("HTTP 401：凭证无效或已过期")
         val response = picked ?: throw McpRpcException(
             "未收到 id=$id 的响应（HTTP ${stream.code}，已读到 ${seen.length} 字符" +
                 "${if (seen.isEmpty()) "，响应为空" else ""}）",
@@ -296,3 +303,6 @@ internal data class McpToolDef(
 
 /** MCP 协议层错误：连接失败 / JSON-RPC error / 响应缺失 / 翻页异常 */
 internal class McpRpcException(message: String) : IOException(message)
+
+/** MCP server 返回 HTTP 401：凭证无效/过期 —— 上层（McpRegistry）据此触发 OAuth 静默续期 */
+internal class McpUnauthorizedException(message: String) : IOException(message)

@@ -103,6 +103,14 @@ internal object ToolIntentRouter {
             keywords = setOf("日程", "日历", "行程"),
             tools = setOf("manage_calendar", "get_current_time"),
         ),
+        Rule(
+            "runs",
+            // 后台/交互任务的状态问询（「跑完了吗」「还在跑吗」「刚才输出是什么」）。
+            // ⚠️ 只收"查状态"的短句；带执行意图的（「帮我跑」「后台下载」）不在此列 ——
+            // 那些句子里往往还有别的诉求，宁可落回全量。
+            keywords = setOf("跑完了吗", "还在跑吗", "还在运行吗", "运行状态", "后台任务", "任务输出", "刚才的输出"),
+            tools = setOf("list_runs", "read_run_output"),
+        ),
     )
 
     /**

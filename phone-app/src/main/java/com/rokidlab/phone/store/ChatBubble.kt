@@ -11,12 +11,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -29,6 +32,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,6 +64,7 @@ import com.rokidlab.phone.design.BrewRed
 import com.rokidlab.phone.design.BrewSuccess
 import com.rokidlab.phone.design.BrewText
 import com.rokidlab.phone.design.BrewTextBright
+import com.rokidlab.phone.platform.InteractiveRunManager
 
 // ===== 对话气泡 =====
 @Composable
@@ -98,6 +103,12 @@ internal fun ChatBubble(
                 .fillMaxWidth()
                 .padding(vertical = 2.dp),
         )
+        return
+    }
+
+    // 运行卡片（本地交互式程序输出流）：等宽块 + 语言标签，滚动跟随最新行
+    if (msg.runId != null) {
+        RunOutputCard(msg)
         return
     }
 
@@ -594,4 +605,68 @@ private fun stepLabel(step: AgentStep): String = when {
     step.kind == AgentStep.Kind.TOOL -> stringResource(R.string.chat_trace_tool_running)
     step.state == AgentStep.State.RUNNING -> stringResource(R.string.chat_trace_thinking)
     else -> stringResource(R.string.chat_trace_thought)
+}
+
+// ===== 运行卡片：本地交互式程序的输出流（见 InteractiveRunManager） =====
+@Composable
+private fun RunOutputCard(msg: ChatMsg) {
+    val label = ChatStateHolder.runLabel(msg.runId!!)
+    // 还在跑：实时从管理器读输出流；已结束：content 已定格（finishRunCard 收尾）
+    val run = InteractiveRunManager.runs.collectAsState().value.firstOrNull { it.id == msg.runId }
+    val output = run?.output?.collectAsState()?.value ?: msg.content
+    val running = run != null && run.alive
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .widthIn(max = 300.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(BrewPanel)
+            .border(1.dp, BrewBorder, RoundedCornerShape(10.dp)),
+    ) {
+        // 标题条：语言标签 + 运行状态
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(BrewChat.copy(alpha = 0.12f))
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                color = BrewChat,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.width(8.dp))
+            if (running) {
+                CircularProgressIndicator(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp, color = BrewChat)
+                Spacer(Modifier.width(5.dp))
+                Text(stringResource(R.string.chat_run_card_running), color = BrewMuted, fontSize = 10.sp)
+            } else {
+                Text(stringResource(R.string.chat_run_card_done), color = BrewDim, fontSize = 10.sp)
+            }
+        }
+        // 输出区：限高滚动，新输出自动跟随到最新行
+        val outScroll = rememberScrollState()
+        androidx.compose.runtime.LaunchedEffect(output) {
+            outScroll.animateScrollTo(outScroll.maxValue)
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 180.dp)
+                .verticalScroll(outScroll)
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+        ) {
+            Text(
+                text = output.ifBlank { stringResource(R.string.chat_code_no_output) },
+                color = BrewTextBright,
+                fontSize = 11.5.sp,
+                lineHeight = 16.sp,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                softWrap = true,
+            )
+        }
+    }
 }

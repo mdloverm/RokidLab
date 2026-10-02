@@ -57,7 +57,9 @@ internal object WebPreviewToolProvider : ToolProvider {
                     "（已自动分配并注入，不要自己挑端口、不要写死端口），绑定 0.0.0.0 或 127.0.0.1。" +
                     "例：python3 -m http.server \$PREVIEW_PORT --directory /mnt/lab/site；" +
                     "python3 app.py（app 内读 os.environ[\"PREVIEW_PORT\"]）；node server.js。" +
-                    "⚠️ 前提要自己备好：页面文件先写好（/mnt/lab 用户文件交换口）；缺依赖先用 install_packages 装（如 flask）。" +
+                    "⚠️ 前提要自己备好：页面文件先写好（可运行项目统一写到 /mnt/lab/<项目名>/）；缺依赖先用 install_packages 装（如 flask）。" +
+                    "⚠️ save_code_file 存到「下载/<项目名>/」的项目，容器内挂载于 **/mnt/download/<项目名>**" +
+                    "（需已授予「所有文件访问」权限；未授予时该目录不存在，改把文件写进 /mnt/lab 再预览）。" +
                     "⚠️ 命令必须**前台运行**：不要加 & 或 nohup（本工具就是要它一直活着；命令退出 = 服务结束）。" +
                     "⚠️ 同时最多 ${WebPreviewManager.MAX_PREVIEWS} 个预览。成功后把地址告诉用户；" +
                     "要停止时调 stop_web_preview。本工具返回的是启动状态与服务日志，不是页面内容；" +
@@ -72,7 +74,7 @@ internal object WebPreviewToolProvider : ToolProvider {
                         ),
                         "cwd" to mapOf(
                             "type" to "string",
-                            "description" to "命令的工作目录（容器内路径）。默认 /（容器根）",
+                            "description" to "命令的工作目录（容器内路径）。省略时沿用上一次成功执行的工作目录（首次为 /，即容器根 rootfs）",
                         ),
                     ),
                     "required" to listOf("command"),
@@ -124,12 +126,15 @@ internal object WebPreviewToolProvider : ToolProvider {
         if (command.isEmpty()) {
             return "命令为空，没有启动任何服务。请把启动命令放在 command 参数里（监听端口用 \$PREVIEW_PORT 变量）。"
         }
-        val cwd = args.optString("cwd").trim().ifEmpty { "/" }
+        val cwd = args.optString("cwd").trim().ifEmpty { ShellWorkspace.defaultCwd }
         Log.i(TAG, "start_web_preview: ${command.take(80)}（cwd=$cwd）")
         return when (val r = WebPreviewManager.start(context, command, cwd)) {
             is WebPreviewManager.StartResult.Started -> buildString {
                 append("网页预览已启动：${r.info.url}（id=${r.info.id}）")
                 append("\n聊天窗口已出现预览入口，用户点开即可看到页面 —— 请把地址与用法一并告诉用户。")
+                // 与 run_shell 同一条工作目录接缝：cd 成功（Started 蕴含）才记忆并回显
+                ShellWorkspace.remember(cwd)
+                append(ShellToolProvider.cwdEcho(cwd))
                 r.note?.let { append("\n注意：$it") }
                 if (r.logTail.isNotBlank()) append("\n\n[服务日志（最近几行）]\n${r.logTail}")
             }

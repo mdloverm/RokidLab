@@ -244,7 +244,8 @@ internal object BrowserToolProvider : ToolProvider {
     private fun open(context: Context, args: JSONObject): String {
         val raw = args.optString("url").trim()
         if (raw.isEmpty()) return "请提供要打开的网址"
-        val url = normalizeUrl(raw) ?: return "网址不合法（只支持 http/https）：$raw"
+        val url = normalizeUrl(raw)
+            ?: return rejectionMessage(raw)
         if (!BrowserSession.open(context, url)) {
             return "没能打开手机上的浏览器页面：请确认乐奇 App 正在运行、能切到前台"
         }
@@ -252,6 +253,29 @@ internal object BrowserToolProvider : ToolProvider {
         val now = BrowserSession.currentUrl().orEmpty().ifBlank { url }
         return "已在手机浏览器打开：$now。接下来用 browser_snapshot 读页面内容；" +
             "若页面要求登录，请让用户自己在手机上登录。"
+    }
+
+    /**
+     * 网址被拒时的**教学式**解释（差距③同款：错误 + 原因 + 下一步）。
+     * 本机文件路径是最常见的误用（2026-10-01 真机 bug：file:///storage/... 被旧规范化
+     * 拼成 https://file///... → WebView ERR_NAME_NOT_RESOLVED），单独给出可执行出路。
+     */
+    private fun rejectionMessage(raw: String): String {
+        val t = raw.trim()
+        val lower = t.lowercase()
+        val looksLocal = lower.startsWith("file:") ||
+            t.startsWith("/") ||
+            t.startsWith("下载") ||
+            Regex("^[a-zA-Z]:[\\\\/]").containsMatchIn(t)
+        return if (looksLocal) {
+            "本机文件路径不能当网址打开（浏览器禁止 file:// 读本机文件）。要预览本机 HTML/网页项目，" +
+                "用 start_web_preview 起一个静态服务：项目若在「下载/<项目名>/」（save_code_file 存的），" +
+                "容器内挂载于 /mnt/download/<项目名>；若在共享目录，挂载于 /mnt/lab/<项目名>。" +
+                "例：python3 -m http.server \$PREVIEW_PORT --directory /mnt/download/<项目名>，" +
+                "用户点聊天里的预览入口即可访问，不要把文件路径直接传给本工具。"
+        } else {
+            "网址不合法（只支持 http/https）：$raw"
+        }
     }
 
     /** 读取当前页面（正文 + 编号） */
@@ -359,16 +383,27 @@ internal object BrowserToolProvider : ToolProvider {
      * 只放行 http/https：`file://` 能读到本机文件、`javascript:` 能直接执行脚本，
      * 都不该由"打开一个网址"顺带获得（[com.rokidlab.phone.browser.BrowserActivity] 的
      * 导航闸门同样只放行 http/about —— 两处是同一策略的两道）。
+     *
+     * ⚠️ 2026-10-01 修复「https://file///...」真机 bug：**必须先判原始 scheme，再做 https 补全**。
+     * 旧实现把 `file:///storage/...` 当作"无 scheme"输入拼成 `https://file///storage/...`
+     * （host=file），URI 校验拦不住（scheme 已是合法 https、host 非空），WebView 拿去解析
+     * 域名 `file` 失败 → ERR_NAME_NOT_RESOLVED。现在带任意非 http(s) scheme 的输入直接拒绝。
      */
     private fun normalizeUrl(raw: String): String? {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return null
-        val hasScheme = trimmed.startsWith("http://", ignoreCase = true) ||
-            trimmed.startsWith("https://", ignoreCase = true)
-        val candidate = if (hasScheme) trimmed else "https://" + trimmed.trimStart('/')
+        val scheme = Regex("^([a-zA-Z][a-zA-Z0-9+.-]*):").find(trimmed)?.groupValues[1]?.lowercase()
+        if (scheme != null && scheme != "http" && scheme != "https") return null
+        // 无 scheme：像本地路径的（/storage/...、C:\...）不该补 https://，直接拒绝
+        if (scheme == null &&
+            (trimmed.startsWith("/") || Regex("^[a-zA-Z]:[\\\\/]").containsMatchIn(trimmed))
+        ) {
+            return null
+        }
+        val candidate = if (scheme != null) trimmed else "https://" + trimmed.trimStart('/')
         val uri = runCatching { java.net.URI(candidate) }.getOrNull() ?: return null
-        val scheme = uri.scheme?.lowercase()
-        if (scheme != "http" && scheme != "https") return null
+        val uriScheme = uri.scheme?.lowercase()
+        if (uriScheme != "http" && uriScheme != "https") return null
         if (uri.host.isNullOrBlank()) return null
         Log.i(TAG, "normalizeUrl: $raw -> $candidate")
         return candidate

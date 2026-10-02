@@ -11,7 +11,6 @@ import com.rokidlab.phone.ai.llm.LlmRegistry
 import com.rokidlab.phone.app.LabApplication
 import org.json.JSONArray
 import org.json.JSONObject
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 只读子代理（方案 §4.3.2）：把"查资料并给结论"这类多轮调研**派出去做**，
@@ -28,8 +27,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * ## 三条硬约束（与 DSH 的差异都写在这里）
  *
  * DSH 在桌面上有 6 种 subagent provider，手机上不成立 —— 每一条都对应一个真实代价：
- *  1. **同一时间只允许 1 个**：并发子代理 = 并发模型请求（token 翻倍 + 限流更容易触顶 +
- *     真机上几乎无法排查"这两个结论分别是谁给的"）；
+ *  1. **并发受限**（2026-10-02 由 1 放宽到 2）：并发子代理 = 并发模型请求（token 翻倍 +
+ *     限流更容易触顶 + 真机上几乎无法排查"这两个结论分别是谁给的"）——
+ *     与 write 型子代理共用 [SubagentSlots]，读写合计仍封顶；
  *  2. **墙上时钟硬上限**（[MAX_WALL_MS]）：主循环在等它，一次调研把用户晾 5 分钟
  *     比"只查了一半"更糟。超时就带着已有结论返回，并如实说明；
  *  3. **本地模型直接拒绝**：本地轻量会话连主 Agent 的工具都不装配（小模型背不动
@@ -59,8 +59,7 @@ internal object ReadOnlySubagent {
     /** 工具返回回填进子代理上下文的单条上限（同主循环的截断意图：别让一篇网页吃光窗口） */
     private const val TOOL_OUTPUT_MAX = 6000
 
-    /** 并发闸门：同时只允许 1 个子任务 */
-    private val busy = AtomicBoolean(false)
+    /** 并发闸门：与 write 型子代理共用 [SubagentSlots]（2026-10-02 由并发 1 放宽到 2） */
 
     /**
      * 跑一个只读调研子任务。
@@ -72,17 +71,19 @@ internal object ReadOnlySubagent {
     fun run(context: Context, question: String, rounds: Int): String {
         val q = question.trim()
         if (q.isEmpty()) return "子任务没说要查什么（question 不能为空）。请写清要回答的问题。"
-        if (!busy.compareAndSet(false, true)) {
-            return "已经有一个子任务在跑了（同一时间只允许 1 个）。等它返回结论后再派下一个，或者你自己直接查。"
-        }
-        val maxRounds = (if (rounds > 0) rounds else MAX_ROUNDS_DEFAULT).coerceIn(1, MAX_ROUNDS_CAP)
-        return try {
-            runInner(context, q, maxRounds)
-        } catch (e: Exception) {
-            Log.w(TAG, "subtask failed: ${e.message}", e)
-            "子任务执行失败（${e.message}）。可以换个更具体的问法重试，或者你自己用现有工具直接查。"
-        } finally {
-            busy.set(false)
+        return SubagentSlots.tryWithSlot(
+            onFull = {
+                "子任务槽位已满（同一时间最多 2 个）。等手头的子任务返回后再派，或者你自己直接查。"
+            },
+        ) {
+            try {
+                val maxRounds = (if (rounds > 0) rounds else MAX_ROUNDS_DEFAULT)
+                    .coerceIn(1, MAX_ROUNDS_CAP)
+                runInner(context, q, maxRounds)
+            } catch (e: Exception) {
+                Log.w(TAG, "subtask failed: ${e.message}", e)
+                "子任务执行失败（${e.message}）。可以换个更具体的问法重试，或者你自己用现有工具直接查。"
+            }
         }
     }
 

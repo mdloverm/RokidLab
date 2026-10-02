@@ -27,7 +27,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  *     无 query 时回退「最近的 K 条」；条数多时不再全量灌入，
  *     省 token 且降低无关记忆对回答的干扰。注入的编号与 items() 全量列表一致，
  *     保证 AI delete-by-index 语义稳定。
- *   - 存储：SQLite（无 Room 依赖），带时间戳；容量上限（FIFO 淘汰）+ 90 天自动过期。
+ *   - 存储：SQLite（无 Room 依赖），带时间戳；容量上限 + **价值评分淘汰**（mem0 风格，
+ *     见 [MemoryScoring]：重要性 + 新近度衰减 + 访问频率，替代旧的纯 FIFO）；
+ *     90 天「没人碰」自动过期（锚点是最近一次被用到，常用记忆自然免过期）。
  *     旧版 SharedPreferences JSON 数组在首次打开时自动迁移。
  *
  * **两类记忆，按 [kind] 分开注入（2026-09-22 加）**：
@@ -56,14 +58,14 @@ object LongTermMemoryManager {
      */
     const val KIND_LESSON = "lesson"
 
-    /** 记忆条数上限（检索式注入后可支撑更大容量，超出按 FIFO 淘汰最旧） */
+    /** 记忆条数上限（超出按 [MemoryScoring] 价值分淘汰最低者，同为最低分时按 FIFO） */
     private const val MAX_ITEMS = 200
 
     /**
      * 经验教训条数上限（独立于 [MAX_ITEMS]）。
      *
      * 给教训单独设上限，是为了让"自动积累的经验"永远挤不掉用户亲口说过的事实：
-     * 教训再多也只在自己这 60 条里 FIFO，用户偏好那 200 条不受影响。
+     * 教训再多也只在自己这 60 条里按价值分淘汰，用户偏好那 200 条不受影响。
      */
     private const val MAX_LESSONS = 60
 
@@ -97,8 +99,10 @@ object LongTermMemoryManager {
      * 库版本。**提升前先确认 [MemoryDb.onUpgrade] 有对应的增量迁移**——记忆是用户/Agent
      * 跨会话积累的数据，升级清库属于不可恢复的数据丢失。
      * v3：memories 增加 embedding / embedding_model 列（语义向量检索）。
+     * v4：memories 增加 importance / access_count / last_accessed 列（mem0 风格价值评分淘汰，
+     * 见 [MemoryScoring]）——老数据全部落默认值（重要度 0.5 / 从未访问），语义正好。
      */
-    internal const val DB_VERSION = 3
+    internal const val DB_VERSION = 4
 
     /**
      * 写锁：AI 工具循环会并发执行多个 toolCalls（如 delete+create 同时到达），
@@ -150,6 +154,9 @@ object LongTermMemoryManager {
                     "content TEXT UNIQUE NOT NULL," +
                     "created_at INTEGER NOT NULL," +
                     "kind TEXT NOT NULL DEFAULT 'fact'," +
+                    "importance REAL NOT NULL DEFAULT 0.5," +
+                    "access_count INTEGER NOT NULL DEFAULT 0," +
+                    "last_accessed INTEGER," +
                     "embedding BLOB," +
                     "embedding_model TEXT)",
             )
@@ -169,6 +176,16 @@ object LongTermMemoryManager {
                     .onFailure { Log.w(TAG, "add embedding column failed: ${it.message}") }
                 runCatching { db.execSQL("ALTER TABLE memories ADD COLUMN embedding_model TEXT") }
                     .onFailure { Log.w(TAG, "add embedding_model column failed: ${it.message}") }
+            }
+            // v3 → v4：加价值评分三列（mem0 风格淘汰，见 [MemoryScoring]）。默认值即老数据语义：
+            // 「重要度中性、从未被注入命中」—— 它们会按新近度参与排序，不会因为缺列被误杀。
+            if (oldVersion < 4) {
+                runCatching { db.execSQL("ALTER TABLE memories ADD COLUMN importance REAL NOT NULL DEFAULT 0.5") }
+                    .onFailure { Log.w(TAG, "add importance column failed: ${it.message}") }
+                runCatching { db.execSQL("ALTER TABLE memories ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0") }
+                    .onFailure { Log.w(TAG, "add access_count column failed: ${it.message}") }
+                runCatching { db.execSQL("ALTER TABLE memories ADD COLUMN last_accessed INTEGER") }
+                    .onFailure { Log.w(TAG, "add last_accessed column failed: ${it.message}") }
             }
         }
     }
@@ -245,11 +262,13 @@ object LongTermMemoryManager {
     private class Row(val kind: String, val content: String)
 
     /**
-     * 检索用记忆行：在 [Row] 基础上多带已存的语义向量。
+     * 检索用记忆行：在 [Row] 基础上多带主键与已存的语义向量。
+     * [id] 用于注入命中后的「保鲜」回写（[touch]：计数 + 刷新时间锚点）；
      * [embedding] 为 null 表示尚未嵌入（等 [maybeBackfill] 懒补）；模型名不匹配当前配置
      * 视为过期向量，检索时跳过。
      */
     private class RetrievalRow(
+        val id: Long,
         val kind: String,
         val content: String,
         val embedding: ByteArray?,
@@ -264,9 +283,9 @@ object LongTermMemoryManager {
      */
     private fun retrievalRows(d: SQLiteDatabase, kind: String? = null): List<RetrievalRow> {
         val sql = if (kind == null) {
-            "SELECT kind, content, embedding, embedding_model FROM memories ORDER BY id ASC"
+            "SELECT id, kind, content, embedding, embedding_model FROM memories ORDER BY id ASC"
         } else {
-            "SELECT kind, content, embedding, embedding_model FROM memories WHERE kind = ? ORDER BY id ASC"
+            "SELECT id, kind, content, embedding, embedding_model FROM memories WHERE kind = ? ORDER BY id ASC"
         }
         return try {
             d.rawQuery(sql, kind?.let { arrayOf(it) }).use { c ->
@@ -274,10 +293,11 @@ object LongTermMemoryManager {
                     while (c.moveToNext()) {
                         out.add(
                             RetrievalRow(
-                                c.getString(0) ?: KIND_FACT,
-                                c.getString(1),
-                                c.getBlob(2),
-                                c.getString(3),
+                                c.getLong(0),
+                                c.getString(1) ?: KIND_FACT,
+                                c.getString(2),
+                                c.getBlob(3),
+                                c.getString(4),
                             ),
                         )
                     }
@@ -330,31 +350,23 @@ object LongTermMemoryManager {
     /** 新增一条记忆：与已有完全相同则忽略（幂等），成功返回新条数 */
     fun add(context: Context, content: String): Int = add(context, content, KIND_FACT)
 
+    /** 新增一条记忆（指定种类），重要度取默认档 5 */
+    fun add(context: Context, content: String, kind: String): Int = add(context, content, kind, 5)
+
     /**
-     * 新增一条记忆（指定种类）。
+     * 新增一条记忆（指定种类与重要度）。
      *
-     * 幂等靠 `content` 的 UNIQUE 约束：**同一条教训重复出现不会堆积成多条**，
-     * 这正是自动写入敢往这里丢内容的前提（否则同样的错误记十遍会挤爆 60 条上限）。
+     * 幂等有**两层**：`content` 的 UNIQUE 约束拦逐字重复；[addOrMerge] 的冲突消解
+     * 把「同一事实的演进/翻转」（改述、否定更新）合并成一条 —— 同一条教训重复出现
+     * 不会堆积成多条，这正是自动写入敢往这里丢内容的前提
+     * （否则同样的错误记十遍会挤爆 60 条上限）。
      *
      * @param kind [KIND_FACT] / [KIND_LESSON]
+     * @param importance AI 给出的重要度 1-10（mem0 的 LLM 评级，见 [MemoryScoring]）；
+     *   落库前归一化为 0.1~1.0
      */
-    fun add(context: Context, content: String, kind: String): Int = synchronized(lock) {
-        val text = content.trim().take(MAX_ITEM_CHARS)
-        val d = db(context)
-        val k = if (kind == KIND_LESSON) KIND_LESSON else KIND_FACT
-        if (text.isEmpty()) return@synchronized countRows(d)
-        try {
-            d.execSQL(
-                "INSERT OR IGNORE INTO memories(content, created_at, kind) VALUES(?, ?, ?)",
-                arrayOf(text, System.currentTimeMillis(), k),
-            )
-            enforceCap(d)
-            countRows(d)
-        } catch (e: Exception) {
-            Log.w(TAG, "add failed: ${e.message}")
-            countRows(d)
-        }
-    }
+    fun add(context: Context, content: String, kind: String, importance: Int): Int =
+        addOrMerge(context, content, kind, importance).total
 
     /**
      * 记一条**经验教训**（[KIND_LESSON]）：AI 在这台设备上踩过的坑、或验证有效的做法。
@@ -371,11 +383,14 @@ object LongTermMemoryManager {
      *
      * ★ 为什么需要它：自动沉淀（工具执行失败后由代码写入）的内容里必然带着**每次都不一样的
      *   错误串**，而 UNIQUE 约束只认整条正文 —— 同一个工具失败十次就是十条近似重复的教训，
-     *   60 条上限很快被这类"同一个坑"塞满，真正有价值的经验反而被 FIFO 挤掉。
+     *   60 条上限很快被这类"同一个坑"塞满，真正有价值的经验反而被挤掉。
      *   按 key（如工具名）去重后，**同一个坑只留第一条**，这才是"记到规则里"该有的样子。
      *
+     * ★ 已存在时会**刷新**既有教训的时间锚点（last_accessed）：同一个坑再次出现，
+     *   恰恰证明这条教训仍然有效 —— mem0 的「复现即保鲜」，让它别在价值分里被 newer 内容压死。
+     *
      * @param dedupKey 去重标记（按包含匹配；建议用工具名这类稳定标识）
-     * @return 真的写入了返回 true；已存在同 key 教训或写入失败返回 false
+     * @return 真的写入了返回 true；已存在同 key 教训（含刷新）或写入失败返回 false
      */
     fun addLessonOnce(context: Context, dedupKey: String, content: String): Boolean {
         val key = dedupKey.trim()
@@ -392,6 +407,13 @@ object LongTermMemoryManager {
                 false
             }
             if (exists) {
+                // 复现即保鲜：教训内容不堆叠，但"还在踩这个坑"这件事要计入淘汰评分
+                runCatching {
+                    d.execSQL(
+                        "UPDATE memories SET last_accessed = ? WHERE kind = ? AND content LIKE ? ESCAPE '!'",
+                        arrayOf(System.currentTimeMillis(), KIND_LESSON, "%${escapeLike(key)}%"),
+                    )
+                }
                 false
             } else {
                 add(context, content, KIND_LESSON)
@@ -403,6 +425,121 @@ object LongTermMemoryManager {
     /** 转义 LIKE 通配符（`!` 为转义符，见 SQL 里的 `ESCAPE '!'`） */
     private fun escapeLike(s: String): String =
         s.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+
+    // ──────────────────────────────────────────────
+    //  冲突消解（mem0：同一事实的演进/翻转以新覆旧，而非多条并存）
+    // ──────────────────────────────────────────────
+
+    /** 词法合并阈值：中文 2-gram Jaccard 达到它即视为「同一句话的改述」（近似重复） */
+    internal const val MERGE_JACCARD = 0.70
+
+    /** 注入去重的嵌入余弦阈值：同模型双向量达到它即视为「同一事实的不同版本」 */
+    internal const val DEDUP_COSINE = 0.90
+
+    /** 否定词字符：短句 gram 几乎全包含于长句、多出的 gram 带这些字 ⇒ 语义翻转（喜欢→不喜欢） */
+    private const val NEGATORS = "不没别非无勿未"
+
+    /** 中文 2-gram Jaccard 相似度（纯函数，可单测）：两个 [tokenize] 集合的交并比 */
+    internal fun lexicalSimilarity(a: String, b: String): Double {
+        val ta = tokenize(a)
+        val tb = tokenize(b)
+        if (ta.isEmpty() || tb.isEmpty()) return 0.0
+        val inter = ta.count { it in tb }
+        return inter.toDouble() / (ta.size + tb.size - inter)
+    }
+
+    /**
+     * 两条记忆是否「同一事实的演进/翻转」，应合并为一条（纯函数，可单测）。
+     *
+     * 两类典型场景：
+     *  - **改述**：「每天9点上班」vs「我每天9点才上班」—— 2-gram Jaccard 很高；
+     *  - **否定翻转**：「我喜欢猫」vs「我不喜欢猫」—— Jaccard 只有 0.6 抓不住，
+     *    但结构上是「短句的 gram 几乎都在长句里、多出来的 gram 带否定字」，
+     *    单独一条判据捕捉它（这正是冲突消解最想抓的形态）。
+     *
+     * 刻意**只判「高相似」不判「语义相反」**：嵌入区分不了「喜欢猫/喜欢狗」与
+     * 「喜欢猫/不喜欢猫」（两组都高度相似），词法侧的否定判据是唯一可靠信号；
+     * 判不出就让两条共存 —— 宁可库里有冗余，不可把两条不同的事实合并丢信息。
+     */
+    internal fun conflictMerge(a: String, b: String): Boolean {
+        val ta = tokenize(a)
+        val tb = tokenize(b)
+        if (ta.isEmpty() || tb.isEmpty()) return false
+        val inter = ta.count { it in tb }
+        val jaccard = inter.toDouble() / (ta.size + tb.size - inter)
+        if (jaccard >= MERGE_JACCARD) return true
+        // 否定翻转：短句 gram 大部分被长句包含，且长句多出的 gram 含否定字
+        val shorter = if (ta.size <= tb.size) ta else tb
+        val longer = if (ta.size <= tb.size) tb else ta
+        if (longer.size > shorter.size * 2) return false // 长度差太大不是同一句话的改述
+        val contained = shorter.count { it in longer }.toDouble() / shorter.size
+        if (contained < 0.65) return false
+        return (longer - shorter).any { g -> g.any { it in NEGATORS } }
+    }
+
+    /** [addOrMerge] 的结果：[total] 为记忆总条数；[mergedFrom] 非 null 表示替换了这条旧记忆 */
+    internal class AddResult(val total: Int, val mergedFrom: String?)
+
+    /**
+     * 新增记忆，**先做冲突消解**：与既有记忆「同一事实的演进/翻转」（见 [conflictMerge]）时，
+     * 用新内容**替换**旧条而不是追加 —— mem0 的 update 语义。
+     *
+     * ★ 为什么必须做：`content UNIQUE` 只拦逐字重复，拦不住「用户喜欢猫」之后又来
+     *   「用户不喜欢猫」—— 两条都进检索窗口，模型每轮都被矛盾信息干扰；
+     *   容量也在为同一个事实的多个版本付费。
+     *
+     * 替换语义（与用户手动 [update] 对齐）：正文/created_at 换新、旧向量作废（等懒回填）、
+     * importance 取新旧较大值（重新确认过的事实不应降级）、access_count 保留
+     * （这个事实被用过的热度属于事实本身，不随表述更新清零）。
+     */
+    internal fun addOrMerge(context: Context, content: String, kind: String, importance: Int): AddResult =
+        synchronized(lock) {
+            val text = content.trim().take(MAX_ITEM_CHARS)
+            val d = db(context)
+            val k = if (kind == KIND_LESSON) KIND_LESSON else KIND_FACT
+            if (text.isEmpty()) return@synchronized AddResult(countRows(d), null)
+            try {
+                // 写入前先在同 kind 内找「演进/翻转」的旧条：取词法分最高且过判据的那条
+                var bestId = -1L
+                var bestFrom: String? = null
+                var best = 0.0
+                d.rawQuery("SELECT id, content FROM memories WHERE kind = ?", arrayOf(k)).use { c ->
+                    while (c.moveToNext()) {
+                        val old = c.getString(1)
+                        val sim = lexicalSimilarity(text, old)
+                        if (sim > best && conflictMerge(text, old)) {
+                            best = sim
+                            bestId = c.getLong(0)
+                            bestFrom = old
+                        }
+                    }
+                }
+                if (bestFrom != null) {
+                    d.execSQL(
+                        "UPDATE memories SET content = ?, created_at = ?, " +
+                            "importance = MAX(importance, ?), embedding = NULL, embedding_model = NULL " +
+                            "WHERE id = ?",
+                        arrayOf<Any?>(
+                            text,
+                            System.currentTimeMillis(),
+                            importance.coerceIn(1, 10) / 10.0,
+                            bestId,
+                        ),
+                    )
+                    Log.i(TAG, "merged new memory into #$bestId (conflict resolution)")
+                    return@synchronized AddResult(countRows(d), bestFrom)
+                }
+                d.execSQL(
+                    "INSERT OR IGNORE INTO memories(content, created_at, kind, importance) VALUES(?, ?, ?, ?)",
+                    arrayOf(text, System.currentTimeMillis(), k, importance.coerceIn(1, 10) / 10.0),
+                )
+                enforceCap(d)
+                AddResult(countRows(d), null)
+            } catch (e: Exception) {
+                Log.w(TAG, "addOrMerge failed: ${e.message}")
+                AddResult(countRows(d), null)
+            }
+        }
 
     /**
      * 删除记忆：入参可为记忆编号（1 起，对应 items() 顺序）或内容片段（包含匹配）。
@@ -461,6 +598,7 @@ object LongTermMemoryManager {
      *
      * created_at 一并刷新：用户刚亲手确认过这条内容，90 天过期计时理应从这一刻重新算，
      * 否则改完一条两年没动过的旧记忆，它下次读取就被惰性清理掉了。
+     * last_accessed 同步刷新：用户确认 = 最强的一次「被用到」（价值评分的时间锚点随之归零）。
      *
      * @return 改到了返回 true；编号越界 / 内容为空 / 与另一条重复（`content` 有 UNIQUE 约束）返回 false
      */
@@ -473,9 +611,14 @@ object LongTermMemoryManager {
                     if (!c.moveToFirst()) return@synchronized false
                     // 正文变了，旧向量描述的是改前内容 —— 一并作废，等懒回填按新正文重算
                     d.execSQL(
-                        "UPDATE memories SET content = ?, created_at = ?, " +
+                        "UPDATE memories SET content = ?, created_at = ?, last_accessed = ?, " +
                             "embedding = NULL, embedding_model = NULL WHERE id = ?",
-                        arrayOf<String>(text, System.currentTimeMillis().toString(), c.getLong(0).toString()),
+                        arrayOf<String>(
+                            text,
+                            System.currentTimeMillis().toString(),
+                            System.currentTimeMillis().toString(),
+                            c.getLong(0).toString(),
+                        ),
                     )
                     true
                 }
@@ -505,7 +648,7 @@ object LongTermMemoryManager {
         val facts = all.withIndex()
             .filter { it.value.kind == KIND_FACT }
             .map { it.index to it.value }
-        val picked = pickRelevant(context, facts, query, INJECT_TOP_K) ?: return null
+        val picked = pickRelevant(context, d, facts, query, INJECT_TOP_K) ?: return null
         return buildString {
             append("以下是与当前话题可能相关的长期记忆（跨会话积累，可据此个性化回答）：\n")
             picked.forEach { (i, r) -> append("${i + 1}. ${r.content}\n") }
@@ -523,7 +666,7 @@ object LongTermMemoryManager {
         val d = db(context)
         pruneExpired(d)
         val lessons = retrievalRows(d, KIND_LESSON).mapIndexed { i, r -> i to r }
-        val picked = pickRelevant(context, lessons, query, LESSON_INJECT_TOP_K) ?: return null
+        val picked = pickRelevant(context, d, lessons, query, LESSON_INJECT_TOP_K) ?: return null
         return buildString {
             append("以下是你过去在这台设备上踩过的坑或验证过的做法（跨会话积累）。做同类事情时先照它来，不要重复试错：\n")
             picked.forEach { (_, r) -> append("· ").append(r.content).append('\n') }
@@ -545,18 +688,28 @@ object LongTermMemoryManager {
      * 任一情况下自动缺席，结果与旧版纯词法**完全一致**——绝不因向量通道故障让检索不可用。
      * query 为空 / 两路全不命中时回退「最近 K 条」（同旧版）。
      *
+     * ★ 所有被注入的记忆都会 [touch] 一次（mem0 的「访问即保鲜」）：注入本身就是
+     *   这条记忆"还在被使用"的最直接证据，是淘汰评分里频率/新近度两个信号的数据来源。
+     *
      * @param items (编号, 行) 列表；编号的语义由调用方定义（事实=全局位置，教训=占位）
      * @return 命中的 (编号, 行)（按编号升序，注入编号稳定）；入参为空返回 null
      */
     private fun pickRelevant(
         context: Context,
+        d: SQLiteDatabase,
         items: List<Pair<Int, RetrievalRow>>,
         query: String?,
         topK: Int,
     ): List<Pair<Int, RetrievalRow>>? {
         if (items.isEmpty()) return null
+        // snap 提前加载：注入去重（[dedupSimilar]）在 fallback 路径也需要它（prefs 读，代价极小）
+        val snap = EmbeddingSettings.load(context)
         val q = query?.trim().orEmpty()
-        if (q.isEmpty()) return items.takeLast(topK)
+        if (q.isEmpty()) {
+            val fallback = dedupSimilar(items.takeLast(topK), snap)
+            touch(d, fallback.map { it.second.id })
+            return fallback
+        }
         val qTokens = tokenize(q)
 
         // ── 词法路：词元重叠数排序，平分时新条目优先（与旧版一致）──
@@ -569,7 +722,6 @@ object LongTermMemoryManager {
             .map { it.first }
 
         // ── 语义路：未启用直接缺席；运行期失败绝不拖垮整条检索 ──
-        val snap = EmbeddingSettings.load(context)
         val vecRanked = if (snap.ready) {
             maybeBackfill(context, snap)
             runCatching { vectorRanked(context, snap, q, items) }
@@ -586,7 +738,67 @@ object LongTermMemoryManager {
         val picked = fused.take(topK)
             .map { pos -> items[pos] }
             .sortedBy { it.first } // 恢复编号升序，注入编号与全量列表一致
-        return picked.ifEmpty { items.takeLast(topK) }
+        val result = dedupSimilar(picked.ifEmpty { items.takeLast(topK) }, snap)
+        touch(d, result.map { it.second.id })
+        return result
+    }
+
+    /**
+     * 注入窗口内的**冲突消解**：同一事实的多个版本只留最新的（id 大者，mem0 update 语义），
+     * 防止「喜欢猫」与「不喜欢猫」同时出现在注入列表里互相打架。
+     *
+     * 判据见 [conflictSimilar]（词法改述/否定翻转 + 嵌入余弦，向量检索路现成、零额外网络）。
+     * 编号是全局位置，去重只影响「哪些进来」，编号本身不变 —— delete 定位不受影响。
+     */
+    private fun dedupSimilar(
+        picked: List<Pair<Int, RetrievalRow>>,
+        snap: EmbeddingSnapshot,
+    ): List<Pair<Int, RetrievalRow>> =
+        picked.sortedByDescending { it.second.id }
+            .fold(mutableListOf<Pair<Int, RetrievalRow>>()) { kept, item ->
+                if (kept.none { conflictSimilar(it.second, item.second, snap) }) kept.add(item)
+                kept
+            }
+            .sortedBy { it.first }
+
+    /** 两条记忆是否同一事实的版本：词法判据（[conflictMerge]）或同模型嵌入余弦 ≥ [DEDUP_COSINE] */
+    private fun conflictSimilar(a: RetrievalRow, b: RetrievalRow, snap: EmbeddingSnapshot): Boolean {
+        if (conflictMerge(a.content, b.content)) return true
+        val va = a.vectorFor(snap) ?: return false
+        val vb = b.vectorFor(snap) ?: return false
+        var dot = 0.0
+        for (i in va.indices) dot += va[i].toDouble() * vb[i].toDouble()
+        return dot >= DEDUP_COSINE
+    }
+
+    /** 行的当前模型向量（未嵌入/模型不匹配返回 null —— 与 [vectorRanked] 的过滤口径一致） */
+    private fun RetrievalRow.vectorFor(snap: EmbeddingSnapshot): FloatArray? {
+        val blob = embedding ?: return null
+        if (embeddingModel != snap.model) return null
+        return KnowledgeBase.decodeVector(blob)
+    }
+
+    /**
+     * 注入命中 = 「被用到」：命中次数 +1 并刷新新近锚点（[MemoryScoring] 的两个活信号）。
+     *
+     * ⚠️ 刻意**不走 [lock]**：这是单条原子 UPDATE（自增 + 覆盖时间），没有「读-改-写」竞态窗口；
+     * 而本函数在 prompt 组装的同步路径上，去抢工具 mutator 的锁只会白等。
+     */
+    private fun touch(d: SQLiteDatabase, ids: List<Long>) {
+        if (ids.isEmpty()) return
+        try {
+            val placeholders = ids.joinToString(",") { "?" }
+            val args = arrayOfNulls<Any?>(ids.size + 1)
+            args[0] = System.currentTimeMillis()
+            ids.forEachIndexed { i, id -> args[i + 1] = id }
+            d.execSQL(
+                "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id IN ($placeholders)",
+                args,
+            )
+        } catch (e: Exception) {
+            // 保鲜回写失败只丢一次计数，检索结果不受影响 —— 静默降级
+            Log.w(TAG, "memory touch failed: ${e.message}")
+        }
     }
 
     /**
@@ -781,7 +993,7 @@ object LongTermMemoryManager {
     }
 
     /**
-     * 两类记忆**各自** FIFO 淘汰超出上限的最旧条目。
+     * 两类记忆**各自**淘汰超出上限的部分。
      *
      * ⚠️ 两个上限必须在自己的 kind 内淘汰，不能合并成一个总数上限：
      * 教训是可以自动积累的，而事实只能由用户/AI 显式写入 —— 合起来算的话，
@@ -792,23 +1004,71 @@ object LongTermMemoryManager {
         trimKind(d, KIND_LESSON, MAX_LESSONS)
     }
 
+    /**
+     * 按 [MemoryScoring] 价值分淘汰超限条目（mem0 风格，2026-10-02 起替代 FIFO）。
+     *
+     * ★ 为什么不再按 id 删最旧：FIFO 里「用户亲口说的身份信息」和「AI 顺手记的备注」
+     *   地位相同，谁先写谁先走。现在淘汰的是**分最低**的 —— 不重要的、久未命中的
+     *   先走；重要/常用的老记忆即使写得早也能留。
+     *
+     * ⚠️ 平分时仍按 id 升序（旧 FIFO 语义兜底）：同分的两条总得有确定性的走法，
+     *   留新去旧是更合理的默认。
+     *
+     * 评分查询失败时**回退旧 FIFO**：淘汰是容量底线，宁可退化为粗糙也不能不淘汰。
+     */
     private fun trimKind(d: SQLiteDatabase, kind: String, max: Int) {
         val n = countRows(d, kind)
-        if (n > max) {
+        if (n <= max) return
+        val overflow = n - max
+        try {
+            data class Scored(val id: Long, val score: Double)
+            val scored = ArrayList<Scored>(n)
+            d.rawQuery(
+                "SELECT id, importance, access_count, last_accessed, created_at FROM memories WHERE kind = ?",
+                arrayOf(kind),
+            ).use { c ->
+                val now = System.currentTimeMillis()
+                while (c.moveToNext()) {
+                    val score = MemoryScoring.evictionScore(
+                        importance = c.getDouble(1),
+                        accessCount = c.getInt(2),
+                        lastAccessed = if (c.isNull(3)) null else c.getLong(3),
+                        createdAt = c.getLong(4),
+                        now = now,
+                    )
+                    scored.add(Scored(c.getLong(0), score))
+                }
+            }
+            scored.sortedWith(compareBy<Scored> { it.score }.thenBy { it.id })
+                .take(overflow)
+                .forEach { v -> d.delete("memories", "id=?", arrayOf(v.id.toString())) }
+            Log.i(TAG, "trim $kind: evicted $overflow lowest-score of $n (cap=$max)")
+        } catch (e: Exception) {
+            // 旧语义兜底：删最旧。新列读到脏值/缺失都不该让容量失控
+            Log.w(TAG, "score-based trim failed, fall back to FIFO: ${e.message}")
             d.execSQL(
                 "DELETE FROM memories WHERE id IN (" +
-                    "SELECT id FROM memories WHERE kind = ? ORDER BY id ASC LIMIT ${n - max})",
+                    "SELECT id FROM memories WHERE kind = ? ORDER BY id ASC LIMIT $overflow)",
                 arrayOf(kind),
             )
         }
     }
 
-    /** 惰性清理过期记忆（读取路径顺带执行，代价极小） */
+    /**
+     * 惰性清理过期记忆（读取路径顺带执行，代价极小）。
+     *
+     * ★ 90 天的计时锚点从「写入时间」换成「**最近一次被用到**」（[MemoryScoring] 的锚点口径）：
+     * `COALESCE(last_accessed, created_at)` —— 注入命中、用户编辑、教训复现都会刷新。
+     * 旧的一刀切会误杀「每季度必用」的偏好（春节回家路线）；现在只要还在被用就不会过期，
+     * 真正 90 天没人碰的（含从未被检索命中的长尾）才清出去。
+     */
     private fun pruneExpired(d: SQLiteDatabase) {
         try {
             val cutoff = System.currentTimeMillis() - EXPIRE_DAYS * 24L * 3600 * 1000
-            d.delete("memories", "created_at < ?", arrayOf(cutoff.toString()))
-        } catch (_: Exception) {
+            d.delete("memories", "COALESCE(last_accessed, created_at) < ?", arrayOf(cutoff.toString()))
+        } catch (e: Exception) {
+            // 过期清理失败只影响容量回收（不会误删记忆），但不能静默 —— 否则永久失效后无从排查
+            Log.w(TAG, "pruneExpired failed: ${e.message}")
         }
     }
 
@@ -851,6 +1111,12 @@ object LongTermMemoryManager {
                             put("type", "string")
                             put("description", "create 时是要记住的内容；delete 时是要删除的编号或内容片段；list/clear 时省略")
                         })
+                        put("importance", JSONObject().apply {
+                            put("type", "integer")
+                            put("minimum", 1)
+                            put("maximum", 10)
+                            put("description", "create 时的重要度 1-10（默认 5，可省略）：身份/长期偏好 8-10，习惯与常用信息 5-7，临时细节 1-4")
+                        })
                     })
                     put("required", JSONArray(listOf("action")))
                 })
@@ -870,9 +1136,15 @@ object LongTermMemoryManager {
             "create" -> {
                 val content = args.optString("content").trim()
                 if (content.isEmpty()) return "create 需要提供 content 内容"
-                val total = add(context, content, kind)
-                if (kind == KIND_LESSON) "已记下这条经验教训（共 $total 条记忆）"
-                else "已记住：$content（共 $total 条长期记忆）"
+                // 重要度 1-10（缺省 5）：落库前 coerce 兜底，模型传出界值不会污染评分
+                val importance = args.optInt("importance", 5).coerceIn(1, 10)
+                val r = addOrMerge(context, content, kind, importance)
+                // 合并发生时要让模型知道：它可能需要向用户改口（"已更新"而不是"已记住"）
+                when {
+                    kind == KIND_LESSON -> "已记下这条经验教训（共 ${r.total} 条记忆）"
+                    r.mergedFrom != null -> "已更新相关的既有记忆（共 ${r.total} 条长期记忆）"
+                    else -> "已记住：$content（共 ${r.total} 条长期记忆）"
+                }
             }
 
             "delete" -> {

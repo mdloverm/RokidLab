@@ -25,9 +25,13 @@ import org.json.JSONObject
  * **漏调的表现是"设置页看得见新工具、模型却永远不调"，且不报错**。
  *
  * ## 三条准入约束（方案 §4.4：安全靠准入，不靠审批闸门）
- * 因为 `ApprovalGate` 是 **fail-open**（无确认通道/超时即降级放行，RULES §12.10），
- * 且当前没有任何真实工具登记为 `EXTERNAL_SIDE_EFFECT`（闸门空转），第三方工具的
- * 安全必须落在这里：
+ * 因为 `ApprovalGate` 对**内置工具**是 fail-open（无确认通道/超时即按声明降级放行，RULES §12.10），
+ * 而 MCP 工具的调用方是**第三方页面**、动作本身也无法保证"未确认时只做无副作用的事"，
+ * 所以第三方工具的安全不指望闸门兜底，必须落在这里：
+ *  ⚠️ 反过来说，**不要**因为"MCP 工具都走 BLOCK"就推断闸门是空的 —— 内置侧已登记
+ *  `delete_file` / `delete_script` / `install_packages` / `send_sms` / `delete_knowledge_doc` /
+ *  `manage_glasses_app` / `delete_calendar_event` 等 `EXTERNAL_SIDE_EFFECT` 工具，名单由
+ *  `ApprovalGateTest` 的 **E1** 钉住（新增必须同步）。两条路的安全目标不同，别互相替代。
  *  1. **必须 https**（release 包禁止明文流量，http 地址直接拒绝并给出可读原因）；
  *  2. **默认关**：工具首次出现时把开关显式写成 false（[ToolRegistry.ensureDisabledByDefault]），
  *     因为 `isEnabled` 的兜底是 `true`，"连上即全开"不可接受；
@@ -84,19 +88,30 @@ internal object McpRegistry {
         val schema: JSONObject,
     )
 
-    @Volatile
-    private var states: Map<String, ServerState> = emptyMap()
+    /**
+     * 一致性快照（R14）：states（server 状态表）与 origin（wireName 反查表）**原子发布**。
+     *
+     * 原先两个独立 @Volatile，「先 states 后 origin」的发布窗口内会出现：
+     * 新 server 的状态可见、但它的工具反查不到 ⇒ 调用白耗一轮（虽然自愈，但不必要的错误反馈
+     * 会诱使页面/模型重试）。读侧永远读**同一个** snapshot，窗口消失。
+     */
+    private class Snapshot(
+        val states: Map<String, ServerState> = emptyMap(),
+        val origin: Map<String, Pair<String, String>> = emptyMap(),
+    )
 
-    /** wireName → (serverId, 原始工具名)：工具调用的反向映射（只含当前可用的） */
     @Volatile
-    private var origin: Map<String, Pair<String, String>> = emptyMap()
+    private var snapshot = Snapshot()
+
+    private fun sortedUsable(states: Map<String, ServerState>): List<ServerState> =
+        states.values.filter { it.config.enabled && it.usable }.sortedBy { it.config.addedAt }
 
     // ═══════════════════ 供 McpToolProvider 读取（动态 getter，不能是快照） ═══════════════════
 
-    fun activeToolNames(): Set<String> = origin.keys.toSet()
+    fun activeToolNames(): Set<String> = snapshot.origin.keys.toSet()
 
     fun activeEntries(): List<ToolEntry> =
-        sortedUsable().flatMap { st -> st.tools.map { toEntry(st.config, it) } }
+        sortedUsable(snapshot.states).flatMap { st -> st.tools.map { toEntry(st.config, it) } }
 
     /**
      * 执行一次 MCP 工具调用。
@@ -104,23 +119,42 @@ internal object McpRegistry {
      * **永不抛异常** —— 这是工具回填路径，抛出去会让主循环把整轮判失败
      * （与 `ReadOnlySubagent.run` 同一约定）。失败原因写进文本交给模型。
      */
-    fun call(name: String, args: JSONObject): String {
-        val mapped = origin[name]
+    fun call(ctx: Context, name: String, args: JSONObject): String {
+        val snap = snapshot
+        val mapped = snap.origin[name]
             ?: return "未知的 MCP 工具：$name（对端可能已断开，请刷新服务器列表）"
         val (serverId, originalName) = mapped
-        val st = states[serverId] ?: return "MCP server 未连接"
+        val st = snap.states[serverId] ?: return "MCP server 未连接"
         if (!st.usable) {
             return "MCP server「${st.config.name}」当前不可用：${st.error ?: "已断开"}"
         }
-        return McpClient.callTool(st.endpoint, st.sessionId, st.config.headers, originalName, args)
+        // 与 connect 同一套头装配：OAuth Bearer 优先，静态 Authorization 头让位
+        val headers = buildMap {
+            putAll(st.config.headers.filterKeys { !it.equals("Authorization", ignoreCase = true) })
+            McpOAuth.authHeader(ctx, serverId)?.let { put("Authorization", it) }
+        }
+        val result = McpClient.callTool(st.endpoint, st.sessionId, headers, originalName, args)
+        // 调用期 401：多半是 access token 在连接后过期了 —— 静默刷一层并原样重试一次
+        // （McpClient 永不抛异常 ⇒ 401 以带标记的文本回来，见 McpClient.callTool）
+        if (result.contains("未授权（401）") && McpOAuth.hasTokens(ctx, serverId)) {
+            val refreshError = McpOAuth.refreshIfNeeded(ctx, serverId, st.config.url, force = true)
+            if (refreshError == null) {
+                val retryHeaders = buildMap {
+                    putAll(st.config.headers.filterKeys { !it.equals("Authorization", ignoreCase = true) })
+                    McpOAuth.authHeader(ctx, serverId)?.let { put("Authorization", it) }
+                }
+                return McpClient.callTool(st.endpoint, st.sessionId, retryHeaders, originalName, args)
+            }
+        }
+        return result
     }
 
     // ═══════════════════ 状态查询（设置页） ═══════════════════
 
     /** 全部 server 状态，按添加时间排序（稳定展示顺序） */
-    fun allStates(): List<ServerState> = states.values.sortedBy { it.config.addedAt }
+    fun allStates(): List<ServerState> = snapshot.states.values.sortedBy { it.config.addedAt }
 
-    fun stateOf(serverId: String): ServerState? = states[serverId]
+    fun stateOf(serverId: String): ServerState? = snapshot.states[serverId]
 
     // ═══════════════════ 生命周期 ═══════════════════
 
@@ -129,6 +163,9 @@ internal object McpRegistry {
      *
      * ⚠️ **同步阻塞**（stdio server 还要先拉桥 + 健康检查，最多再等 ~10s）
      * ⇒ 必须在后台线程调用（UI 侧用 `Dispatchers.IO`），不要在 Compose 组合里直接调。
+     *
+     * OAuth：若该 server 已有授权 token（[McpOAuth]），自动附加 `Authorization: Bearer` 头；
+     * 连接中遇到 401（[McpUnauthorizedException]）且存在 refresh_token 时静默续期一次并重试。
      *
      * @return **null = 成功**；非 null = 失败原因（已面向用户措辞，可直接展示）
      */
@@ -149,22 +186,48 @@ internal object McpRegistry {
             put(config, ServerState(config, false, null, emptyList(), reason, emptyList(), endpoint))
             return reason
         }
+        val reason = connectWithAuth(ctx, config, endpoint, forcedRefresh = false)
+        if (reason == null) return null
+        put(config, ServerState(config, false, null, emptyList(), reason, emptyList(), endpoint))
+        return reason
+    }
+
+    /**
+     * 带鉴权的连接尝试：initialize + listTools。
+     *
+     * 401 处理口径（只重试一层，避免循环）：
+     *  - 有 refresh_token 且还没试过强刷 ⇒ 静默续期后**原地重试一次**；
+     *  - 续期失败 / 重试仍 401 ⇒ 返回可读原因；若 server 曾授权过（有 token），
+     *    原因文案提示"重新授权"，设置页据此亮出授权按钮。
+     */
+    private fun connectWithAuth(
+        ctx: Context,
+        config: McpServerConfig,
+        endpoint: String,
+        forcedRefresh: Boolean,
+    ): String? {
+        // OAuth Bearer 优先于静态头：它是"最新的凭证"；用户手填的其它头照常透传
+        // （Bearer 与手填 Authorization 冲突时以 Bearer 为准 —— 静态 token 必然过期，没有保留价值）
+        val headers = buildMap {
+            putAll(config.headers.filterKeys { !it.equals("Authorization", ignoreCase = true) })
+            McpOAuth.authHeader(ctx, config.id)?.let { put("Authorization", it) }
+        }
         val sessionId = try {
-            McpClient.initialize(endpoint, config.headers)
+            McpClient.initialize(endpoint, headers)
+        } catch (e: McpUnauthorizedException) {
+            return onUnauthorized(ctx, config, endpoint, forcedRefresh, "连接被拒绝（401）")
         } catch (e: Exception) {
-            val reason = "连接失败：${e.message ?: e.javaClass.simpleName}"
             // ⚠️ 只打 endpoint 不打 headers —— headers 可能含 token
             Log.w(TAG, "connect $endpoint failed: ${e.message}")
-            put(config, ServerState(config, false, null, emptyList(), reason, emptyList(), endpoint))
-            return reason
+            return "连接失败：${e.message ?: e.javaClass.simpleName}"
         }
         val defs = try {
-            McpClient.listTools(endpoint, sessionId, config.headers)
+            McpClient.listTools(endpoint, sessionId, headers)
+        } catch (e: McpUnauthorizedException) {
+            return onUnauthorized(ctx, config, endpoint, forcedRefresh, "获取工具列表被拒绝（401）")
         } catch (e: Exception) {
-            val reason = "获取工具列表失败：${e.message ?: e.javaClass.simpleName}"
             Log.w(TAG, "listTools $endpoint failed: ${e.message}")
-            put(config, ServerState(config, false, sessionId, emptyList(), reason, emptyList(), endpoint))
-            return reason
+            return "获取工具列表失败：${e.message ?: e.javaClass.simpleName}"
         }
         val (registered, rejected) = buildTools(ctx, config, defs)
         put(
@@ -183,11 +246,35 @@ internal object McpRegistry {
         return null
     }
 
+    /** 401 的统一处置：能刷则刷一层再重试；不能刷则给带行动指引的原因文案 */
+    private fun onUnauthorized(
+        ctx: Context,
+        config: McpServerConfig,
+        endpoint: String,
+        forcedRefresh: Boolean,
+        prefix: String,
+    ): String {
+        if (!forcedRefresh && McpOAuth.hasTokens(ctx, config.id)) {
+            val refreshError = McpOAuth.refreshIfNeeded(ctx, config.id, config.url, force = true)
+            if (refreshError == null) {
+                Log.i(TAG, "token refreshed, retrying connect ${config.name}")
+                return connectWithAuth(ctx, config, endpoint, forcedRefresh = true)
+                    ?: prefix // 成功路径理论上不会走到这里（成功时 connect() 直接返回）
+            }
+            Log.w(TAG, "refresh failed for ${config.name}: $refreshError")
+        }
+        val authorizedBefore = McpOAuth.hasTokens(ctx, config.id)
+        return "$prefix：" + if (authorizedBefore) {
+            "登录凭证已失效且自动续期未成功，请点「授权登录」重新授权"
+        } else {
+            "该 server 需要 OAuth 授权，请点「授权登录」"
+        }
+    }
+
     /** 断开并移除某个 server（它的工具随即从模型可见清单消失；stdio 桥一并停掉） */
     fun disconnect(ctx: Context, serverId: String) {
-        states = states - serverId
+        publish(snapshot.states - serverId)
         McpStdioBridge.stop(ctx, serverId)
-        rebuildIndex()
     }
 
     /**
@@ -200,9 +287,9 @@ internal object McpRegistry {
         val configs = McpServerStore.load(ctx)
         val keptIds = configs.map { it.id }.toSet()
         // 配置里已删除的 server：状态与 stdio 桥一并清掉（桥是常驻进程，不能跟着配置变成孤儿）
-        states.keys.filter { it !in keptIds }.forEach { McpStdioBridge.stop(ctx, it) }
-        states = states.filterKeys { it in keptIds }
-        rebuildIndex()
+        val stale = snapshot.states.keys.filter { it !in keptIds }
+        stale.forEach { McpStdioBridge.stop(ctx, it) }
+        publish(snapshot.states.filterKeys { it in keptIds })
         configs.filter { it.enabled }.forEach { cfg ->
             runCatching { connect(ctx, cfg) }
                 .onFailure { Log.w(TAG, "syncAll ${cfg.name} threw: ${it.message}") }
@@ -220,8 +307,15 @@ internal object McpRegistry {
 
     // ═══════════════════ 内部 ═══════════════════
 
-    private fun sortedUsable(): List<ServerState> =
-        states.values.filter { it.config.enabled && it.usable }.sortedBy { it.config.addedAt }
+    /** 发布新快照：由 states 整表重建 origin，原子替换并通知 `ToolRegistry` 失效派生表 */
+    private fun publish(states: Map<String, ServerState>) {
+        val map = LinkedHashMap<String, Pair<String, String>>()
+        sortedUsable(states).forEach { st ->
+            st.tools.forEach { map[it.wireName] = st.config.id to it.originalName }
+        }
+        snapshot = Snapshot(states, map)
+        ToolRegistry.setDynamicProviders(listOf(McpToolProvider))
+    }
 
     /**
      * 地址准入：**只允许 https；明文 http 仅限回环地址**。
@@ -281,10 +375,16 @@ internal object McpRegistry {
         val rejected = mutableListOf<String>()
         val taken = mutableSetOf<String>()
 
-        defs.take(MAX_TOOLS_PER_SERVER).forEach { def ->
+        // 上限在**校验之后**才生效（R14）：原先 `defs.take(30)` 先截断再校验，
+        // 排在前面的不合规工具会白占名额，把后面 schema 合法、本来能用的工具挤出清单。
+        defs.forEach { def ->
+            if (accepted.size >= MAX_TOOLS_PER_SERVER) {
+                rejected += "${def.name}（超出单 server 上限 $MAX_TOOLS_PER_SERVER，未注册）"
+                return@forEach
+            }
             val wire = wireNameOf(config.id, def.name)
-            // 撞名检测：同一 server 内、以及跨 server（origin 里已被别人占）
-            val otherOwner = origin[wire]?.first
+            // 撞名检测：同一 server 内、以及跨 server（快照 origin 里已被别人占）
+            val otherOwner = snapshot.origin[wire]?.first
             if (wire in taken || (otherOwner != null && otherOwner != config.id)) {
                 rejected += "${def.name}（工具名与已有工具冲突）"
                 return@forEach
@@ -309,10 +409,7 @@ internal object McpRegistry {
             accepted += RegisteredTool(wire, def.name, desc, schema)
         }
 
-        if (defs.size > MAX_TOOLS_PER_SERVER) {
-            rejected += "另有 ${defs.size - MAX_TOOLS_PER_SERVER} 个工具因超出单 server 上限" +
-                "（$MAX_TOOLS_PER_SERVER）未注册"
-        }
+        // 上限溢出已在上面逐条记 rejected（含被挤出的具体工具名），这里不再重复汇总
         // 准入控制：首次见到的工具默认**关**（第三方能力默认不信任）
         accepted.forEach { ToolRegistry.ensureDisabledByDefault(ctx, it.wireName) }
         return accepted to rejected
@@ -363,23 +460,7 @@ internal object McpRegistry {
             .joinToString("").ifBlank { "s" }
 
     private fun put(config: McpServerConfig, state: ServerState) {
-        states = states + (config.id to state)
-        rebuildIndex()
-    }
-
-    /**
-     * 由 [states] 重建反向映射，并**通知 `ToolRegistry` 失效派生表与 schema 缓存**。
-     *
-     * 这个通知是本类最容易被漏掉的一步：不做的话，工具已注册、设置页也看得见，
-     * 但模型拿到的 `tools` 还是旧的一组，而且**不报错**。
-     */
-    private fun rebuildIndex() {
-        val map = LinkedHashMap<String, Pair<String, String>>()
-        sortedUsable().forEach { st ->
-            st.tools.forEach { map[it.wireName] = st.config.id to it.originalName }
-        }
-        origin = map
-        ToolRegistry.setDynamicProviders(listOf(McpToolProvider))
+        publish(snapshot.states + (config.id to state))
     }
 
     private fun toEntry(cfg: McpServerConfig, tool: RegisteredTool): ToolEntry = ToolEntry(

@@ -35,12 +35,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.rokidlab.phone.R
+import android.widget.Toast
 import com.rokidlab.phone.ai.ToolRegistry
+import com.rokidlab.phone.ai.mcp.McpOAuth
 import com.rokidlab.phone.ai.mcp.McpRegistry
 import com.rokidlab.phone.ai.mcp.McpServerConfig
 import com.rokidlab.phone.ai.mcp.McpServerStore
@@ -134,6 +137,8 @@ internal fun McpServersPage(
                 text = stringResource(R.string.chat_settings_mcp_hint),
                 color = BrewMuted,
                 fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             if (busy) {
                 Spacer(Modifier.height(6.dp))
@@ -193,6 +198,7 @@ internal fun McpServersPage(
                         state = st,
                         expanded = cfg.id in expanded,
                         toolStates = toolStates,
+                        oauthStatus = McpOAuth.oauthState(ctx, cfg.id),
                         onToggleExpand = {
                             expanded = if (cfg.id in expanded) expanded - cfg.id else expanded + cfg.id
                         },
@@ -216,6 +222,19 @@ internal fun McpServersPage(
                                 withContext(Dispatchers.IO) { McpRegistry.reload(ctx, cfg) }
                                 reloadStates()
                                 busy = false
+                            }
+                        },
+                        onAuthorize = {
+                            scope.launch {
+                                busy = true
+                                val err = withContext(Dispatchers.IO) {
+                                    McpOAuth.beginAuthorization(ctx, cfg)
+                                }
+                                err?.let { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show() }
+                                busy = false
+                                // 授权成功与否由回调 Activity 收尾（换 token + 重连 + Toast）；
+                                // 这里只兜底刷新一次状态
+                                reloadStates()
                             }
                         },
                         onEdit = { editing = cfg },
@@ -251,6 +270,8 @@ internal fun McpServersPage(
             onConfirm = {
                 servers = McpServerStore.remove(ctx, target.id)
                 McpRegistry.disconnect(ctx, target.id)
+                // 授权 token 一并清掉：server 都删了，留着一截 Bearer 没有意义
+                McpOAuth.clear(ctx, target.id)
                 reloadStates()
                 deleting = null
             },
@@ -265,10 +286,12 @@ private fun ServerCard(
     state: McpRegistry.ServerState?,
     expanded: Boolean,
     toolStates: Map<String, Boolean>,
+    oauthStatus: McpOAuth.OauthState?,
     onToggleExpand: () -> Unit,
     onToggleEnabled: (Boolean) -> Unit,
     onToggleTool: (String, Boolean) -> Unit,
     onReconnect: () -> Unit,
+    onAuthorize: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -376,6 +399,37 @@ private fun ServerCard(
                     .clickable(enabled = toolCount > 0) { onToggleExpand() }
                     .padding(horizontal = 6.dp, vertical = 3.dp),
             )
+            // OAuth 授权入口：仅 https 远程 server（本地/stdio server 无需授权）。
+            // oauthStatus != null 表示已有 token（"已授权/已过期"），按钮文案随之变化
+            val oauthEligible = !cfg.isStdio && cfg.url.startsWith("https://", ignoreCase = true)
+            if (oauthEligible) {
+                Text(
+                    text = stringResource(
+                        if (oauthStatus != null) R.string.mcp_oauth_relogin else R.string.mcp_oauth_login,
+                    ),
+                    color = BrewChat,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onAuthorize() }
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                )
+                if (oauthStatus != null) {
+                    Text(
+                        text = stringResource(
+                            if (oauthStatus == McpOAuth.OauthState.EXPIRED) {
+                                R.string.mcp_oauth_state_expired
+                            } else {
+                                R.string.mcp_oauth_state_authorized
+                            },
+                        ),
+                        color = if (oauthStatus == McpOAuth.OauthState.EXPIRED) BrewAmber else BrewMuted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(start = 4.dp),
+                    )
+                }
+            }
             Spacer(Modifier.weight(1f))
             TextButton(onClick = onReconnect) {
                 Text(stringResource(R.string.mcp_reconnect), color = BrewMuted, fontSize = 12.sp)

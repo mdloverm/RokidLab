@@ -11,10 +11,13 @@ import com.rokidlab.phone.ai.LongTermMemoryManager
 import com.rokidlab.phone.ai.SkillRegistry
 import com.rokidlab.phone.ai.ToolGateway
 import com.rokidlab.phone.ai.ToolRegistry
+import com.rokidlab.phone.ai.mcp.McpRegistry
 import com.rokidlab.phone.ai.session.SessionDump
 import com.rokidlab.phone.ai.session.SessionLog
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.platform.ProotInstaller
+import com.rokidlab.phone.proactive.ProactiveGate
+import com.rokidlab.phone.proactive.ProactiveGatePolicy
 import com.rokidlab.phone.store.ChatMsg
 import com.rokidlab.phone.store.ChatSessionStore
 import com.rokidlab.phone.store.ChatStateHolder
@@ -44,6 +47,8 @@ internal object StatusToolProvider : ToolProvider {
         "list_sessions",
         "read_session",
         "session_trace",
+        "list_mcp_servers",
+        "manage_proactive",
     )
 
     override fun tools(): List<ToolEntry> = listOf(
@@ -181,6 +186,52 @@ internal object StatusToolProvider : ToolProvider {
                 ),
             ),
         ),
+        // MCP server 清单（只读，R5）：模型此前不知道"连了哪些外部工具、健康与否"，
+        // 调用失败时只能瞎猜。增删仍走设置页 —— 准入（https / 默认关）是安全敏感操作，
+        // 不开放给模型（见 McpRegistry 三条准入约束）。
+        ToolEntry(
+            name = "list_mcp_servers",
+            group = ToolRegistry.DOMAIN_INFO,
+            displayNameRes = R.string.ai_tool_list_mcp_servers_name,
+            descriptionRes = R.string.ai_tool_list_mcp_servers_desc,
+            risk = ToolRisk.READ_ONLY,
+            statusText = "正在读取 MCP 服务器状态…",
+            schema = toolSchema(
+                name = "list_mcp_servers",
+                description = "列出已配置的外部工具服务器（MCP）：名称、连接状态、可用工具数与失败原因。当用户问「连接了哪些外部工具」「XX 工具为什么调不了」，或 MCP 工具调用失败需要判断是没连接还是服务端故障时调用。只读：添加/删除/开关服务器请引导用户到「设置 → 连接器」操作。",
+                parameters = mapOf("type" to "object", "properties" to emptyMap<String, Any>()),
+            ),
+        ),
+        // 主动行为开关（R6）：用户说「别再主动跟我打招呼」时，模型此前只能说
+        // "请自己去面板点"。只碰 ProactivePanel 的六个用户开关，不碰决策门内部的
+        // 免打扰/冷却/额度判定（那是运行期策略，不是用户开关）。
+        ToolEntry(
+            name = "manage_proactive",
+            group = ToolRegistry.DOMAIN_INFO,
+            displayNameRes = R.string.ai_tool_manage_proactive_name,
+            descriptionRes = R.string.ai_tool_manage_proactive_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在调整主动行为设置…",
+            summarize = { args ->
+                val f = args.optString("feature")
+                val on = if (args.optBoolean("on", true)) "开" else "关"
+                if (args.optString("action") == "toggle" && f.isNotBlank()) "主动行为开关：$f → $on" else "查看主动行为设置"
+            },
+            schema = toolSchema(
+                name = "manage_proactive",
+                description = "查看或切换「主动性」面板的六个功能开关（与聊天输入栏 Bolt 面板同一组开关）。action=\"list\"：看当前场景与各开关状态。action=\"toggle\"：切换单个开关，feature 取 ritual（早晚安）/ briefing（日程简报）/ care（关怀提醒）/ followup（主动回访）/ idle_chat（空闲闲聊）/ vision（走走拍拍），on 传 true/false。当用户说「别再主动跟我打招呼了」（关 idle_chat，或按用户意思关整组）、「把日程简报打开」时调用。免打扰时段、闲聊频率等细项仍请用户到面板里调。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "action" to mapOf("type" to "string", "enum" to listOf("list", "toggle"), "description" to "list=查看当前状态；toggle=切换开关"),
+                        "feature" to mapOf("type" to "string", "enum" to listOf("ritual", "briefing", "care", "followup", "idle_chat", "vision"), "description" to "action=toggle 时必填：要切换的功能"),
+                        "on" to mapOf("type" to "boolean", "description" to "action=toggle 时必填：true=开启，false=关闭"),
+                    ),
+                    "required" to listOf("action"),
+                ),
+            ),
+        ),
     )
 
     /** 日志回填上限：日志可能上千行，全量回填浪费 token（真实结论通常在尾部） */
@@ -188,6 +239,9 @@ internal object StatusToolProvider : ToolProvider {
 
     /** 跨会话检索：单条提问/回答回填上限，防长回答把 token 吃光 */
     private const val TURN_TEXT_MAX_CHARS = 220
+
+    /** sessionId 白名单：id 来自模型输出（不可信），进文件路径前必须消毒，防 `../` 路径穿越 */
+    private val SESSION_ID_RE = Regex("[A-Za-z0-9_-]+")
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
         return when (name) {
@@ -201,7 +255,72 @@ internal object StatusToolProvider : ToolProvider {
             "list_sessions" -> listSessions(context, args)
             "read_session" -> readSession(context, args)
             "session_trace" -> sessionTrace(context, args)
+            "list_mcp_servers" -> listMcpServers()
+            "manage_proactive" -> manageProactive(context, args)
             else -> throw IllegalArgumentException("未知工具: $name")
+        }
+    }
+
+    /**
+     * MCP server 清单（R5）：只读快照转可读文本。
+     * 失败原因原文带出 —— 它是排查「工具为什么调不了」的关键证据
+     * （准入拒绝 / 连接失败 / 列工具失败，三者的下一步动作完全不同）。
+     */
+    private fun listMcpServers(): String {
+        val states = runCatching { McpRegistry.allStates() }.getOrElse { e ->
+            return "读取 MCP 服务器状态失败：${e.message}"
+        }
+        if (states.isEmpty()) return "还没有配置任何外部工具服务器（MCP）。用户可在「设置 → 连接器」里添加。"
+        val lines = states.map { st ->
+            val status = when {
+                !st.config.enabled -> "已停用"
+                st.usable -> "已连接"
+                else -> "连接异常：${st.error ?: "未知原因"}"
+            }
+            buildString {
+                append("· ${st.config.name}（${status}，工具 ${st.tools.size} 个）")
+                if (st.rejected.isNotEmpty()) append("，另有 ${st.rejected.size} 个工具未通过校验被丢弃")
+            }
+        }
+        return "共 ${states.size} 个 MCP 服务器：\n" + lines.joinToString("\n") +
+            "\n（增删与开关请引导用户到「设置 → 连接器」操作）"
+    }
+
+    /** ProactiveFeature id → 中文名（工具回填给模型看，与面板措辞一致） */
+    private val proactiveLabels = mapOf(
+        ProactiveGatePolicy.ProactiveFeature.RITUAL to "早晚安",
+        ProactiveGatePolicy.ProactiveFeature.BRIEFING to "日程简报",
+        ProactiveGatePolicy.ProactiveFeature.CARE to "关怀提醒",
+        ProactiveGatePolicy.ProactiveFeature.FOLLOWUP to "主动回访",
+        ProactiveGatePolicy.ProactiveFeature.IDLE_CHAT to "空闲闲聊",
+        ProactiveGatePolicy.ProactiveFeature.VISION to "走走拍拍",
+    )
+
+    /** 六格开关快照（list 与 toggle 共用同一出口，保证模型看到的永远是切换后的真实状态） */
+    private fun renderProactiveState(gate: ProactiveGate): String {
+        val scene = gate.scene()
+        val features = ProactiveGatePolicy.ProactiveFeature.entries.joinToString("\n") { f ->
+            "· ${proactiveLabels[f]}（${f.id}）：${if (gate.isFeatureOn(f)) "开" else "关"}"
+        }
+        return "当前场景：${scene.name}\n功能开关：\n$features"
+    }
+
+    /**
+     * 主动行为开关（R6）：只碰 [ProactiveGate.setFeature] 六个用户开关 ——
+     * 决策门内部的免打扰/冷却/额度判定不在这里的职责范围（那是运行期策略，面板也没直接暴露）。
+     */
+    private fun manageProactive(context: Context, args: JSONObject): String {
+        val gate = ProactiveGate.get(context)
+        return when (args.optString("action").trim().lowercase()) {
+            "toggle" -> {
+                val id = args.optString("feature").trim().lowercase()
+                val feature = ProactiveGatePolicy.ProactiveFeature.entries.firstOrNull { it.id == id }
+                    ?: return "未知的 feature：$id（可选 ${proactiveLabels.entries.joinToString(" / ") { "${it.value}=${it.key.id}" }}）"
+                val on = args.optBoolean("on", true)
+                gate.setFeature(feature, on)
+                "已${if (on) "开启" else "关闭"}「${proactiveLabels[feature]}」。\n" + renderProactiveState(gate)
+            }
+            else -> renderProactiveState(gate)
         }
     }
 
@@ -598,6 +717,7 @@ internal object StatusToolProvider : ToolProvider {
     private fun readSession(context: Context, args: JSONObject): String {
         val id = sessionIdOf(args)
         if (id.isBlank()) return "本机还没有正在使用的会话，读不到历史。"
+        if (!SESSION_ID_RE.matches(id)) return "无效的会话 id（只允许字母、数字、下划线、连字符）。"
         val file = SessionLog.fileFor(context.filesDir, id)
         if (!file.exists()) {
             // 如实说清两种可能，而不是含糊地"没有记录" —— 用户会据此判断
@@ -618,6 +738,7 @@ internal object StatusToolProvider : ToolProvider {
     private fun sessionTrace(context: Context, args: JSONObject): String {
         val id = sessionIdOf(args)
         if (id.isBlank()) return "本机还没有正在使用的会话，看不到工具调用链。"
+        if (!SESSION_ID_RE.matches(id)) return "无效的会话 id（只允许字母、数字、下划线、连字符）。"
         val file = SessionLog.fileFor(context.filesDir, id)
         if (!file.exists()) return "会话「${sessionTitle(context, id)}」没有事件记录，看不到工具调用链。"
         val records = runCatching { SessionLog(file).read() }.getOrElse { e ->

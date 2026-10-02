@@ -539,6 +539,55 @@ internal object ChatStateHolder {
         }
     }
 
+    // ═══════════ 运行卡片（本地交互式程序，见 InteractiveRunManager） ═══════════
+
+    /**
+     * 插入一条**运行卡片**消息（程序启动时调用）。必须在主线程调用。
+     *
+     * ⚠️ **刻意不走 [persist]**：输出高频原地更新（每行一次），落盘会把聊天记录文件写成
+     * 灾难；且程序/输出在会话重放里没有意义 —— 会话重载后运行卡自然消失。
+     *
+     * ⚠️ 定位**只认 [ChatMsg.runId]**，不按"列表末尾" —— 教训来自 upsertTrace 时代：
+     * 按位置定位的消息，被中途插入的新消息一顶就劈开（永久转圈 bug）。
+     */
+    fun addRunCard(runId: String, label: String): ChatMsg {
+        val id = msgIdCounter.incrementAndGet()
+        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val msg = ChatMsg(
+            id = id,
+            isUser = false,
+            content = "",
+            time = time,
+            isStatus = false,
+            runId = runId,
+        )
+        messages.add(msg)
+        runMeta[runId] = label
+        return msg
+    }
+
+    /** 运行卡片的语言标签（runId → label；程序从 runs 移除后渲染层还要用它显示标题） */
+    private val runMeta = mutableMapOf<String, String>()
+    fun runLabel(runId: String): String = runMeta[runId] ?: ""
+
+    /** 程序输出到达：按 runId 原地更新对应消息（高频、不落盘）。必须在主线程调用 */
+    fun upsertRunOutput(runId: String, output: String) {
+        val idx = messages.indexOfFirst { it.runId == runId }
+        if (idx >= 0) messages[idx] = messages[idx].copy(content = output)
+    }
+
+    /**
+     * 程序结束：把最终输出定格进运行卡片并追加收尾行（退出码/超时原因）。
+     * Run 已从管理器移除 ⇒ 渲染层此后读 content。必须在主线程调用。
+     */
+    fun finishRunCard(runId: String, output: String, tail: String) {
+        val idx = messages.indexOfFirst { it.runId == runId }
+        if (idx >= 0) {
+            val body = listOf(output.trim(), tail).filter { it.isNotBlank() }.joinToString("\n")
+            messages[idx] = messages[idx].copy(content = body)
+        }
+    }
+
     /**
      * 添加一条图片消息：content = 图片说明（caption），[imageUrl] = 远端图片直链。
      * 由 `show_image` 工具调用，必须在主线程调用（Compose 快照线程）。

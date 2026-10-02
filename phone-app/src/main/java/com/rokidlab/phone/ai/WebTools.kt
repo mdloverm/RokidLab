@@ -109,8 +109,11 @@ object WebTools {
     /**
      * 关键词搜索网页（多引擎链式兜底，均无需 Key）。
      * 成功返回候选条目文本并标注**是哪个引擎**给的；全部失败返回说明，模型应如实告知用户。
+     *
+     * （2026-10-02 摘除）曾有商用搜索 API 头（博查/Tavily），因用户不购 key 整体移除，
+     * 回到纯免费引擎链。原实现见 git 历史 / 本日 memory 日志。
      */
-    fun search(query: String): String {
+    fun search(context: Context, query: String): String {
         val q = query.trim()
         if (q.isEmpty()) return "请提供要搜索的关键词"
 
@@ -672,6 +675,10 @@ object WebTools {
                 }
             }
             Log.i(TAG, "deleteDownloadedProject: $proj -> deleted $deleted/${ids.size} files under Download/$proj/")
+            // MediaStore 只删文件行，**不动磁盘上的目录**——删完后 Download/<proj>/ 的空目录
+            // 会一直留在文件管理器里（用户报"一堆空目录残留"的直接来源之一）。
+            // 自底向上修剪空目录；目录非空（还有非本次删除范围的东西）或无权删除时自然停下。
+            pruneEmptyDirs(File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), proj))
             return deleted
         }
         // API < 29：writeProjectFile 的兜底路径写在应用专属下载目录，直接整目录删
@@ -679,6 +686,20 @@ object WebTools {
         val ok = runCatching { dir.deleteRecursively() }.getOrDefault(false)
         Log.i(TAG, "deleteDownloadedProject(legacy): $proj -> removed=$ok")
         return if (ok) 1 else 0
+    }
+
+    /**
+     * 自底向上修剪 [root] 目录树里的**空目录**（含 [root] 本身）。
+     * 只删确认已空的目录（delete() 对非空目录本来就返回 false，天然安全）；
+     * 授予「所有文件访问」时能真删，未授权时静默失败（空目录残留，无害）。
+     */
+    private fun pruneEmptyDirs(root: File?) {
+        if (root == null || !root.isDirectory) return
+        runCatching {
+            root.walkBottomUp().filter { it.isDirectory }.forEach { d ->
+                d.list()?.isEmpty() == true && d.delete()
+            }
+        }
     }
 
     /**

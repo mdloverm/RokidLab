@@ -92,6 +92,12 @@ class CxrLHiRokidSession(
     }
     companion object {
         private const val TAG = "CxrLHiRokidSession"
+
+        /**
+         * 工具结果下行的硬上限（字符，R13）：RFCOMM 单帧 64KB，这里给 JSON 信封留足余量。
+         * 正常路径到不了 —— 网关 per-tool 40K / 通用 8K 两道闸在前；本值只兜"闸被绕过"。
+         */
+        private const val DOWNLINK_HARD_LIMIT_CHARS = 60_000
         private const val PREFS_NAME = "cxr_l_auth"
         private const val KEY_TOKEN_PREFIX = "token_"
 
@@ -360,11 +366,34 @@ class CxrLHiRokidSession(
                 .put("ok", r.ok)
             r.result?.let { out.put("result", it) }
             r.error?.let { out.put("error", it) }
+            // 物理上限证据（R13）：RFCOMM 单帧 64KB，超过它若被传输层静默截断，
+            // 页面会拿到非法 JSON 且无真因可查。网关侧已有 per-tool 40K / 通用 8K 双闸，
+            // 走到这里还超限只可能是闸被绕过/新增大结果工具未登记 —— 留下真因并改发短错误。
+            if (out.toString().length > DOWNLINK_HARD_LIMIT_CHARS) {
+                LogCollector.e(
+                    TAG,
+                    "AIUI 工具结果 ${out.toString().length} 字符超过下行硬上限 $DOWNLINK_HARD_LIMIT_CHARS" +
+                        "（name=$name cbId=$cbId）：改发短错误，请检查该工具是否漏登记结果上限",
+                )
+                val slim = JSONObject()
+                    .put("type", "toolResult")
+                    .put("cbId", cbId)
+                    .put("ok", false)
+                    .put("error", "tool '$name' produced an oversized result; downlink refused")
+                val slimSent = aiuiHost.sendAiuiHostMessage(slim.toString())
+                if (slimSent != 0) {
+                    LogCollector.w(TAG, "AIUI 短错误下行也失败 ret=$slimSent cbId=$cbId")
+                }
+                return
+            }
             // 下行返回值必须检查：sendAiuiHostMessage 走 CXR 通道，链路断开时返回 -2/-1，
             // 原先丢弃返回值会让「工具已执行但结果发不出去」完全无声（页面只能等到超时，
             // 排查时也看不到任何失败记录）。
             val sent = aiuiHost.sendAiuiHostMessage(out.toString())
             if (sent != 0) {
+                // 只 Log.w 在 logcat 里，App 内日志面板（LogCollector）看不到 —— 排查
+                // 「页面 pending 永挂」时这里是无声的（闭环审计 R8）。必须双写。
+                LogCollector.w(TAG, "AIUI 工具结果下行失败 ret=$sent name=$name cbId=$cbId（页面将等到超时）")
                 Log.w(TAG, "handleAiuiToolCall: result send failed (ret=$sent) name=$name cbId=$cbId")
             }
         } catch (e: Exception) {
@@ -379,7 +408,10 @@ class CxrLHiRokidSession(
                         .put("error", "tool call failed: ${e.message}")
                         .toString(),
                 )
-                if (ret != 0) Log.w(TAG, "handleAiuiToolCall: error send failed (ret=$ret) cbId=$cbId")
+                if (ret != 0) {
+                    LogCollector.w(TAG, "AIUI 工具错误下行失败 ret=$ret cbId=$cbId（页面将等到超时）")
+                    Log.w(TAG, "handleAiuiToolCall: error send failed (ret=$ret) cbId=$cbId")
+                }
             }
         }
     }
@@ -1049,6 +1081,10 @@ class CxrLHiRokidSession(
         com.rokidlab.phone.ai.GlassToolConfirmChannel.unbind(this)
         // 插播 B：复位握手状态，下次连接重新协商眼镜端能力
         GlassesHandshake.reset()
+        // 复位 AI 场景开关：断线后眼镜端不会补通知（见 aiSceneOpen 注释），
+        // 残留 true 会让重连后的首条下行跳过 waitAiSceneOpen 直接发 ASR_Result ——
+        // 眼镜端场景尚未重开、无会话 item 可写，提问文字静默丢失
+        setAiSceneOpen(false)
         // 下次会话重新核验眼镜端 BAL 豁免（重装 RokidLink 后 appops 会回到 default）
         glassesBalExemptConfirmed = false
         // 解除 Rokid 主机 App 服务绑定（applicationContext 绑定不随 Activity 销毁自动解绑）

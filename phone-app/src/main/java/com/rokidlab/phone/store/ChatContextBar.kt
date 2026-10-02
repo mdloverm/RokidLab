@@ -50,7 +50,7 @@ private const val DANGER_RATIO = 0.85f
 /**
  * 上下文占用条（输入框上方常驻）。
  *
- * 存在的理由：会话记忆的裁剪（12 条 / 6000 字符）原本是**完全静默**的 ——
+ * 存在的理由：会话记忆的裁剪（12 条 / 4000 token）原本是**完全静默**的 ——
  * 用户只会感到「它怎么忘了」，却无法把这件事归因到任何东西上。这里把预算做成
  * 常驻可见的细条，平时（< 60%）只是一道极淡的线不抢注意力，逼近上限时变色并给出
  * 一行说明，点开还能看到具体数字。
@@ -191,7 +191,7 @@ internal fun ContextUsageDialog(
                 fontSize = 12.sp,
             )
             Text(
-                text = stringResource(R.string.chat_context_chars, usage.chars, usage.charLimit),
+                text = stringResource(R.string.chat_context_history_tokens, usage.tokens, usage.tokenLimit),
                 color = BrewMuted,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 4.dp),

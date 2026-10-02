@@ -269,6 +269,38 @@ internal object ModelPresets {
         return false
     }
 
+    /**
+     * 该模型是否属于"思考系"家族 —— **自动开思考**（任务轮开思考，见
+     * `AiConversationService` 的 llmOptions 装配）的准入判据。
+     *
+     * ## 为什么按名白名单而不是无脑开
+     *
+     * 思考开启意味着 `max_tokens` 放大到 [com.rokidlab.phone.ai.OpenAiService.MAX_TOKENS_THINKING]
+     * （32000）。老模型（deepseek-chat/V3 时代、无思考能力的便宜档）的 max output 上限
+     * 可能小于这个值，无脑开会把原本能用的请求打成 400。所以策略与
+     * [supportsThinkingDisabled] 同一取舍：**按已知家族点名，宁可漏开也不能打挂请求**。
+     *
+     * 覆盖（2026-10-01）：
+     * - deepseek：flash（V4.1 混合思考）/ v4 / reasoner / r1 —— flash 是当前主力 agent 档，
+     *   官方 agent 基准（Terminal-Bench 等）全部在思考开启口径下测得；
+     * - doubao：seed / thinking 系（默认开思考的家族，与 supportsThinkingDisabled 同口径）；
+     * - kimi：k2 系（思考型）。
+     */
+    fun prefersThinking(model: String): Boolean {
+        val m = model.lowercase()
+        if (m.contains("deepseek")) {
+            return m.contains("flash") || m.contains("v4") ||
+                m.contains("reasoner") || m.contains("-r1") || m.contains("r1-")
+        }
+        if (m.contains("doubao")) {
+            return m.contains("seed") || m.contains("thinking")
+        }
+        if (m.contains("kimi") || m.contains("moonshot")) {
+            return m.contains("k2")
+        }
+        return false
+    }
+
     // ═══════════════════ 服务商标识（仅用于展示/统计）═══════════════════
 
     /** 从 baseUrl 推断服务商名；识别不出统一叫 openai-compatible */

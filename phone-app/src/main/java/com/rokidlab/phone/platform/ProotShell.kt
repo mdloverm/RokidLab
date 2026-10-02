@@ -5,9 +5,12 @@ import android.os.Build
 import android.os.Environment
 import android.util.Log
 import java.io.File
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
 /**
@@ -75,6 +78,14 @@ object ProotShell {
      * - 未授权时降级到 App 私有外部目录（功能不中断，只是用户不方便直接看到）。
      */
     const val GUEST_SHARE = "/mnt/lab"
+
+    /**
+     * guest 内的**公共下载目录**只读挂载点（2026-10-01）：`/mnt/download` ↔ 系统「Download」。
+     * 桥接 `save_code_file` 写到「下载/<项目名>/」的项目与容器内的预览/脚本 ——
+     * 没有它，模型起 http.server 读不到刚生成的项目（详见 [ensureDownloadBind]）。
+     * 仅在授予「所有文件访问」时挂载；容器内写侧仍走 save_code_file（MediaStore）。
+     */
+    const val GUEST_DOWNLOAD = "/mnt/download"
 
     /**
      * guest 内的**附加组件**固定挂载点（[extrasDir] 的宿主目录挂到这里）。
@@ -286,6 +297,25 @@ object ProotShell {
         "${host.absolutePath}:$GUEST_SHARE"
     }.getOrNull()
 
+    /**
+     * 公共下载目录挂载（`/mnt/download` ↔ 系统「Download」）（2026-10-01）。
+     *
+     * 为什么需要：`save_code_file` 走 MediaStore 把项目写进「下载/<项目名>/」，而容器原本只挂
+     * `/mnt/lab`（↔ 下载/Lab）—— 模型起了 `http.server` 也读不到刚生成的项目，被迫拿
+     * `file://` 路径硬开浏览器（真机 bug：URL 被拼成 `https://file///...` → ERR_NAME_NOT_RESOLVED）。
+     * 有 MANAGE_EXTERNAL_STORAGE 直通时把公共 Download 挂进来，预览/脚本就能直接读。
+     *
+     * 写侧纪律不变：容器内**不要**往 /mnt/download 写 —— MediaStore 通道（save_code_file）
+     * 才是权威写入路径（会触发媒体扫描、在文件管理器可见）；直写内核路径会绕过这些副作用。
+     * 无「所有文件访问」权限 / Android 10- 时不挂载（返回 null，靠工具描述里的降级话术兜底）。
+     */
+    private fun ensureDownloadBind(ctx: Context): String? {
+        if (!canUsePublicDownload()) return null
+        val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!dir.isDirectory) return null
+        return "${dir.absolutePath}:$GUEST_DOWNLOAD"
+    }
+
     // ═══════════════════ 诊断 ═══════════════════
 
     /**
@@ -407,8 +437,95 @@ object ProotShell {
      * 与 [ensureShareBind] 同样处理：每次执行前跑一遍（幂等），失败只记日志不拖垮命令。
      */
     private fun ensureGuestDirs(ctx: Context) {
-        runCatching { File(rootfsDir(ctx), "var/log/apt").mkdirs() }
-            .onFailure { Log.w(TAG, "log dir mkdirs failed: ${it.message}") }
+        runCatching {
+            File(rootfsDir(ctx), "var/log/apt").mkdirs()
+            // ⚠️ man 目录（2026-10-01 真机实测）：ubuntu-base 没有 /usr/share/man/man1，
+            // openjdk 这类 update-alternatives 系包的 postinst 要往里建符号链接 → dpkg
+            // 配置阶段整体失败（**包其实已解压好**），与 /var/log/apt 同一类"装了却报失败"的元凶。
+            File(rootfsDir(ctx), "usr/share/man/man1").mkdirs()
+            File(rootfsDir(ctx), "usr/share/man/man7").mkdirs()
+        }.onFailure { Log.w(TAG, "guest dirs mkdirs failed: ${it.message}") }
+        ensureGuestCompatLinks(ctx)
+    }
+
+    /**
+     * 装完环境顺带预装**常用小件**（幂等，成功后写标记跳过）：
+     * curl / wget（下载）、unzip / zip / xz-utils（解压）、jq（JSON 处理）。
+     *
+     * ## 为什么预装（2026-10-01 能力审计）
+     * 这六件合计不到 5 MB，却覆盖了模型高频的「先装包才能干活」场景 —— 不预装的话，
+     * 每次下载 / 解压 / 处理 JSON 都要走一轮 install_packages 的用户征询，摩擦极大。
+     *
+     * 失败**不阻断装机**：环境本体（bash/apt）照样可用，小件可以之后让模型用
+     * install_packages 补。标记写在 rootfs 里（`var/lib/lab/.coreutils`），
+     * 重装环境后自然重新预装。
+     *
+     * ⚠️ 调用时机：[ProotInstaller] 的 CONFIGURE 段 —— 安装线程正持 rootfs 独占锁，
+     * 本函数经 [installPackages] → [runScript] 取的是**同线程读锁**（RRWL 允许写锁降级），不会死锁。
+     */
+    fun ensureCoreUtils(ctx: Context): Boolean {
+        val marker = File(rootfsDir(ctx), "var/lib/lab/.coreutils")
+        if (marker.isFile) return true
+        val r = installPackages(
+            ctx,
+            listOf("curl", "wget", "unzip", "zip", "xz-utils", "jq"),
+            timeoutSec = 600L,
+        )
+        if (!r.ok) {
+            Log.w(TAG, "常用小件预装失败：${r.stderrTail(4).ifBlank { r.summary() }}")
+            return false
+        }
+        return runCatching {
+            marker.parentFile?.mkdirs()
+            marker.writeText("ok\n")
+            true
+        }.getOrElse {
+            Log.w(TAG, "coreutils 标记写入失败：${it.message}")
+            true   // 包装上了，标记写失败只影响幂等（下次重复 apt，无害）
+        }
+    }
+
+    /**
+     * guest 内的兼容别名（幂等，直接操作 rootfs 文件、不经 proot，与 DNS/apt 源同一套做法）：
+     * `python` → `python3`、`pip` → `pip3`。
+     *
+     * ## 为什么必须有（2026-10-01 真机定位）
+     * Ubuntu 24.04 的 python3 **不自带** `python`/`pip` 别名（那要另装 python-is-python3），
+     * 而模型写 `python x.py` 是肌肉记忆 → 容器里必报 `python: command not found`，
+     * 用户看到的就是"运行 py 代码报错"。补上符号链接后模型与用户脚本两侧一起受益。
+     *
+     * 符号链接目标用 **guest 绝对路径** `/usr/bin/python3`（guest 内任意 cwd 都能解析；
+     * 相对目标会在 /usr/local/bin 里找不到）。python3 未装时跳过（装完的下次执行自动补上）。
+     */
+    private fun ensureGuestCompatLinks(ctx: Context) {
+        runCatching {
+            val rootfs = rootfsDir(ctx)
+            val binDir = File(rootfs, "usr/local/bin")
+            for ((linkName, target) in listOf("python" to "python3", "pip" to "pip3")) {
+                if (!File(rootfs, "usr/bin/$target").exists()) continue
+                val link = File(binDir, linkName)
+                // ⚠️ 链接目标是 guest 内绝对路径（/usr/bin/xxx），宿主视角解析不到 ⇒ 悬空。
+                // File.exists() 会跟随目标解析、对悬空链接返回 false ⇒ 误判不存在 → 重建 →
+                // FileAlreadyExistsException → 每次执行打 warning 且跳过后续条目。
+                // 用 NOFOLLOW_LINKS 只看链接本体，悬空也算已存在。
+                val linkPath = link.toPath()
+                if (java.nio.file.Files.exists(linkPath, java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue
+                if (!binDir.exists() && !binDir.mkdirs()) {
+                    Log.w(TAG, "compat bin mkdirs failed: ${binDir.absolutePath}")
+                    return
+                }
+                java.nio.file.Files.createSymbolicLink(link.toPath(), java.nio.file.Paths.get("/usr/bin/$target"))
+            }
+            // ⚠️ PEP 668（2026-10-01 真机实测）：Ubuntu 24.04 的 pip 全局安装被
+            // externally-managed-environment 拦截，模型的 `pip install xxx` 必报错。
+            // 本容器是一次性 fake-root 环境，没有"可破坏的系统 Python"的顾虑，
+            // 直接写 /etc/pip.conf 放行（与 python/pip 别名同一类兼容补丁，幂等）。
+            val pipConf = File(rootfs, "etc/pip.conf")
+            if (!pipConf.exists()) {
+                pipConf.parentFile?.mkdirs()
+                pipConf.writeText("[global]\nbreak-system-packages = true\n")
+            }
+        }.onFailure { Log.w(TAG, "compat links failed: ${it.message}") }
     }
 
     /**
@@ -508,8 +625,13 @@ object ProotShell {
         return try {
             // CRLF 会让 shebang/`sed` 出诡异错（Windows 侧传进来的脚本尤其容易带上）
             file.writeText(script.replace("\r\n", "\n"))
-            // 默认挂共享文件夹 /mnt/lab 与附加组件 /opt/extras；调用方显式传的 extraBinds 在后（允许覆盖/扩展）
-            val binds = listOfNotNull(ensureShareBind(ctx), ensureExtrasBind(ctx)) + extraBinds
+            // 默认挂共享文件夹 /mnt/lab、附加组件 /opt/extras 与公共下载 /mnt/download；
+            // 调用方显式传的 extraBinds 在后（允许覆盖/扩展）
+            val binds = listOfNotNull(
+                ensureShareBind(ctx),
+                ensureExtrasBind(ctx),
+                ensureDownloadBind(ctx),
+            ) + extraBinds
             val extraPath = guestExtraPath(ctx)
             val pathValue = if (extraPath.isEmpty()) GUEST_PATH else "$GUEST_PATH:$extraPath"
             val args = baseArgs(ctx, binds) + listOf(
@@ -543,8 +665,233 @@ object ProotShell {
         onStdoutLine: ((String) -> Unit)? = null,
         onStderrLine: ((String) -> Unit)? = null,
     ): ExecResult {
+        return runScript(ctx, commandScript(command, cwd), timeoutSec, extraBinds, onStdoutLine, onStderrLine)
+    }
+
+    /**
+     * 把 command+cwd 包成脚本（[runCommand] 与后台通道共用 cwd 语义）。
+     * `cwd != "/"` 用脚本内 `cd` 实现（见 [runCommand] 注释）；`shellQuote` 是 private，
+     * 所以这个包装必须是本对象的方法 —— 别处自己拼 `cd $cwd` 就是注入面。
+     */
+    fun commandScript(command: String, cwd: String): String {
         val prefix = if (cwd == "/") "" else "cd ${shellQuote(cwd)} || exit 90\n"
-        return runScript(ctx, prefix + command + "\n", timeoutSec, extraBinds, onStdoutLine, onStderrLine)
+        return prefix + command + "\n"
+    }
+
+    // ═══════════════════ 交互式执行（代码卡"迷你终端"） ═══════════════════
+
+    /**
+     * 一段**运行中**的交互式脚本：stdin 管道保留、stdout/stderr 流式回调、空闲超时自动收尾。
+     *
+     * ## 与 [runScript]（一次性收集式）的本质区别
+     *  - stdin：一次性版本接 `/dev/null`（2026-10-01 实锤交互程序会挂满超时）；
+     *    交互版本**保留管道**，宿主经 [writeStdin] 喂数据 —— 这是它的存在意义；
+     *  - 超时：一次性版本是"从启动计时"的固定超时；交互版本是**空闲超时** ——
+     *    只要还有输出或输入就继续活着，静默 [idleTimeoutSec] 才回收
+     *    （交互程序跑多久取决于用户，不能按启动时间掐）。
+     *    ⚠️ [idleTimeoutSec] <= 0 = 不启用空闲看狗（后台长任务专用，见 RunToolProvider）。
+     *
+     * ## 锁的归属（⚠️ 与 [runScript] 不同）
+     * rootfs 读锁与执行槽位在**后台持有线程**上获取并持有到进程退出 —— RRWL 要求
+     * "谁获取谁释放"，而交互进程的寿命横跨任意多个调用线程，只能由专属线程包揽全程。
+     * 后果：交互进程存活期间"换整个 rootfs"的安装会等锁（超时即如实报"正忙"），
+     * 这是**有意的** —— 装包动 rootfs 本就不该与正在运行的程序并发。
+     *
+     * ## 已知限制（如实接受，不做 PTY）
+     * 无伪终端 ⇒ 依赖 isatty 关闭缓冲的语言（如 Java `System.out.print` 不带换行）
+     * 提示符可能延迟到下一次输出才显示；Python `input()` / bash `read` 提示符正常
+     * （它们自己会 flush）。做 PTY 需要 JNI + ptmx 权限面，收益不配成本。
+     */
+    class InteractiveHandle internal constructor(
+        private val proc: Process,
+        private val lastActivity: AtomicLong,
+    ) {
+        private val stopped = AtomicBoolean(false)
+
+        val alive: Boolean get() = proc.isAlive && !stopped.get()
+
+        /** 往程序的 stdin 写入（调用方负责带 `\n` —— Scanner/readline 都按行读） */
+        fun writeStdin(text: String) {
+            if (stopped.get() || !proc.isAlive) return
+            runCatching {
+                proc.outputStream.write(text.toByteArray(Charsets.UTF_8))
+                proc.outputStream.flush()
+                lastActivity.set(System.currentTimeMillis())
+            }
+        }
+
+        /** 用户主动停止（SIGTERM → 3 秒不退 SIGKILL；proot `--kill-on-exit` 带走 guest 子进程） */
+        fun stop() {
+            if (!stopped.compareAndSet(false, true)) return
+            runCatching { proc.destroy() }
+            Thread {
+                runCatching {
+                    if (!proc.waitFor(3, TimeUnit.SECONDS)) proc.destroyForcibly()
+                }
+            }.apply { isDaemon = true }.start()
+        }
+    }
+
+    /**
+     * 在 rootfs 里交互式执行一段脚本：立刻返回 [InteractiveHandle]（进程继续在后台跑）。
+     *
+     * - [onOutput]：stdout/stderr **合流**逐行回调（读线程上触发，调用方需自行切主线程）；
+     * - [onStarted]：进程起来后、**读线程启动前**回调（后台线程）——注册型调用方必须用它
+     *   建立"输出 → 自己"的通道，在 [onOutput] 里才能看到全部输出（含最早的编译错误）；
+     * - [onExit]：进程退出（自然结束 / 空闲超时被杀 / 用户 stop）后回调一次，**只调一次**；
+     * - 返回 null = 没起来（rootfs 未装 / 锁与槽位 5 秒内没抢到），此时 [onExit] 会收到带原因的结果。
+     */
+    fun runScriptInteractive(
+        ctx: Context,
+        script: String,
+        idleTimeoutSec: Long = 60L,
+        onStarted: ((InteractiveHandle) -> Unit)? = null,
+        onOutput: (String) -> Unit,
+        onExit: (ExecResult) -> Unit,
+    ): InteractiveHandle? {
+        val out = StringBuilder()
+        val lastActivity = AtomicLong(System.currentTimeMillis())
+        val exited = AtomicBoolean(false)
+        var handleOut: InteractiveHandle? = null
+        val ready = CountDownLatch(1)
+
+        // 全生命周期（取锁 → 启动 → 看护 → 收尾）都在这条专属线程上，满足 RRWL "谁获取谁释放"
+        Thread {
+            var readLockHeld = false
+            var slotHeld = false
+            var scriptFile: File? = null
+            var proc: Process? = null
+            try {
+                if (!rootfsReady(ctx)) {
+                    onExit(ExecResult(-1, "", "", "rootfs 未安装（先到「设置 → 本机执行环境」安装）"))
+                    return@Thread
+                }
+                val readLock = rootfsLock.readLock()
+                if (!runCatching { readLock.tryLock(EXEC_WAIT_SEC, TimeUnit.SECONDS) }.getOrDefault(false)) {
+                    onExit(ExecResult(-1, "", "", "本机执行环境正忙（安装/卸载进行中），没有启动。请稍后重试。"))
+                    return@Thread
+                }
+                readLockHeld = true
+                if (!runCatching { execSlots.tryAcquire(EXEC_WAIT_SEC, TimeUnit.SECONDS) }.getOrDefault(false)) {
+                    onExit(ExecResult(-1, "", "", "同时运行的本机命令太多（上限 $MAX_CONCURRENT_EXECUTIONS 条），没有启动。请稍后重试。"))
+                    return@Thread
+                }
+                slotHeld = true
+
+                val tmp = guestTmpDir(ctx)
+                if (!tmp.exists() && !tmp.mkdirs()) {
+                    onExit(ExecResult(-1, "", "", "无法创建 guest 临时目录"))
+                    return@Thread
+                }
+                ensureGuestDirs(ctx)
+                val name = "rl-${scriptSeq.incrementAndGet()}-${System.currentTimeMillis() % 100000}.sh"
+                val file = File(tmp, name)
+                scriptFile = file
+                file.writeText(script.replace("\r\n", "\n"))
+
+                val binds = listOfNotNull(ensureShareBind(ctx), ensureExtrasBind(ctx), ensureDownloadBind(ctx))
+                val extraPath = guestExtraPath(ctx)
+                val pathValue = if (extraPath.isEmpty()) GUEST_PATH else "$GUEST_PATH:$extraPath"
+                val args = baseArgs(ctx, binds) + listOf(
+                    "/usr/bin/env", "-i",
+                    "PATH=$pathValue",
+                    "HOME=$GUEST_HOME",
+                    "TERM=dumb",
+                    "LANG=C.UTF-8",
+                    "/bin/bash", "--noprofile", "--norc", "/tmp/$name",
+                )
+                // ⚠️ stdin 不重定向 —— 保留管道就是交互通道本身（与 ProcessRun.run 相反）。
+                // ⚠️ PROOT_TMP_DIR / PROOT_LOADER 必须**自己注入**（exec() 对一次性路径统一注入，
+                // 这里不走 exec）——缺 PROOT_TMP_DIR 时 proot 默认用 /tmp，Android 上不存在，
+                // 直接启动失败（2026-10-01 实锤：交互通道首版漏了这两个，UI 报"环境启动失败"）。
+                workDir(ctx).mkdirs()
+                tmpDir(ctx).mkdirs()
+                // ⚠️ baseArgs 返回的是 proot 的**参数**（以 "-0" 开头），**不含二进制本身**——
+                // exec() 是 ProcessRun.run(bin=prootFile, args=...) 单独传 bin。首版把参数列表
+                // 直接当命令行 ⇒ "Cannot run program \"-0\""（2026-10-01 实锤）。
+                val pb = ProcessBuilder(listOf(prootFile(ctx).absolutePath) + args)
+                pb.directory(workDir(ctx))
+                pb.environment()["PROOT_TMP_DIR"] = tmpDir(ctx).absolutePath
+                pb.environment()["PROOT_LOADER"] = loaderFile(ctx).absolutePath
+                val started = pb.start()
+                proc = started
+                handleOut = InteractiveHandle(started, lastActivity)
+                // 注册必须在读线程启动**之前**：注册型调用方（InteractiveRunManager）靠这个
+                // 建立"输出 → 自己"的通道，晚一步就丢开头的输出（编译错误恰恰在开头）
+                onStarted?.invoke(handleOut)
+                Log.i(TAG, "[interactive] started script=$name")
+
+                // stdout / stderr 必须**两条独立线程**并发读（ProcessRun 注释里的死锁警告：
+                // 单线程顺序读时，子进程写满 stderr 管道会阻塞在写，stdout 永远读不完）
+                val errThread = Thread {
+                    runCatching {
+                        started.errorStream.bufferedReader(Charsets.UTF_8).forEachLine { err ->
+                            out.appendLine(err)
+                            onOutput(err)
+                            lastActivity.set(System.currentTimeMillis())
+                        }
+                    }
+                }.apply { isDaemon = true; start() }
+                val readThread = Thread {
+                    runCatching {
+                        started.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { line ->
+                            out.appendLine(line)
+                            onOutput(line)
+                            lastActivity.set(System.currentTimeMillis())
+                        }
+                    }
+                }.apply { isDaemon = true; start() }
+
+                ready.countDown()
+
+                // 看狗：每 5 秒醒一次，静默超 idleTimeoutSec 即杀。
+                // ⚠️ idleTimeoutSec <= 0 = **不启用空闲看狗**（后台长任务通道）：
+                // 编译大项目/爬虫这类"几分钟不吐一个字"的活，60s 空闲看狗会误杀；
+                // 后台任务的回收靠调用方显式 stop（Run.stop / stop_run 工具），不靠看狗兜底。
+                var force = false
+                while (!started.waitFor(5, TimeUnit.SECONDS)) {
+                    if (idleTimeoutSec <= 0) continue
+                    val idleSec = (System.currentTimeMillis() - lastActivity.get()) / 1000
+                    if (idleSec >= idleTimeoutSec) {
+                        out.appendLine("（空闲超过 ${idleTimeoutSec}s，已自动结束）")
+                        onOutput("（空闲超过 ${idleTimeoutSec}s，已自动结束）")
+                        started.destroy()
+                        if (!started.waitFor(3, TimeUnit.SECONDS)) {
+                            started.destroyForcibly()
+                            force = true
+                        }
+                        break
+                    }
+                }
+                readThread.join(1_000L)
+                errThread.join(1_000L)
+                val code = if (force) -1 else runCatching { started.exitValue() }.getOrDefault(-1)
+                if (exited.compareAndSet(false, true)) {
+                    onExit(ExecResult(code, out.toString().trim(), ""))
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "[interactive] failed: ${e.javaClass.simpleName}: ${e.message}")
+                if (exited.compareAndSet(false, true)) {
+                    onExit(ExecResult(-1, out.toString().trim(), "", "启动失败：${e.javaClass.simpleName}: ${e.message}"))
+                }
+            } finally {
+                runCatching { scriptFile?.delete() }
+                if (slotHeld) execSlots.release()
+                if (readLockHeld) runCatching { unlockLogged(rootfsLock.readLock()) }
+                // 早退路径（rootfs 未装 / 锁失败）也要放行调用线程，别让它白等 5 秒
+                runCatching { ready.countDown() }
+            }
+        }.apply {
+            isDaemon = true
+            name = "ProotShell-interactive"
+            start()
+        }
+
+        // 调用线程最多等 5 秒拿 handle（起进程 + 落脚本足够了；拿不到说明没起来）
+        if (!ready.await(5, TimeUnit.SECONDS)) {
+            return null
+        }
+        return handleOut
     }
 
     // ═══════════════════ guest 运行期配置 ═══════════════════
@@ -563,7 +910,10 @@ object ProotShell {
         echo "python: $(command -v python3 || echo '未安装')"
         echo "node: $(command -v node || echo '未安装')"
         echo "git: $(command -v git || echo '未安装')"
+        echo "java: $(command -v java || echo '未安装')"
+        echo "core: $(for c in curl wget unzip zip xz jq; do command -v ${'$'}c >/dev/null 2>&1 && printf '%s ' "${'$'}c"; done)"
         echo "share: $(if touch /mnt/lab/.wtest 2>/dev/null; then rm -f /mnt/lab/.wtest; echo '/mnt/lab 可读写'; else echo '/mnt/lab 不可用'; fi)"
+        echo "download: $(if [ -d /mnt/download ]; then echo '/mnt/download 可用（公共下载目录）'; else echo '/mnt/download 未挂载（缺「所有文件访问」或 Android 10-）'; fi)"
         echo "disk: $(df -h / | tail -1 | tr -s ' ' | cut -d' ' -f2-4)"
         """.trimIndent(),
         timeoutSec = timeoutSec,
@@ -856,7 +1206,11 @@ object ProotShell {
         return try {
             // CRLF 教训同 runScriptLocked（Windows 侧传进来的脚本）
             file.writeText(script.replace("\r\n", "\n"))
-            val binds = listOfNotNull(ensureShareBind(ctx), ensureExtrasBind(ctx))
+            val binds = listOfNotNull(
+                ensureShareBind(ctx),
+                ensureExtrasBind(ctx),
+                ensureDownloadBind(ctx),
+            )
             val extraPath = guestExtraPath(ctx)
             val pathValue = if (extraPath.isEmpty()) GUEST_PATH else "$GUEST_PATH:$extraPath"
             val args = baseArgs(ctx, binds) + listOf(

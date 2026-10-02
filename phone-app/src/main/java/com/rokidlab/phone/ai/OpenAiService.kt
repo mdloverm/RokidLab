@@ -34,6 +34,10 @@ class OpenAiService(
      *  工具驱动会话必须关闭才能稳定工具调用）；true=不附加（服务端思考默认开启），
      *  此时调用方需把每轮返回的 reasoning_content 原样回传历史以通过多轮校验 */
     private val thinkingEnabled: Boolean = false,
+    /** 思考深度分档（P0-5，2026-10-01）：仅在 thinkingEnabled 时随请求附带 `reasoning_effort`。
+     *  取值 low/medium/high —— 任务轮 medium、调研子代理 high；null=不附带（服务端默认档）。
+     *  与 thinking 字段同款兜底：端点不认这个字段会 400，撤掉重试并记住（见 reasoningEffortRejected） */
+    private val reasoningEffort: String? = null,
 ) {
     companion object {
         private const val TAG = "OpenAiService"
@@ -51,6 +55,17 @@ class OpenAiService(
          * （表现为连续 content=null 空轮，AIUI 生成整体失败）。
          */
         private const val MAX_TOKENS_THINKING = 32000
+
+        /**
+         * finish=length 空轮自动续做时的放大预算（token）。
+         *
+         * 根治（2026-10-01）当年「用默认关思考躲空轮」的病根：思考开启后若一轮 reasoning
+         * 把 [MAX_TOKENS_THINKING] 全烧光（零 content、零 tool_calls、finish=length），
+         * 不计重试次数地按本预算**原地重放一次**——零产出 ⇒ 整轮重放无副作用（与断线重放
+         * 同一安全边界），且第二次 reasoning 通常会收敛（同一任务已想过大半）。
+         * 仅在 thinkingEnabled 时启用；关思考轮 8192 预算下 length 空轮极罕见，不值得放大。
+         */
+        private const val MAX_TOKENS_LENGTH_RETRY = 64000
 
         /**
          * 该模型是否支持用 `thinking: {"type":"disabled"}` 关闭思考。
@@ -120,6 +135,23 @@ class OpenAiService(
                 e.code in 400..499 &&
                 e.body.lowercase().contains("thinking")
 
+        /**
+         * 已知**不接受 `reasoning_effort` 字段**的「模型@端点」组合（P0-5，2026-10-01）。
+         * 与 [thinkingFieldRejected] 同策略：先带上试，被拒就撤掉重试并记住。
+         */
+        private val reasoningEffortRejected: MutableSet<String> =
+            java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+        /** 该「模型@端点」当前是否允许附带 reasoning_effort 字段 */
+        private fun allowReasoningEffort(baseUrl: String, model: String): Boolean =
+            temperatureKey(baseUrl, model) !in reasoningEffortRejected
+
+        /** 判断是否为「服务端拒绝 reasoning_effort 字段」类 4xx（错误正文提到 reasoning 才认） */
+        private fun isReasoningEffortRejection(e: Exception): Boolean =
+            e is com.rokidlab.phone.util.HttpStatusException &&
+                e.code in 400..499 &&
+                e.body.lowercase().contains("reasoning")
+
         /** 该模型当前是否应附带自定义 temperature（已被拒过的不再带） */
         private fun includeTemperature(baseUrl: String, model: String): Boolean =
             temperatureKey(baseUrl, model) !in temperatureRestricted
@@ -129,6 +161,51 @@ class OpenAiService(
             e is com.rokidlab.phone.util.HttpStatusException &&
                 e.code in 400..499 &&
                 e.body.lowercase().contains("temperature")
+
+        /**
+         * 已知**不接受 `tool_choice` 字段**的「模型@端点」组合（P1 协议现代化，2026-10-02）。
+         *
+         * 为什么要补：`tool_choice: "required"` 是「这轮必须调用至少一个工具」的协议级硬约束 ——
+         * 计划驱动续做轮靠它防止模型又出一轮"总结性空谈"（此前只能靠提示词求它出手，
+         * 对标 Claude Code / OpenAI 的 tool_choice 强约束，见评估 C 档 #3）。
+         * 但它是可选字段，聚合站/本地推理后端可能不认，严格校验的实现会整请求 400。
+         * 与 [temperatureRestricted] 同策略：先带上试，被拒就撤掉重试并记住，之后不再带。
+         * 进程内缓存即可（理由同 [streamUsageUnsupported]）。
+         */
+        private val toolChoiceRejected: MutableSet<String> =
+            java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+        /** 该「模型@端点」当前是否允许附带 tool_choice 字段 */
+        private fun allowToolChoice(baseUrl: String, model: String): Boolean =
+            temperatureKey(baseUrl, model) !in toolChoiceRejected
+
+        /** 判断是否为「服务端拒绝 tool_choice 字段」类 4xx（错误正文提到 tool_choice 才认） */
+        private fun isToolChoiceRejection(e: Exception): Boolean =
+            e is com.rokidlab.phone.util.HttpStatusException &&
+                e.code in 400..499 &&
+                e.body.lowercase().contains("tool_choice")
+
+        /**
+         * 已知**不接受 `response_format` 字段**的「模型@端点」组合（P1 协议现代化，2026-10-02）。
+         *
+         * 为什么要补：`response_format: {"type":"json_object"}` 让服务端保证 content 是合法 JSON
+         * （此前非工具 JSON 场景全靠提示词约定 + 正则剥围栏兜底，见评估 C 档 #2）。
+         * 同样是可选字段，不认它的端点会整请求 400 —— 与上面各字段同策略：
+         * 先带上试，被拒就撤掉重试并记住。进程内缓存即可（理由同上）。
+         */
+        private val responseFormatRejected: MutableSet<String> =
+            java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+        /** 该「模型@端点」当前是否允许附带 response_format 字段 */
+        private fun allowResponseFormat(baseUrl: String, model: String): Boolean =
+            temperatureKey(baseUrl, model) !in responseFormatRejected
+
+        /** 判断是否为「服务端拒绝 response_format 字段」类 4xx（正文提到 response_format / json_object 才认） */
+        private fun isResponseFormatRejection(e: Exception): Boolean {
+            if (e !is com.rokidlab.phone.util.HttpStatusException || e.code !in 400..499) return false
+            val body = e.body.lowercase()
+            return body.contains("response_format") || body.contains("json_object")
+        }
 
         /** 端点标识（host 拿不到时退化成去掉尾斜杠的 baseUrl） */
         private fun endpointHost(baseUrl: String): String {
@@ -264,6 +341,11 @@ class OpenAiService(
          * **压根不在 tools 里的工具**：白耗一轮，拿回一句"未知工具"，用户侧表现为「AI 说要查却查不了」。
          */
         availableTools: Set<String>? = null,
+        /**
+         * 项目规则（差距⑥，2026-10-01）：用户写在 `下载/RokidLab规则.md` 里的自定约定，
+         * 代码/项目类任务注入。调用方保证**每任务只读一次、任务内逐字节稳定**（缓存前缀纪律）。
+         */
+        projectRules: String? = null,
     ): JSONObject {
         val systemMsg = JSONObject()
         systemMsg.put("role", "system")
@@ -310,6 +392,9 @@ class OpenAiService(
                 if (has("search_knowledge_base")) {
                     append("\n- 用户问的是**他导入的文档/资料**里的内容时（「说明书里怎么说的」「我传给你的那份文档讲了什么」「资料里有没有提到 X」）：调用 search_knowledge_base 检索本地知识库。检索词给文档标题里的词或专有名词（原文用词），不要用口语化的转述；结果为空时它会返回库里现有文档名，据此换个词再试一次。资料里确实没有的，如实说没有，不要用你自己的知识冒充文档内容")
                 }
+                if (has("manage_knowledge_base")) {
+                    append("\n- 用户说「把这（段话/份资料）存进知识库」「记下来以后能查」时，用 manage_knowledge_base（action=add，name=文档名、text=正文）存进去，存完用 search_knowledge_base 检索一次确认内容真的能查到；用户问「知识库里有什么」用 action=list 如实列出。要删文档用 delete_knowledge_doc（不可恢复，会先向用户确认；docId 必须来自 list，先复述文档名再动手）")
+                }
                 if (has("research_subtask")) {
                     append("\n- 需要翻好几份资料才能回答的问题（对比评测、把多篇文章的要点整理出来、查一个你也不确定的事实）：用 research_subtask 派给**只读子助手**去查，它会把带来源的结论交回来。这比你自己一轮一轮搜更省轮次，也不会让大段网页正文塞满你的上下文。⚠️ 它只有只读能力（做不了设备操作/写文件），也看不到你和用户的对话 —— question 要写全")
                 }
@@ -329,11 +414,38 @@ class OpenAiService(
                 if (has("list_files")) {
                     append("\n- 涉及手机上的文件时（「我生成过哪些文件」「那个项目里有什么」「看一下 app.json」，或要改、删、重命名生成过的文件）：先用 list_files / search_files 看清有什么，再用 read_text_file 读真实内容，改动用 edit_text_file / move_file，删除用 delete_file。**不要凭印象描述文件里写了什么**；删除不可恢复，动手前先列出将删的清单并向用户确认")
                 }
+                if (has("manage_glasses_app")) {
+                    append("\n- 眼镜应用管理：装 APK 用 manage_glasses_app（action=install，apkPath 传手机存储绝对路径，可先用 list_files(scope=\"downloads\") 找）；「把那个应用关掉」用 action=stop；「卸载/删掉那个应用」用 action=uninstall（不可恢复，动手前先向用户复述应用名）。只装/停/卸 —— 打开应用用 launch_glasses_app，看装了什么用 list_glasses_apps")
+                }
+                if (has("list_glasses_files")) {
+                    append("\n- 涉及眼镜上的文件时（「眼镜里有什么文件/照片」「把眼镜里那张照片传给我」）：先用 list_glasses_files 找路径，文本内容用 read_glasses_file 读，拿到手机用 download_glasses_file（落到手机「下载」目录后告诉用户文件名）。不要凭印象猜眼镜里的路径，读不到就换个目录再列")
+                }
+                if (has("delete_calendar_event")) {
+                    append("\n- 涉及日程删改时：「把那个日程删了」用 delete_calendar_event（**不可恢复**，动手前先向用户复述要删的是哪个；先 manage_calendar action=query 看清再删，模糊匹配命中多个时向用户确认后带 eventId 重调）；「把会议改到 4 点」「改个标题」用 update_calendar_event，只更新给得出手的字段，改时间时新日期与新时刻至少给一个")
+                }
+                if (has("list_mcp_servers")) {
+                    append("\n- 外部工具（MCP）调用失败或用户问「连了哪些外部工具」时，先 list_mcp_servers 看连接状态与失败原因再回答；添加/删除服务器请引导用户到「设置 → 连接器」，你自己没有这个权限")
+                }
+                if (has("manage_proactive")) {
+                    append("\n- 用户表达「别再主动跟我打招呼了」「把日程简报关掉」这类对主动行为的偏好时，用 manage_proactive 直接改开关（feature 用 idle_chat/briefing 等对应项），改完告诉用户改了什么；免打扰时段、闲聊频率等细项不在开关里，引导用户到聊天输入栏的 Bolt 面板调")
+                }
                 if (has("save_script")) {
                     append("\n- 反复要做的处理不要每次都重拼命令：你刚用 run_shell 试通了多步流程、或用户说「以后每次都这样处理/存成脚本」时，用 save_script 把它存成脚本（**存之前先确认真的跑通**）；之后用 run_script 按名字直接跑，不确定存过什么先用 list_scripts 查（名字必须与清单完全一致，不要凭印象猜）；脚本废弃/存错要清掉时用 delete_script（删除不可恢复，先 list_scripts 确认名字，并告知用户将删哪个）")
                 }
                 if (has("run_shell")) {
-                    append("\n- run_shell 里是一个完整的 Linux 环境（bash + 常用命令）：**缺什么命令就自己装上再用** —— 先 `which xxx` 确认没有，再用 **install_packages**（它会先请用户确认）装上后接着做，不要把「没这个命令」当成结论抛回给用户。⚠️ **不要在 run_shell 里跑 apt-get install**：那条通道不问用户，而且超时上限更短，装到一半被强杀会留下 dpkg 半配置状态。环境还没安装时它会直接告诉你，这时引导用户去「设置 → 本机执行环境」安装即可，不要反复重试")
+                    append("\n- run_shell 里是一个完整的 Linux 环境（bash + 常用命令）：**缺什么命令就自己装上再用** —— 先 `which xxx` 确认没有，装上后接着做，不要把「没这个命令」当成结论抛回给用户。环境还没安装时它会直接告诉你，这时引导用户去「设置 → 本机执行环境」安装即可，不要反复重试")
+                }
+                if (has("install_packages")) {
+                    // 两工具开关独立：install_packages 的引导必须挂自己的闸门，
+                    // 否则 run_shell 开而它关时，模型被引导去调一个未下发的工具 → 白耗一轮
+                    append("\n- 缺命令/缺依赖时用 **install_packages** 装（它会先请用户确认）；⚠️ **不要在 run_shell 里直接跑 apt-get install**：那条通道不问用户，而且超时上限更短，装到一半被强杀会留下 dpkg 半配置状态")
+                }
+                if (has("read_run_output")) {
+                    // 后台任务三件套的引导挂自己的闸门（read_run_output 是组里必然存在的那把钥匙）
+                    append("\n- **长命令用 run_shell 的 background=true 后台跑**（编译大项目/批量下载/爬虫，超过超时上限的活）：拿到 runId 后用 read_run_output 轮询进度（隔一段时间再读，不要连续空转刷屏），write_run_input 可给交互程序喂输入，stop_run 停止。用户问「跑完了吗/刚才输出是什么」时，先 list_runs 拿任务列表再 read_run_output，不要凭记忆编")
+                }
+                if (has("snapshot_container")) {
+                    append("\n- 大改动容器环境**之前**（要装一堆包、跑不可控的实验脚本），可以先用 snapshot_container 拍个快照留后路；环境被改乱后用 restore_container 回档（会覆盖当前容器，先向用户说明再恢复）。没有快照时 restore 会如实返回")
                 }
                 if (has("download_file")) {
                     append("\n- 本机没有需要的文件/工具时用 download_file 把链接下到手机「下载」目录（下完可在 run_shell 里解压/赋权直接用）；`.aix`/`.apk` 这类要装的东西不要用 download_file，走对应的安装工具")
@@ -346,9 +458,17 @@ class OpenAiService(
                 }
                 if (has("open_aiui_app")) {
                     append("\n- AIUI 智能体应用（\"打开/演示 XXX 智能体\"）有**手机上**和**眼镜上**两个展示位置，调用前先判断用户要看哪儿：说\"在手机上/手机上看看/先演示一下\" → target=\"phone\"（对话里直接浮出演示卡片，不用戴眼镜）；说\"在眼镜上/戴上眼镜看/推眼镜\" → target=\"glasses\"。**两种说法都没有时先问一句「在手机上看还是眼镜上看」**，不要自己替他决定。用户要的是\"手机上演示\"时不要推眼镜，反过来也一样")
+                    append("\n- **生成 AIUI 应用**（用户提到 AIUI/智能体应用/眼镜应用/做给眼镜的页面或小游戏）有一套硬纪律：① 先 load_skill(\"aiui-dev\") 学规范，页面必须写 .ink SFC 四块结构（<script def> + <script setup> + <page> + <style>），**禁止用 HTML 文件冒充 AIUI 应用**（眼镜引擎解析不了 HTML，交出去就是黑屏）；② **眼镜屏是单色绿光波导，物理上永远没有彩色**——用户要\"彩色版\"=手机预览专属，必读该技能的 lab-runtime.md §2.4（页面写全彩 + open_aiui_app(target=\"phone\", color=true) 两步缺一不可），不要拿单色绿屏规范写彩色项目，也不要自作主张改成 HTML；③ 单个 .ink 控制在 ~150 行内，游戏/复杂页面把逻辑拆成多文件分多次写；④ **写完必须 open_aiui_app(target=\"phone\") 就地演示自检**，确认页面真的渲染出来了（不是黑屏/空白）再交付，眼镜版要另说「要装到眼镜上吗」；⑤ **任务中途失败/用户叫停时，把已落盘的残缺文件用 delete_file 删干净**（整个项目删法：project 传项目名、path 留空）——不许留只有 app.json 没有页面的半个项目在手机和眼镜上占位；⑥ **游戏/动画/异步类页面必读 lab-runtime.md §9.0（ink 沙箱无事件循环，最高频翻车点）**：setTimeout/setInterval/requestAnimationFrame/Promise.then/await 的回调**一律不执行**（真机实测零输出），只有 onLoad/onShow/onKeyDown/onMessage 事件回调有效——下落/移动动画用 **CSS animation**（渲染引擎驱动），游戏逻辑用「事件回调 + 时间戳数学」替代游戏循环，音频用 Web Audio（v0.18 支持，AudioContext.start(time) 提前调度，音频线程自己走），异步工具调用必须 Lab.callTool 回调式（禁 await/then）；⑦ **音乐/节奏类页面放真歌，不要用合成音冒充**：页面可以调 media 域工具——control_music(action=play, songName=歌名) 播放真歌（音频走手机扬声器，页面拿不到音频流），**播完立刻调一次 get_now_playing** 一次性拿 durationMs、positionMs、逐行歌词 timeMs，之后用本地时钟从 positionMs 推进做节拍/音符判定，**严禁轮询**（AIUI 页面工具调用限 30 次/分钟，轮询很快耗尽额度后全部被拒）；打击音效/倒计时滴答才用 Web Audio 合成叠加。注意页面拿不到波形与真实 BPM（歌在手机端播、眼镜无网络），节拍点只能从歌词时间戳或固定 BPM 推导，生成时如实按这个精度设计判定窗口，不要宣称波形级对齐")
                 }
                 if (has("save_code_file")) {
-                    append("\n- 写代码分两种场景，不要混用：① 用户只是想看/学/要一段代码（「写个快排」「给我一段 Python 示例」「这个函数怎么写」）→ 直接在回复正文里用围栏代码块输出（手机会渲染成可复制、可保存、可运行的卡片），**不要**调用 save_code_file；② 用户明确要生成项目/页面/应用/多个文件，或要求保存成文件 → 用 save_code_file 逐个写入手机「下载/项目名/」目录（一次一个文件、逐个调用），生成前告知「正在生成 文件名…」，最终只做简短结论（如「已生成 4 个文件，保存在下载目录的 xxx 项目」），正文里不要再贴源码")
+                    append("\n- 写代码分两种场景，不要混用：① 用户只是想看/学/要一段代码（「写个快排」「给我一段 Python 示例」「这个函数怎么写」）→ 直接在回复正文里用围栏代码块输出（手机会渲染成可复制、可保存、可运行的卡片），**不要**调用 save_code_file；② 用户明确要生成项目/页面/应用/多个文件，或要求保存成文件 → 用 save_code_file 逐个写入手机「下载/项目名/」目录（一次一个文件、逐个调用），生成前告知「正在生成 文件名…」，最终只做简短结论（如「已生成 4 个文件，保存在下载目录的 xxx 项目」），正文里不要再贴源码。**落盘后必须验证再交付，禁止盲写完就宣称完成**：网页项目（HTML/JS）生成完调用 start_web_preview 确认页面能渲染（白屏/JS 报错要修好才算完成；「下载/项目名/」在容器内挂载于 /mnt/download/项目名，服务 --directory 直接指过去）；Python/脚本类生成完用 run_shell 实际跑一遍（同样从 /mnt/download/项目名 读文件）；带着报错修到能运行，再给最终结论。**绝不要把本机文件路径当 http 网址打开**（浏览器会报错）。注意：用户要的是 **AIUI/眼镜应用**时这条 HTML 流程不适用——见 open_aiui_app 条款的 AIUI 生成纪律，必须写 .ink 而不是 HTML")
+                }
+                // 项目规则（差距⑥）：用户自维护的约定文件，代码/项目类任务注入 ——
+                // 生成一致性的一次性投入长期受益；调用方保证任务内逐字节稳定（缓存前缀纪律）
+                projectRules?.let { rules ->
+                    append("\n\n【项目规则】以下是用户为本机的代码/项目生成任务手写的约定，生成时优先遵守（与安全要求或工具准则冲突时以后者为准）：")
+                    append("\n")
+                    append(rules)
                 }
             }
             // 【关系状态】亲密度背景数据（陪伴 streak + 当日互动），首日无真实交互记录时不注入
@@ -565,12 +685,36 @@ class OpenAiService(
         tools: List<JSONObject>? = null,
         readTimeout: Int? = null,
         attempts: Int = 2,
+        toolChoice: String? = null,
+        responseFormatType: String? = null,
     ): ChatTurn {
         // 网络瞬断/服务商抖动时重试一次：一次失败即整轮失败对用户太不友好（30s 超时后直接没回复）
         var lastError: Exception? = null
+        // finish=length 空轮续做是否已用过（只续一次，语义与流式路径一致，见 chatTurnStream）
+        var lengthRetryUsed = false
         repeat(attempts) { attempt ->
             try {
-                return chatTurnOnce(messages, tools, readTimeout)
+                val turn = chatTurnOnce(
+                    messages, tools, readTimeout,
+                    if (lengthRetryUsed) MAX_TOKENS_LENGTH_RETRY else 0,
+                    toolChoice, responseFormatType,
+                )
+                if (!lengthRetryUsed && thinkingEnabled &&
+                    turn.finishReason == "length" &&
+                    turn.content.isNullOrBlank() && turn.toolCalls.isEmpty()
+                ) {
+                    lengthRetryUsed = true
+                    Log.w(
+                        TAG,
+                        "chatTurn: finish=length 且零产出（reasoning 烧光思考预算）" +
+                            "—— 按 $MAX_TOKENS_LENGTH_RETRY 预算原地重放一次（不计重试次数）",
+                    )
+                    return chatTurnOnce(
+                        messages, tools, readTimeout, MAX_TOKENS_LENGTH_RETRY,
+                        toolChoice, responseFormatType,
+                    )
+                }
+                return turn
             } catch (e: Exception) {
                 lastError = e
                 if (attempt == 0 && attempts > 1) {
@@ -626,6 +770,18 @@ class OpenAiService(
         retryBaseDelayMs: Long = 500,
         readTimeout: Int? = null,
         onReasoning: ((String) -> Unit)? = null,
+        /**
+         * 协议级工具约束（P1 协议现代化）：`"required"` = 这轮必须至少调一个工具。
+         * 计划驱动续做轮用它防止模型又出一轮"总结性空谈"（见评估 C 档 #3）。
+         * 端点不认时自动撤掉重试并按「模型@端点」记住（见 [toolChoiceRejected]）。
+         */
+        toolChoice: String? = null,
+        /**
+         * 结构化输出（P1 协议现代化）：`"json_object"` = 服务端保证 content 是合法 JSON。
+         * ⚠️ 只影响 **content**，管不到工具调用参数（save_code_file 的 app.json 走参数通道，
+         * 不适用）。端点不认时自动撤掉重试并记住（见 [responseFormatRejected]）。
+         */
+        responseFormatType: String? = null,
     ): ChatTurn {
         var lastError: Exception? = null
         // 本端点是否带上 stream_options.include_usage（唯一能拿到真实 token 用量的手段）；
@@ -634,14 +790,45 @@ class OpenAiService(
         // 本轮是否附带 thinking 关闭字段：按模型名规则 + 「被拒过不再带」共同决定
         var thinkingOptIn = !thinkingEnabled && supportsThinkingDisabled(model) &&
             allowThinkingField(baseUrl, model)
+        // 本轮是否附带 reasoning_effort（思考深度分档）：仅思考开启时有意义 + 被拒过不再带
+        var effortOptIn = thinkingEnabled && reasoningEffort != null &&
+            allowReasoningEffort(baseUrl, model)
+        // 本轮是否附带 tool_choice / response_format：调用方给了 + 被拒过不再带
+        var toolChoiceOptIn = toolChoice != null && allowToolChoice(baseUrl, model)
+        var responseFormatOptIn = responseFormatType != null && allowResponseFormat(baseUrl, model)
         var attempt = 0
+        // finish=length 空轮续做是否已用过（只续一次，见循环内的判定）
+        var lengthRetryUsed = false
         while (attempt < retryAttempts) {
             val accumulator = SseStreamAccumulator(onDelta, onReasoning)
             try {
-                return streamOnce(
+                val turn = streamOnce(
                     messages, tools, accumulator, isCancelled,
-                    readTimeout ?: readTimeoutMs, usageOptIn, thinkingOptIn,
+                    readTimeout ?: readTimeoutMs, usageOptIn, thinkingOptIn, effortOptIn,
+                    if (lengthRetryUsed) MAX_TOKENS_LENGTH_RETRY else 0,
+                    toolChoice = if (toolChoiceOptIn) toolChoice else null,
+                    responseFormatType = if (responseFormatOptIn) responseFormatType else null,
                 )
+                // ★ finish=length 空轮续做（2026-10-01 根治）：思考开启时单轮 reasoning 可能
+                //   把 MAX_TOKENS_THINKING 全烧光 —— 零 content、零 tool_calls、finish=length。
+                //   改造前靠「默认关思考」躲它（把 agent 能力一起关掉了）；现在不计重试次数地
+                //   放大预算原地重放一次：零产出 ⇒ 整轮重放无副作用（与断线重放同一安全边界），
+                //   reasoning 增量会接着推给「过程」区（表现为思考接续，无碍）。仍空则照常返回，
+                //   由上层按空轮兜底处理。
+                if (!lengthRetryUsed && thinkingEnabled &&
+                    accumulator.finishReason == "length" &&
+                    turn.content.isNullOrBlank() && turn.toolCalls.isEmpty() &&
+                    isCancelled?.invoke() != true
+                ) {
+                    lengthRetryUsed = true
+                    Log.w(
+                        TAG,
+                        "chatTurnStream: finish=length 且零产出（reasoning 烧光思考预算）" +
+                            "—— 按 $MAX_TOKENS_LENGTH_RETRY 预算原地重放一次（不计重试次数）",
+                    )
+                    continue
+                }
+                return turn
             } catch (e: Exception) {
                 lastError = e
                 // 服务端明确拒绝（4xx，除 408/429 这类「稍后再试」语义）→ 重试必然同样失败：
@@ -677,6 +864,47 @@ class OpenAiService(
                     Log.w(
                         TAG,
                         "chatTurnStream: 端点拒绝 thinking 字段（${e.message}）" +
+                            "—— 撤掉该字段重试同一轮（不计重试次数，之后该模型不再带）",
+                    )
+                    continue
+                }
+                // ★ 可选字段（reasoning_effort）被拒 ≠ 这轮对话失败：撤掉它原地重来一次（P0-5）
+                if (hopeless && isReasoningEffortRejection(e) &&
+                    effortOptIn && !accumulator.hasEmittedContent()
+                ) {
+                    reasoningEffortRejected.add(temperatureKey(baseUrl, model))
+                    effortOptIn = false
+                    Log.w(
+                        TAG,
+                        "chatTurnStream: 端点拒绝 reasoning_effort 字段（${e.message}）" +
+                            "—— 撤掉该字段重试同一轮（不计重试次数，之后该模型不再带）",
+                    )
+                    continue
+                }
+                // ★ 可选字段（tool_choice）被拒 ≠ 这轮对话失败：撤掉它原地重来一次（P1 协议现代化）。
+                //   必须排在 stream_options 通用兜底**之前**：错误正文能精确归因，
+                //   否则会被通用兜底误判成 stream_options 被拒（同 temperature 先例的注释理由）
+                if (hopeless && isToolChoiceRejection(e) &&
+                    toolChoiceOptIn && !accumulator.hasEmittedContent()
+                ) {
+                    toolChoiceRejected.add(temperatureKey(baseUrl, model))
+                    toolChoiceOptIn = false
+                    Log.w(
+                        TAG,
+                        "chatTurnStream: 端点拒绝 tool_choice 字段（${e.message}）" +
+                            "—— 撤掉该字段重试同一轮（不计重试次数，之后该模型不再带）",
+                    )
+                    continue
+                }
+                // ★ 可选字段（response_format）被拒 ≠ 这轮对话失败：撤掉它原地重来一次（P1 协议现代化）
+                if (hopeless && isResponseFormatRejection(e) &&
+                    responseFormatOptIn && !accumulator.hasEmittedContent()
+                ) {
+                    responseFormatRejected.add(temperatureKey(baseUrl, model))
+                    responseFormatOptIn = false
+                    Log.w(
+                        TAG,
+                        "chatTurnStream: 端点拒绝 response_format 字段（${e.message}）" +
                             "—— 撤掉该字段重试同一轮（不计重试次数，之后该模型不再带）",
                     )
                     continue
@@ -739,6 +967,14 @@ class OpenAiService(
         includeStreamUsage: Boolean,
         /** 是否附带上 `thinking:{"type":"disabled"}`（关思考）；由调用方按模型名规则+被拒历史决定 */
         includeThinkingDisable: Boolean,
+        /** 是否附带上 `reasoning_effort`（思考深度分档）；由调用方按 profile+被拒历史决定 */
+        includeReasoningEffort: Boolean,
+        /** >0 时覆盖默认输出预算（finish=length 空轮续做专用，见 [MAX_TOKENS_LENGTH_RETRY]） */
+        maxTokensOverride: Int = 0,
+        /** 非空时附带 `tool_choice` 字段（上层已按被拒历史过滤，见 [chatTurnStream] 的 toolChoice） */
+        toolChoice: String? = null,
+        /** 非空时附带 `response_format` 字段（上层已按被拒历史过滤，见 [chatTurnStream] 的 responseFormatType） */
+        responseFormatType: String? = null,
     ): ChatTurn {
         val base = baseUrl.trimEnd('/')
         val endpoint = when {
@@ -755,7 +991,14 @@ class OpenAiService(
             // 此处曾写死 8192，导致「收尾的非流式调用能出正文、主循环流式调用却连续空轮」的怪现象
             // （2026-09-14 真机日志：9 次空轮全部 reasoning≥2.5 万，成功轮 reasonng≤1.1 万）。
             // 两处必须共用同一套取值，见 MAX_TOKENS_DEFAULT / MAX_TOKENS_THINKING。
-            put("max_tokens", if (thinkingEnabled) MAX_TOKENS_THINKING else MAX_TOKENS_DEFAULT)
+            put(
+                "max_tokens",
+                when {
+                    maxTokensOverride > 0 -> maxTokensOverride
+                    thinkingEnabled -> MAX_TOKENS_THINKING
+                    else -> MAX_TOKENS_DEFAULT
+                },
+            )
             // 思考系模型只允许服务端默认采样参数（如 Moonshot kimi-k2.5/2.6 只接受 temperature=1）：
             // 被拒过的「模型@端点」不再附带（含用户自定义值，见 mergeExtraBody），否则整请求 400
             val withTemperature = includeTemperature(baseUrl, model)
@@ -769,6 +1012,16 @@ class OpenAiService(
             if (includeThinkingDisable) {
                 put("thinking", JSONObject().put("type", "disabled"))
             }
+            // 思考深度分档（P0-5）：仅思考开启时才有意义；端点不认时上层撤字段重试
+            if (includeReasoningEffort && reasoningEffort != null) {
+                put("reasoning_effort", reasoningEffort)
+            }
+            // 工具约束（P1 协议现代化）：计划续做轮的"必须出手"硬约束；端点不认时上层撤字段重试
+            if (toolChoice != null) put("tool_choice", toolChoice)
+            // 结构化输出（P1 协议现代化）：保证 content 为合法 JSON（管不到工具参数）；同上撤字段重试
+            if (responseFormatType != null) {
+                put("response_format", JSONObject().put("type", responseFormatType))
+            }
             // 用户自定义请求参数（本地 Ollama 调参）：最后合并，覆盖上面的默认值
             mergeExtraBody(this, extraBody, dropTemperature = !withTemperature)
         }
@@ -778,6 +1031,8 @@ class OpenAiService(
             "chatTurnStream request: model=$model max_tokens=${requestBody.optInt("max_tokens")} " +
                 "thinking=${if (requestBody.has("thinking")) "disabled" else "server-default"} " +
                 "temperature=${if (requestBody.has("temperature")) "0.7" else "server-default"} " +
+                "tool_choice=${requestBody.opt("tool_choice") ?: "none"} " +
+                "response_format=${requestBody.optJSONObject("response_format")?.optString("type") ?: "none"} " +
                 "tools=${tools?.size ?: 0}",
         )
         val headers = mapOf(
@@ -818,15 +1073,29 @@ class OpenAiService(
         messages: JSONArray,
         tools: List<JSONObject>? = null,
         readTimeout: Int? = null,
+        /** >0 时覆盖默认输出预算（finish=length 空轮续做专用，见 [MAX_TOKENS_LENGTH_RETRY]） */
+        maxTokensOverride: Int = 0,
+        toolChoice: String? = null,
+        responseFormatType: String? = null,
     ): ChatTurn {
-        // temperature / thinking 两个字段都可能被服务端单独拒绝：各撤一次原地重试
-        // （与流式路径兜底同款）。循环必然收敛 —— 每次 continue 都把对应开关置 false。
+        // temperature / thinking / reasoning_effort / tool_choice / response_format 五个字段
+        // 都可能被服务端单独拒绝：各撤一次原地重试（与流式路径兜底同款）。
+        // 循环必然收敛 —— 每次 continue 都把对应开关置 false。
         var withTemperature = includeTemperature(baseUrl, model)
         var withThinking = !thinkingEnabled && supportsThinkingDisabled(model) &&
             allowThinkingField(baseUrl, model)
+        var withEffort = thinkingEnabled && reasoningEffort != null &&
+            allowReasoningEffort(baseUrl, model)
+        var withToolChoice = toolChoice != null && allowToolChoice(baseUrl, model)
+        var withResponseFormat = responseFormatType != null && allowResponseFormat(baseUrl, model)
         while (true) {
             try {
-                return chatTurnOnceInternal(messages, tools, readTimeout, withTemperature, withThinking)
+                return chatTurnOnceInternal(
+                    messages, tools, readTimeout, withTemperature, withThinking, withEffort,
+                    maxTokensOverride,
+                    toolChoice = if (withToolChoice) toolChoice else null,
+                    responseFormatType = if (withResponseFormat) responseFormatType else null,
+                )
             } catch (e: Exception) {
                 if (isTemperatureRejection(e) && withTemperature) {
                     temperatureRestricted.add(temperatureKey(baseUrl, model))
@@ -848,6 +1117,36 @@ class OpenAiService(
                     withThinking = false
                     continue
                 }
+                if (isReasoningEffortRejection(e) && withEffort) {
+                    reasoningEffortRejected.add(temperatureKey(baseUrl, model))
+                    Log.w(
+                        TAG,
+                        "chatTurn: 端点拒绝 reasoning_effort 字段（${e.message}）" +
+                            "—— 撤掉该字段重试一次（之后该模型不再带）",
+                    )
+                    withEffort = false
+                    continue
+                }
+                if (isToolChoiceRejection(e) && withToolChoice) {
+                    toolChoiceRejected.add(temperatureKey(baseUrl, model))
+                    Log.w(
+                        TAG,
+                        "chatTurn: 端点拒绝 tool_choice 字段（${e.message}）" +
+                            "—— 撤掉该字段重试一次（之后该模型不再带）",
+                    )
+                    withToolChoice = false
+                    continue
+                }
+                if (isResponseFormatRejection(e) && withResponseFormat) {
+                    responseFormatRejected.add(temperatureKey(baseUrl, model))
+                    Log.w(
+                        TAG,
+                        "chatTurn: 端点拒绝 response_format 字段（${e.message}）" +
+                            "—— 撤掉该字段重试一次（之后该模型不再带）",
+                    )
+                    withResponseFormat = false
+                    continue
+                }
                 throw e
             }
         }
@@ -859,6 +1158,10 @@ class OpenAiService(
         readTimeout: Int?,
         withTemperature: Boolean,
         includeThinkingDisable: Boolean,
+        includeReasoningEffort: Boolean,
+        maxTokensOverride: Int = 0,
+        toolChoice: String? = null,
+        responseFormatType: String? = null,
     ): ChatTurn {
         // baseUrl 兼容：带 /v1 或已含完整 /chat/completions 的填法
         val base = baseUrl.trimEnd('/')
@@ -873,13 +1176,30 @@ class OpenAiService(
         requestBody.put("stream", false)
         // 思考开启时预算放大（reasoning 与正文/工具参数共享该上限），关闭思考时默认值即可。
         // 取值与流式路径共用同一套常量，避免两条路径预算不一致（曾导致流式空轮、非流式正常）
-        requestBody.put("max_tokens", if (thinkingEnabled) MAX_TOKENS_THINKING else MAX_TOKENS_DEFAULT)
+        requestBody.put(
+            "max_tokens",
+            when {
+                maxTokensOverride > 0 -> maxTokensOverride
+                thinkingEnabled -> MAX_TOKENS_THINKING
+                else -> MAX_TOKENS_DEFAULT
+            },
+        )
         // 思考系模型只允许服务端默认采样参数，同流式路径（见 streamOnce 的 withTemperature）
         if (withTemperature) requestBody.put("temperature", 0.7)
         if (!tools.isNullOrEmpty()) requestBody.put("tools", JSONArray(tools))
         // 关闭思考：不附加关思考字段时，服务端按默认开启思考（reasoning 会耗尽输出预算导致空轮），同流式路径
         if (includeThinkingDisable) {
             requestBody.put("thinking", JSONObject().put("type", "disabled"))
+        }
+        // 思考深度分档（P0-5）：仅思考开启时才有意义；端点不认时上层撤字段重试
+        if (includeReasoningEffort && reasoningEffort != null) {
+            requestBody.put("reasoning_effort", reasoningEffort)
+        }
+        // 工具约束（P1 协议现代化）：同流式路径；端点不认时上层撤字段重试
+        if (toolChoice != null) requestBody.put("tool_choice", toolChoice)
+        // 结构化输出（P1 协议现代化）：保证 content 为合法 JSON（管不到工具参数）；同上撤字段重试
+        if (responseFormatType != null) {
+            requestBody.put("response_format", JSONObject().put("type", responseFormatType))
         }
         // 用户自定义请求参数（本地 Ollama 调参）：最后合并，覆盖上面的默认值
         mergeExtraBody(requestBody, extraBody, dropTemperature = !withTemperature)
@@ -894,6 +1214,8 @@ class OpenAiService(
             "chatTurn request: model=$model max_tokens=${requestBody.optInt("max_tokens")} " +
                 "thinking=${if (requestBody.has("thinking")) "disabled" else "server-default"} " +
                 "temperature=${if (requestBody.has("temperature")) "0.7" else "server-default"} " +
+                "tool_choice=${requestBody.opt("tool_choice") ?: "none"} " +
+                "response_format=${requestBody.optJSONObject("response_format")?.optString("type") ?: "none"} " +
                 "tools=${tools?.size ?: 0}",
         )
         val response = HttpClient.postString(

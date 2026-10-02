@@ -20,10 +20,6 @@
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
     </style>
 
-    <style name="Theme.RokidLabPhone.Launcher" parent="Theme.RokidLabPhone.Fullscreen">
-        <item name="android:windowBackground">@color/brew_bg</item>
-    </style>
-
     <!-- 授权页：透明背景，只托一个"为什么需要权限"的说明弹窗 + 系统授权框。
          透明是为了让用户看清"自己刚才是从哪个界面被拉过来的"，不至于觉得 App 莫名弹窗。 -->
     <style name="Theme.RokidLabPhone.Transparent" parent="Theme.RokidLabPhone">

@@ -74,6 +74,11 @@ object ProcessRun {
         return try {
             val pb = ProcessBuilder(listOf(bin.absolutePath) + args)
             if (workDir != null) pb.directory(workDir)
+            // stdin 必须接 /dev/null：ProcessBuilder 默认继承宿主进程的 stdin（永不 EOF），
+            // guest 里的交互程序（java Scanner / bash read / python input 走独立 stdin 的场景）
+            // 会**永远阻塞等输入** → 挂满超时。所有数据投喂都走脚本内管道，没有任何调用方
+            // 需要经宿主 stdin 传数据（2026-10-01 真机实锤：代码卡跑猜数字游戏挂满 120s）。
+            pb.redirectInput(File("/dev/null"))
             env.forEach { (k, v) -> pb.environment()[k] = v }
             val proc = pb.start()
 

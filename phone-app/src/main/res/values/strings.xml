@@ -342,7 +342,7 @@
     <string name="chat_context_compressed">更早的对话已压缩为摘要</string>
     <string name="chat_context_compressed_hint">最早几轮的原话已被压缩成摘要，细节可能记不全。</string>
     <string name="chat_context_messages">历史消息 %1$d / %2$d</string>
-    <string name="chat_context_chars">字符数 %1$d / %2$d</string>
+    <string name="chat_context_history_tokens">历史 token %1$d / %2$d</string>
     <string name="chat_context_explain">乐奇会把最近几轮对话带给模型。超出上限时，最早的对话会被压缩成要点保留 —— 这就是它偶尔「忘记」的原因。开个新对话可以立刻清空上下文。</string>
     <string name="chat_context_new_session">新建对话</string>
     <string name="chat_context_compact">立即压缩上下文</string>
@@ -387,7 +387,10 @@
     <string name="chat_code_copy">复制代码</string>
     <string name="chat_code_download">保存到下载目录</string>
     <string name="chat_code_run">运行代码</string>
-    <string name="chat_code_running">正在运行…</string>
+    <string name="chat_code_running">正在运行…（可在下方输入与程序交互）</string>
+    <string name="chat_code_stop">停止</string>
+    <string name="chat_code_send">发送</string>
+    <string name="chat_code_input_hint">输入内容发给正在运行的程序…</string>
     <string name="chat_code_exit">退出码 %1$d</string>
     <string name="chat_code_launch_failed">环境启动失败：%1$s</string>
     <string name="chat_code_no_output">（无输出）</string>
@@ -397,6 +400,9 @@
     <string name="chat_code_env_missing">本机执行环境未安装：到「设置 → 本机执行环境」安装后才能运行</string>
     <string name="chat_code_python_missing">容器里还没装 python3：到「设置 → 本机执行环境」安装 Python</string>
     <string name="chat_code_node_missing">容器里还没装 node：先在本机执行环境里安装</string>
+    <string name="chat_code_java_missing">容器里还没装 Java（javac）：到「设置 → 本机执行环境」安装 Java，或让 AI 帮你装</string>
+    <string name="chat_code_java_noclass">代码里没有 class 定义，无法作为 Java 程序运行</string>
+    <string name="chat_code_java_interactive">（程序异常退出。若是需要键盘输入的交互程序：聊天里的代码运行不支持交互，请让 AI 把测试输入写进代码里再运行）</string>
     <string name="chat_code_saved">已保存：%1$s</string>
     <string name="chat_code_save_failed">保存失败：%1$s</string>
     <!-- 图片卡片 -->
@@ -408,6 +414,12 @@
     <string name="chat_title">乐奇聊天</string>
     <string name="chat_subtitle">文字对话 · 眼镜播报</string>
     <string name="chat_input_hint">输入消息...</string>
+    <string name="chat_input_hint_program">输入将发给 %1$s 程序…</string>
+    <string name="chat_program_mode_connect">%1$s 程序正在运行 · 点这里在聊天框里直接操作它</string>
+    <string name="chat_program_mode_banner">正在与 %1$s 程序交互 · 输入将直接发给它</string>
+    <string name="chat_program_mode_exit">退出</string>
+    <string name="chat_run_card_running">运行中</string>
+    <string name="chat_run_card_done">已结束</string>
     <string name="chat_send">发送</string>
     <string name="chat_stop">停止</string>
     <string name="chat_think_on">思考开</string>
@@ -504,7 +516,7 @@
     <!-- 乐奇聊天 - AI 服务设置 -->
     <string name="chat_settings">AI 设置</string>
     <string name="chat_settings_title">AI 服务设置</string>
-    <string name="chat_settings_hint">支持 OpenAI 兼容接口（DeepSeek / 通义 / Kimi / Ollama 等）</string>
+    <string name="chat_settings_hint">支持 OpenAI 兼容接口</string>
     <string name="chat_settings_base_url">服务地址</string>
     <string name="chat_settings_api_key">API 密钥</string>
     <string name="chat_settings_model">模型名</string>
@@ -533,7 +545,7 @@
     <string name="chat_settings_source_local">本地模型</string>
     <!-- 模型供应商管理页（品牌列表 → 密钥 → 模型，替代原三个手填输入框） -->
     <string name="chat_settings_provider_title">模型供应商</string>
-    <string name="chat_settings_provider_hint">选择品牌服务商，填入 API 密钥即可使用；支持同时保存多家</string>
+    <string name="chat_settings_provider_hint">填入密钥即用 · 可保存多家</string>
     <string name="chat_settings_provider_entry">模型供应商</string>
     <string name="chat_settings_provider_entry_hint">点击选择服务商与模型</string>
     <string name="chat_settings_provider_current">当前：%1$s · %2$s</string>
@@ -573,7 +585,7 @@
     <string name="ai_tool_cat_browser">网页操作</string>
     <string name="ai_tool_cat_screen">屏幕操作</string>
     <string name="chat_settings_mcp">外部 MCP</string>
-    <string name="chat_settings_mcp_hint">连接第三方 MCP 服务，扩展 AI 能力</string>
+    <string name="chat_settings_mcp_hint">连接外部 MCP 服务</string>
     <string name="mcp_connecting">正在连接…</string>
     <string name="mcp_add">添加服务器</string>
     <string name="mcp_reconnect_all">全部重连</string>
@@ -583,6 +595,10 @@
     <string name="mcp_state_unknown">未连接</string>
     <string name="mcp_tools_count">%1$d 个工具</string>
     <string name="mcp_ignored">已忽略 %1$d 个工具</string>
+    <string name="mcp_oauth_login">授权登录</string>
+    <string name="mcp_oauth_relogin">重新授权</string>
+    <string name="mcp_oauth_state_authorized">已授权</string>
+    <string name="mcp_oauth_state_expired">已过期</string>
     <string name="mcp_tools_expand">查看 %1$d 个工具</string>
     <string name="mcp_tools_collapse">收起 %1$d 个工具</string>
     <string name="mcp_reconnect">重连</string>
@@ -619,9 +635,9 @@
     <string name="chat_settings_skills">AI 技能</string>
     <string name="chat_settings_skills_hint">命中描述时自动按步骤执行</string>
     <string name="skills_manage_title">AI 技能</string>
-    <string name="skills_manage_hint">技能 = 说明书（SKILL.md）。命中技能描述时乐奇会先加载完整步骤，再调用下方本地工具执行；一次请求可组合多个技能</string>
+    <string name="skills_manage_hint">命中描述时加载步骤并执行</string>
     <string name="skills_enabled_switch">启用技能</string>
-    <string name="skills_enabled_switch_hint">关闭后所有自定义技能不参与对话</string>
+    <string name="skills_enabled_switch_hint">关闭后技能不参与对话</string>
     <string name="skills_add_create">手动填写</string>
     <string name="skills_add_import">导入文件</string>
     <string name="skills_add_url">下载链接</string>
@@ -675,7 +691,7 @@
     <string name="chat_ocr_native_unavailable">当前设备不支持本地 OCR，无法拍照识题</string>
     <string name="chat_photo_failed">拍照失败</string>
     <string name="chat_kb_title">知识库</string>
-    <string name="chat_kb_subtitle">导入 txt/md/json，提问时自动检索</string>
+    <string name="chat_kb_subtitle">导入文档 · 提问时自动检索</string>
     <string name="chat_kb_import">导入文档</string>
     <string name="chat_kb_empty">知识库为空，请先导入文档</string>
     <string name="chat_kb_delete">删除</string>
@@ -716,7 +732,7 @@
 
     <!-- 乐奇聊天 - Agent 会话记忆 -->
     <string name="agent_section_title">会话记忆</string>
-    <string name="agent_section_subtitle">会话记忆按对话各自保存，长期记忆所有对话共用</string>
+    <string name="agent_section_subtitle">会话记忆各自保存 · 长期记忆共享</string>
     <string name="agent_memory_switch">启用会话记忆</string>
     <string name="agent_memory_switch_hint">开启后 AI 能听懂「再来一首」「它是什么」这类指代。关闭只是停用——已积累的上下文会保留，重新开启后仍然生效</string>
     <string name="agent_memory_info">超出上下文上限时自动压缩较早的对话，要点以摘要保留</string>
@@ -850,7 +866,7 @@
 
     <!-- 聊天输入栏「主动性」下弹面板 -->
     <string name="chat_proactive_title">主动性</string>
-    <string name="chat_proactive_subtitle">陪伴方式与频率 · 随你的回应自动调频</string>
+    <string name="chat_proactive_subtitle">陪伴频率 · 随回应自动调节</string>
 
     <!-- 陪伴场景（5 格单选，切走再切回自动恢复各自的功能组合） -->
     <string name="proactive_section_scene">陪伴方式</string>
@@ -920,6 +936,10 @@
     <!-- AI 工具（ToolRegistry 设置页展示） -->
     <string name="ai_tool_search_knowledge_base_name">知识库检索</string>
     <string name="ai_tool_search_knowledge_base_desc">检索已导入的文档资料</string>
+    <string name="ai_tool_manage_knowledge_base_name">知识库管理</string>
+    <string name="ai_tool_manage_knowledge_base_desc">列出或存入知识库文档</string>
+    <string name="ai_tool_delete_knowledge_doc_name">删除知识库文档</string>
+    <string name="ai_tool_delete_knowledge_doc_desc">从知识库中删除一份文档</string>
     <string name="ai_tool_get_current_time_name">当前时间</string>
     <string name="ai_tool_get_current_time_desc">查当前日期与时间</string>
     <string name="ai_tool_list_glasses_apps_name">已装应用列表</string>
@@ -928,6 +948,14 @@
     <string name="ai_tool_get_glasses_status_desc">查眼镜电量、存储与系统信息</string>
     <string name="ai_tool_launch_glasses_app_name">打开应用</string>
     <string name="ai_tool_launch_glasses_app_desc">打开眼镜上的应用</string>
+    <string name="ai_tool_manage_glasses_app_name">眼镜应用管理</string>
+    <string name="ai_tool_manage_glasses_app_desc">安装、停止或卸载眼镜上的应用</string>
+    <string name="ai_tool_list_glasses_files_name">眼镜文件列表</string>
+    <string name="ai_tool_list_glasses_files_desc">列出眼镜存储里某个目录的内容</string>
+    <string name="ai_tool_read_glasses_file_name">读取眼镜文件</string>
+    <string name="ai_tool_read_glasses_file_desc">读取眼镜存储里的文本文件内容</string>
+    <string name="ai_tool_download_glasses_file_name">从眼镜下载文件</string>
+    <string name="ai_tool_download_glasses_file_desc">把眼镜存储里的文件拷贝到手机下载目录</string>
     <string name="ai_tool_control_music_name">音乐播放控制</string>
     <string name="ai_tool_control_music_desc">播放歌曲或停止播放</string>
     <string name="ai_tool_stop_tts_name">停止播报</string>
@@ -936,6 +964,14 @@
     <string name="ai_tool_manage_timer_desc">创建 / 查看 / 取消定时提醒</string>
     <string name="ai_tool_manage_calendar_name">日历管理</string>
     <string name="ai_tool_manage_calendar_desc">查看或创建日程</string>
+    <string name="ai_tool_delete_calendar_event_name">删除日程</string>
+    <string name="ai_tool_delete_calendar_event_desc">删除日历上的一个日程（需确认）</string>
+    <string name="ai_tool_update_calendar_event_name">修改日程</string>
+    <string name="ai_tool_update_calendar_event_desc">修改日程的标题、时间或备注</string>
+    <string name="ai_tool_list_mcp_servers_name">外部工具服务列表</string>
+    <string name="ai_tool_list_mcp_servers_desc">查看已连接的 MCP 服务器状态</string>
+    <string name="ai_tool_manage_proactive_name">主动行为开关</string>
+    <string name="ai_tool_manage_proactive_desc">查看或切换主动打招呼等功能开关</string>
     <string name="ai_tool_show_lyrics_name">显示歌词</string>
     <string name="ai_tool_show_lyrics_desc">在眼镜上拉起歌词页</string>
     <string name="ai_tool_get_now_playing_name">读取播放信息</string>
@@ -984,6 +1020,18 @@
     <string name="ai_tool_start_web_preview_desc">在本机 Linux 环境启动持续运行的网页服务，聊天里可实时预览页面效果</string>
     <string name="ai_tool_stop_web_preview_name">停止网页预览</string>
     <string name="ai_tool_stop_web_preview_desc">停止正在运行的网页预览服务</string>
+    <string name="ai_tool_list_runs_name">查看运行任务</string>
+    <string name="ai_tool_list_runs_desc">列出正在运行和最近结束的后台任务</string>
+    <string name="ai_tool_read_run_output_name">读取任务输出</string>
+    <string name="ai_tool_read_run_output_desc">查看某个后台/交互任务已经输出的内容</string>
+    <string name="ai_tool_write_run_input_name">向任务写入输入</string>
+    <string name="ai_tool_write_run_input_desc">给正在运行的交互程序写一行输入（自动回车）</string>
+    <string name="ai_tool_stop_run_name">停止任务</string>
+    <string name="ai_tool_stop_run_desc">停止一个正在运行的后台/交互任务</string>
+    <string name="ai_tool_snapshot_container_name">环境快照</string>
+    <string name="ai_tool_snapshot_container_desc">保存当前 Linux 环境的全部内容（已装软件与文件）</string>
+    <string name="ai_tool_restore_container_name">恢复环境快照</string>
+    <string name="ai_tool_restore_container_desc">把 Linux 环境恢复到最近一次快照（会覆盖当前内容，先经你确认）</string>
     <string name="chat_preview_bar_label">网页预览运行中</string>
     <string name="chat_preview_bar_open">打开</string>
     <string name="chat_preview_stop">停止服务</string>
@@ -1083,6 +1131,16 @@
     <string name="ai_tool_session_trace_desc">查看某轮调过哪些工具</string>
     <string name="ai_tool_research_subtask_name">派子任务查资料</string>
     <string name="ai_tool_research_subtask_desc">让子助手多轮查资料并给结论</string>
+    <string name="ai_tool_execute_subtask_name">派子任务执行</string>
+    <string name="ai_tool_execute_subtask_desc">让子助手多轮调用本机工具完成一件任务</string>
+    <string name="ai_tool_open_navigation_name">地图导航</string>
+    <string name="ai_tool_open_navigation_desc">打开地图或导航到目的地</string>
+    <string name="ai_tool_uninstall_phone_app_name">卸载手机应用</string>
+    <string name="ai_tool_uninstall_phone_app_desc">卸载手机上的应用</string>
+    <string name="ai_tool_set_flashlight_name">手机手电筒</string>
+    <string name="ai_tool_set_flashlight_desc">开关手机手电筒</string>
+    <string name="ai_tool_get_step_count_name">读取计步</string>
+    <string name="ai_tool_get_step_count_desc">查开机以来累计步数</string>
     <string name="chat_settings_aiui">AIUI 应用管理</string>
     <string name="chat_settings_aiui_hint">管理对话生成或上传的智能体应用</string>
     <string name="aiui_manage_title">AIUI 应用管理</string>
@@ -1117,7 +1175,7 @@
     <string name="aiui_status_local">仅在手机</string>
     <!-- ── 本地模型（Termux + Ollama）── -->
     <string name="local_model_title">本地模型</string>
-    <string name="local_model_subtitle">通过 Termux 运行 Ollama，让眼镜对话用上手机本地的离线大模型</string>
+    <string name="local_model_subtitle">Termux 运行 Ollama · 眼镜离线对话</string>
     <string name="local_model_service">Ollama 服务</string>
     <string name="local_model_status_checking">检测中…</string>
     <string name="local_model_status_running">运行中 · v%1$s</string>
@@ -1152,7 +1210,7 @@
     <string name="local_model_chat_local_hint">眼镜语音对话正在使用「%1$s」，完全本地推理、无需联网</string>
     <string name="local_model_chat_empty_hint">尚未接入：在下方选择一个模型设为眼镜对话模型，即可离线使用</string>
     <string name="local_model_params_title">对话参数</string>
-    <string name="local_model_params_subtitle">即时生效，随每次本地对话请求下发；切换模型后依然有效</string>
+    <string name="local_model_params_subtitle">改动即时生效 · 切换模型后仍有效</string>
     <string name="local_model_params_predict_title">回复长度上限</string>
     <string name="local_model_params_predict_hint">限制单轮最多输出的 token 数。qwen3 等思考型模型容易一口气想太久导致久等，调小可把回复时间框定在可控范围</string>
     <string name="local_model_params_ctx_title">上下文长度</string>
@@ -1694,6 +1752,9 @@
     <string name="local_exec_pip_install">pip 安装中（清华镜像）</string>
     <string name="local_exec_git_hint">克隆与管理仓库 · 约 10 MB</string>
     <string name="local_exec_git_ready_hint">可克隆与管理仓库</string>
+    <string name="local_exec_java_name">Java (OpenJDK 21)</string>
+    <string name="local_exec_java_hint">编译运行 Java 程序 · 下载约 82 MB、装后约 290 MB，需数分钟</string>
+    <string name="local_exec_java_ready_hint">可编译与运行 Java 程序</string>
     <string name="local_exec_addon_install">安装</string>
     <string name="local_exec_enable">开通</string>
     <string name="local_exec_apt_update">更新软件源</string>
@@ -1815,6 +1876,7 @@
     <string name="permission_label_overlay">显示在其他应用上层</string>
     <string name="permission_label_all_files">所有文件访问</string>
     <string name="permission_label_exact_alarm">精确提醒</string>
+    <string name="permission_label_activity_recognition">身体活动</string>
     <string name="permission_label_accessibility">无障碍服务</string>
     <string name="permission_dialog_title">需要开启权限</string>
     <string name="permission_dialog_message">「%1$s」需要以下权限：\n%2$s\n\n点「立即开启」后，在系统弹窗里选「允许」即可。</string>
@@ -1845,6 +1907,7 @@
     <string name="permission_reason_location">获取当前位置</string>
     <string name="permission_reason_launch">让眼镜语音在你锁屏或回到桌面时也能拨号、设闹钟、打开应用</string>
     <string name="permission_reason_exact_alarm">让定时提醒到点准时触发</string>
+    <string name="permission_reason_activity">读取自开机累计步数</string>
     <!-- 创建定时任务后缺精确闹钟权限时的结果提示（任务已建成，只是提醒可能不精确） -->
     <string name="timer_exact_alarm_requested">为保证到点准时，请允许「精确提醒」。</string>
     <string name="timer_exact_alarm_notify">请点通知开启「精确提醒」，确保准时提醒。</string>

@@ -141,6 +141,19 @@ enum class AppPermission(
     ),
 
     /**
+     * 身体活动（`ACTIVITY_RECOGNITION`，Android 10+）：`get_step_count` 读计步传感器的前提。
+     *
+     * [onboardingCritical] = false：计步是可选能力，缺权限时由工具现场走
+     * [PermissionBridge.ensure] 拉起系统授权框（后台退通知栏兜底）。
+     */
+    ACTIVITY_RECOGNITION(
+        Manifest.permission.ACTIVITY_RECOGNITION,
+        R.string.permission_label_activity_recognition,
+        minSdk = Build.VERSION_CODES.Q,
+        onboardingCritical = false,
+    ),
+
+    /**
      * 无障碍服务（`BIND_ACCESSIBILITY_SERVICE`）：屏幕操作域（`read_screen` / `tap_screen` /
      * `swipe_screen` / `press_key` / `type_text`）与**零弹窗截屏**的前提。
      *

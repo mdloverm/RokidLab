@@ -155,6 +155,8 @@ internal fun KbManageDialog(
                         text = stringResource(R.string.chat_kb_subtitle),
                         color = BrewMuted,
                         fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 TextButton(

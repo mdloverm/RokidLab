@@ -96,16 +96,24 @@ object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
      *   [com.rokidlab.phone.ai.tools.ToolEntry.summarize]，与工具定义同源）——
      *   本类只负责把它送到界面上，不再自己从 args 拼。
      */
-    override fun confirm(toolName: String, prompt: String): Boolean {
+    override fun confirm(toolName: String, prompt: String): Boolean =
+        confirm(toolName, prompt, CONFIRM_TIMEOUT_MS)
+
+    /**
+     * 带等待上限的版本（闸门按来源收紧窗口，如 AIUI 页面路径 18s，见 ApprovalGate R7 注释）。
+     * 上限只**收紧**不放宽：取 `min(maxWaitMs, 本通道 40s)`。
+     */
+    override fun confirm(toolName: String, prompt: String, maxWaitMs: Long): Boolean {
         val ctx = appContext ?: return false
         if (!isAvailable()) return false
         lastCancelled = false
         val id = "pc-${System.currentTimeMillis()}-${seq.incrementAndGet()}"
         val waiter = Waiter()
         pending[id] = waiter
+        val wait = minOf(maxWaitMs, CONFIRM_TIMEOUT_MS)
         return try {
             ctx.startActivity(ToolConfirmActivity.createIntent(ctx, id, toolName, prompt))
-            if (!waiter.latch.await(CONFIRM_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            if (!waiter.latch.await(wait, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "phone confirm timeout (id=$id tool=$toolName)")
                 false
             } else {

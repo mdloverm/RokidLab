@@ -514,15 +514,28 @@ object FileWorkspace {
         if (root == null) {
             // 项目镜像不在，可能只剩公开副本
             val pub = WebTools.deleteDownloadedProject(context, proj)
-            return if (pub > 0) "项目「$proj」没有工程镜像，已删除下载目录里的 $pub 个公开文件"
-            else "删除失败：项目「$proj」不存在"
+            val glasses = unlinkRegistryRecords(context, proj)
+            val glassesNote = if (glasses.isNullOrEmpty()) "" else "；眼镜端：${glasses.joinToString("；")}"
+            return if (pub > 0 || !glasses.isNullOrEmpty()) {
+                "项目「$proj」没有工程镜像，已删除下载目录里的 $pub 个公开文件$glassesNote"
+            } else {
+                "删除失败：项目「$proj」不存在"
+            }
         }
         if (path.trim().isBlank()) {
             val mirrorOk = runCatching { root.deleteRecursively() }.getOrDefault(false)
             val pub = runCatching { WebTools.deleteDownloadedProject(context, proj) }.getOrDefault(0)
-            Log.i(TAG, "delete project $proj: mirror=$mirrorOk public=$pub")
+            // 删除已安装记录：登记表里的 agentId 对应本地 .aix 包（含彩色预览包）与眼镜端副本。
+            // 不联动的话：对话里说"把项目删了"，手机源文件没了，眼镜上却还能语音打开它。
+            val glasses = unlinkRegistryRecords(context, proj)
+            Log.i(TAG, "delete project $proj: mirror=$mirrorOk public=$pub registry=$glasses")
+            val glassesNote = when {
+                glasses == null -> ""
+                glasses.isEmpty() -> ""
+                else -> "；眼镜端：${glasses.joinToString("；")}"
+            }
             return if (mirrorOk) {
-                "已删除项目「$proj」（工程镜像 + 下载目录里的 $pub 个公开文件），不可恢复"
+                "已删除项目「$proj」（工程镜像 + 下载目录里的 $pub 个公开文件$glassesNote），不可恢复"
             } else {
                 "删除项目「$proj」失败（工程镜像未能完整删除）"
             }
@@ -534,6 +547,27 @@ object FileWorkspace {
         val ok = if (target.isDirectory) runCatching { target.deleteRecursively() }.getOrDefault(false)
         else runCatching { target.delete() }.getOrDefault(false)
         return if (ok) "已删除「$label」，不可恢复" else "删除「$label」失败"
+    }
+
+    /**
+     * 整项目删除时联动 AIUI 安装记录：注销登记、删本地 .aix 包（含彩色预览包）、
+     * 尽力删除眼镜端副本（眼镜未连接时如实报告，不阻塞手机侧删除）。
+     *
+     * @return null = 注册表里没有该项目的记录（从未打包安装过，无需联动）；
+     *         非空 = 每条记录的删除结果描述（供拼进工具回复告知模型/用户）
+     */
+    private fun unlinkRegistryRecords(context: Context, project: String): List<String>? {
+        val records = runCatching { AiuiAppRegistry.list(context) }.getOrNull()
+            ?.filter { it.project == project }
+            ?: return null
+        if (records.isEmpty()) return null
+        return records.map { r ->
+            runCatching { AiuiAppRegistry.remove(context, r.agentId) }
+            runCatching { AiuiProject.deletePackageFiles(context, r.agentId) }
+            val err = runCatching { AiuiProject.deleteAixOnGlasses(context, r.agentId) }.getOrNull()
+            if (err == null) "「${r.appName}」已从眼镜删除"
+            else "「${r.appName}」眼镜端未能删除（$err），可连接眼镜后到 AI 应用管理页删除"
+        }
     }
 
     private fun deleteDownload(context: Context, project: String, path: String): String {

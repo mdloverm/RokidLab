@@ -23,35 +23,24 @@ import com.rokidlab.phone.ai.ToolRegistry
 internal object PageScope {
 
     /**
-     * 页面可调用的工具域。
+     * 页面可调用的工具域。**全域开放**（用户 2026-09-09 拍板基线，2026-10-01 起恢复全量）。
      *
-     * 基线是"全部开放"（用户 2026-09-09 拍板），**减去本机执行域** —— 想收窄时只改这一处，
-     * 调用逻辑不用动（`ToolGateway.ALLOWED_DOMAINS` 是本常量的别名，页面看到的工具清单
-     * 与准入判定都由它派生，不会出现"页面列表里有、调用被拒"的错位）。
+     * ## 与 2026-10-01 之前的关键差别：shell/screen 域从"整域摘除"改为"必须确认"
+     * 曾一度把 [com.rokidlab.phone.ai.ToolRegistry.DOMAIN_SHELL] 与
+     * [com.rokidlab.phone.ai.ToolRegistry.DOMAIN_SCREEN] 从本集合摘掉 —— 判据是
+     * "能力形态"边界（`run_shell` 是任意命令执行、`tap_screen` 是整机触摸注入原语，
+     * 都不该交给第三方页面静默使用）。摘域的真实代价是 **AIUI 页面路径整体断链**：
+     * 眼镜上"能说不能做"，感知-执行环在页面这一侧永远缺一环。
      *
-     * ## 为什么摘掉 `shell` 域：这不是"逐工具安全判断"，而是**能力形态**的边界
-     * `run_shell` 是全表唯一的**任意命令执行**原语。AIUI 页面是**第三方制品**
-     * （对话生成、或用户从商店导入的 `.aix`），开放它等于把"在这台手机上执行任意命令"
-     * 交给页面作者 —— 而用户对页面的心智是「显示点东西」，不是「可以在我手机上跑命令」。
+     * 现在的边界表达换成了**知情同意**：域回到白名单（页面工具清单可见、可调），
+     * 但页面路径的每一次 shell/screen 调用都会被
+     * [PageElevatedDomainGuard] 拦下要用户确认（fail-closed：问不到就拒）。
+     * 对话路径（用户本人在场）不受影响，维持原有静默/确认语义。
      *
-     * 为什么不用 `DENY_TOOLS` 表达（那里 5 条里已有隐私/成本类，加一条似乎更省事）：
-     *  - `RULES.md §AIUI` 把 `DENY_TOOLS` 的定位钉死在「**技术故障类**」，
-     *    并要求"不做逐工具安全判断"（安全边界归 `isEnabled` 总开关）；
-     *  - 在**域**上表达还有一层实际好处：域是装配单位，摘掉后页面拿到的**工具清单**里
-     *    也不会有它（只有黑名单的话，页面仍会在列表里看见 `run_shell` 却调不动）。
-     *
-     * 对话路径（用户本人在场、可追问、可撤销）**保留**该能力，这是产品意图。
-     *
-     * ## 为什么也摘掉 `screen` 域（2026-09-23 同一条判据）
-     * `tap_screen` 是全表唯一的「在整台手机上注入任意触摸」原语 —— 与 `run_shell` 同属
-     * **能力形态**越界，而不是"某个工具危险"：页面作者只要愿意，就能让手机点开银行 App、
-     * 点掉一个确认框。页面是第三方制品（模型生成 / 商店导入的 `.aix`），
-     * 用户对它的心智是「显示点东西」，不是"可以操作我的手机"。
-     * 同样地，用**域**表达还顺带把工具清单也从页面里摘掉了（页面连 `read_screen` 都看不到），
-     * 而不是"看得见却调不动"。
+     * 为什么不用 `DENY_TOOLS` 表达危险：`RULES.md §AIUI` 把那张表钉在「技术故障类」，
+     * 并要求"不做逐工具安全判断"（安全边界归 `isEnabled` 总开关）。
      */
-    val ALLOWED_DOMAINS: Set<String> =
-        ToolRegistry.DOMAIN_ALL - ToolRegistry.DOMAIN_SHELL - ToolRegistry.DOMAIN_SCREEN
+    val ALLOWED_DOMAINS: Set<String> = ToolRegistry.DOMAIN_ALL
 
     /**
      * 例外：不开放给页面的工具。
@@ -67,14 +56,18 @@ internal object PageScope {
      * （只返回最近一段、每条 220 字），收紧它会是一次未经确认的行为变更；
      * 这里的界线是「**不让页面做批量枚举与导出**」，不是"页面不能碰任何历史"。
      *
-     * **成本类**：`research_subtask`（只读子代理）。它会在页面的一次 `callTool` 里
-     * **再发起若干次模型调用**，而页面侧既看不到过程、也无法中途取消（页面桥是
-     * fire-and-forget + onMessage，没有取消通道）。页面想"查资料"，直接调
-     * `search_web` / `fetch_webpage` 就够了 —— 那些是单次调用。
+     * **成本类**：`research_subtask`（只读子代理）与 `execute_subtask`（write 型子代理，
+     * 2026-10-02）。两者都会在页面的一次 `callTool` 里**再发起若干次模型调用**，而页面侧
+     * 既看不到过程、也无法中途取消（页面桥是 fire-and-forget + onMessage，没有取消通道）。
+     * `execute_subtask` 更进一步还能**写本机状态**（写文件/设定时器）—— 看不见的循环
+     * 不该替用户改状态。页面想"查资料"，直接调 `search_web` / `fetch_webpage` 就够了 ——
+     * 那些是单次调用。
      *
      * 注意：安全边界由 `ToolGateway.isEnabled` 总开关负责，这里不做逐工具安全判断。
      * ⚠️ 这条纪律意味着**不能**因为"某个工具很危险"就往本表里加名字 ——
      * 那类收窄要落在**域**上（见 [ALLOWED_DOMAINS] 对 `shell` 域的处理）。
+     * （子代理两个名字进本表的判据是「一次调用 → 多次模型调用」的**不可取消性**，
+     * 与 research_subtask 同判据，不是"危险所以禁"。）
      */
     val DENY_TOOLS: Set<String> = setOf(
         "open_aiui_app",
@@ -82,6 +75,7 @@ internal object PageScope {
         "read_session",
         "session_trace",
         "research_subtask",
+        "execute_subtask",
     )
 
     /**

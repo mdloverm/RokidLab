@@ -55,6 +55,31 @@ class ToolRiskMapTest {
     }
 
     /**
+     * 副作用标记与风险档的一致性（2026-10-02 体检补的护栏）：
+     * 两级调度按 `sideEffect` 分泳道（[AiConversationService] 的 runToolWorker）——
+     *  - `EXTERNAL_SIDE_EFFECT` 必须 `sideEffect=true`：不可逆动作失败不重试 + 串行泳道，
+     *    漏标会静默进入并行泳道，恰好复现"并发副作用工具"竞态（两弹窗互抢/进度行互覆）；
+     *  - `sideEffect=true` 的工具不得声明 `READ_ONLY`（自相矛盾：读工具不该改状态）。
+     * 注意单向不对称是**有意的**：LOCAL_SIDE_EFFECT 允许幂等工具 `sideEffect=false`
+     * （如 stop_tts 重放无害、show_image 只改显示），因此不做"非只读 ⇒ 必串行"的强断言。
+     */
+    @Test
+    fun `副作用标记与风险档一致性`() {
+        assertTrue("工具表不应为空（否则本断言形同虚设）", ToolRegistry.toolList.size >= 30)
+        // 判据走两张既有派生表：SIDE_EFFECT_TOOLS（由 ToolEntry.sideEffect 聚合）+ riskOf
+        val broken = ToolRegistry.toolList.map { it.name }.filter { name ->
+            val risk = ToolRiskMap.riskOf(name)
+            val serial = name in ToolRegistry.SIDE_EFFECT_TOOLS
+            (risk == ToolRisk.EXTERNAL_SIDE_EFFECT && !serial) || (serial && risk == ToolRisk.READ_ONLY)
+        }
+        assertEquals(
+            "副作用标记与风险档矛盾（漏标 sideEffect 会静默进入并行泳道引发竞态）",
+            emptyList<String>(),
+            broken,
+        )
+    }
+
+    /**
      * 无人值守安全不变式：定时自主任务只装配 [ToolRegistry.readOnlyToolNames]，
      * 该名单里**绝不能**出现任何会改状态的工具 —— 无人监管时跑错一次
      * （半夜拨号 / 装机 / 改设置）代价远高于「少做一点」。
@@ -80,6 +105,9 @@ class ToolRiskMapTest {
             "write_clipboard",
             // 本机执行：无人值守时**绝不允许**跑任意命令（它改的是真机上的文件，且不可预判）
             "run_shell",
+            // 运行任务干预：写 stdin 可能触发程序内不可逆动作、停止/快照/恢复都改容器状态
+            //（list_runs / read_run_output 是只读，不在此列）
+            "write_run_input", "stop_run", "snapshot_container", "restore_container",
             // 装包同理，且它还会下外网流量、失败会留下 dpkg 半配置状态
             "install_packages",
             // 脚本库同理：存/跑脚本就是跑命令的另一条写法（list_scripts 只读，不在此列）
@@ -96,6 +124,12 @@ class ToolRiskMapTest {
             // 点击/输入则是在整台手机上动手 —— 用户不在场时两件都不该发生。
             // ⚠️ read_screen 是只读动作却登记在本机副作用档，正是为了落在这一行里（见 ScreenOpToolProvider 注释）
             "read_screen", "tap_screen", "swipe_screen", "press_key", "type_text",
+            // 眼镜应用装/停/卸：改变眼镜系统状态、卸载不可恢复，无人值守时没人能确认
+            "manage_glasses_app",
+            // 从眼镜拷文件会在手机下载目录写文件（无人值守时虽然本机可撤销，但占蓝牙链路且不该背着用户动眼镜存储）
+            "download_glasses_file",
+            // 删日程：删除不可恢复；改日程与切主动行为开关：本机副作用但无人值守时不该背着用户动
+            "delete_calendar_event", "update_calendar_event", "manage_proactive",
         )
         mustBeExcluded.forEach { name ->
             assertTrue(
@@ -112,6 +146,8 @@ class ToolRiskMapTest {
             "list_phone_apps",
             // 读剪贴板 / 解析文档：只读、不上传（PDF 走本机 OCR），同样必须能在无人值守时用
             "read_clipboard", "parse_document",
+            // MCP server 清单：纯只读快照，自主任务排查「外部工具为什么调不了」时要用
+            "list_mcp_servers",
         ).forEach { name ->
             assertTrue("查询工具 $name 应在只读名单内", name in allowed)
         }

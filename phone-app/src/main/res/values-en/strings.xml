@@ -339,7 +339,7 @@
     <string name="chat_context_compressed">Earlier turns compressed to a summary</string>
     <string name="chat_context_compressed_hint">The earliest turns were compressed to a summary, so some details may be lost.</string>
     <string name="chat_context_messages">History messages %1$d / %2$d</string>
-    <string name="chat_context_chars">Characters %1$d / %2$d</string>
+    <string name="chat_context_history_tokens">History tokens %1$d / %2$d</string>
     <string name="chat_context_explain">LeQi sends the recent turns to the model. Past the limit, the earliest turns are compressed to a summary — that is why it sometimes forgets. Starting a new chat clears the context immediately.</string>
     <string name="chat_context_new_session">New chat</string>
     <string name="chat_context_compact">Compact context now</string>
@@ -384,7 +384,10 @@
     <string name="chat_code_copy">Copy code</string>
     <string name="chat_code_download">Save to Downloads</string>
     <string name="chat_code_run">Run code</string>
-    <string name="chat_code_running">Running…</string>
+    <string name="chat_code_running">Running… (type below to interact with the program)</string>
+    <string name="chat_code_stop">Stop</string>
+    <string name="chat_code_send">Send</string>
+    <string name="chat_code_input_hint">Type to send input to the running program…</string>
     <string name="chat_code_exit">Exit code %1$d</string>
     <string name="chat_code_launch_failed">Environment error: %1$s</string>
     <string name="chat_code_no_output">(no output)</string>
@@ -394,6 +397,9 @@
     <string name="chat_code_env_missing">Local Linux environment is not installed. Set it up in Settings → Local exec to run code.</string>
     <string name="chat_code_python_missing">python3 is not installed in the container. Install Python in Settings → Local exec.</string>
     <string name="chat_code_node_missing">node is not installed in the container. Install it in the local exec environment first.</string>
+    <string name="chat_code_java_missing">Java (javac) is not installed in the container. Install Java in Settings → Local exec, or ask the AI to install it.</string>
+    <string name="chat_code_java_noclass">No class definition found. This code cannot run as a Java program.</string>
+    <string name="chat_code_java_interactive">(Program exited with an error. If it is an interactive program that reads keyboard input: code cards do not support interaction — ask the AI to embed test inputs in the code.)</string>
     <string name="chat_code_saved">Saved: %1$s</string>
     <string name="chat_code_save_failed">Save failed: %1$s</string>
     <!-- Image cards -->
@@ -405,6 +411,12 @@
     <string name="chat_title">LeQi Chat</string>
     <string name="chat_subtitle">Chat · Spoken on Glasses</string>
     <string name="chat_input_hint">Type a message...</string>
+    <string name="chat_input_hint_program">Input goes to the %1$s program…</string>
+    <string name="chat_program_mode_connect">%1$s program is running · tap to control it from the chat box</string>
+    <string name="chat_program_mode_banner">Interacting with the %1$s program · input goes straight to it</string>
+    <string name="chat_program_mode_exit">Exit</string>
+    <string name="chat_run_card_running">Running</string>
+    <string name="chat_run_card_done">Finished</string>
     <string name="chat_send">Send</string>
     <string name="chat_stop">Stop</string>
     <string name="chat_think_on">Think On</string>
@@ -499,7 +511,7 @@
     <string name="chat_think_collapse">Collapse</string>
     <string name="chat_settings">AI Settings</string>
     <string name="chat_settings_title">AI Service Settings</string>
-    <string name="chat_settings_hint">Supports OpenAI-compatible APIs (DeepSeek / Qwen / Kimi / Ollama, etc.)</string>
+    <string name="chat_settings_hint">Supports OpenAI-compatible APIs</string>
     <string name="chat_settings_base_url">Base URL</string>
     <string name="chat_settings_api_key">API Key</string>
     <string name="chat_settings_model">Model</string>
@@ -528,7 +540,7 @@
     <string name="chat_settings_source_local">Local Model</string>
     <!-- Provider management page (brand list → key → model, replaces the three manual fields) -->
     <string name="chat_settings_provider_title">Model Providers</string>
-    <string name="chat_settings_provider_hint">Pick a brand provider and paste its API key; multiple providers can be saved</string>
+    <string name="chat_settings_provider_hint">Paste a key to use · save multiple</string>
     <string name="chat_settings_provider_entry">Model Providers</string>
     <string name="chat_settings_provider_entry_hint">Tap to choose a provider and model</string>
     <string name="chat_settings_provider_current">Current: %1$s · %2$s</string>
@@ -568,7 +580,7 @@
     <string name="ai_tool_cat_browser">Web Browsing</string>
     <string name="ai_tool_cat_screen">Screen Control</string>
     <string name="chat_settings_mcp">External MCP</string>
-    <string name="chat_settings_mcp_hint">Connect third-party MCP servers to extend AI</string>
+    <string name="chat_settings_mcp_hint">Connect external MCP servers</string>
     <string name="mcp_connecting">Connecting…</string>
     <string name="mcp_add">Add server</string>
     <string name="mcp_reconnect_all">Reconnect all</string>
@@ -578,6 +590,10 @@
     <string name="mcp_state_unknown">Not connected</string>
     <string name="mcp_tools_count">%1$d tools</string>
     <string name="mcp_ignored">%1$d tool(s) ignored</string>
+    <string name="mcp_oauth_login">Sign in</string>
+    <string name="mcp_oauth_relogin">Re-authorize</string>
+    <string name="mcp_oauth_state_authorized">Authorized</string>
+    <string name="mcp_oauth_state_expired">Expired</string>
     <string name="mcp_tools_expand">Show %1$d tools</string>
     <string name="mcp_tools_collapse">Hide %1$d tools</string>
     <string name="mcp_reconnect">Reconnect</string>
@@ -614,9 +630,9 @@
     <string name="chat_settings_skills">AI Skills</string>
     <string name="chat_settings_skills_hint">Auto-runs steps when its description matches</string>
     <string name="skills_manage_title">AI Skills</string>
-    <string name="skills_manage_hint">A skill is a playbook (SKILL.md). When a skill description matches, LeQi loads its full steps first, then calls the local tools below to run them; multiple skills can be combined in one request</string>
+    <string name="skills_manage_hint">Loads steps on match, runs local tools</string>
     <string name="skills_enabled_switch">Enable skills</string>
-    <string name="skills_enabled_switch_hint">When off, no custom skill participates in chat</string>
+    <string name="skills_enabled_switch_hint">Skills pause when off</string>
     <string name="skills_add_create">Write manually</string>
     <string name="skills_add_import">Import file</string>
     <string name="skills_add_url">Download link</string>
@@ -669,7 +685,7 @@
     <string name="chat_ocr_native_unavailable">Local OCR is not supported on this device.</string>
     <string name="chat_photo_failed">Failed to take photo</string>
     <string name="chat_kb_title">Knowledge Base</string>
-    <string name="chat_kb_subtitle">Import txt/md/json; searched automatically when you ask</string>
+    <string name="chat_kb_subtitle">Import docs · searched when you ask</string>
     <string name="chat_kb_import">Import Document</string>
     <string name="chat_kb_empty">Knowledge base is empty. Please import documents first.</string>
     <string name="chat_kb_delete">Delete</string>
@@ -710,7 +726,7 @@
 
     <!-- LeQi Chat - Agent Memory -->
     <string name="agent_section_title">Session Memory</string>
-    <string name="agent_section_subtitle">Session memory is kept per conversation; long-term memory is shared by all conversations</string>
+    <string name="agent_section_subtitle">Per-chat session · shared long-term memory</string>
     <string name="agent_memory_switch">Enable Session Memory</string>
     <string name="agent_memory_switch_hint">When ON, AI understands references such as \"play another\" or \"what is it\". Turning it OFF only pauses it — accumulated context is kept and takes effect again once re-enabled.</string>
     <string name="agent_memory_info">When the context limit is exceeded, older turns are compressed and their key points kept in a summary</string>
@@ -844,7 +860,7 @@
 
     <!-- Proactivity bottom sheet (chat input bar) -->
     <string name="chat_proactive_title">Proactivity</string>
-    <string name="chat_proactive_subtitle">Companionship style and pace · adapts to your replies</string>
+    <string name="chat_proactive_subtitle">Companion pace · adapts to your replies</string>
 
     <!-- Companionship scenes (5 cells; each remembers its own feature set) -->
     <string name="proactive_section_scene">Companionship</string>
@@ -914,6 +930,10 @@
     <!-- AI Tools (ToolRegistry settings display) -->
     <string name="ai_tool_search_knowledge_base_name">Knowledge Search</string>
     <string name="ai_tool_search_knowledge_base_desc">Search imported documents</string>
+    <string name="ai_tool_manage_knowledge_base_name">Knowledge Base</string>
+    <string name="ai_tool_manage_knowledge_base_desc">List or add knowledge base documents</string>
+    <string name="ai_tool_delete_knowledge_doc_name">Delete KB Document</string>
+    <string name="ai_tool_delete_knowledge_doc_desc">Delete a document from the knowledge base</string>
     <string name="ai_tool_get_current_time_name">Current Time</string>
     <string name="ai_tool_get_current_time_desc">Current date and time</string>
     <string name="ai_tool_list_glasses_apps_name">Installed Apps</string>
@@ -922,6 +942,14 @@
     <string name="ai_tool_get_glasses_status_desc">Glasses battery, storage, system info</string>
     <string name="ai_tool_launch_glasses_app_name">Open App</string>
     <string name="ai_tool_launch_glasses_app_desc">Open an app on the glasses</string>
+    <string name="ai_tool_manage_glasses_app_name">Manage Glasses Apps</string>
+    <string name="ai_tool_manage_glasses_app_desc">Install, stop or uninstall apps on the glasses</string>
+    <string name="ai_tool_list_glasses_files_name">List Glasses Files</string>
+    <string name="ai_tool_list_glasses_files_desc">List the contents of a folder on the glasses storage</string>
+    <string name="ai_tool_read_glasses_file_name">Read Glasses File</string>
+    <string name="ai_tool_read_glasses_file_desc">Read a text file from the glasses storage</string>
+    <string name="ai_tool_download_glasses_file_name">Download File from Glasses</string>
+    <string name="ai_tool_download_glasses_file_desc">Copy a file from the glasses storage to the phone Downloads folder</string>
     <string name="ai_tool_control_music_name">Music control</string>
     <string name="ai_tool_control_music_desc">Play a song or stop playback</string>
     <string name="ai_tool_stop_tts_name">Stop speaking</string>
@@ -930,6 +958,14 @@
     <string name="ai_tool_manage_timer_desc">Create, view or cancel reminders</string>
     <string name="ai_tool_manage_calendar_name">Calendar</string>
     <string name="ai_tool_manage_calendar_desc">View or create calendar events</string>
+    <string name="ai_tool_delete_calendar_event_name">Delete Event</string>
+    <string name="ai_tool_delete_calendar_event_desc">Delete a calendar event (asks for confirmation)</string>
+    <string name="ai_tool_update_calendar_event_name">Edit Event</string>
+    <string name="ai_tool_update_calendar_event_desc">Change an event\'s title, time or notes</string>
+    <string name="ai_tool_list_mcp_servers_name">MCP Servers</string>
+    <string name="ai_tool_list_mcp_servers_desc">List connected MCP servers and their status</string>
+    <string name="ai_tool_manage_proactive_name">Proactivity Switches</string>
+    <string name="ai_tool_manage_proactive_desc">View or toggle proactive feature switches</string>
     <string name="ai_tool_show_lyrics_name">Show Lyrics</string>
     <string name="ai_tool_show_lyrics_desc">Show the lyrics page on the glasses</string>
     <string name="ai_tool_get_now_playing_name">Now Playing Info</string>
@@ -977,6 +1013,18 @@
     <string name="ai_tool_start_web_preview_desc">Start a persistent web service in the on-device Linux environment for live preview in chat</string>
     <string name="ai_tool_stop_web_preview_name">Stop Web Preview</string>
     <string name="ai_tool_stop_web_preview_desc">Stop a running web preview service</string>
+    <string name="ai_tool_list_runs_name">List Run Tasks</string>
+    <string name="ai_tool_list_runs_desc">List running and recently finished background tasks</string>
+    <string name="ai_tool_read_run_output_name">Read Task Output</string>
+    <string name="ai_tool_read_run_output_desc">Read what a background/interactive task has printed so far</string>
+    <string name="ai_tool_write_run_input_name">Write Task Input</string>
+    <string name="ai_tool_write_run_input_desc">Send one input line (auto newline) to a running interactive task</string>
+    <string name="ai_tool_stop_run_name">Stop Task</string>
+    <string name="ai_tool_stop_run_desc">Stop a running background/interactive task</string>
+    <string name="ai_tool_snapshot_container_name">Environment Snapshot</string>
+    <string name="ai_tool_snapshot_container_desc">Save the entire Linux environment (installed packages and files)</string>
+    <string name="ai_tool_restore_container_name">Restore Environment</string>
+    <string name="ai_tool_restore_container_desc">Restore the Linux environment to the latest snapshot (overwrites current state; asks you first)</string>
     <string name="chat_preview_bar_label">Web preview running</string>
     <string name="chat_preview_bar_open">Open</string>
     <string name="chat_preview_stop">Stop service</string>
@@ -1074,6 +1122,16 @@
     <string name="ai_tool_session_trace_desc">See which tools ran in a turn</string>
     <string name="ai_tool_research_subtask_name">Delegate Research</string>
     <string name="ai_tool_research_subtask_desc">A sub-agent researches and reports back</string>
+    <string name="ai_tool_execute_subtask_name">Delegate Task</string>
+    <string name="ai_tool_execute_subtask_desc">A sub-agent runs local tools to finish a task</string>
+    <string name="ai_tool_open_navigation_name">Maps &amp; Navigation</string>
+    <string name="ai_tool_open_navigation_desc">Open a map or navigate to a place</string>
+    <string name="ai_tool_uninstall_phone_app_name">Uninstall Phone App</string>
+    <string name="ai_tool_uninstall_phone_app_desc">Uninstall an app on the phone</string>
+    <string name="ai_tool_set_flashlight_name">Flashlight</string>
+    <string name="ai_tool_set_flashlight_desc">Toggle the phone flashlight</string>
+    <string name="ai_tool_get_step_count_name">Step Count</string>
+    <string name="ai_tool_get_step_count_desc">Steps taken since boot</string>
     <string name="chat_settings_aiui">AIUI App Manager</string>
     <string name="chat_settings_aiui_hint">Manage chat-created or uploaded agent apps</string>
     <string name="aiui_manage_title">AIUI App Manager</string>
@@ -1108,7 +1166,7 @@
     <string name="aiui_status_local">Phone only</string>
     <!-- ── Local models (Termux + Ollama) ── -->
     <string name="local_model_title">Local Models</string>
-    <string name="local_model_subtitle">Run Ollama inside Termux and use private, fully offline models for glasses chat</string>
+    <string name="local_model_subtitle">Run Ollama in Termux · offline glasses chat</string>
     <string name="local_model_service">Ollama Service</string>
     <string name="local_model_status_checking">Checking…</string>
     <string name="local_model_status_running">Running · v%1$s</string>
@@ -1143,7 +1201,7 @@
     <string name="local_model_chat_local_hint">Voice chat on glasses is using %1$s, fully offline with no internet needed</string>
     <string name="local_model_chat_empty_hint">Not connected yet: pick a model below to use it for glasses chat offline</string>
     <string name="local_model_params_title">Chat Params</string>
-    <string name="local_model_params_subtitle">Applied immediately to every local chat request; still effective after switching models</string>
+    <string name="local_model_params_subtitle">Applies instantly · survives model switch</string>
     <string name="local_model_params_predict_title">Max reply length</string>
     <string name="local_model_params_predict_hint">Caps the output tokens per turn. Thinking models like qwen3 can over-think and make you wait; lowering this bounds the reply time</string>
     <string name="local_model_params_ctx_title">Context length</string>
@@ -1685,6 +1743,9 @@
     <string name="local_exec_pip_install">Installing via pip (TUNA mirror)</string>
     <string name="local_exec_git_hint">Clone and manage repos · about 10 MB</string>
     <string name="local_exec_git_ready_hint">Ready to clone and manage repos</string>
+    <string name="local_exec_java_name">Java (OpenJDK 21)</string>
+    <string name="local_exec_java_hint">Compile and run Java · about 82 MB download, 290 MB installed, takes minutes</string>
+    <string name="local_exec_java_ready_hint">Ready to compile and run Java programs</string>
     <string name="local_exec_addon_install">Install</string>
     <string name="local_exec_enable">Enable</string>
     <string name="local_exec_apt_update">Updating package index</string>
@@ -1806,6 +1867,7 @@
     <string name="permission_label_overlay">Display over other apps</string>
     <string name="permission_label_all_files">All files access</string>
     <string name="permission_label_exact_alarm">Exact alarms</string>
+    <string name="permission_label_activity_recognition">Physical activity</string>
     <string name="permission_label_accessibility">Accessibility service</string>
     <string name="permission_dialog_title">Permission required</string>
     <string name="permission_dialog_message">%1$s needs the following permissions:\n%2$s\n\nTap Grant now, then choose Allow in the system dialog.</string>
@@ -1836,6 +1898,7 @@
     <string name="permission_reason_location">get the current location</string>
     <string name="permission_reason_launch">let glasses voice dial, set alarms and open apps while your phone is locked or on the home screen</string>
     <string name="permission_reason_exact_alarm">make scheduled reminders fire on time</string>
+    <string name="permission_reason_activity">read steps taken since boot</string>
     <!-- Shown after a timer/agent task is created but exact-alarm is missing (task still exists) -->
     <string name="timer_exact_alarm_requested">Allow \"Exact alarms\" so it fires on time.</string>
     <string name="timer_exact_alarm_notify">Tap the notification to enable exact alarms.</string>

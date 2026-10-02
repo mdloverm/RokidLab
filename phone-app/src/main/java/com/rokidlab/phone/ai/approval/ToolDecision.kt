@@ -63,6 +63,13 @@ enum class DecisionOrigin {
 
     /** 外部副作用工具的用户确认 */
     RISK_CONFIRMATION,
+
+    /**
+     * AIUI 页面调用 shell/screen 域的**强制确认**（[PageElevatedDomainGuard]，fail-closed）。
+     * 2026-10-01 起这两个域回到页面白名单，代价是页面路径每次调用都要用户点头 ——
+     * 问不到用户（眼镜/手机确认通道都不可用）就拒绝，页面永远拿不到静默的命令执行。
+     */
+    PAGE_ELEVATED,
 }
 
 /**

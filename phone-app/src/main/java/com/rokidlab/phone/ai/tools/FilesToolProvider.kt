@@ -257,7 +257,8 @@ internal object FilesToolProvider : ToolProvider {
             schema = toolSchema(
                 name = "delete_file",
                 description = "删除文件或目录。scope=\"project\" 删项目工程目录里的文件/目录——**path 留空并传 project = 删除整个项目**" +
-                    "（会同时删掉下载目录里的公开副本）；scope=\"downloads\" 从系统下载目录删文件。" +
+                    "（会同时删掉下载目录里的公开副本；该项目若已安装/演示过，还会连带注销登记、删本地 .aix 包并尽力删除眼镜端副本——" +
+                    "眼镜未连接时会注明，可让它连接后再到 AI 应用管理页删）；scope=\"downloads\" 从系统下载目录删文件。" +
                     "⚠️ 删除不可恢复。用户只说「清理一下」「不要了」这类含糊表达时，**先用 list_files 确认清单**，" +
                     "并明确告知将删除哪些文件，得到确认后再调用；不要自行扩大删除范围。",
                 parameters = mapOf(

@@ -277,15 +277,33 @@ class ApprovalGateTest {
         // ★ 2026-09-23 本机执行域新增两项：delete_script（删脚本库条目，与 delete_file 同判据）
         // 与 install_packages（apt 会拉外网流量、改容器状态）。后者收进闸门还有一层机制考虑：
         // run_shell 是 LOCAL 档（对话路径静默执行），把 apt 留在 shell 里 = 一条**不问用户**的装包通道。
+        // ★ 2026-09-29 知识库删除 delete_knowledge_doc（EXTERNAL，删文档不可恢复）；
+        // ★ 2026-09-30 眼镜应用管理 manage_glasses_app（EXTERNAL，装/停/卸眼镜应用、卸载不可恢复）；
+        // ★ 2026-09-30 日历删除 delete_calendar_event（EXTERNAL，删日程不可恢复；改日程是
+        //   LOCAL 档独立工具 update_calendar_event，不进闸门 —— 对齐 edit_text_file 的口径）。
+        // ★ 2026-10-01 容器恢复 restore_container（EXTERNAL，覆盖当前容器状态；PROCEED fail-open
+        //   与 install_packages 同判据：rootfs 可重下；页面路径另有 PageElevatedDomainGuard 更严）。
+        // ★ 2026-10-02 手机应用卸载 uninstall_phone_app（EXTERNAL，卸载后应用与数据不可恢复；
+        //   系统卸载确认框只是第二道保险，模型侧必须先过闸门）。
         // 本断言的职责：守住闸门只服务被显式选中的这几个 —— 任何人新增 EXTERNAL_SIDE_EFFECT
-        // 工具，都必须回到这里同步，并补一条像 E3b / E3c 那样的确认用例。
+        // 工具，都必须回到这里同步，并补一条像 E3b / E3c / E3d 那样的确认用例。
         val external = ToolRegistry.toolList
             .filter { ToolRegistry.riskOfOrNull(it.name) == ToolRisk.EXTERNAL_SIDE_EFFECT }
             .map { it.name }
             .sorted()
         assertEquals(
-            "若此项变化，说明确认闸门的服务对象变了，请同步回归用例（见 E3b / E3c）",
-            listOf("delete_file", "delete_script", "install_packages", "send_sms"),
+            "若此项变化，说明确认闸门的服务对象变了，请同步回归用例（见 E3b / E3c / E3d）",
+            listOf(
+                "delete_calendar_event",
+                "delete_file",
+                "delete_knowledge_doc",
+                "delete_script",
+                "install_packages",
+                "manage_glasses_app",
+                "restore_container",
+                "send_sms",
+                "uninstall_phone_app",
+            ),
             external,
         )
     }
@@ -354,6 +372,74 @@ class ApprovalGateTest {
         assertTrue("删脚本确认要写出脚本名，实际：$del", del.contains("resize-images.sh"))
     }
 
+    @Test
+    fun `E3d 知识库删除与眼镜应用管理的确认摘要读出对象`() {
+        // 回归 2026-09-29/09-30：delete_knowledge_doc（删知识库文档）与 manage_glasses_app
+        // （装/停/卸眼镜应用）先后进入确认闸门。摘要必须让用户一眼看出
+        // "删哪个文档 / 装哪个 APK / 卸哪个应用" —— 含糊的摘要等于把闸门降级成盲点。
+        fun askOf(name: String, args: JSONObject): String =
+            (riskGuard.evaluate(ToolCallContext(ToolSource.CONVERSATION, name, args, false))
+                as ToolDecision.Ask).prompt
+
+        val delDoc = askOf("delete_knowledge_doc", JSONObject().put("docId", 3))
+        assertTrue("删知识库文档的摘要必须非空，实际：$delDoc", delDoc.isNotBlank())
+
+        val install = askOf(
+            "manage_glasses_app",
+            JSONObject().put("action", "install").put("apkPath", "/sdcard/Download/demo.apk"),
+        )
+        assertTrue("装眼镜应用的摘要要提到 APK/安装，实际：$install", install.contains("APK"))
+
+        val uninstall = askOf(
+            "manage_glasses_app",
+            JSONObject().put("action", "uninstall").put("appName", "小智"),
+        )
+        assertTrue("卸载应用的确认要写出应用名，实际：$uninstall", uninstall.contains("小智"))
+
+        val stop = askOf(
+            "manage_glasses_app",
+            JSONObject().put("action", "stop").put("packageName", "com.example.app"),
+        )
+        assertTrue("停止应用的确认要写出包名，实际：$stop", stop.contains("com.example.app"))
+    }
+
+    @Test
+    fun `E3e 日历删除的确认摘要读出被删对象`() {
+        // 回归 2026-09-30：delete_calendar_event（删日程不可恢复）进入确认闸门。
+        // 摘要让用户一眼看出删的是哪个日程（标题 / eventId）——
+        // 用户不看摘要盲点「确认」，等于把闸门降级成一次点击。
+        fun askOf(args: JSONObject): String =
+            (riskGuard.evaluate(ToolCallContext(ToolSource.CONVERSATION, "delete_calendar_event", args, false))
+                as ToolDecision.Ask).prompt
+
+        val byTitle = askOf(JSONObject().put("date", "today").put("title", "团队会议"))
+        assertTrue("按关键词删要写出标题，实际：$byTitle", byTitle.contains("团队会议"))
+
+        val byId = askOf(JSONObject().put("eventId", 42))
+        assertTrue("按 id 删要写出 id，实际：$byId", byId.contains("42"))
+
+        val blank = askOf(JSONObject())
+        assertTrue("参数缺失时也要给出可读摘要（而不是空白确认框），实际：$blank", blank.isNotBlank())
+    }
+
+    @Test
+    fun `E3f 手机应用卸载的确认摘要读出对象`() {
+        // 回归 2026-10-02：uninstall_phone_app（卸载手机应用、数据一并清空，不可恢复）进闸门。
+        // 摘要让用户一眼看出"要卸哪个" —— packageName 优先；只有应用名时也要读出名字。
+        fun askOf(args: JSONObject): String =
+            (riskGuard.evaluate(ToolCallContext(ToolSource.CONVERSATION, "uninstall_phone_app", args, false))
+                as ToolDecision.Ask).prompt
+
+        val byPkg = askOf(JSONObject().put("packageName", "com.tencent.mm"))
+        assertTrue("卸载确认要写出包名，实际：$byPkg", byPkg.contains("com.tencent.mm"))
+
+        val byName = askOf(JSONObject().put("appName", "微信"))
+        assertTrue("只有应用名时也要读出名字，实际：$byName", byName.contains("微信"))
+
+        val blank = askOf(JSONObject())
+        assertTrue("参数缺失时也要给出可读摘要（而不是空白确认框），实际：$blank", blank.isNotBlank())
+    }
+
     // ════════════════════════════════════════════════════════════════════
     // F. resolveAsk —— 通道选择 + fail-open 三态 + 声明分流（安全关键）
     // ════════════════════════════════════════════════════════════════════
@@ -416,6 +502,46 @@ class ApprovalGateTest {
             ToolDecision.Allow,
             ApprovalGate.resolveAsk(ask, "call_phone"),
         )
+    }
+
+    /** 记录闸门传入的等待上限（验证 R7 的来源感知收紧确实到达通道） */
+    private class RecordingCapResolver(available: Boolean, confirmed: Boolean) : ApprovalGate.ConfirmResolver {
+        override val channelId: String = "cap-fake"
+        private val avail = available
+        private val ok = confirmed
+        var lastMaxWaitMs: Long = -1
+        override fun isAvailable(): Boolean = avail
+        override fun confirm(toolName: String, prompt: String, maxWaitMs: Long): Boolean {
+            lastMaxWaitMs = maxWaitMs
+            return ok
+        }
+        override fun confirm(toolName: String, prompt: String): Boolean =
+            confirm(toolName, prompt, Long.MAX_VALUE)
+    }
+
+    @Test
+    fun `F4a 页面来源的确认等待被收紧到 18s（对话路径不设上限）`() {
+        val fake = RecordingCapResolver(available = true, confirmed = false)
+        ApprovalGate.confirmationResolver = fake
+        ApprovalGate.resolveAsk(ask, "call_phone", ToolSource.AIUI_PAGE)
+        assertEquals(
+            "页窗 25s（眼镜端 SYNC_TOOL_TIMEOUT_MS）− 开销 − 执行余量 ⇒ 18s（ApprovalGate.PAGE_CONFIRM_TIMEOUT_MS）",
+            ApprovalGate.PAGE_CONFIRM_TIMEOUT_MS,
+            fake.lastMaxWaitMs,
+        )
+        ApprovalGate.resolveAsk(ask, "call_phone", ToolSource.CONVERSATION)
+        assertEquals("对话路径整轮由工具循环兜着，不收紧", Long.MAX_VALUE, fake.lastMaxWaitMs)
+    }
+
+    @Test
+    fun `F4b 页面来源超时未确认一律拒绝（fail-closed），即使工具声明 PROCEED`() {
+        ApprovalGate.confirmationResolver = FakeResolver(available = true, confirmed = false, cancelled = false)
+        val r = ApprovalGate.resolveAsk(ask, "call_phone", ToolSource.AIUI_PAGE)
+        assertTrue(
+            "确认在页窗过期后到达会让副作用在页面已报失败后执行（R7「报超时却执行」），PROCEED 也要拒",
+            r is ToolDecision.Deny,
+        )
+        assertTrue("拒绝文案必须给出可操作出路", (r as ToolDecision.Deny).reason.contains("重新触发"))
     }
 
     @Test
@@ -580,16 +706,28 @@ class ApprovalGateTest {
     }
 
     @Test
-    fun `H6 run_shell 不对 AIUI 页面开放`() {
-        // 页面是第三方制品（模型生成 / 用户导入的 .aix）。`run_shell` 是全表唯一的
-        // **任意命令执行**原语 —— 开放它等于让页面作者在用户手机上跑任意命令。
-        // 对话路径保留该能力是产品意图，页面路径必须拒绝。
-        val reason = PageScope.rejectReason("run_shell", PageScope.pageVisibleTools(), PageScope::domainOf)
-        assertEquals("domain 'shell' of tool 'run_shell' is not allowed in AIUI pages", reason)
-        // 边界落在**域**上而不是 DENY_TOOLS：RULES 规定黑名单只放技术故障类，
-        // 且摘域能让页面拿到的工具清单里也没有它（黑名单做不到这一点）
-        assertTrue("shell 域必须不在页面开放域里", ToolRegistry.DOMAIN_SHELL !in PageScope.ALLOWED_DOMAINS)
+    fun `H6 run_shell 对页面开放但必须 fail-closed 确认`() {
+        // 2026-10-01 政策：域回到页面白名单（"带闸门开放"），边界从"能力形态摘除"
+        // 换成"知情同意"——shell/screen 域的**每一次页面调用**都要过
+        // PageElevatedDomainGuard 的用户确认，fail-closed：问不到用户就拒。
+        // 对话路径不受影响（该 guard 只对 AIUI_PAGE 生效）。
+        assertTrue("shell 域必须在页面开放域里（带闸门开放）", ToolRegistry.DOMAIN_SHELL in PageScope.ALLOWED_DOMAINS)
+        assertTrue("screen 域同样在页面开放域里", ToolRegistry.DOMAIN_SCREEN in PageScope.ALLOWED_DOMAINS)
         assertTrue("黑名单不该为它开先例", "run_shell" !in PageScope.DENY_TOOLS)
+        // 准入门放行后，审批链里必须有强制确认兜底
+        assertNull(PageScope.rejectReason("run_shell", PageScope.pageVisibleTools(), PageScope::domainOf))
+        val r = PageElevatedDomainGuard().evaluate(ctxOf("run_shell", source = ToolSource.AIUI_PAGE))
+        assertTrue("页面调 run_shell 必须触发确认", r is ToolDecision.Ask)
+        assertTrue("页面路径 fail-closed（问不到就拒）", (r as ToolDecision.Ask).failClosed)
+        assertEquals(DecisionOrigin.PAGE_ELEVATED, r.origin)
+        // 对话路径不受影响：compose 按 ctx.source 过滤 guard（直接 evaluate 不带过滤，是单测口径）
+        val viaCompose = ApprovalGate.compose(
+            ctxOf("run_shell", source = ToolSource.CONVERSATION),
+            guards = listOf(PageElevatedDomainGuard()),
+        )
+        assertEquals("对话路径调 run_shell 不被页面确认闸门拦截", ToolDecision.Allow, viaCompose)
+        // 只读域不触发（get_current_time 属 info 域）
+        assertNull(PageElevatedDomainGuard().evaluate(ctxOf("get_current_time", source = ToolSource.AIUI_PAGE)))
     }
 
     // ════════════════════════════════════════════════════════════════════

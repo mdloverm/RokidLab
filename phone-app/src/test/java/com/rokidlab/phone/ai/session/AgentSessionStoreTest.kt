@@ -3,6 +3,7 @@ package com.rokidlab.phone.ai.session
 import com.rokidlab.phone.ai.ChatMessage
 import com.rokidlab.phone.ai.TokenUsage
 import com.rokidlab.phone.ai.compaction.CompactionTrigger
+import com.rokidlab.phone.ai.compaction.TokenMeter
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -19,7 +20,8 @@ import java.io.File
  * 第 4~5 组 = 事件流带来的新能力）：
  *
  *  1. 每轮记录 user+assistant 两条，assistant 的工具轨迹由 `ToolCall` 事件**派生**；
- *  2. 条数上限 12（约 6 轮）/ 字符上限 6000：超出时把最旧一轮压进置顶滚动摘要；
+ *  2. 条数上限 12（约 6 轮）/ token 上限 4000（真实计量见 `TokenMeter`，2026-10-02 起替代
+ *     字符口径）：超出时把最旧一轮压进置顶滚动摘要；
  *  3. **清空**：只由用户显式触发（`wipe` 真删文件）—— 原先的"10 分钟无活动自动过期"已于
  *     2026-09-20 移除（与"记忆随对话保存"相抵，且静默发生）；
  *  4. **重启重建**：同一个文件重新打开，历史逐条一致（这是整个接线的目的）；
@@ -65,7 +67,7 @@ class AgentSessionStoreTest {
         store.finishTurn(t, reply, TurnEndReason.COMPLETED)
     }
 
-    private fun chars(h: List<ChatMessage>) = h.sumOf { it.content.length }
+    private fun tokens(h: List<ChatMessage>) = h.sumOf { TokenMeter.count(it.content) }
 
     // ═══════════════════ 1. 基本记录（改造前既有语义）═══════════════════
 
@@ -102,13 +104,13 @@ class AgentSessionStoreTest {
     }
 
     @Test
-    fun `字符超上限时压缩最旧轮并保证总量回落`() {
+    fun `token超上限时压缩最旧轮并保证总量回落`() {
         val store = newStore()
-        // 每轮约 1501 字符；第 4 轮累计超过 6000 触发压缩，最旧轮被合并成滚动摘要
-        repeat(4) { i -> recordTurn(store, "Q", "R".repeat(1500)) }
+        // 每轮约 3000 token；4 轮累计超过 4000 触发压缩，最旧轮被合并成滚动摘要
+        repeat(4) { i -> recordTurn(store, "Q", "很".repeat(3000)) }
         val h = store.history()
-        val c = chars(h)
-        assertTrue("总字符应 ≤ 6000，实际 $c", c <= 6000)
+        val t = tokens(h)
+        assertTrue("总 token 应 ≤ 4000，实际 $t", t <= 4000)
         assertTrue("条数应 ≤ 12，实际 ${h.size}", h.size <= 12)
         assertEquals("压缩后最旧应成为 system 摘要", "system", h.first().role)
         assertTrue(h.first().content.startsWith("[更早对话摘要]"))
@@ -119,7 +121,7 @@ class AgentSessionStoreTest {
         val store = newStore()
         repeat(20) { i -> recordTurn(store, "问题$i", "答案" + "很".repeat(800)) }
         val h = store.history()
-        assertTrue(chars(h) <= 6000)
+        assertTrue("总 token 应 ≤ 默认预算 4000，实际 ${tokens(h)}", tokens(h) <= 4000)
         assertTrue(h.size <= 12)
         assertTrue("不能把上下文清空", h.isNotEmpty())
         assertEquals("最新回复应保留", "答案" + "很".repeat(800), h.last().content)
@@ -351,9 +353,9 @@ class AgentSessionStoreTest {
         val store = newStore()
         repeat(4) { i -> recordTurn(store, "u$i", "r$i") }
         assertEquals(8, store.history().size)
-        // 小窗口模型：把字符预算压到 600（下限）
-        store.applyPolicy(com.rokidlab.phone.ai.compaction.CompactionPolicy.DEFAULT.copy(maxChars = 600))
-        assertTrue("收紧后应立刻落到新预算内", chars(store.history()) <= 600)
+        // 小窗口模型：把 token 预算压到下限 380
+        store.applyPolicy(com.rokidlab.phone.ai.compaction.CompactionPolicy.DEFAULT.copy(maxTokens = 380))
+        assertTrue("收紧后应立刻落到新预算内", tokens(store.history()) <= 380)
     }
 
     // ═══════════════════ 6. 成本可观测（方案 §4.3.4）═══════════════════
@@ -444,5 +446,54 @@ class AgentSessionStoreTest {
         assertEquals(777, reopened.promptTokens)
         assertEquals(88, reopened.completionTokens)
         assertEquals(1, reopened.modelCalls)
+    }
+
+    // ═══════════════════ 6. 摘要 LLM 精炼（digestRefiner，2026-10-02）═══════════════════
+
+    /** 带精炼器的 store（其余与 [newStore] 相同） */
+    private fun newStoreWithRefiner(refined: String?): AgentSessionStore =
+        AgentSessionStore(
+            SessionLog(file) { now },
+            onTrim = { trims.add(it) },
+            digestRefiner = { _, _ -> refined },
+        )
+
+    /** 记一轮超长对话，触发压力压缩 */
+    private fun recordLongTurn(store: AgentSessionStore, user: String, reply: String) {
+        now += 1
+        val t = store.beginTurn(MessageSource.TEXT)
+        store.appendUserMessage(t, user, MessageSource.TEXT)
+        store.finishTurn(t, reply, TurnEndReason.COMPLETED)
+    }
+
+    @Test
+    fun `精炼成功后摘要文本被替换且仍以标题行开头`() {
+        val store = newStoreWithRefiner("· 用户要求把首页按钮改成红色，已完成")
+        recordLongTurn(store, "帮我把首页按钮改成红色", "好的，已改为红色，重启后生效。".repeat(300))
+        recordLongTurn(store, "再看看电量页", "电量页正常，无需处理。".repeat(300))
+        // 两轮超长（> 6000 字符）触发压缩；本地摘要被精炼结果替换
+        val h = store.history()
+        assertEquals("system", h[0].role)
+        assertTrue(
+            "摘要必须是精炼后的文本（含标题行）",
+            h[0].content.startsWith("[更早对话摘要]") && h[0].content.contains("改成红色"),
+        )
+        // 被压缩的轮不再出现在正文里
+        assertFalse(h.any { it.content.startsWith("帮我把首页按钮改成红色") })
+        // 重启后精炼结果仍在（它是事件流的一部分，不只是内存态）
+        assertEquals(h[0].content, newStore().history()[0].content)
+    }
+
+    @Test
+    fun `精炼失败静默保留本地摘要`() {
+        val store = newStoreWithRefiner(null)
+        recordLongTurn(store, "第一个问题", "第一个回答。".repeat(600))
+        recordLongTurn(store, "第二个问题", "第二个回答。".repeat(600))
+        val h = store.history()
+        assertEquals("system", h[0].role)
+        assertTrue(
+            "精炼失败时必须是本地提取的摘要行",
+            h[0].content.startsWith("[更早对话摘要]") && h[0].content.contains("· 用户问"),
+        )
     }
 }

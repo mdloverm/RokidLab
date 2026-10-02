@@ -10,9 +10,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 只读子代理工具（`research_subtask`，方案 §4.3.2）的接线与安全契约。
+ * 子代理工具（`research_subtask` / `execute_subtask`，方案 §4.3.2）的接线与安全契约。
  *
- * 这个工具最危险的失败方式不是"报错"，而是**悄悄把约束放宽**：
+ * 这类工具最危险的失败方式不是"报错"，而是**悄悄把约束放宽**：
  *  - 被错误标成有副作用 → 主循环失败不重试，行为变化没人发现；
  *  - 被放进 AIUI 代码生成子集 → 在那段最怕卡住的时间里装配一个会发起多轮模型调用的工具；
  *  - 对 AIUI 页面开放 → 页面一次 `callTool` 就能触发若干次模型调用（且无法取消）；
@@ -21,6 +21,7 @@ import org.junit.Test
 class SubagentToolTest {
 
     private val name = "research_subtask"
+    private val writeName = "execute_subtask"
 
     @Test
     fun `research_subtask 已注册且是只读`() {
@@ -69,5 +70,59 @@ class SubagentToolTest {
         val rounds = props.optJSONObject("rounds")
         assertNotNull("没有 rounds 就限制不住开销", rounds)
         assertEquals("轮次上限要写在 schema 里（服务端与模型都看得到）", 6, rounds!!.getInt("maximum"))
+    }
+
+    @Test
+    fun `execute_subtask 已注册且是本机副作用档`() {
+        val meta = ToolRegistry.toolList.firstOrNull { it.name == writeName }
+        assertNotNull("$writeName 没在 provider 的 tools() 里声明 —— 模型永远调不到，且不会报错", meta)
+        assertFalse("子代理是正常能力，不该藏起来", meta!!.hidden)
+        assertEquals(ToolRegistry.DOMAIN_RESEARCH, meta.group)
+        assertEquals(
+            "write 子代理可执行本机副作用工具，按 LOCAL_SIDE_EFFECT 登记；" +
+                "登记成 READ_ONLY 会骗过装配层的风险过滤",
+            ToolRisk.LOCAL_SIDE_EFFECT, ToolRegistry.riskOfOrNull(writeName),
+        )
+        assertFalse("子代理自身不依赖眼镜", writeName in ToolRegistry.GLASSES_REQUIRED_TOOLS)
+    }
+
+    @Test
+    fun `execute_subtask 不进只读与无人值守名单`() {
+        assertFalse(
+            "write 子代理绝不能进只读名单（会连带进无人值守名单，变成无人监管的本机写入）",
+            writeName in ToolRegistry.readOnlyToolNames(),
+        )
+        assertFalse(
+            "无人值守任务不能派 write 子代理（没人能打断看不见的写状态循环）",
+            writeName in ToolRegistry.unattendedToolNames(),
+        )
+    }
+
+    @Test
+    fun `execute_subtask 不对 AIUI 页面开放`() {
+        val known = PageScope.pageVisibleTools()
+        val reason = PageScope.rejectReason(writeName, known, PageScope::domainOf)
+        assertNotNull("页面不该能派 write 子任务：一次 callTool 会触发若干次写状态动作，且无法取消", reason)
+        assertTrue("拒绝理由要指明是页面准入限制：$reason", reason!!.contains("not allowed in AIUI pages"))
+    }
+
+    @Test
+    fun `execute_subtask schema 声明 task 必填与轮次上限`() {
+        val meta = ToolRegistry.toolList.first { it.name == writeName }
+        val params = ToolRegistry.buildSchema(meta)
+            .getJSONObject("function").getJSONObject("parameters")
+        val props = params.getJSONObject("properties")
+
+        val task = props.optJSONObject("task")
+        assertNotNull("没有 task，子代理不知道要做什么", task)
+        val required = params.getJSONArray("required")
+        assertTrue(
+            "task 必须是必填 —— 它是子代理唯一的信息来源（它看不到对话）",
+            (0 until required.length()).any { required.getString(it) == "task" },
+        )
+
+        val rounds = props.optJSONObject("rounds")
+        assertNotNull("没有 rounds 就限制不住开销", rounds)
+        assertEquals("轮次上限要写在 schema 里（服务端与模型都看得到）", 8, rounds!!.getInt("maximum"))
     }
 }

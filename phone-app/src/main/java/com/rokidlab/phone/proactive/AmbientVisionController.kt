@@ -2,18 +2,14 @@ package com.rokidlab.phone.proactive
 
 import android.app.AlarmManager
 import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.os.Build
 import android.util.Log
 import com.rokidlab.phone.R
 import com.rokidlab.phone.app.LabApplication
 import com.rokidlab.phone.glasses.MotionBuffer
 import kotlin.math.sqrt
 
-private const val ACTION_VISION_TICK = "com.rokidlab.phone.proactive.VISION_TICK"
 private const val PI_RC = 2001
 
 /** IMU 移动判定窗口 */
@@ -36,6 +32,9 @@ class AmbientVisionController private constructor(private val appContext: Contex
         private const val TAG = "AmbientVision"
         private const val PREFS = "proactive_vision"
         private const val K_ENABLED = "enabled"
+
+        /** 闹钟到点广播 action：由 Manifest 注册的 [VisionTickReceiver] 接收（进程死了也能被拉起） */
+        const val ACTION_VISION_TICK = "com.rokidlab.phone.proactive.VISION_TICK"
 
         @Volatile
         private var instance: AmbientVisionController? = null
@@ -64,12 +63,6 @@ class AmbientVisionController private constructor(private val appContext: Contex
         if (sessionActiveCache) Log.i(TAG, "session restored from prefs")
     }
 
-    private val tickReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == ACTION_VISION_TICK) onTick()
-        }
-    }
-
     private fun tickPendingIntent(): PendingIntent = PendingIntent.getBroadcast(
         appContext, PI_RC,
         Intent(ACTION_VISION_TICK).setPackage(appContext.packageName),
@@ -89,11 +82,10 @@ class AmbientVisionController private constructor(private val appContext: Contex
     /**
      * 登记/重排下一拍（幂等，兼作 reschedule）：一次性 RTC_WAKEUP 闹钟（Doze 下也触发），
      * 到点后由 [onTick] 链式重排。拍摄节奏固定 15 分钟一拍（[ProactiveGatePolicy.VISION_INTERVAL_MS]）。
-     * 进程被杀后闹钟仍在但动态 receiver 已失联 → 该轮丢失，
-     * 由 Application.onCreate 的 [start] 重建链路（与定时任务同一生命周期保证）。
+     * 到点广播由 Manifest 注册的 [VisionTickReceiver] 接收：进程被杀后闹钟照样拉起进程
+     * 并投递（与定时任务 TimerAlarmReceiver 同一生命周期保证），链路自续不断。
      */
     fun start() {
-        registerReceiverIfNeeded()
         try {
             val am = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             if (!isEnabled()) {
@@ -159,18 +151,5 @@ class AmbientVisionController private constructor(private val appContext: Contex
                     .contains(com.rokidlab.phone.ai.tools.VisionToolProvider.TOOL_LOOK) +
                 ", sessionActive=$sessionActiveCache)",
         )
-    }
-
-    private var receiverRegistered = false
-
-    private fun registerReceiverIfNeeded() {
-        if (receiverRegistered) return
-        if (Build.VERSION.SDK_INT >= 33) {
-            appContext.registerReceiver(tickReceiver, IntentFilter(ACTION_VISION_TICK), Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            appContext.registerReceiver(tickReceiver, IntentFilter(ACTION_VISION_TICK))
-        }
-        receiverRegistered = true
     }
 }

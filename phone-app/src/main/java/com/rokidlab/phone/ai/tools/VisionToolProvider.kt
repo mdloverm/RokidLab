@@ -171,7 +171,8 @@ internal object VisionToolProvider : ToolProvider {
         val app = context.applicationContext as? LabApplication
             ?: return "看不了：应用上下文不可用，请稍后重试"
         if (!app.hasCxrL()) {
-            return "看不了：眼镜链路尚未初始化。请如实告诉用户现在看不到画面，"
+            return "看不了：眼镜链路尚未初始化。请如实告诉用户现在看不到画面，" +
+                "需要先连接并配对眼镜才行；不要说成「没有相机权限」，也不要编造画面内容。"
         }
         val session = runCatching { app.cxrL }.getOrNull()
             ?: return "看不了：当前没有连接到眼镜。请告诉用户「需要先连接眼镜我才能看到画面」"

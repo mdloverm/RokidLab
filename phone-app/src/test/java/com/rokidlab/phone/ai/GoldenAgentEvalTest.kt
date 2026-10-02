@@ -120,11 +120,13 @@ class GoldenAgentEvalTest {
     }
 
     @Test
-    fun `B5 AIUI 会话域仅含 aiui files info web knowledge`() {
+    fun `B5 AIUI 会话域仅含 aiui files info web knowledge shell`() {
         // 排除项才是这个子集的意义：眼镜管理(timer/media/display)/手机域/research/vision/mcp
         // 都是"这份活干不上"的域，每轮少发十几个 Schema。
         // web + knowledge 是**输入侧素材**（只读），页面生成常以"把这份资料做成页面"开头，
         // 砍掉它们会让切换到子集后的下一轮突然失去素材来源，模型只能凭印象编数据。
+        // shell 是 2026-10-01 补进来的（save_code_file 准则要求落盘后用 start_web_preview /
+        // run_shell 验证，见 ToolRegistry.SESSION_AIUI_DOMAINS 的 KDoc）—— 本金标此前漏更新。
         assertEquals(
             setOf(
                 ToolRegistry.DOMAIN_AIUI,
@@ -132,6 +134,7 @@ class GoldenAgentEvalTest {
                 ToolRegistry.DOMAIN_INFO,
                 ToolRegistry.DOMAIN_WEB,
                 ToolRegistry.DOMAIN_KNOWLEDGE,
+                ToolRegistry.DOMAIN_SHELL,
             ),
             ToolRegistry.SESSION_AIUI_DOMAINS,
         )

@@ -203,7 +203,13 @@ private fun AiuiDemoScreen(
                     .border(1.dp, BrewBorder),
             ) {
                 AndroidView(
-                    factory = { host.view },
+                    // 同 AiuiDemoCard：host.view 是共享单例，从聊天卡切过来时旧 holder 可能还没摘干净，
+                    // 先 removeView 再接入（child-already-has-parent 崩溃的另一半路径）
+                    factory = {
+                        host.view.apply {
+                            (parent as? android.view.ViewGroup)?.removeView(this)
+                        }
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
                 // 手势层盖在画布上（它**吞掉**触摸，不转发给 WebView：两路都发会一次点击出两个动作）

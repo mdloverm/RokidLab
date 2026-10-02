@@ -26,5 +26,5 @@ internal object McpToolProvider : ToolProvider {
     override fun tools(): List<ToolEntry> = McpRegistry.activeEntries()
 
     override fun execute(context: Context, name: String, args: JSONObject): String =
-        McpRegistry.call(name, args)
+        McpRegistry.call(context, name, args)
 }

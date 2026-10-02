@@ -48,6 +48,20 @@ object ApprovalGate {
 
     private const val TAG = "ApprovalGate"
 
+    /**
+     * AIUI 页面路径的确认等待上限。
+     *
+     * 背景（闭环审计 R7）：眼镜端同步工具窗口是 25s（`AiuiLinkActivity.SYNC_TOOL_TIMEOUT_MS`），
+     * 而确认通道自身要等 35s/40s —— 用户在页窗超时**之后**才点确认时，副作用照样执行，
+     * 页面却早已显示失败（「报超时却执行」）。
+     *
+     * 取 18s = 25s 页窗 − 上行/下行与线程调度开销（~2s）− 工具执行余量（~5s）：
+     * 确认在页窗内出结论，执行结果也尽量赶在页窗超时前回到页面。
+     * 与之配套：页面路径**超时未确认一律拒绝**（见 [resolveAsk]），且
+     * `ToolGateway` 对页面路径用动态 join 预算把「确认+执行」总时长压进 23s。
+     */
+    internal const val PAGE_CONFIRM_TIMEOUT_MS = 18_000L
+
     /** 生产策略集（[ToolGuards.default] 只构造一次 —— [SourceRateLimitGuard] 是有状态的） */
     private val defaultGuards: List<ToolGuard> by lazy { ToolGuards.default() }
 
@@ -84,6 +98,14 @@ object ApprovalGate {
          *   通道负责把它渲染到眼镜端悬浮层 + TTS 播报 / 手机端弹窗。
          */
         fun confirm(toolName: String, prompt: String): Boolean
+
+        /**
+         * 带**等待上限**的版本（闸门按调用来源收紧窗口时使用）。
+         * 默认退化为无上限实现 —— 生产通道（眼镜/手机）**必须覆写**并取
+         * `min(maxWaitMs, 自身超时)`；测试假实现可不覆写（不建模时间）。
+         */
+        fun confirm(toolName: String, prompt: String, maxWaitMs: Long): Boolean =
+            confirm(toolName, prompt)
 
         /** 上一次确认是否被用户**显式取消**（true=取消 → 拒绝；false=超时/未响应 → 按声明分流） */
         fun wasCancelled(): Boolean = false
@@ -142,7 +164,7 @@ object ApprovalGate {
             enabled = context?.let { ToolRegistry.isEnabled(it, name) },
         )
         val composed = compose(ctx)
-        val resolved = if (composed is ToolDecision.Ask) resolveAsk(composed, name) else composed
+        val resolved = if (composed is ToolDecision.Ask) resolveAsk(composed, name, source) else composed
         audit(ctx, resolved)
         return resolved
     }
@@ -199,13 +221,27 @@ object ApprovalGate {
      * 早期实现不区分，导致"用户点错一次 / 眼镜没响应"被当成拒绝，
      * 用户侧看到「你已在眼镜上取消」但自己根本没操作。
      */
-    internal fun resolveAsk(ask: ToolDecision.Ask, toolName: String): ToolDecision {
+    internal fun resolveAsk(ask: ToolDecision.Ask, toolName: String): ToolDecision =
+        resolveAsk(ask, toolName, ToolSource.CONVERSATION)
+
+    /**
+     * 来源感知版。[ToolSource.AIUI_PAGE] 与对话路径有两点不同（闭环审计 R7）：
+     *
+     * 1. **确认等待有 18s 上限**（[PAGE_CONFIRM_TIMEOUT_MS]）：页面同步窗口 25s，
+     *    用户超窗后才确认会让副作用在页面已报失败后执行；
+     * 2. **超时未确认一律拒绝（fail-closed）**，不看 [ToolDecision.Ask.failClosed]：
+     *    页窗过期/将过期时执行，正是「页面报超时、副作用却发生」那个 bug 本身。
+     *    对 `PROCEED` 工具这是有意的行为收紧 —— 页面路径用户随时可重新触发，
+     *    重新触发会得到一个新的确认弹窗，代价只是再点一次。
+     */
+    internal fun resolveAsk(ask: ToolDecision.Ask, toolName: String, source: ToolSource): ToolDecision {
         val channel = activeChannel()
         if (channel == null) {
             // 两条通道都问不到：按工具自己的声明分流（见类注释）
             return if (ask.failClosed) denyUnconfirmed(toolName, "当前无法向你确认") else ToolDecision.Allow
         }
-        val confirmed = runCatching { channel.confirm(toolName, ask.prompt) }.getOrDefault(false)
+        val maxWait = if (source == ToolSource.AIUI_PAGE) PAGE_CONFIRM_TIMEOUT_MS else Long.MAX_VALUE
+        val confirmed = runCatching { channel.confirm(toolName, ask.prompt, maxWait) }.getOrDefault(false)
         if (confirmed) {
             Log.i(TAG, "confirmed via ${channel.channelId} (tool=$toolName)")
             return ToolDecision.Allow
@@ -215,6 +251,14 @@ object ApprovalGate {
             return ToolDecision.Deny(
                 DecisionOrigin.RISK_CONFIRMATION,
                 "你已取消本次操作，未执行：'$toolName'",
+            )
+        }
+        // 页面路径：确认等待被压进页窗，超窗未确认 = 页面侧已（或将）显示失败，
+        // 此时放行就是「报超时却执行」—— 一律拒绝，出路是重新触发。
+        if (source == ToolSource.AIUI_PAGE) {
+            return ToolDecision.Deny(
+                DecisionOrigin.RISK_CONFIRMATION,
+                "等待你确认超时，'$toolName' 未执行。需要时请重新触发，并在确认弹窗出现后尽快答复",
             )
         }
         // 超时/未响应/通道抛异常：同样按声明分流

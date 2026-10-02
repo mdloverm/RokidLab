@@ -161,7 +161,7 @@ internal object WebToolProvider : ToolProvider {
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String = when (name) {
-            "search_web" -> WebTools.search(args.optString("query"))
+            "search_web" -> WebTools.search(context, args.optString("query"))
 
             "fetch_webpage" -> WebTools.fetchPage(args.optString("url"))
 

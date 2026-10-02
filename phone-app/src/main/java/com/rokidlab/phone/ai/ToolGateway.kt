@@ -52,6 +52,16 @@ object ToolGateway {
         private const val MAX_RESULT_CHARS = 8000
 
         /**
+         * `list_tools` 能力发现清单的字符上限。
+         *
+         * ⚠️ 不能复用 [MAX_RESULT_CHARS]：注册表 80+ 工具，每条带完整中文描述约 150~300 字符，
+         * 8000 只装得下前 ~30 条 —— 清单按声明顺序静默丢尾（files/phone/browser 域整段消失），
+         * 生成方模型据此写页面会大量调「清单里没有」的工具。这个结果走 CXR Caps 下行
+         * （同 `get_cover_image` 的 40K 通道），不受 RFCOMM 8000 约束。
+         */
+        private const val MAX_LIST_TOOLS_CHARS = 40_000
+
+        /**
          * 按工具放宽的结果上限（默认 [MAX_RESULT_CHARS]）。
          *
          * 目前只有 `get_cover_image`：它返回封面图的 data URL，base64 后动辄 2~4 万字符，
@@ -65,6 +75,21 @@ object ToolGateway {
     /** 单次调用超时。工具可能走外网（搜索/天气 1~3s），留足余量。
      *  眼镜端同步等待窗口（25s）必须比它大，否则本类给出的真实错误回不到页面。 */
     private const val CALL_TIMEOUT_MS = 15_000L
+
+    /**
+     * AIUI 页面路径的总预算（闭环审计 R7）。
+     *
+     * 页面确认等待已由 [com.rokidlab.phone.ai.approval.ApprovalGate] 压到 18s，但那只是
+     * 一半 —— 若执行 join 仍按 [CALL_TIMEOUT_MS] 给满，确认 18s + 执行 15s = 33s 会
+     * 超过眼镜端同步窗口（25s）：页面早已超时，工具却还在跑。这里把「确认+执行」的
+     * **总时长**压进 23s（页窗 25s − 下行余量 2s）：确认耗掉多少，执行就只剩多少
+     * （最少 [PAGE_MIN_JOIN_MS]）。超预算返回的「tool timed out」是手机侧的真实错误，
+     * 能在页窗内回到页面，不再是眼镜端笼统的本地超时。
+     */
+    private const val PAGE_TOTAL_BUDGET_MS = 23_000L
+
+    /** 页面路径执行 join 的保底下限：确认耗时接近上限时，至少给工具 2s 执行机会 */
+    private const val PAGE_MIN_JOIN_MS = 2_000L
 
     /** 同一 cbId 的去重窗口：页面超时重试落在窗口内即命中，不再起第二个 worker */
     private const val DEDUPE_TTL_MS = 60_000L
@@ -147,26 +172,36 @@ object ToolGateway {
     fun listAllowed(context: Context): List<ToolBrief> =
         ToolRegistry.toolList
             .filter { it.group in ALLOWED_DOMAINS && it.name !in DENY_TOOLS }
+            // hidden 口径与设置页（visibleTools）对齐（R10）：系统性工具（自诊断/日志/会话读）
+            // 是给**对话模型**用的自我认知工具，页面（第三方 .ink）没有资格看见与调用
+            .filterNot { it.hidden }
             .map { ToolBrief(it.name, it.description(context), it.group) }
 
     /**
      * 清单的紧凑 JSON（页面 Lab.listTools() 用），避免页面自己拼装。
      *
-     * ⚠️ 超长时**按条丢弃尾部工具**，绝不截断字符串：这条路径原先也过 [truncateResult]，
-     * 而「截断 + …(truncated)」会把 JSON 变成非法串，页面 `JSON.parse` 直接失败 ——
-     * 表现为整个工具清单不可用（比少列几个工具糟糕得多）。宁可少列，也必须保持合法 JSON。
+     * 上限是 [MAX_LIST_TOOLS_CHARS]（远大于工具结果的 8000）：清单是**能力发现**通道，
+     * 截尾会让生成方模型拿着残缺清单写页面。超长时仍**按条丢弃尾部工具**、并置
+     * `"truncated": true`，绝不截断字符串：截断 + …(truncated) 会把 JSON 变成非法串，
+     * 页面 `JSON.parse` 直接失败 —— 宁可少列，也必须保持合法 JSON。
      */
     fun listAllowedJson(context: Context): String {
         val arr = org.json.JSONArray()
         var used = "{\"tools\":[]}".length
+        var truncated = false
         for (t in listAllowed(context)) {
             val obj = JSONObject().put("name", t.name).put("description", t.description)
             val cost = obj.toString().length + 1
-            if (used + cost > MAX_RESULT_CHARS) break
+            if (used + cost > MAX_LIST_TOOLS_CHARS) {
+                truncated = true
+                break
+            }
             used += cost
             arr.put(obj)
         }
-        return JSONObject().put("tools", arr).toString()
+        val payload = JSONObject().put("tools", arr)
+        if (truncated) payload.put("truncated", true)
+        return payload.toString()
     }
 
     /**
@@ -229,6 +264,7 @@ object ToolGateway {
      *   已完成则直接回缓存结果，不会第二次执行工具。留空则不做去重（一次性调用场景）。
      */
     fun call(context: Context, name: String, arguments: String, cbId: String = ""): CallResult {
+        val startedAt = System.currentTimeMillis()
         val toolName = name.trim()
         if (!isEnabled(context)) {
             return CallResult(false, toolName, error = "tool gateway is disabled")
@@ -254,27 +290,10 @@ object ToolGateway {
             dedupeMap[dedupeKey]?.let { prev ->
                 if (now - prev.createdAt <= DEDUPE_TTL_MS) {
                     Log.i(TAG, "tool $toolName: cbId=$dedupeKey seen before (finished=${prev.finished.get()}), reuse")
-                    return awaitResult(prev, toolName, duplicate = true)
+                    return awaitResult(prev, toolName, duplicate = true, timeoutMs = joinBudgetMs(startedAt))
                 }
                 dedupeMap.remove(dedupeKey, prev)
             }
-        }
-
-        // 审批闸门（唯一判定点，见 ApprovalGate）：per-source 限流 + EXTERNAL_SIDE_EFFECT 眼镜端确认。
-        // fail-open：无确认通道 / 眼镜端旧版 / 用户超时未响应 → 降级放行；
-        // 只有用户在眼镜上显式取消才拒绝。
-        //
-        // 页面域/黑名单在上面的 precheck 已经拦过一遍，这里的 PageScopeGuard 会再判一次 ——
-        // 是幂等的纯判定（读内存表），保留它是为了"绕过网关直接调闸门"时策略仍然生效。
-        val decision = ApprovalGate.preExecute(
-            ToolSource.AIUI_PAGE,
-            toolName,
-            JSONObject(normalizedArgs),
-            // 读工具开关：页面调用的工具同样受设置页开关约束（否则关掉的工具仍能从页面被调起）
-            context = context.applicationContext,
-        )
-        if (decision is ToolDecision.Deny) {
-            return CallResult(false, toolName, error = decision.reason)
         }
 
         val appContext = context.applicationContext
@@ -295,6 +314,10 @@ object ToolGateway {
         }, "aiui-tool-$toolName")
         val entry = InFlight(worker, resultRef, errorRef, finished)
 
+        // 先占幂等坑、再过审批：审批可能阻塞最长 ~40s（眼镜确认 35s / 手机 40s），
+        // 期间页面用同一 cbId 重试必须命中占位 entry（等待/回「进行中」），
+        // 而不是再跑一遍 preExecute —— 那会重复扣限流额度、并对用户弹第二次确认框
+        //（两个线程各建 InFlight 只靠 putIfAbsent 才没双重执行，语义靠竞态运气）。
         if (dedupeKey.isNotEmpty()) {
             // putIfAbsent 而非「先查后写」：两个同 cbId 请求并发到达时，
             // 后者会拿到先到者的 entry 并挂上去等结果，绝不退化成本地第二次执行工具。
@@ -302,23 +325,60 @@ object ToolGateway {
             if (raced != null) {
                 Log.i(TAG, "tool $toolName: cbId=$dedupeKey concurrent duplicate, join in-flight call")
                 // 本 worker 从未 start，直接丢弃，避免重复副作用
-                return awaitResult(raced, toolName, duplicate = true)
+                return awaitResult(raced, toolName, duplicate = true, timeoutMs = joinBudgetMs(startedAt))
             }
             evictExpiredDedupe(System.currentTimeMillis())
         }
+
+        // 审批闸门（唯一判定点，见 ApprovalGate）：per-source 限流 + EXTERNAL_SIDE_EFFECT 眼镜端确认。
+        // fail-open：无确认通道 / 眼镜端旧版 / 用户超时未响应 → 降级放行；
+        // 只有用户在眼镜上显式取消才拒绝。
+        //
+        // 页面域/黑名单在上面的 precheck 已经拦过一遍，这里的 PageScopeGuard 会再判一次 ——
+        // 是幂等的纯判定（读内存表），保留它是为了"绕过网关直接调闸门"时策略仍然生效。
+        val decision = try {
+            ApprovalGate.preExecute(
+                ToolSource.AIUI_PAGE,
+                toolName,
+                JSONObject(normalizedArgs),
+                // 读工具开关：页面调用的工具同样受设置页开关约束（否则关掉的工具仍能从页面被调起）
+                context = appContext,
+            )
+        } catch (e: Throwable) {
+            // 审批本身炸了必须撤占位：否则 TTL 内该 cbId 的重试全都挂在一个永不启动的 worker 上
+            if (dedupeKey.isNotEmpty()) dedupeMap.remove(dedupeKey, entry)
+            throw e
+        }
+        if (decision is ToolDecision.Deny) {
+            // 撤占位：被拒的调用不占坑，后续重试重新走完整判定（而不是等到 TTL 过期）
+            if (dedupeKey.isNotEmpty()) dedupeMap.remove(dedupeKey, entry)
+            return CallResult(false, toolName, error = decision.reason)
+        }
+
         worker.isDaemon = true
         worker.start()
-        return awaitResult(entry, toolName, duplicate = false)
+        return awaitResult(entry, toolName, duplicate = false, timeoutMs = joinBudgetMs(startedAt))
     }
+
+    /**
+     * 本次调用的 join 预算：本网关只服务页面路径（[com.rokidlab.phone.ai.approval.ToolSource.AIUI_PAGE]），
+     * 预算 = [PAGE_TOTAL_BUDGET_MS] − 已耗时（审批等待占掉的部分），下限 [PAGE_MIN_JOIN_MS]、
+     * 上限 [CALL_TIMEOUT_MS]。对话路径不走本网关。
+     */
+    private fun joinBudgetMs(startedAt: Long): Long =
+        (PAGE_TOTAL_BUDGET_MS - (System.currentTimeMillis() - startedAt))
+            .coerceIn(PAGE_MIN_JOIN_MS, CALL_TIMEOUT_MS)
 
     /**
      * 等待一次已登记的调用结束，并按统一口径转成 [CallResult]。
      *
      * [duplicate] 区分首次调用与重复调用：两者都在超时后返回错误，
      * 但错误语义不同 —— 首次是「超时」，重复是「上一次仍在跑」（提示页面别再造并发）。
+     *
+     * [timeoutMs] 由调用方按来源预算传入（页面路径 = 动态预算，见 [joinBudgetMs]）。
      */
-    private fun awaitResult(entry: InFlight, toolName: String, duplicate: Boolean): CallResult {
-        entry.worker.join(CALL_TIMEOUT_MS)
+    private fun awaitResult(entry: InFlight, toolName: String, duplicate: Boolean, timeoutMs: Long): CallResult {
+        entry.worker.join(timeoutMs)
         if (!entry.finished.get()) {
             // 超时后不 interrupt：工具可能持有文件/网络资源，强中断会留下半写状态，
             // 让线程自己跑完（daemon 线程不阻塞进程退出）。
@@ -327,8 +387,8 @@ object ToolGateway {
                 LogCollector.w(TAG, "工具 $toolName 重复调用，上一次仍在执行（页面 15s 重试触发）")
                 CallResult(false, toolName, error = "tool '$toolName' is already in progress")
             } else {
-                Log.w(TAG, "tool $toolName timed out after ${CALL_TIMEOUT_MS}ms")
-                LogCollector.w(TAG, "工具 $toolName 执行超时 ${CALL_TIMEOUT_MS}ms（线程继续跑完，不中断）")
+                Log.w(TAG, "tool $toolName timed out after ${timeoutMs}ms")
+                LogCollector.w(TAG, "工具 $toolName 执行超时 ${timeoutMs}ms（线程继续跑完，不中断）")
                 CallResult(false, toolName, error = "tool '$toolName' timed out")
             }
         }
@@ -340,6 +400,17 @@ object ToolGateway {
         }
 
         var result = entry.resultRef.get() ?: ""
+        // 大结果通道（R13）：超限的截断产物语义已坏 —— 封面图的 base64 被砍半张、
+        // 页面 JSON.parse/图片解码双双失败且无真因可查。与其下行一个必炸的 payload，
+        // 不如显式失败并留下证据（普通工具仍走 truncateResult 的语义截断，不变）。
+        val toolLimit = PER_TOOL_MAX_RESULT_CHARS[toolName]
+        if (toolLimit != null && result.length > toolLimit) {
+            LogCollector.w(
+                TAG,
+                "工具 $toolName 结果 ${result.length} 字符超过大结果通道上限 $toolLimit，已拒绝下行（R13）",
+            )
+            return CallResult(false, toolName, error = "result of '$toolName' is too large for the glasses downlink")
+        }
         result = truncateResult(toolName, result)
         Log.i(TAG, "tool $toolName ok, ${result.length} chars")
         return CallResult(true, toolName, result = result)

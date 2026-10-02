@@ -135,7 +135,15 @@ internal fun AiuiDemoCard(modifier: Modifier = Modifier) {
                 contentAlignment = Alignment.Center,
             ) {
                 AndroidView(
-                    factory = { host.view },
+                    // ⚠️ host.view 是 AiuiWebHost 持有的**单例** WebView，聊天卡与 AiuiDemoActivity
+                    // 共用它：上一处 AndroidView holder 尚未 removeView 时这里就 addView 会直接抛
+                    // "child already has a parent"（13:40 真机崩溃，见 dropbox data_app_crash）。
+                    // 返回前先从旧父容器摘除，谁后拿到谁接手。
+                    factory = {
+                        host.view.apply {
+                            (parent as? android.view.ViewGroup)?.removeView(this)
+                        }
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
                 if (error != null) {

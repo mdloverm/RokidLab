@@ -40,6 +40,13 @@ internal object AgentSessionManager {
     private const val SESSION_PREFS = "agent_session_prefs"
     private const val KEY_ENABLED = "session_memory_enabled"
 
+    /**
+     * 会话事件流文件数量上限（2026-10-02 体检）：每条对话一个 `agent_sessions/<id>.jsonl`，
+     * 此前只增不减，长期使用目录无限膨胀。绑定会话时顺手按修改时间淘汰最旧的，
+     * 只在超出上限时触发（正常几十条对话远够用；当前会话永不参与淘汰）。
+     */
+    private const val MAX_SESSION_FILES = 50
+
     @Volatile
     private var appContext: Context? = null
 
@@ -80,6 +87,7 @@ internal object AgentSessionManager {
         }
         boundSessionId = sessionId
         store = newStore(ctx, sessionId)
+        pruneSessionCap(ctx, sessionId)
         Log.i(TAG, "bind session=$sessionId")
     }
 
@@ -110,6 +118,8 @@ internal object AgentSessionManager {
         AgentSessionStore(
             SessionLog(SessionLog.fileFor(ctx.filesDir, sessionId)),
             onTrim = { Log.d(TAG, it) },
+            // 摘要 LLM 精炼：压缩后用被压轮原文重写摘要（失败静默保留本地摘要，见 LlmDigestRefiner）
+            digestRefiner = LlmDigestRefiner.refinerFor(ctx),
         )
 
     /** 当前门面；`init` 之后才第一次需要写时才懒绑定（覆盖 bindSession 早于 init 的极早期路径） */
@@ -225,6 +235,29 @@ internal object AgentSessionManager {
             ?.toList()
             .orEmpty()
 
+    /**
+     * 会话文件数量底线（[MAX_SESSION_FILES]）：超出时按最后修改时间删最旧的。
+     *
+     * 与 [clearAll] 的语义分界：那是用户**显式**「全清」，这里只是容量兜底，只动最久没动的
+     * 旧会话。排在 [bindSession] 后调用 —— 目录只有几十个文件，列一次的开销可忽略；
+     * 当前会话（刚绑定、正要被读写）显式排除，永不参与淘汰。
+     */
+    private fun pruneSessionCap(context: Context, currentSessionId: String) {
+        runCatching {
+            val files = sessionLogFiles(context)
+            if (files.size <= MAX_SESSION_FILES) return
+            files.asSequence()
+                .filter { it.nameWithoutExtension != currentSessionId }
+                .sortedBy { it.lastModified() }
+                .take(files.size - MAX_SESSION_FILES)
+                .forEach { f ->
+                    runCatching { f.delete() }
+                        .onSuccess { if (it) Log.i(TAG, "session cap: pruned old log ${f.name}") }
+                        .onFailure { Log.w(TAG, "session cap: prune failed: ${f.name}", it) }
+                }
+        }.onFailure { Log.w(TAG, "pruneSessionCap failed: ${it.message}") }
+    }
+
     /** 丢弃最后一轮对话上下文（用户点「重新生成 / 编辑重发」时调用） */
     fun dropLastTurn() {
         storeOrNull()?.dropLastTurn()
@@ -237,7 +270,7 @@ internal object AgentSessionManager {
      * 这是 `llm` 接缝给 `compaction` 接缝的直接输入：`ModelCapabilities.contextWindow` 是
      * 改造前完全拿不到的真实数字，而"历史预算"正是该由它推导的量。规则见
      * [CompactionPolicy.forWindow] —— **双向**：小窗口收紧、大窗口放宽（两侧各有绝对天花板，
-     * 见 `MAX_CHARS_CEIL` / `MAX_MESSAGES_CEIL` / `MAX_DIGEST_CEIL`），窗口未知时原样返回默认档 ——
+     * 见 `MAX_TOKENS_CEIL` / `MAX_MESSAGES_CEIL` / `MAX_DIGEST_CEIL`），窗口未知时原样返回默认档 ——
      * "不知道"不等于"该调小"，否则会平白损失用户的上下文。
      */
     internal fun applyModelCapabilities(caps: ModelCapabilities) {
@@ -247,7 +280,7 @@ internal object AgentSessionManager {
         Log.i(
             TAG,
             "compaction policy adjusted by model window: ctx=${caps.contextWindow} " +
-                "(src=${caps.source}) -> maxChars=${next.maxChars} maxMessages=${next.maxMessages} " +
+                "(src=${caps.source}) -> maxTokens=${next.maxTokens} maxMessages=${next.maxMessages} " +
                 "digestMax=${next.digestMaxChars}",
         )
     }
@@ -327,8 +360,10 @@ internal object AgentSessionManager {
         return ContextUsage(
             messages = history.size,
             messageLimit = policy.maxMessages,
-            chars = history.sumOf { it.content.length },
-            charLimit = policy.maxChars,
+            // 真实 token 计量（cl100k）：与压缩预算同口径 —— 单位从字符换成 token 后，
+            // "进度条 100%" 与"下一轮会被压缩"终于说的是同一件事
+            tokens = history.sumOf { com.rokidlab.phone.ai.compaction.TokenMeter.count(it.content) },
+            tokenLimit = policy.maxTokens,
             compressed = s?.hasDigest() ?: false,
             enabled = isEnabled(context),
             windowLimited = policy.windowAdjusted,
@@ -353,12 +388,16 @@ internal object AgentSessionManager {
 /**
  * 上下文占用快照（UI 用）。
  *
- * [ratio] 取「条数占比」与「字符占比」的较大者：两个预算是"或"的关系 ——
+ * [ratio] 取「条数占比」与「token 占比」的较大者：两个预算是"或"的关系 ——
  * 任一项触顶都会触发裁剪（见 `BasicCompactionEngine.compactIfNeeded`），
  * 只报其中一项，会在另一项先触顶时让用户毫无预警。
  *
- * @param windowLimited 预算是否已被**模型窗口**调整过（不再是默认的 6000 字符 / 12 条）。
- *   必须让用户看得见：否则他会发现"上限怎么变成 983 字符了"（或"怎么变成 3 万了"）却找不到原因 ——
+ * ★ token 口径（2026-10-02）：历史预算从字符换成真实 token 计量（`TokenMeter`）——
+ * 字符对中英文不等权（英文 4 字符/token、中文约 1 字/token），同一个"6000 字符"
+ * 的预算在两种语言下差 4 倍；token 是模型真正消费的单位，进度条与压缩触发自此同口径。
+ *
+ * @param windowLimited 预算是否已被**模型窗口**调整过（不再是默认的 4000 token / 12 条）。
+ *   必须让用户看得见：否则他会发现"上限怎么变成 600 token 了"（或"怎么变成 3 万了"）却找不到原因 ——
  *   前者是切到小窗口模型（本地 Ollama `num_ctx`）的正常表现，后者是切到大窗口模型后
  *   **主动放宽**的结果，两种都不是功能坏了。名字保留 `windowLimited`（调用点太多），
  *   语义是"被窗口改过"，方向由 `widenedFromDefault` / `tightenedFromDefault` 区分。
@@ -366,8 +405,8 @@ internal object AgentSessionManager {
 data class ContextUsage(
     val messages: Int,
     val messageLimit: Int,
-    val chars: Int,
-    val charLimit: Int,
+    val tokens: Int,
+    val tokenLimit: Int,
     /** 是否已产生置顶滚动摘要（= 早期对话已被压缩） */
     val compressed: Boolean,
     /** 会话记忆是否开启；false 时 UI 不展示 */
@@ -420,7 +459,7 @@ data class ContextUsage(
         get() {
             if (!enabled) return 0f
             val byCount = if (messageLimit > 0) messages.toFloat() / messageLimit else 0f
-            val byChars = if (charLimit > 0) chars.toFloat() / charLimit else 0f
-            return maxOf(byCount, byChars).coerceIn(0f, 1f)
+            val byTokens = if (tokenLimit > 0) tokens.toFloat() / tokenLimit else 0f
+            return maxOf(byCount, byTokens).coerceIn(0f, 1f)
         }
 }

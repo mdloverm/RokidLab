@@ -52,6 +52,12 @@ internal object PhoneToolProvider : ToolProvider {
         "get_phone_status",
         "set_phone_volume",
         "manage_calendar",
+        "delete_calendar_event",
+        "update_calendar_event",
+        "open_navigation",
+        "uninstall_phone_app",
+        "set_flashlight",
+        "get_step_count",
     )
 
     override fun tools(): List<ToolEntry> = listOf(
@@ -336,6 +342,154 @@ internal object PhoneToolProvider : ToolProvider {
                 ),
             ),
         ),
+        // 删日程：删除不可恢复 ⇒ EXTERNAL + BLOCK（对齐 delete_knowledge_doc 先例）。
+        // 刻意不并进 manage_calendar：那会把整个工具升到 EXTERNAL，"记个日程"也得弹确认。
+        ToolEntry(
+            name = "delete_calendar_event",
+            group = ToolRegistry.DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_delete_calendar_event_name,
+            descriptionRes = R.string.ai_tool_delete_calendar_event_desc,
+            risk = ToolRisk.EXTERNAL_SIDE_EFFECT,
+            confirmPolicy = ToolConfirmPolicy.BLOCK,
+            sideEffect = true,
+            statusText = "正在删除日程…",
+            summarize = { args ->
+                val t = args.optString("title").takeIf { it.isNotBlank() }
+                val id = args.optLong("eventId", 0L).takeIf { it > 0 }?.let { "id=$it" }
+                val obj = listOfNotNull(t, id).joinToString(" ")
+                if (obj.isBlank()) "删除日历日程" else "删除日历日程：$obj"
+            },
+            schema = toolSchema(
+                name = "delete_calendar_event",
+                description = "删除手机日历上的一个日程（**不可恢复**，会先向用户确认）。eventId 优先（从 manage_calendar query 或删除/修改的候选列表里拿，最精确）；没有 id 时传 date+title 关键词，关键词命中多个日程时会把候选连 eventId 列出来，此时不要猜，向用户确认后带 eventId 重调。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "eventId" to mapOf("type" to "integer", "description" to "日程 id（精确句柄，优先使用）"),
+                        "date" to mapOf("type" to "string", "description" to "日期：today/tomorrow/YYYY-MM-DD/MM-DD；用关键词定位时必传（限定搜索范围）"),
+                        "title" to mapOf("type" to "string", "description" to "日程标题关键词（模糊匹配）；没有 eventId 时必传"),
+                    ),
+                ),
+            ),
+        ),
+        // 改日程：可再次编辑、本机可撤销 ⇒ LOCAL 档静默执行（对齐 edit_text_file 的口径）
+        ToolEntry(
+            name = "update_calendar_event",
+            group = ToolRegistry.DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_update_calendar_event_name,
+            descriptionRes = R.string.ai_tool_update_calendar_event_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在修改日程…",
+            summarize = { args -> "修改日历日程${args.optString("title").takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""}" },
+            schema = toolSchema(
+                name = "update_calendar_event",
+                description = "修改手机日历上的一个日程（改标题/改时间/改备注）。eventId 优先；没有 id 时传 date+title 关键词（命中多个会列出候选，此时带 eventId 重调）。只更新给出的字段：newTitle 改标题；改时间时 newDate（新日期）与 newStartTime（HH:mm）至少给一个、只给其一则另一项沿用原值；newDurationMinutes 改时长（分钟）；newNote 改备注。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "eventId" to mapOf("type" to "integer", "description" to "日程 id（精确句柄，优先使用）"),
+                        "date" to mapOf("type" to "string", "description" to "原日程日期（today/tomorrow/YYYY-MM-DD/MM-DD）；用关键词定位时必传"),
+                        "title" to mapOf("type" to "string", "description" to "原日程标题关键词；没有 eventId 时必传"),
+                        "newTitle" to mapOf("type" to "string", "description" to "新标题（可选）"),
+                        "newDate" to mapOf("type" to "string", "description" to "新日期（改期时给；today/tomorrow/YYYY-MM-DD）"),
+                        "newStartTime" to mapOf("type" to "string", "description" to "新开始时间，24 小时制 HH:mm"),
+                        "newDurationMinutes" to mapOf("type" to "integer", "description" to "新时长（分钟）"),
+                        "newNote" to mapOf("type" to "string", "description" to "新备注（给出即覆盖，包括覆盖为空）"),
+                    ),
+                ),
+            ),
+        ),
+        // 打开导航：与 open_phone_app 同档 —— 只是拉起本机地图应用，动作本机可重做 ⇒ LOCAL
+        ToolEntry(
+            name = "open_navigation",
+            group = ToolRegistry.DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_open_navigation_name,
+            descriptionRes = R.string.ai_tool_open_navigation_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在打开导航…",
+            summarize = { args ->
+                val dest = args.optString("destination").takeIf { it.isNotBlank() }
+                if (dest != null) "打开导航：$dest" else "打开地图"
+            },
+            schema = toolSchema(
+                name = "open_navigation",
+                description = "在手机上打开地图 / 发起导航。目的地可选：给了就在地图里定位到目的地（由地图应用接手导航），不给就只打开地图 App。当用户说「导航去 XX」「带我去 XX」「打开地图」时调用。出行方式只是偏好，部分地图应用可能忽略。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "destination" to mapOf("type" to "string", "description" to "目的地名称或地址，如「杭州东站」「西湖」；不传 = 只打开地图"),
+                        "mode" to mapOf("type" to "string", "enum" to listOf("drive", "walk", "bike", "transit"), "description" to "出行方式：drive=驾车（默认）/walk=步行/bike=骑行/transit=公交"),
+                    ),
+                ),
+            ),
+        ),
+        // 卸载应用：一旦确认，应用与其数据全部清空、不可恢复 ⇒ EXTERNAL + BLOCK
+        //（对齐 delete_calendar_event 先例）。系统卸载确认框只是第二道保险，
+        // 模型侧必须先过确认闸门 —— 无人值守时不许背着用户卸应用。
+        ToolEntry(
+            name = "uninstall_phone_app",
+            group = ToolRegistry.DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_uninstall_phone_app_name,
+            descriptionRes = R.string.ai_tool_uninstall_phone_app_desc,
+            risk = ToolRisk.EXTERNAL_SIDE_EFFECT,
+            confirmPolicy = ToolConfirmPolicy.BLOCK,
+            sideEffect = true,
+            statusText = "正在请求卸载应用…",
+            summarize = { args ->
+                val who = args.optString("packageName").takeIf { it.isNotBlank() }
+                    ?: args.optString("appName").takeIf { it.isNotBlank() }
+                if (who != null) "卸载应用 $who" else "卸载应用"
+            },
+            schema = toolSchema(
+                name = "uninstall_phone_app",
+                description = "卸载手机上的一个应用（**不可恢复**，应用数据一并清空；会先向用户确认，之后还会弹系统卸载确认框）。packageName 优先（从 list_phone_apps 结果里拿最精确）；只有应用名时传 appName。用户明确说「卸载/删除 XX 应用」时才调用；「清理一下不用的应用」这类模糊指令要先列出候选、向用户确认后再调。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "packageName" to mapOf("type" to "string", "description" to "应用包名（精确句柄，优先使用），如 com.tencent.mm"),
+                        "appName" to mapOf("type" to "string", "description" to "应用名称（没有包名时用），如「微信」；拿不准包名时先用 list_phone_apps 查"),
+                    ),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "set_flashlight",
+            group = ToolRegistry.DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_set_flashlight_name,
+            descriptionRes = R.string.ai_tool_set_flashlight_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在设置手电筒…",
+            summarize = { args -> if (args.optBoolean("enabled", false)) "打开手电筒" else "关闭手电筒" },
+            schema = toolSchema(
+                name = "set_flashlight",
+                description = "开关手机手电筒（闪光灯补光）。当用户说「打开手电筒」「把灯关了」且指手机闪光灯时调用。enabled 必填：true=开，false=关。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "enabled" to mapOf("type" to "boolean", "description" to "true=打开手电筒；false=关闭"),
+                    ),
+                    "required" to listOf("enabled"),
+                ),
+            ),
+        ),
+        // 计步：只读传感器数据。口径必须如实 —— TYPE_STEP_COUNTER 是**自开机累计**步数
+        //（重启清零），schema 与设置页描述都写明，禁止模型谎称"今日步数"。
+        ToolEntry(
+            name = "get_step_count",
+            group = ToolRegistry.DOMAIN_PHONE,
+            displayNameRes = R.string.ai_tool_get_step_count_name,
+            descriptionRes = R.string.ai_tool_get_step_count_desc,
+            risk = ToolRisk.READ_ONLY,
+            statusText = "正在读取计步数据…",
+            schema = toolSchema(
+                name = "get_step_count",
+                description = "读取手机计步传感器：自开机以来的**累计步数**（重启清零），可作今日活动量参考，不是精确的「今日步数」。当用户问「我今天走了多少步」「看看步数」时调用；回答时要如实说明这个口径。",
+                parameters = mapOf("type" to "object", "properties" to emptyMap<String, Any>()),
+            ),
+        ),
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
@@ -401,10 +555,18 @@ internal object PhoneToolProvider : ToolProvider {
 
             "get_phone_status" -> PhoneTools.getPhoneStatus(context)
 
-            "set_phone_volume" -> PhoneTools.setPhoneVolume(context, args.optInt("volume", 50))
+            // schema 虽标 volume 必填，但闸门不校验 required：模型漏传/传错类型时
+            // optInt 默认值会静默把音量设成 50% —— 必须显式拒绝而非猜一个默认值
+            "set_phone_volume" -> {
+                val vol = if (args.has("volume") && !args.isNull("volume")) args.optInt("volume", -1) else -1
+                if (vol in 0..100) PhoneTools.setPhoneVolume(context, vol)
+                else "请提供 0~100 的音量值（volume）"
+            }
 
             // 查询 / 创建二合一（原 query_calendar + add_calendar_event）：同一能力域，
             // 合并后模型在「改到明天吧」这类来回对话里不必两组 schema 反复挑。
+            // 删 / 改走独立工具（delete_calendar_event / update_calendar_event）——
+            // 删除是 EXTERNAL+BLOCK 走确认闸门，不能并进这个 LOCAL 档工具。
             "manage_calendar" -> when (args.optString("action").trim().lowercase()) {
                 "create" -> PhoneTools.addCalendarEvent(
                     context,
@@ -414,8 +576,54 @@ internal object PhoneToolProvider : ToolProvider {
                     durationMinutes = args.optInt("durationMinutes", 60),
                     note = args.optString("note").trim().ifBlank { null },
                 )
-                else -> PhoneTools.queryCalendar(context, args.optString("date"))
+                "query" -> PhoneTools.queryCalendar(context, args.optString("date"))
+                // 未知 action 不能静默按 query 处理：模型想删日程传错 action 时，
+                // 拿到查询结果会误以为删除已生效
+                else -> "action 只支持 query/create"
             }
+
+            "delete_calendar_event" -> PhoneTools.deleteCalendarEvent(
+                context,
+                eventId = args.optLong("eventId", 0L),
+                date = args.optString("date").trim().ifBlank { null },
+                title = args.optString("title").trim().ifBlank { null },
+            )
+
+            "update_calendar_event" -> PhoneTools.updateCalendarEvent(
+                context,
+                eventId = args.optLong("eventId", 0L),
+                date = args.optString("date").trim().ifBlank { null },
+                title = args.optString("title").trim().ifBlank { null },
+                newTitle = args.optString("newTitle").trim().ifBlank { null },
+                newDate = args.optString("newDate").trim().ifBlank { null },
+                newStartTime = args.optString("newStartTime").trim().ifBlank { null },
+                newDurationMinutes = args.optInt("newDurationMinutes", 0).takeIf { it > 0 },
+                newNote = if (args.has("newNote")) args.optString("newNote") else null,
+            )
+
+            "open_navigation" -> PhoneTools.openNavigation(
+                context,
+                destination = args.optString("destination"),
+                mode = args.optString("mode", "drive"),
+            )
+
+            "uninstall_phone_app" -> PhoneTools.uninstallPhoneApp(
+                context,
+                packageName = args.optString("packageName"),
+                appName = args.optString("appName"),
+            )
+
+            // schema 虽标 enabled 必填，但闸门不校验 required：模型漏传时 optBoolean
+            // 会静默按 false 处理（想开灯却执行"关灯"）—— 必须显式拒绝而非猜默认值
+            "set_flashlight" -> {
+                if (!args.has("enabled") || args.isNull("enabled")) {
+                    "请说明要开还是关手电筒（enabled 必填）"
+                } else {
+                    PhoneTools.setFlashlight(context, args.optBoolean("enabled"))
+                }
+            }
+
+            "get_step_count" -> PhoneTools.readStepCount(context)
 
         else -> throw IllegalArgumentException("未知工具: $name")
         }

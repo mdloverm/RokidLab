@@ -8,6 +8,8 @@ import com.rokidlab.phone.network.ApkDownloader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * rootfs 的**下载 → 校验 → 解压 → 裁剪 → 就绪**全流程。
@@ -276,6 +278,8 @@ object ProotInstaller {
         trim(rootfs)
         val guest = ProotShell.ensureGuestConfig(ctx)
         if (!guest.allOk) Log.w(TAG, "guest 配置未完全成功：${guest.notes.joinToString()}")
+        // 常用小件（curl/unzip/jq 等）预装：失败不阻断装机（模型可事后用 install_packages 补）
+        ProotShell.ensureCoreUtils(ctx)
 
         writeMarker(ctx)
         runCatching { zip.delete() }
@@ -313,6 +317,125 @@ object ProotInstaller {
             return r
         } finally {
             ProotShell.unlockRootfsExclusive()
+        }
+    }
+
+    // ═══════════════════ 快照 / 恢复（⑤ 容器状态固化） ═══════════════════
+
+    /**
+     * 快照目录（**单槽位**）：`files/proot-snapshot/{rootfs, install.marker}`。
+     * 单槽位是有意的：快照的意义是"装了一堆东西之前的存档点"，多槽位只会把用户存储
+     * 吃成几百 MB × N；要新存档点就再拍一次（覆盖）。
+     */
+    fun snapshotDir(ctx: Context): File = File(ctx.filesDir, "proot-snapshot")
+
+    /** 有没有可恢复的快照（判据与 [isInstalled] 同源：`bin/bash` 在位） */
+    fun hasSnapshot(ctx: Context): Boolean = File(snapshotDir(ctx), "rootfs/bin/bash").exists()
+
+    /**
+     * 快照当前容器：把 rootfs（含已装软件、用户文件、guest 配置）复制进 [snapshotDir]。
+     *
+     * ⚠️ 全程在 rootfs **独占锁**内（复制到一半的 rootfs 不是一致状态）；
+     * 正在跑的交互任务持着读锁 ⇒ 快照会如实报"正忙"——这是有意的，与安装同一条纪律。
+     * 失败时清掉半截快照，不留垃圾。
+     */
+    fun snapshotContainer(ctx: Context): ExecResult {
+        if (!isInstalled(ctx)) {
+            return ExecResult(-1, "", "", "本机执行环境未安装，没有可快照的内容。")
+        }
+        WebPreviewManager.stopAll(ctx, "容器快照")
+        com.rokidlab.phone.ai.mcp.McpStdioBridge.stopAll("容器快照")
+        if (!ProotShell.tryLockRootfsExclusive(ROOTFS_LOCK_WAIT_SEC)) {
+            return ExecResult(-1, "", "", "有程序正在本机执行环境中运行，无法快照。请等正在跑的任务结束再试。")
+        }
+        try {
+            val snap = snapshotDir(ctx)
+            deleteTree(snap)
+            if (!copyTreePreservingLinks(ProotShell.rootfsDir(ctx), File(snap, "rootfs"))) {
+                deleteTree(snap)
+                return ExecResult(-1, "", "", "快照失败（复制 rootfs 时出错），已回滚清理。")
+            }
+            markerFile(ctx).takeIf { it.exists() }?.copyTo(File(snap, MARKER_NAME), overwrite = true)
+            val mb = dirSize(snap) / 1024 / 1024
+            Log.i(TAG, "容器快照完成：${snap.absolutePath}（$mb MB）")
+            return ExecResult(0, "快照完成（约 $mb MB，存于应用私有目录；单槽位，下次快照会覆盖旧快照）。", "", "")
+        } finally {
+            ProotShell.unlockRootfsExclusive()
+        }
+    }
+
+    /**
+     * 把容器恢复到最近一次快照：**删掉当前 rootfs、用快照整体替换**。
+     *
+     * 当前容器里"快照之后装的东西、写的文件"会丢失 —— 这是恢复的语义本身，
+     * 调用方（工具摘要）必须把这点说清。恢复失败（复制中断）时清掉 rootfs 留干净现场，
+     * 用户重新安装即可（28 MB），不会出现"半截容器还自称已安装"的假就绪。
+     */
+    fun restoreContainer(ctx: Context): ExecResult {
+        if (!hasSnapshot(ctx)) {
+            return ExecResult(-1, "", "", "没有可用的容器快照。先用 snapshot_container 创建一个。")
+        }
+        WebPreviewManager.stopAll(ctx, "容器恢复")
+        com.rokidlab.phone.ai.mcp.McpStdioBridge.stopAll("容器恢复")
+        if (!ProotShell.tryLockRootfsExclusive(ROOTFS_LOCK_WAIT_SEC)) {
+            return ExecResult(-1, "", "", "有程序正在本机执行环境中运行，无法恢复。请等正在跑的任务结束再试。")
+        }
+        try {
+            val rootfs = ProotShell.rootfsDir(ctx)
+            deleteTree(rootfs)
+            if (!copyTreePreservingLinks(File(snapshotDir(ctx), "rootfs"), rootfs)) {
+                deleteTree(rootfs)
+                return ExecResult(
+                    -1, "", "",
+                    "恢复失败（复制时出错）。请到「设置 → 本机执行环境」重新安装（约 28 MB 下载）。",
+                )
+            }
+            val marker = File(snapshotDir(ctx), MARKER_NAME)
+            if (marker.exists()) marker.copyTo(markerFile(ctx), overwrite = true)
+            Log.i(TAG, "容器已恢复到快照：${rootfs.absolutePath}")
+            return ExecResult(0, "恢复完成：容器已回到快照时的状态（快照保留，可再次恢复）。", "", "")
+        } finally {
+            ProotShell.unlockRootfsExclusive()
+        }
+    }
+
+    /**
+     * Host 侧递归复制目录树：**符号链接按 `readSymbolicLink` 原样重建**（不跟随）。
+     *
+     * 为什么不用设备 tar：恢复时 `tar -C` 会重演"硬链接失败但退出码非 0"的误判面
+     * （[installFromArchive] 的教训），且这里需要失败即知、路径可控；
+     * rootfs 百 MB 级在 F2FS 上 NIO 复制为秒级~十几秒，可接受。
+     *
+     * ⚠️ 链接不跟随是**正确性**要求：rootfs 里有 `/bin → usr/bin`、alternatives 等链接，
+     * 跟随复制会把整棵子树重复拷一遍（体积翻倍），悬空链接则会抛异常。
+     * ⚠️ 设备文件/socket/fifo：rootfs 里不该有（/dev 是 bind 的），遇到跳过并记日志。
+     */
+    private fun copyTreePreservingLinks(src: File, dst: File): Boolean {
+        return runCatching {
+            val srcPath = src.toPath()
+            val dstPath = dst.toPath()
+            Files.walk(srcPath).use { stream ->
+                stream.forEach { p ->
+                    val target = dstPath.resolve(srcPath.relativize(p))
+                    when {
+                        p == srcPath -> Files.createDirectories(target)
+                        Files.isSymbolicLink(p) -> {
+                            Files.createDirectories(target.parent)
+                            Files.createSymbolicLink(target, Files.readSymbolicLink(p))
+                        }
+                        Files.isDirectory(p) -> Files.createDirectories(target)
+                        Files.isRegularFile(p) -> {
+                            Files.createDirectories(target.parent)
+                            Files.copy(p, target, StandardCopyOption.REPLACE_EXISTING)
+                        }
+                        else -> Log.w(TAG, "快照跳过特殊文件：$p")
+                    }
+                }
+            }
+            true
+        }.getOrElse {
+            Log.w(TAG, "复制树失败：${it.javaClass.simpleName}: ${it.message}")
+            false
         }
     }
 

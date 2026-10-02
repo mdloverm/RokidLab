@@ -102,8 +102,8 @@ android {
         applicationId = "com.rokidlab.phone"
         minSdk = 29
         targetSdk = 34
-        versionCode = 28
-        versionName = "4.3"
+        versionCode = 29
+        versionName = "4.4"
         manifestPlaceholders["cleartextTrafficPermitted"] = "false"
 
         // 本地 OCR（onnxruntime + opencv）体积较大，只保留主流真机 ABI
@@ -524,7 +524,11 @@ dependencies {
     
     // client-l SDK 内部依赖 Gson，需要显式引入
     implementation("com.google.code.gson:gson:2.10.1")
-    
+
+    // jtokkit：OpenAI tiktoken 的纯 Java 实现（cl100k_base），上下文预算按真实 token 计量
+    // （2026-10-02 起替代「字符数 ≈ token」的经验换算，见 ai/compaction/TokenMeter）
+    implementation("com.knuddels:jtokkit:1.1.0")
+
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)

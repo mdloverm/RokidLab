@@ -43,9 +43,9 @@ class MemoryRrfFuseTest {
     }
 
     @Test
-    fun `DB 版本为 v3 且带向量列迁移承诺`() {
+    fun `DB 版本为 v4 且带评分列迁移承诺`() {
         // 版本号变更必须成对修改 onCreate/onUpgrade（见 MemoryDb）；
         // 钉住当前版本，误改版本号而漏迁移（drop 重建丢记忆）时第一时间暴露
-        assertEquals(3, LongTermMemoryManager.DB_VERSION)
+        assertEquals(4, LongTermMemoryManager.DB_VERSION)
     }
 }

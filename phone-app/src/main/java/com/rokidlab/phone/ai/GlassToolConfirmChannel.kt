@@ -135,7 +135,14 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
      *   [com.rokidlab.phone.ai.tools.ToolEntry.summarize]，与工具定义同源）——
      *   本类只负责传输，不再自己从 args 拼。
      */
-    override fun confirm(toolName: String, prompt: String): Boolean {
+    override fun confirm(toolName: String, prompt: String): Boolean =
+        confirm(toolName, prompt, CONFIRM_TIMEOUT_MS)
+
+    /**
+     * 带等待上限的版本（闸门按来源收紧窗口，如 AIUI 页面路径 18s，见 ApprovalGate R7 注释）。
+     * 上限只**收紧**不放宽：取 `min(maxWaitMs, 本通道 35s)`。
+     */
+    override fun confirm(toolName: String, prompt: String, maxWaitMs: Long): Boolean {
         lastCancelled = false
         val s = session
         val link = s?.cxrLink
@@ -146,18 +153,19 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
         val id = "tc-${System.currentTimeMillis()}-${seq.incrementAndGet()}"
         val waiter = ConfirmWaiter()
         pending[id] = waiter
+        val wait = minOf(maxWaitMs, CONFIRM_TIMEOUT_MS)
         return try {
             val caps = Caps()
             caps.write(id)
             caps.write(toolName)
             caps.write(prompt)
             val r = s.rawSendCustomCmd(link, LinkProtocol.TOPIC_TOOL_CONFIRM, caps)
-            Log.i(TAG, "confirm request sent (id=$id tool=$toolName) -> $r")
+            Log.i(TAG, "confirm request sent (id=$id tool=$toolName wait=${wait / 1000}s) -> $r")
             if (r < 0) {
                 Log.w(TAG, "confirm request send failed -> deny")
                 return false
             }
-            if (!waiter.latch.await(CONFIRM_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            if (!waiter.latch.await(wait, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "confirm timeout (id=$id) -> deny")
                 false
             } else {

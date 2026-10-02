@@ -21,7 +21,7 @@ import org.junit.Test
  *
  *  1. 风险档（`read_screen` 虽然只读，但**必须**按本机副作用档登记，见下）；
  *  2. 不进只读/无人值守名单（用户不在场时不许读屏、更不许代点）；
- *  3. 不对 AIUI 页面开放（页面是第三方制品，与 `run_shell` 同一条判据）；
+ *  3. 对 AIUI 页面是**带闸门开放**（域在白名单里，但每次调用都强制用户确认，fail-closed）；
  *  4. 提交类文案 / 无文案坐标点击**必须**先问用户。
  */
 class ScreenOpToolTest {
@@ -63,14 +63,17 @@ class ScreenOpToolTest {
     }
 
     @Test
-    fun `屏幕操作域不对 AIUI 页面开放`() {
-        assertFalse(
-            "screen 域必须与 shell 域一起从页面准入域里摘掉（tap_screen 是整机触摸注入原语）",
+    fun `屏幕操作域对页面开放但必须确认（带闸门开放）`() {
+        // 2026-10-01 政策：screen 域回到页面白名单（与 shell 域同一条"带闸门开放"判据），
+        // 页面每一次调用都由 PageElevatedDomainGuard 强制用户确认（fail-closed）——
+        // 页面永远拿不到静默的整机触摸注入。
+        assertTrue(
+            "screen 域必须在页面开放域里（带闸门开放）",
             ToolRegistry.DOMAIN_SCREEN in PageScope.ALLOWED_DOMAINS,
         )
         screenTools.forEach { name ->
-            assertNotNull(
-                "$name 必须被页面准入门拒绝",
+            assertNull(
+                "$name 在准入门应放行（确认由审批链兜底）",
                 PageScope.rejectReason(name, PageScope.pageVisibleTools(), PageScope::domainOf),
             )
         }

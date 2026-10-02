@@ -40,6 +40,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.OffsetMapping
@@ -120,6 +121,8 @@ internal fun ChatSettingsDialog(
     var showSkillsManage by remember { mutableStateOf(false) }
     // AIUI 应用管理子页面（对话生成/本地上传的智能体应用）
     var showAiuiManage by remember { mutableStateOf(false) }
+    // 联网搜索子页面（商用搜索 API 配置）
+    // （2026-10-02 摘除）联网搜索商用 API 设置页：用户不买 key，UI 入口与页面已整体移除。
     // 本地模型管理子页面（Termux + Ollama 离线推理）
     var showLocalModel by remember { mutableStateOf(false) }
     // 模型供应商管理子页面（品牌列表 → 密钥 → 模型，见 ProviderManagePage）
@@ -287,6 +290,8 @@ internal fun ChatSettingsDialog(
                 text = stringResource(R.string.chat_settings_hint),
                 color = BrewMuted,
                 fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(14.dp))
 
@@ -623,6 +628,8 @@ internal fun ChatSettingsDialog(
                         text = stringResource(R.string.agent_section_subtitle),
                         color = BrewMuted,
                         fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Text(text = "›", color = BrewMuted, fontSize = 20.sp)

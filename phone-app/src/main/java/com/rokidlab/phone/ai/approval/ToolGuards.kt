@@ -11,13 +11,17 @@ import com.rokidlab.phone.ai.ToolRisk
  * 2. [UnknownToolGuard] —— 名字压根不存在
  * 3. [ToolEnabledGuard] —— 用户把工具开关关掉了
  * 4. [UnattendedScopeGuard] —— 无人值守下的只读∪媒体白名单
- * 5. [SourceRateLimitGuard] —— 限流（**有状态**，放在纯判定之后，避免被拒的调用白扣配额）
- * 6. [GlassesDependencyGuard] —— 本机模式下的眼镜依赖
- * 7. [RiskApprovalGuard] —— 外部副作用 → 用户确认
+ * 5. [SourceRateLimitGuard] —— 限流（**有状态**，放在纯判定之后）
+ * 6. [PageElevatedDomainGuard] —— 页面调 shell/screen 域的强制确认（fail-closed）
+ * 7. [GlassesDependencyGuard] —— 本机模式下的眼镜依赖
+ * 8. [RiskApprovalGuard] —— 外部副作用 → 用户确认
  *
- * ⚠️ 顺序是有意的，不要随意重排：限流必须排在所有"纯判定"之后 ——
- * 改造前 AIUI 路径的准入校验在限流之前、对话路径没有准入校验，
- * 于是两个来源的"被拒调用扣不扣配额"行为不一致。现在统一为**不扣**。
+ * ⚠️ 顺序是有意的，不要随意重排：限流排在 guard 1–4 这些"纯判定"之后，被它们拒掉的
+ * 调用不占配额。⚠️ 但**不是所有被拒都不扣**（2026-09-30 审计更正，原文「统一为不扣」
+ * 与实现不符）：限流在 6/7 之前 —— 被眼镜依赖（本机模式）拒绝、或在用户确认环节
+ * 被取消/超时的调用，配额在 guard 5 已经扣了。影响可忽略（对话 120/min 的量级
+ * 远先碰不到上限），且把限流挪到确认**之后**反而更糟：确认等待是秒级阻塞，
+ * 等待期间同 source 的新调用会绕过限流直奔确认通道。
  */
 internal object ToolGuards {
 
@@ -27,6 +31,7 @@ internal object ToolGuards {
         ToolEnabledGuard(),
         UnattendedScopeGuard(),
         SourceRateLimitGuard(),
+        PageElevatedDomainGuard(),
         GlassesDependencyGuard(),
         RiskApprovalGuard(),
     )
@@ -41,7 +46,11 @@ internal object ToolGuards {
 internal class PageScopeGuard(
     private val allowedDomains: Set<String> = PageScope.ALLOWED_DOMAINS,
     private val denyTools: Set<String> = PageScope.DENY_TOOLS,
-    private val knownTools: Set<String> = PageScope.pageVisibleTools(),
+    // ⚠️ 必须是 () -> Set<String>（惰性求值），不能是构造期快照：ApprovalGate.defaultGuards
+    // 是 by lazy 单例，若在构造时固化 knownTools，之后动态注册的 MCP 工具（用户新连一个
+    // server）就永远不在名单里，页面调用会被误判 "unknown tool" —— 而对话路径的
+    // UnknownToolGuard 用的是动态 lambda，两路径判定分叉。
+    private val knownTools: () -> Set<String> = PageScope::pageVisibleTools,
     private val toolDomain: (String) -> String? = PageScope::domainOf,
 ) : ToolGuard {
 
@@ -52,7 +61,7 @@ internal class PageScopeGuard(
     override fun evaluate(ctx: ToolCallContext): ToolDecision? {
         val reason = PageScope.rejectReason(
             toolName = ctx.name,
-            knownTools = knownTools,
+            knownTools = knownTools(),
             toolDomain = toolDomain,
             allowedDomains = allowedDomains,
             denyTools = denyTools,
@@ -211,6 +220,39 @@ internal class GlassesDependencyGuard : ToolGuard {
         return ToolDecision.Deny(
             DecisionOrigin.GLASSES_REQUIRED,
             "现在是「本机模式」（不连接眼镜），${ctx.name} 需要眼镜在线才能用",
+        )
+    }
+}
+
+/**
+ * AIUI 页面调用 **shell / screen 域** → 强制用户确认（fail-closed）。
+ *
+ * ★ 这是 2026-10-01「带闸门开放」政策的另一半：`PageScope.ALLOWED_DOMAINS` 把这两个域
+ * 加回页面白名单（页面的工具清单可见、可调），本 guard 保证**每一次**页面调用都要用户点头
+ * —— 问不到用户（眼镜/手机确认通道都不可用）就拒绝，页面永远拿不到静默的
+ * 命令执行 / 触摸注入。对话路径不受本 guard 影响（只对 [ToolSource.AIUI_PAGE] 生效）。
+ *
+ * ## 位置为什么在 [SourceRateLimitGuard] 之后、[RiskApprovalGuard] 之前
+ *  - 放在纯判定 deny（unknown/disabled/unattended）之后：那些该直接拒的不浪费用户一次确认；
+ *  - 放在 [RiskApprovalGuard] 之前：**首个 Ask 胜出** —— 页面调 `install_packages`
+ *    （EXTERNAL + PROCEED fail-open）时会被本 guard 的 fail-closed Ask 拦下，
+ *    页面路径永远比对话路径更严，不会因 fail-open 语义倒挂出"页面不问就能装包"。
+ *
+ * ⚠️ 本 guard 无 IO、可单测；阻塞由 [ApprovalGate] 统一负责。
+ */
+internal class PageElevatedDomainGuard : ToolGuard {
+
+    override val id: String = "page-elevated-domain"
+
+    override val sources: Set<ToolSource> = setOf(ToolSource.AIUI_PAGE)
+
+    override fun evaluate(ctx: ToolCallContext): ToolDecision? {
+        val domain = ctx.domain ?: return null
+        if (domain != ToolRegistry.DOMAIN_SHELL && domain != ToolRegistry.DOMAIN_SCREEN) return null
+        return ToolDecision.Ask(
+            DecisionOrigin.PAGE_ELEVATED,
+            ToolRegistry.summarizeToolCall(ctx.name, ctx.args),
+            failClosed = true,
         )
     }
 }

@@ -31,6 +31,12 @@ import org.json.JSONObject
 internal object LlmRegistry {
     private const val TAG = "LlmRegistry"
 
+    /** reasoning_effort 默认档：主对话任务轮（P0-5，2026-10-01） */
+    private const val REASONING_EFFORT_TASK = "medium"
+
+    /** reasoning_effort 调研档：只读子代理（P0-5，2026-10-01） */
+    private const val REASONING_EFFORT_SUBAGENT = "high"
+
     // ═══════════════════ 请求档位（Profile）═══════════════════
 
     /**
@@ -41,6 +47,16 @@ internal object LlmRegistry {
      * 代码生成轮需要更长时间时由调用方在请求级传大值（见 `chatTurnStream` 的 readTimeout）。
      */
     private const val CHAT_REMOTE_TIMEOUT_MS = 30_000
+
+    /**
+     * 主对话链路**思考轮**的远程读超时。
+     *
+     * 思考开启（[Options.thinkingEnabled]=true）时 reasoning 先于正文产出；探测/收尾的
+     * 非流式调用在响应开始前没有任何字节流动，30s 读超时会在思考中途就判死整轮。
+     * 流式调用虽然每帧都续命，但思考首帧之前的等待同样吃这个超时。120s 对
+     * medium 强度的思考足够，又远小于本地超时，打断让出时间仍有界。
+     */
+    private const val CHAT_REMOTE_THINKING_TIMEOUT_MS = 120_000
 
     /**
      * 主对话链路的本地读超时。
@@ -57,6 +73,9 @@ internal object LlmRegistry {
      * 而等待是有代价的（用户正等着定时任务触发的结果）。不该跟主对话共用超时。
      */
     private const val BACKGROUND_TIMEOUT_MS = 8_000
+
+    /** 压缩摘要精炼档（[Profile.DIGEST]）的远程读超时 */
+    private const val DIGEST_TIMEOUT_MS = 15_000
 
     /** 请求档位：决定超时与是否附加本地调参，让调用方不必再自己拼这些 */
     enum class Profile {
@@ -76,6 +95,19 @@ internal object LlmRegistry {
          * 也不该继承本地 OLLAMA 的聊天调参。
          */
         SUBAGENT,
+
+        /**
+         * 压缩摘要精炼（`AgentSessionStore` 的 digestRefiner）：把被压缩的早期对话轮
+         * 重写成一份信息密度更高的滚动摘要。
+         *
+         * 为什么不能复用 [SUBAGENT]：那个档位固定**开思考**（调研要交叉比对），而摘要
+         * 是"压缩原文要点"的机械活，思考只会白白烧预算与时间 —— 且它跑在回复已送达之后，
+         * 用户对它的延迟最不宽容。
+         * 为什么不能复用 [BACKGROUND]：8s 对 6000+ 字符的输入偏紧（超时退回本地摘要虽无害，
+         * 但失败率高了功能就形同虚设）；给 15s，覆盖远程端点正常生成一版摘要的耗时。
+         * **失败可弃**（本地摘要兜底）与 [BACKGROUND] 同性质，这点写在调用方的文档里。
+         */
+        DIGEST,
     }
 
     /**
@@ -88,6 +120,8 @@ internal object LlmRegistry {
     data class Options(
         val thinkingEnabled: Boolean = false,
         val localParams: JSONObject? = null,
+        /** 思考深度分档（P0-5）：仅 thinkingEnabled 时生效；null = 用该 profile 的默认档 */
+        val reasoningEffort: String? = null,
     )
 
     // ═══════════════════ 路由解析 ═══════════════════
@@ -177,14 +211,27 @@ internal object LlmRegistry {
      */
     fun newService(cfg: AiConfig, profile: Profile, options: Options = Options()): OpenAiService {
         val local = isLocalBase(cfg.baseUrl)
+        // 思考轮统一用放宽的读超时（见 CHAT_REMOTE_THINKING_TIMEOUT_MS）；本地端点另有更长超时
+        val chatTimeoutMs = when {
+            local -> CHAT_LOCAL_TIMEOUT_MS
+            options.thinkingEnabled -> CHAT_REMOTE_THINKING_TIMEOUT_MS
+            else -> CHAT_REMOTE_TIMEOUT_MS
+        }
         return when (profile) {
             Profile.CHAT -> OpenAiService(
                 apiKey = cfg.apiKey,
                 model = cfg.model,
                 baseUrl = cfg.baseUrl,
-                readTimeoutMs = if (local) CHAT_LOCAL_TIMEOUT_MS else CHAT_REMOTE_TIMEOUT_MS,
+                readTimeoutMs = chatTimeoutMs,
                 extraBody = if (local) options.localParams else null,
                 thinkingEnabled = !local && options.thinkingEnabled,
+                // P0-5 思考深度分档：任务轮默认 medium（闲聊/路由轮 thinking 关闭，不附带）；
+                // 调用方可用 options.reasoningEffort 覆盖默认档
+                reasoningEffort = if (!local && options.thinkingEnabled) {
+                    options.reasoningEffort ?: REASONING_EFFORT_TASK
+                } else {
+                    null
+                },
             )
 
             Profile.BACKGROUND -> OpenAiService(
@@ -200,7 +247,24 @@ internal object LlmRegistry {
                 baseUrl = cfg.baseUrl,
                 // 与主对话同量级的超时：子代理是同步调用（主循环在等结论），
                 // 而且它一轮里可能读一整篇网页 —— 8s 会把正常调研直接判死
-                readTimeoutMs = if (local) CHAT_LOCAL_TIMEOUT_MS else CHAT_REMOTE_TIMEOUT_MS,
+                readTimeoutMs = if (local) CHAT_LOCAL_TIMEOUT_MS else CHAT_REMOTE_THINKING_TIMEOUT_MS,
+                // ★ 子代理固定开思考（2026-10-01）：调研是全 Lab 最吃推理的场景（读多份资料
+                //   交叉比对再下结论），且它对首字延迟不敏感（主循环在等结论，用户看到的是
+                //   "过程"在走）。改造前它走默认 thinkingEnabled=false → 请求显式关思考，
+                //   等于让最强 agent 档位干着最不需要动脑的活。仍按 !local 收口：本地小模型
+                //   的思考由 localParams 自行调参。
+                thinkingEnabled = !local,
+                // P0-5：子代理思考档位固定 high —— 调研要交叉比对多份资料，值得多想
+                reasoningEffort = if (!local) REASONING_EFFORT_SUBAGENT else null,
+            )
+
+            Profile.DIGEST -> OpenAiService(
+                apiKey = cfg.apiKey,
+                model = cfg.model,
+                baseUrl = cfg.baseUrl,
+                // 15s：覆盖"几千字符输入 + 几百字符摘要"的正常生成耗时（见 Profile.DIGEST 的说明）
+                readTimeoutMs = DIGEST_TIMEOUT_MS,
+                // 摘要是机械活：不开思考、不带调参 —— 失败可弃（本地摘要兜底）
             )
         }
     }

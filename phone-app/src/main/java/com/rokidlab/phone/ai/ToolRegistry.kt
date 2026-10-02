@@ -47,7 +47,7 @@ object ToolRegistry {
     const val DOMAIN_FILES = "files"        // 文件产出与文件工作区（列/读/搜/改/删/移）
     const val DOMAIN_AIUI = "aiui"          // AIUI 智能体应用（生成/安装/打开/管理）
     const val DOMAIN_PHONE = "phone"        // 手机端（通讯录/拨号/闹钟/应用/状态/音量/日历）
-    const val DOMAIN_RESEARCH = "research"  // 只读子代理委派（调研）
+    const val DOMAIN_RESEARCH = "research"  // 子代理委派（调研 research_subtask / 本机执行 execute_subtask）
     /**
      * 视觉域：用眼镜摄像头看真实世界（`look_at_view`）。
      *
@@ -61,9 +61,14 @@ object ToolRegistry {
      *
      * 与 [DOMAIN_VISION] 同理单独成域：眼镜域是"管理"能力，这条是"替用户听"，
      * 且涉及远场麦克风（隐私敏感），用户想关掉时的心智是「别让它偷听周围」，
-     * 而不是「别看眼镜状态」。域装配上与视觉域同口径：进主 Agent 全量域
-     * （[SESSION_AGENT_DOMAINS] ⊇ [DOMAIN_ALL]），不进 AIUI 会话子集（[SESSION_AIUI_DOMAINS]）
-     * —— 第三方页面不该有静默开麦的能力。
+     * 而不是「别看眼镜状态」。域装配口径（2026-09-30 用户拍板，与视觉域一致）：
+     * 进主 Agent 全量域（[SESSION_AGENT_DOMAINS] ⊇ [DOMAIN_ALL]），不进 AIUI **会话**
+     * 子集（[SESSION_AIUI_DOMAINS] —— 那是代码生成场景的 token 省减，**不是安全边界**）；
+     * AIUI 页面工具口（`PageScope.ALLOWED_DOMAINS`）**保持开放**：页面可以调
+     * `listen_ambient` / `look_at_view`，这是有意的产品口径、不是漏网。
+     * ⚠️ 历史事故：这里的注释曾写「第三方页面不该有静默开麦的能力」，与实际行为矛盾
+     * （2026-09-29 闭环审计 §1 发现）；要收窄时改 PageScope 并同步 RULES §12.2 与
+     * lab-runtime.md §9，别只改注释。
      */
     const val DOMAIN_HEARING = "hearing"
     /**
@@ -152,7 +157,7 @@ object ToolRegistry {
     val SESSION_LOCAL_DOMAINS: Set<String> = emptySet()
 
     /**
-     * AIUI/代码生成会话装配的工具域：AIUI + 文件产出 + 基础信息 + 联网 + 知识库。
+     * AIUI/代码生成会话装配的工具域：AIUI + 文件产出 + 基础信息 + 联网 + 知识库 + **shell**。
      * 模型命中 aiui-dev 技能（或开始写代码）后，主循环把 tools 从全量域切换为本子集，
      * 每轮少发十来个无关工具 Schema，显著降低 input token 与 prefill 耗时；
      * load_skill/load_skill_section 属技能伪工具，切换后由调用方单独保留。
@@ -161,9 +166,15 @@ object ToolRegistry {
      * 「把知识库里《X》做成卡片页」「照这个链接做一个页面」「页面默认显示某城市的天气」。
      * 这两个域都是**只读输入侧**能力（不写文件、不控设备），砍掉它们会让这类请求
      * 在切进子集后的下一轮突然失去素材来源，模型只能凭印象编数据；保留成本只有 4 个 Schema。
+     *
+     * 为什么必须含 [DOMAIN_SHELL]（2026-10-01）：系统提示的 save_code_file 准则要求
+     * 「落盘后必须验证再交付——网页用 start_web_preview 确认渲染、脚本用 run_shell 跑一遍」，
+     * 而这两个工具都归 shell 域。子集缺了它，代码生成刚一开场验证工具就从 Schema 里消失，
+     * 验证闭环变成空头支票——模型要么调不到、要么调了报「未知工具」白耗一轮。
+     * shell 域有 ApprovalGate 全套风险闸门兜底（本子集从来不是安全边界），放进子集无权限放宽。
      */
     val SESSION_AIUI_DOMAINS: Set<String> =
-        setOf(DOMAIN_AIUI, DOMAIN_FILES, DOMAIN_INFO, DOMAIN_WEB, DOMAIN_KNOWLEDGE)
+        setOf(DOMAIN_AIUI, DOMAIN_FILES, DOMAIN_INFO, DOMAIN_WEB, DOMAIN_KNOWLEDGE, DOMAIN_SHELL)
 
     /** 代码/项目文件落盘工具名（把生成的文件写入手机下载目录的对应项目文件夹） */
     const val TOOL_CODE_FILE = "save_code_file"
@@ -195,6 +206,7 @@ object ToolRegistry {
         com.rokidlab.phone.ai.tools.WebToolProvider,
         com.rokidlab.phone.ai.tools.FilesToolProvider,
         com.rokidlab.phone.ai.tools.ShellToolProvider,
+        com.rokidlab.phone.ai.tools.RunToolProvider,
         com.rokidlab.phone.ai.tools.WebPreviewToolProvider,
         com.rokidlab.phone.ai.tools.ScriptToolProvider,
         com.rokidlab.phone.ai.tools.AiuiToolProvider,
@@ -496,14 +508,14 @@ object ToolRegistry {
      * 为什么单独列一张表而不是直接按域切：需要眼镜的工具**跨了 3 个域** ——
      * `glasses` 域 5 个（全部要）、`aiui` 域 4 个（生成/装/开/管 AIUI 应用都要落到眼镜上）、
      * 以及 `media` 域的 `show_lyrics`（要把歌词推到眼镜并拉起眼镜系统音乐页）。
-     * 按域切要么漏（media 只该摘 1 个，不能整域摘掉 play_song/stop_music）要么多。
+     * 按域切要么漏（media 只该摘 1 个，不能整域摘掉 control_music）要么多。
      * 因此**显式登记**在工具自己的声明上（而不是按域推导）。
      *
      * ⚠️ 判定口径是「**没有眼镜就做不成**」，不是「和眼镜有关」。以下**故意不在名单里**，
      * 因为它们在手机侧独立完成、且眼镜不可用时已优雅降级（摘掉反而白白损失能力）：
      *  - `show_image`：先把图片放进手机对话气泡，再**尽力**镜像到眼镜悬浮层，
      *    眼镜不在时如实回「已在手机端显示图片；眼镜端未连接…」（见 DisplayToolProvider）。
-     *  - `play_song` / `stop_music`：本地 `MusicPlayerController` 播放，不依赖眼镜。
+     *  - `control_music`（媒体控制）：本地 `MusicPlayerController` 播放，不依赖眼镜。
      *  - `get_now_playing` / `get_cover_image`：读手机侧 MediaSession、在手机侧下载封面。
      *  - `save_code_file` / `read_code_file`：读写手机本地项目文件，离线可写代码。
      *

@@ -7,6 +7,9 @@
 1. 本须知全文已在 load_skill 返回中，优先级最高。
 2. 写代码前用 load_skill_section(name="aiui-dev", section=…) 读官方章节，不要凭印象写 SFC：写 .ink 读 framework.md 的 SFC 章节，按键/生命周期查 events.md，组件查 components.md，样式查 wxss.md，API 先查 apis.md 索引再进对应域（wx.* → apis-wx.md），交付前过一遍 checklist.md。
 3. 本技能快照基于官方 main（2026-09-23，对应运行时 ink v0.18.0，RokidLink 内嵌运行时已同步升级）。可用新能力：`<streamdown>` / `<table>` / `<video>` 流式渲染、自定义组件、OPFS 持久化、流式 fetch（TextDecoder stream:true）、Web Audio、Widgets、后台 Agent Workers（app.json 用 `agentWorkers`，**`workers` 字段已废弃**）。⚠️ 新能力按需使用：页面若用了 0.16+ 的 API，在老固件眼镜的官方通道（AiuiActivity）可能渲染不出，不确定时优先用基础档（0.14）能力。
+4. ⚠️ **同步覆盖边界（改技能前必读）**：官方文件（SKILL.md / checklist.md / framework / components / wxss / design-system-green / apis*）会被官方同步**整文件覆盖**（SkillFetcher.OFFICIAL_AIUI_DEV_FILES），**Lab 特有规则只准写在本文**（LOCAL_COMPANION_SKILL_FILES 管辖、同步天然保留，冲突以本文为准）——需要改官方行为时写在本文并声明覆盖，**禁止直接改官方文件**（改了会在下次同步时静默丢失）。由此派生两条无条件规则，不依赖官方文件是否提及：
+   - 用户明确说"彩色/全彩/带颜色" ⇒ 直接按 §2.4 走（页面写全彩 + open_aiui_app(target=phone,color=true)，两步缺一不可）；
+   - 彩色项目交付自检 ⇒ §8 的彩色项。
 
 ## 1. 运行链路与规模上限
 
@@ -23,7 +26,8 @@
 
 ## 2. 图形界面与配色约束（游戏/棋盘/列表必读）★
 
-### 2.1 单色绿光波导：只有绿通道亮度可见（最高频翻车点）
+### 2.1 单色绿光波导：只有绿通道亮度可见（最高频翻车点）★仅单色绿屏适用
+- ⚠️ **本节只适用于默认的单色绿屏项目**；用户明确要彩色时**跳过本节**，走 §2.4 全彩路径，不要拿绿色阶梯去写「彩色」项目。
 - 眼镜屏是**单色绿通道**（官方 design-system-green.md：基色 `#40ff5e`，background `#000000`）。**亮度即信息**：红/蓝/洋红/橙紫几乎不可见；深蓝灰（`#0d1117`/`#161d2b`/`#2b3446`）≈ 黑 ≈ 不可见。
 - ⇒ 别用「深底 + 亮字 + 彩色块」的常规暗色主题分区。用**绿通道亮度分层**：结构线 24–48%、正文 72%、数值/选中 100%（`#40ff5e`）、背景 `#000000`。
 - 实测事故（2048）：背景 `#0d1117` + 瓦片 `#2b3446`，眼镜上只剩数字可见，整个棋盘消失。
@@ -37,7 +41,7 @@
 - ⇒ 棋盘/网格/列表：
   - `.board { display: grid; grid-template-columns: 72px 72px 72px 72px; grid-template-rows: 72px 72px 72px 72px; gap: 6px; }`，16 个 `<view>` 作**直接子节点**（顺序即行列，不要嵌套 4 个 row）。
   - 每格：`<view class="{{ c00 }}"><text class="num">{{ v00 }}</text></view>`；`data` 里为每格声明 `cNN`（class 串）与 `vNN`（文字）两字段，onLoad 里先初始化。
-  - 配色靠 class，用官方透明度阶梯：空 `rgba(64,255,94,.06)` → `.24` → `.48` → `.72` → 最大 `#40ff5e`（如 2048 瓦片）；一格一个 class，**不要用 style 内联绑定**。
+  - 配色靠 class，用官方透明度阶梯（**仅单色绿屏**；彩色项目改用 §2.4 的全彩 token）：空 `rgba(64,255,94,.06)` → `.24` → `.48` → `.72` → 最大 `#40ff5e`（如 2048 瓦片）；一格一个 class，**不要用 style 内联绑定**。
   - 刷新：全部格子一次 `setData`（32 个字段无压力）；**状态变化一律由按键驱动** —— 本宿主**定时器不执行**（见 §9.0），别用 `setInterval`/`setTimeout`。
 
 ### 2.4 彩色显示（yodaos-sprite-full）★仅手机预览可用
@@ -46,6 +50,12 @@
 - **只有用户明确说出"彩色/全彩/带颜色"时**才做彩色版：
   1. 页面按全彩配色写（深底亮字、彩色 token 都可以，不再受 §2.1 绿通道约束）；
   2. 打开用 open_aiui_app(**target=phone, color=true**)——打包自动注入 `"theme":"yodaos-sprite-full"`，只进手机包。
+- ⚠️ **两步缺一不可**：`color=true` 只改包级 theme 字段，**救不了已经写绿的页面 CSS**。生成/修改阶段就要把每个页面的颜色写成全彩；对已按 §2.1 写过的绿色项目做彩色版，必须逐页重写配色后再开，只补 `color=true` 是无效的。
+- 全彩配色参考（手机预览，深色底；色彩只起语义/分区作用，状态仍需文字或图标冗余）：
+  - 背景 `#0d1220`，卡片/分区面 `#1a2233`，边框 `#2b3a55`；
+  - 正文 `#e8eef7`，次要文字 `#9fb0c7`；
+  - 语义色：成功/主色 `#34d17b`、警示 `#f5a623`、危险 `#ef5350`、信息 `#4da3ff`、强调 `#b57bff`；
+  - 选中/高亮＝主色底 + 深色字（`#0d1220`），**不要再沿用 `rgba(64,255,94,…)` 绿色阶梯**。
 - 同一个项目推眼镜时颜色会退化为绿通道亮度、效果不可控（深蓝灰≈黑）。要上眼镜必须按 §2.1 绿色规范重写配色，并提醒用户彩色版上眼镜会走样。
 
 ## 3. 渲染宿主差异（自托管 AiuiLinkActivity）
@@ -108,11 +118,13 @@ onKeyDown(e) {
 
 - 只通过 save_code_file 落盘；回复 ≤ 3 句、纯文本、无代码围栏、无源码转述。
 - 用户只说「做个支持手柄的 XX」时直接套官方模板/设计规范产出，不必再询问。
+- 彩色项目交付自检（官方 checklist 不含此项，随同步会丢，故钉在本文）：**每页 CSS 已按 §2.4 全彩 token 重写** + open_aiui_app(target=phone,color=true) 两步都做了才算完成；对旧绿色项目做彩色版必须逐页重写配色，**只补 color=true 不算合格**。
 
 ## 9. 调用手机端工具（Lab 工具口）
 
 页面可调用手机端绝大部分工具（音乐/天气/搜索/提醒/设备信息等），这是页面与外部世界交互的唯一通道——不要在页面里 fetch 外网。
 **不开放的只有 5 个**：`open_aiui_app`（页面打开自己＝自指递归）、`list_sessions` / `read_session` / `session_trace`（会读到用户的全部会话与完整事件流，页面是第三方制品不该能批量枚举导出）、`research_subtask`（会另起子代理）。调它们只会收到明确的拒绝文案，**别把它当成工具名写错**。
+⚠️ `shell` 域与 `screen` 域（`run_shell`、`install_packages`、`save_script`、`list_scripts`、`run_script`、`delete_script`、`start_web_preview`、`stop_web_preview`、`read_screen`、`tap_screen`、`swipe_screen`、`press_key`、`type_text`）是**带闸门开放**（2026-10-01 起）：能调用，但**每一次都会先向用户弹确认**，用户同意才执行、问不到用户（眼镜/手机都无确认通道）直接拒。页面里调用它们**不会**立刻执行——回调会等到用户点头或超时拒绝；⚠️ 超时可能较长（等用户确认），不要在页面里连续重试刷确认框。此外 `delete_knowledge_doc`、`manage_glasses_app` 是**确认闸门 BLOCK 级**工具：它们出现在清单里，但页面路径必然被拒（不可恢复的操作只对对话中本人在场开放）。不确定现在能调什么，调 `list_tools` 拿一份实时清单。
 
 ### 9.0 ⚠️ 本宿主无事件循环 —— 工具调用必须回调式（最高频翻车点）
 ink 沙箱**只执行同步代码**：`Promise.then` / `await` / `setTimeout` / `setInterval` 的回调**一个都不执行**（真机实测零输出）；只有 `onLoad`/`onShow`/`onKeyDown`/`onMessage` 这类**事件回调**有效。

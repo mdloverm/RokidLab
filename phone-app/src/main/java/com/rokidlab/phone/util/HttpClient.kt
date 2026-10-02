@@ -5,6 +5,7 @@ import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import okhttp3.ConnectionPool
+import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -164,6 +165,40 @@ object HttpClient {
         headers: Map<String, String> = emptyMap(),
     ): HttpRawResult {
         val request = buildRequest(url, "POST", headers, body)
+        clientFor(connectTimeout, readTimeout).newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            return HttpRawResult(response.code, text, response.headers.toHeaderMap())
+        }
+    }
+
+    /**
+     * 发送 `application/x-www-form-urlencoded` 的表单 POST（OAuth 2.0 token 端点的法定格式）。
+     *
+     * 为什么不复用 [postString]：`buildRequest` 对 body 硬编码 JSON media type，即使调用方
+     * 显式带 `Content-Type: application/x-www-form-urlencoded` 头，OkHttp 的 BridgeInterceptor
+     * 也会用 body 自带的 Content-Type **覆盖**它 —— OAuth 规范要求 token 请求是表单编码，
+     * 用 JSON 发过去会被 token 端点直接 400。
+     *
+     * 非 2xx 不抛异常（与 [postStringRaw] 同口径）：OAuth 错误响应的正文本身就是结构化
+     * `{"error":"invalid_grant","error_description":…}`，调用方要按 error 码分别处置
+     * （invalid_grant 换新授权，其它报错即可），而不是"失败了"一个事实。
+     */
+    fun postFormRaw(
+        url: String,
+        form: Map<String, String>,
+        connectTimeout: Int = 10000,
+        readTimeout: Int = 15000,
+        headers: Map<String, String> = emptyMap(),
+    ): HttpRawResult {
+        val builder = FormBody.Builder()
+        form.forEach { (k, v) -> builder.add(k, v) }
+        val request = Request.Builder()
+            .url(url)
+            .headers(okhttp3.Headers.Builder().apply {
+                headers.forEach { (k, v) -> add(k, v) }
+            }.build())
+            .post(builder.build())
+            .build()
         clientFor(connectTimeout, readTimeout).newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             return HttpRawResult(response.code, text, response.headers.toHeaderMap())

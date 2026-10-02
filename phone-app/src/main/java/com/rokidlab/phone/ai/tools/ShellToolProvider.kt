@@ -10,6 +10,7 @@ import com.rokidlab.phone.ai.ToolRisk
 import android.content.Context
 import android.util.Log
 import com.rokidlab.phone.ai.ToolRegistry
+import com.rokidlab.phone.platform.InteractiveRunManager
 import com.rokidlab.phone.platform.ProotInstaller
 import com.rokidlab.phone.platform.ProotShell
 import org.json.JSONObject
@@ -26,14 +27,16 @@ import org.json.JSONObject
  *  - 有：bash + coreutils（grep/sed/awk/tar/curl…）、apt（可装包）、**可选**的 python3 / node / git；
  *  - 没有：Android 系统命令（`pm`/`am`/`dumpsys`/`input` 是宿主的东西，容器里不存在）、
  *    **真机 root**（`-0` 只是 proot 的 fake root，够 apt 用，不改真机权限）；
- *  - **不挂整个 `/sdcard`**，只开一个共享口子 `/mnt/lab`：授予「所有文件访问」后直通公共
- *    「下载/Lab」，未授权降级 App 私有目录（见 [ProotShell.shareStatus]）。
- *    除 `/mnt/lab` 外的手机存储路径在容器里都不存在，别让模型去猜。
+ *  - **不挂整个 `/sdcard`**，只开两个口子：共享盘 `/mnt/lab`（授予「所有文件访问」后直通公共
+ *    「下载/Lab」，未授权降级 App 私有目录，见 [ProotShell.shareStatus]）与只读的
+ *    `/mnt/download`（公共下载目录，桥接 save_code_file 的产物，2026-10-01 新增）。
+ *    除这两个挂载点外的手机存储路径在容器里都不存在，别让模型去猜。
  *
  * ## 风险档为什么是 [ToolRisk.LOCAL_SIDE_EFFECT] 而不是 EXTERNAL
  * 判据是「最坏能坏成什么」：容器是可丢弃的（`rm -rf /` 只毁掉 rootfs，重下 28.5 MB 即恢复），
- * 且**不提权**（同 UID 跑；只 bind `/dev` `/proc` `/sys` 与一个用户知情的专用共享目录
- * `/mnt/lab` ↔ 下载/Lab，不 bind 任何其他用户数据）⇒ 触达不到第三方、
+ * 且**不提权**（同 UID 跑；只 bind `/dev` `/proc` `/sys`、用户知情的专用共享目录
+ * `/mnt/lab` ↔ 下载/Lab、与同样需要用户显式授权「所有文件访问」才出现的公共下载目录
+ * `/mnt/download` ⇒ 触达不到隐私数据（相册/文档类目录不在 Download）、
  * 也改不了系统状态。反过来若登记成 [ToolRisk.EXTERNAL_SIDE_EFFECT]，**每次跑条命令都要用户确认**
  * ——"跑条 `ls` 也要先点头"是本机模式下最烦人的交互，而这正是 `save_code_file` 当年那个事故的形状
  * （见 [ToolRisk] 的历史事故注释），是**用错档位本身**造出来的故障，不是安全加固。
@@ -43,13 +46,15 @@ import org.json.JSONObject
  * **"最坏能坏成什么"**：`run_shell` 最坏毁掉可重下的 rootfs（无外部代价），
  * 而装包最坏是用户流量与存储的实打实消耗。
  *
- * ## 为什么 `shell` 域不在 [com.rokidlab.phone.ai.approval.PageScope.ALLOWED_DOMAINS] 里
- * AIUI 页面是**第三方制品**（模型生成或用户导入的 `.aix`），一旦能调 `run_shell`
- * 就等于把"任意命令执行"交给了页面作者（`install_packages` 同理：任意装包）。
- * 对话路径（用户本人在场）给这个能力是产品意图，
- * 页面路径不是 —— 边界写在 `PageScope.ALLOWED_DOMAINS`（唯一产地）。
- * ⚠️ 刻意**不**写进 `PageScope.DENY_TOOLS`：`RULES.md` 把那张表的定位钉在「技术故障类」，
- * 并要求不逐工具做安全判断；摘域还能让页面拿到的工具清单里也不出现它。
+ * ## `shell` 域对 AIUI 页面：从"整域摘除"到"必须确认"（2026-10-01 用户拍板）
+ * 页面是**第三方制品**（模型生成或用户导入的 `.aix`），`run_shell` 又是全表唯一的
+ * **任意命令执行**原语 —— 原设计把整个 shell/screen 域从 `PageScope.ALLOWED_DOMAINS`
+ * 摘掉（页面连工具清单里都看不到）。2026-10-01 起改为**带闸门开放**：
+ * 域回到页面白名单（页面的工具清单里能看见），但页面路径的每一次 shell/screen 调用
+ * 都要过 [com.rokidlab.phone.ai.approval.PageElevatedDomainGuard] 的**用户确认**
+ * （fail-closed：眼镜/手机都问不到就拒）。对话路径（用户本人在场）维持静默执行不变 ——
+ * 这是产品意图。边界从"能力形态"换成了"知情同意"，域的取舍仍只写在
+ * `PageScope.ALLOWED_DOMAINS`（唯一产地）。
  *
  * ## 结果为什么按**不可信内容**回填
  * 同一条工具既能跑 `ls -la`（本地确定性输出），也能跑 `curl`（外部作者写的内容）——
@@ -78,7 +83,21 @@ internal object ShellToolProvider : ToolProvider {
      */
     const val TOOL_INSTALL = "install_packages"
 
-    override val toolNames = setOf(TOOL_RUN, TOOL_INSTALL)
+    /**
+     * 容器快照（⑤）：把当前 rootfs 整体存档（单槽位）。
+     * 实现（锁、复制策略、失败回滚）在 [ProotInstaller.snapshotContainer]。
+     */
+    const val TOOL_SNAPSHOT = "snapshot_container"
+
+    /**
+     * 容器恢复（⑤）：删当前 rootfs、用快照整体替换。
+     * ⚠️ 定档 EXTERNAL + PROCEED（问不到就做）：与 install_packages 同一条判据 ——
+     * 最坏代价是"丢掉快照之后装的包"，而容器本身可重下（28 MB）恢复；
+     * 但**恢复动作本身必须让用户知道**（summarize 会在确认通道里展示）。
+     */
+    const val TOOL_RESTORE = "restore_container"
+
+    override val toolNames = setOf(TOOL_RUN, TOOL_INSTALL, TOOL_SNAPSHOT, TOOL_RESTORE)
 
     /** 默认超时：日常命令秒级返回；装包那种慢活由模型显式传更大的值 */
     private const val DEFAULT_TIMEOUT_SEC = 120
@@ -89,6 +108,9 @@ internal object ShellToolProvider : ToolProvider {
     /** 装包默认/上限超时：apt 装大包（如 ffmpeg）实测可到十几分钟，给足余量避免半配置状态 */
     private const val DEFAULT_INSTALL_TIMEOUT_SEC = 900
     private const val MAX_INSTALL_TIMEOUT_SEC = 1800
+
+    /** 后台任务的空闲看狗：静默 10 分钟才回收（编译大项目可能几分钟不吐字，60s 会误杀） */
+    private const val BACKGROUND_IDLE_TIMEOUT_SEC = 600L
 
     override fun tools(): List<ToolEntry> = listOf(
         ToolEntry(
@@ -103,7 +125,7 @@ internal object ShellToolProvider : ToolProvider {
             statusText = "正在本机执行命令…",
             schema = toolSchema(
                 name = TOOL_RUN,
-                description = "在这台手机上的一台 Linux 环境（Ubuntu 容器）里执行 shell 命令，返回退出码、标准输出与标准错误。用于用户要求「跑个命令/算一下/处理文件/写个脚本/用 python/grep 一下」这类需要真正执行的任务，例如统计、文本与数据处理、下载（curl/wget）、解压、调 python3 脚本。⚠️ 这里**不是**手机的 Android shell：pm/am/dumpsys/input/getprop 这类系统命令在容器里不存在，也不要指望真机 root（容器里的 root 是假的，只够 apt 用）。📁 **与手机交换文件只走 /mnt/lab**：它是容器里唯一挂载的手机目录——用户已授予「所有文件访问」时直通手机的「下载/Lab」文件夹（在系统文件管理器和下载里可见，双向读写）；未授权时它在 App 私有目录、用户看不到（结果里会注明当前是哪种）。用户给的文件让他放进「下载/Lab」，容器产出的成品（脚本/图表/CSV）写到 /mnt/lab 用户就能在手机里拿到；除它之外不要猜 /sdcard 等任何手机路径。可用的东西：bash + 常用命令行工具。python3 / node / git 属**可选组件**：缺 python3、git 时可自己用 install_packages 装，缺 node（用户没在本机执行环境里装 Node.js）只能如实告知并指引他去「设置 → 本机执行环境」安装，**不要试着用 apt 装 nodejs 顶替**。⚠️ **缺命令要装包时用 install_packages 工具**，不要在 run_shell 里跑 `apt-get install`：那条通道不问用户、且 600s 超时上限会把装到一半的 dpkg 强杀（留下半配置状态）。命令里多级引号容易写错，建议把复杂逻辑写成 heredoc 或 `bash -c`。⚠️ 返回内容过长会被截断，所以**自己先过滤**：加 `head`/`tail`/`grep -c`/`wc -l`，不要直接 cat 一个大文件。若返回里说「本机执行环境还没安装」，就把这个事实如实告诉用户并指引他去「设置 → 本机执行环境」安装，**不要假装命令已经执行过**。音乐、电话、闹钟、网页搜索这些已有专用工具，不要用本工具绕道。",
+                description = "在这台手机上的一台 Linux 环境（Ubuntu 容器）里执行 shell 命令，返回退出码、标准输出与标准错误。用于用户要求「跑个命令/算一下/处理文件/写个脚本/用 python/grep 一下」这类需要真正执行的任务，例如统计、文本与数据处理、下载（curl/wget）、解压、调 python3 脚本。⚠️ 这里**不是**手机的 Android shell：pm/am/dumpsys/input/getprop 这类系统命令在容器里不存在，也不要指望真机 root（容器里的 root 是假的，只够 apt 用）。📁 **与手机交换文件走两个挂载点**：① /mnt/lab —— 用户已授予「所有文件访问」时直通手机的「下载/Lab」文件夹（系统文件管理器可见，双向读写）；未授权时在 App 私有目录（结果里会注明哪种）。用户给的输入文件让他放进「下载/Lab」，容器产出的成品写到 /mnt/lab 用户就能拿到。② /mnt/download —— **只读**镜像手机整个「下载」目录（同样需要「所有文件访问」；未授予时不存在）：save_code_file 存到「下载/<项目名>/」的项目从这里读，运行/预览它们就用这个路径。除这两个挂载点外不要猜 /sdcard 等任何手机路径（容器里不存在）。生成**可运行项目**（脚本/网页/服务）时优先写到 /mnt/lab/<项目名>/，之后运行与预览都从那里找。⚠️ **运行之前轮次生成的代码前不要凭记忆猜路径**：先 ls 确认文件实际位置，再显式传 cwd（省略 cwd 时沿用上一次成功执行的工作目录，首次为 /）。可用的东西：bash + 常用命令行工具。curl、wget、unzip、zip、xz-utils、jq 装环境时已预装，直接用（缺了才考虑 install_packages 补）。python3 / node / git 属**可选组件**：缺 python3、git 时可自己用 install_packages 装，缺 node（用户没在本机执行环境里装 Node.js）只能如实告知并指引他去「设置 → 本机执行环境」安装，**不要试着用 apt 装 nodejs 顶替**。python3 已装时 `python` 与 `pip` 别名同样可用（已自动补符号链接）；pip 已配 break-system-packages，全局 pip install 可直接用。**java/javac 可能未预装**：先 `command -v javac` 探一下；缺时优先引导用户去「设置 → 本机执行环境」点 Java 的「安装」（OpenJDK 21，走国内 apt 镜像，下载约 82MB、装后约 300MB），用户同意由你代装时再用 install_packages 装 openjdk-21-jdk-headless（装前向用户说明体积与耗时）；用户只是随口一提时如实说明本机没装 Java 即可。**Python GUI 框架（tkinter/PyQt/Kivy 等）在容器里开不出窗口**（没有显示服务器和 GPU），不要装也不要跑——需要图形界面时生成网页（start_web_preview）或 AIUI 页面代替。⚠️ **缺命令要装包时用 install_packages 工具**，不要在 run_shell 里跑 `apt-get install`：那条通道不问用户、且 600s 超时上限会把装到一半的 dpkg 强杀（留下半配置状态）。命令里多级引号容易写错，建议把复杂逻辑写成 heredoc 或 `bash -c`。⚠️ 返回内容过长会被截断，所以**自己先过滤**：加 `head`/`tail`/`grep -c`/`wc -l`，不要直接 cat 一个大文件。若返回里说「本机执行环境还没安装」，就把这个事实如实告诉用户并指引他去「设置 → 本机执行环境」安装，**不要假装命令已经执行过**。音乐、电话、闹钟、网页搜索这些已有专用工具，不要用本工具绕道。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -113,13 +135,17 @@ internal object ShellToolProvider : ToolProvider {
                         ),
                         "cwd" to mapOf(
                             "type" to "string",
-                            "description" to "命令的工作目录（容器内路径）。默认 /（容器根，也就是 rootfs）；目录不存在会以退出码 90 失败",
+                            "description" to "命令的工作目录（容器内路径）。省略时沿用上一次成功执行的工作目录（首次为 /，即容器根 rootfs）；目录不存在会以退出码 90 失败",
                         ),
                         "timeoutSec" to mapOf(
                             "type" to "integer",
                             "description" to "超时秒数，默认 $DEFAULT_TIMEOUT_SEC，上限 $MAX_TIMEOUT_SEC。装包、下载大文件这类慢操作要显式传大一点",
                             "minimum" to 5,
                             "maximum" to MAX_TIMEOUT_SEC,
+                        ),
+                        "background" to mapOf(
+                            "type" to "boolean",
+                            "description" to "true = **后台运行**：立即返回 runId，不等待结束（timeoutSec 被忽略）。适合编译大项目、批量下载这类超过超时上限的慢活。启动后用 read_run_output(runId) 轮询输出，write_run_input / stop_run 干预；后台任务空闲 $BACKGROUND_IDLE_TIMEOUT_SEC 秒会被自动回收，结束的记录用 list_runs 可查",
                         ),
                     ),
                     "required" to listOf("command"),
@@ -159,6 +185,7 @@ internal object ShellToolProvider : ToolProvider {
                     "不要带版本号（写 python3，不写 python3=3.12）、不要带 apt 参数（不要 -y / --fix-broken）、" +
                     "一次可以传多个。装完**务必实际验证**再用（`command -v <命令>` 或 `<命令> --version`）：" +
                     "apt 在「包其实已装好、只是收尾写日志失败」时也会返回非 0 退出码，只看退出码会误报失败。" +
+                    "⚠️ **GUI 框架类不要装**（tkinter/python3-tk/PyQt/Kivy/libsdl2 等）：容器里没有显示服务器，装了也开不出窗口（真机实测 Kivy Window=None），用户的图形界面需求一律引导走网页预览或 AIUI 页面。" +
                     "⚠️ 与 run_shell 是同一个容器环境（同一个 rootfs）；不要在 run_shell 里跑 apt-get install。",
                 parameters = mapOf(
                     "type" to "object",
@@ -179,6 +206,52 @@ internal object ShellToolProvider : ToolProvider {
                 ),
             ),
         ),
+        ToolEntry(
+            name = TOOL_SNAPSHOT,
+            group = ToolRegistry.DOMAIN_SHELL,
+            displayNameRes = R.string.ai_tool_snapshot_container_name,
+            descriptionRes = R.string.ai_tool_snapshot_container_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            contentTrust = ToolContentTrust.TRUSTED,
+            statusText = "正在给本机环境拍快照…",
+            summarize = { _ -> "给本机 Linux 环境拍快照（保存当前已装的软件与文件，可能要十几秒到几分钟）" },
+            schema = toolSchema(
+                name = TOOL_SNAPSHOT,
+                description = "给本机 Linux 环境的整个容器拍一个快照（保存 rootfs 全部内容：已安装的软件、" +
+                    "装过的包、写进去的文件）。适合在「即将做大改动 / 用户要求保存现场」之前调用。" +
+                    "快照保存在应用私有目录，**单槽位**——再拍一次会覆盖旧快照。" +
+                    "⚠️ 有任务正在跑时快照会被拒绝（要先等它们结束）；快照可能要十几秒到几分钟。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = TOOL_RESTORE,
+            group = ToolRegistry.DOMAIN_SHELL,
+            displayNameRes = R.string.ai_tool_restore_container_name,
+            descriptionRes = R.string.ai_tool_restore_container_desc,
+            // 定档 EXTERNAL（覆盖当前容器状态）但问不到就做（PROCEED）：容器可重下、
+            // 快照本身就是"可恢复点"，与 install_packages 同一条判据。
+            risk = ToolRisk.EXTERNAL_SIDE_EFFECT,
+            confirmPolicy = ToolConfirmPolicy.PROCEED,
+            sideEffect = true,
+            contentTrust = ToolContentTrust.TRUSTED,
+            statusText = "正在恢复本机环境…",
+            summarize = { _ -> "把本机 Linux 环境恢复到最近一次快照（快照之后安装的软件与写入的文件会丢失）" },
+            schema = toolSchema(
+                name = TOOL_RESTORE,
+                description = "把本机 Linux 环境恢复到最近一次快照：**当前容器会被快照内容整体替换**，" +
+                    "快照之后安装的软件、写入的文件都会丢失（快照本身保留，可再次恢复）。" +
+                    "没有快照时会如实返回；有任务正在跑时会被拒绝。用于环境被改乱后想回档、或用户明确要求恢复。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>(),
+                ),
+            ),
+        ),
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
@@ -189,6 +262,8 @@ internal object ShellToolProvider : ToolProvider {
         val result = when (name) {
             TOOL_RUN -> runShell(context, args)
             TOOL_INSTALL -> installPackages(context, args)
+            TOOL_SNAPSHOT -> ProotInstaller.snapshotContainer(context).let { format(it) }
+            TOOL_RESTORE -> ProotInstaller.restoreContainer(context).let { format(it) }
             else -> throw IllegalArgumentException("未知工具: $name")
         }
         // 容器写 /mnt/lab 走的是**内核路径**（不经 MediaProvider），所以产出不会自动进媒体库 ——
@@ -214,14 +289,57 @@ internal object ShellToolProvider : ToolProvider {
                 "装好之后我就能在这台手机上跑命令了。现在不要假装已经执行过，也不要凭空编造输出。"
         }
 
-        val cwd = args.optString("cwd").trim().ifEmpty { "/" }
+        val cwd = args.optString("cwd").trim().ifEmpty { ShellWorkspace.defaultCwd }
+        // ── 后台模式（④ 长任务句柄）：异步通道立即返回 runId，不占对话轮等待 ──
+        if (args.optBoolean("background", false)) {
+            return runInBackground(context, command, cwd)
+        }
         val timeout = args.optInt("timeoutSec", DEFAULT_TIMEOUT_SEC).coerceIn(5, MAX_TIMEOUT_SEC)
         val result = runCatching { ProotShell.runCommand(context, command, cwd = cwd, timeoutSec = timeout.toLong()) }
             .getOrElse { e ->
                 Log.w(TAG, "run_shell 抛异常：${e.javaClass.simpleName}: ${e.message}")
                 return "执行本机命令时出错：${e.javaClass.simpleName}: ${e.message}"
             }
-        return format(result) + shareHint(context)
+        // 工作目录接缝：cd 成功（非退出码 90）才记忆；每轮回显让压缩后的最近结果仍携带路径
+        if (result.launched && result.code != 90) ShellWorkspace.remember(cwd)
+        return format(result) + cwdEcho(cwd) + shareHint(context)
+    }
+
+    /**
+     * 后台长任务（④）：把命令送进 [InteractiveRunManager] 的异步通道，立即返回 runId。
+     *
+     * 为什么复用交互通道而不是再开一条：stdin 保留 = 交互程序可喂输入；空闲看狗放宽到
+     * [BACKGROUND_IDLE_TIMEOUT_SEC]（编译大项目可能几分钟不吐字，60s 会误杀）；
+     * 结束时自动进 [InteractiveRunManager.history]（⑥ 运行历史），AI 事后可查。
+     * 输出合流进 [InteractiveRunManager.Run.output] —— 若用户在看聊天页，运行卡片同步可见。
+     *
+     * ⚠️ 后台任务的文件产出**不会**触发 [LabFileOutputs] 的目录 diff（那是前台命令
+     * 返回前对比的）——让模型在任务结束后用 `ls /mnt/lab` 自行确认产出。
+     */
+    private fun runInBackground(context: Context, command: String, cwd: String): String {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val failure = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        val run = InteractiveRunManager.start(
+            context,
+            ProotShell.commandScript(command, cwd),
+            label = "SHELL",
+            idleTimeoutSec = BACKGROUND_IDLE_TIMEOUT_SEC,
+        ) { r, _ ->
+            if (r.failure != null) failure.set(r.failure)
+            latch.countDown()
+        }
+        if (run == null) {
+            // 没起来：onFinished 会带原因回调（后台线程），等一小会拿原因再如实回报
+            runCatching { latch.await(3, java.util.concurrent.TimeUnit.SECONDS) }
+            val why = failure.get() ?: "环境正忙（安装/卸载进行中或并发已满）"
+            return "后台任务没能启动：$why。请如实告知用户，稍后重试；不要假装任务在跑。"
+        }
+        // cwd 语义同前台：命令内 cd 成功与否未知，先按请求值记忆（后续 read_run_output 可纠偏）
+        ShellWorkspace.remember(cwd)
+        return "后台任务已启动：runId=${run.id}。" +
+            "用 read_run_output(runId=\"${run.id}\") 轮询输出（隔一段时间再读，不要连续空转刷屏）；" +
+            "需要干预时用 write_run_input / stop_run；结束后 list_runs 里也能查到这条记录。" +
+            cwdEcho(cwd)
     }
 
     /**
@@ -268,6 +386,16 @@ internal object ShellToolProvider : ToolProvider {
         // 附在装包结果后面既是噪音，也会诱导模型向用户报告一个它没做过的事。
         return "安装结果（${packages.joinToString("、")}）：\n" + format(result) + note
     }
+
+    /**
+     * 每次结果附一行当前工作目录（[ShellWorkspace] 接缝的回显半边）。
+     *
+     * 为什么必须回显：上下文压缩会吃掉早期「文件写在哪」的工具结果，回显让
+     * **最近一条结果**永远携带真实路径 —— 压缩后模型据此恢复目录，不再靠猜。
+     * [WebPreviewToolProvider] 成功启动时复用同一行，保证两个入口语义一致。
+     */
+    internal fun cwdEcho(cwd: String): String =
+        "\n\n[工作目录] $cwd（run_shell / start_web_preview 省略 cwd 时沿用此目录）"
 
     /**
      * 每次结果附一行共享盘当前指向：模型据此判断产出的文件用户在手机上看不看得见。

@@ -360,7 +360,7 @@ private suspend fun deleteRecord(
         runCatching { r.sourceProjectDir?.let { File(it).deleteRecursively() } }
         runCatching { r.project?.takeIf { it.isNotBlank() }?.let { com.rokidlab.phone.ai.WebTools.deleteDownloadedProject(ctx, it) } }
     }
-    runCatching { AiuiProject.packageFile(ctx, r.agentId).delete() }
+    runCatching { AiuiProject.deletePackageFiles(ctx, r.agentId) }
     if (deleteOnGlasses) {
         val err = AiuiProject.deleteAixOnGlasses(ctx, r.agentId)
         if (err != null) return@withContext ctx.getString(R.string.aiui_delete_glasses_fail, err)

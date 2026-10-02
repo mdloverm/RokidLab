@@ -21,8 +21,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -30,10 +34,13 @@ import androidx.compose.material.icons.outlined.DataObject
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,8 +53,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rokidlab.phone.R
@@ -95,6 +104,46 @@ internal fun CodeBlockCard(langRaw: String, code: String) {
 
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<ExecResult?>(null) }
+    // ── 交互式运行：寿命归 InteractiveRunManager（全局）──
+    // 卡片滚出列表被回收**不再杀进程**（此前 DisposableEffect stop 的限制已废除）；
+    // 输出在聊天流里同步有一张"运行卡片"（addRunCard），聊天输入可经程序模式直发 stdin。
+    var runId by remember { mutableStateOf<String?>(null) }
+    val runsState = com.rokidlab.phone.platform.InteractiveRunManager.runs.collectAsState()
+    val liveRun = runId?.let { id -> runsState.value.firstOrNull { it.id == id } }
+    val liveOutput = liveRun?.output?.collectAsState()?.value ?: ""
+
+    fun startRun(script: String, label: String) {
+        running = true
+        result = null
+        var rid: String? = null
+        scope.launch(Dispatchers.IO) {
+            val rs = com.rokidlab.phone.platform.InteractiveRunManager.start(
+                ctx,
+                script,
+                label,
+            ) { r, finishedRun ->
+                scope.launch(Dispatchers.Main) {
+                    running = false
+                    result = r
+                    // 运行卡片定格：把最终输出写进消息（Run 已从管理器移除，UI 读不到流了）
+                    rid?.let { id ->
+                        val body = finishedRun?.output?.value ?: ""
+                        val tail = r.failure ?: "退出码 ${r.code}"
+                        ChatStateHolder.finishRunCard(id, body, tail)
+                    }
+                }
+            }
+            rid = rs?.id
+            withContext(Dispatchers.Main) {
+                if (rs != null) {
+                    ChatStateHolder.addRunCard(rs.id, label)
+                    runId = rs.id
+                } else {
+                    running = false
+                }
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -138,32 +187,7 @@ internal fun CodeBlockCard(langRaw: String, code: String) {
                         Toast.makeText(ctx, R.string.chat_code_env_missing, Toast.LENGTH_LONG).show()
                         return@CardIconButton
                     }
-                    running = true
-                    result = null
-                    scope.launch(Dispatchers.IO) {
-                        val r = when (runnable) {
-                            CodeLanguage.Runnable.SHELL ->
-                                ProotShell.runCommand(ctx, code, timeoutSec = 60L)
-
-                            CodeLanguage.Runnable.PYTHON ->
-                                ProotShell.runScript(
-                                    ctx,
-                                    interpreterScript(ctx, "python3", R.string.chat_code_python_missing, code),
-                                    timeoutSec = 120L,
-                                )
-
-                            CodeLanguage.Runnable.NODE ->
-                                ProotShell.runScript(
-                                    ctx,
-                                    interpreterScript(ctx, "node", R.string.chat_code_node_missing, code),
-                                    timeoutSec = 120L,
-                                )
-                        }
-                        withContext(Dispatchers.Main) {
-                            running = false
-                            result = r
-                        }
-                    }
+                    startRun(buildRunScript(ctx, runnable, code), label)
                 }
             }
             CardIconButton(
@@ -211,9 +235,15 @@ internal fun CodeBlockCard(langRaw: String, code: String) {
             )
         }
 
-        // ── 运行结果（就地展开） ──
+        // ── 运行结果（就地展开；输出同时有聊天流运行卡片，输入走聊天框"程序模式"） ──
         if (running || result != null) {
-            CodeResultPanel(running = running, result = result, onClear = { result = null })
+            CodeResultPanel(
+                running = running,
+                result = result,
+                liveOutput = liveOutput,
+                onStop = { liveRun?.stop() },
+                onClear = { result = null },
+            )
         }
     }
 }
@@ -245,7 +275,13 @@ private fun CardIconButton(
 }
 
 @Composable
-private fun CodeResultPanel(running: Boolean, result: ExecResult?, onClear: () -> Unit) {
+private fun CodeResultPanel(
+    running: Boolean,
+    result: ExecResult?,
+    liveOutput: String,
+    onStop: () -> Unit,
+    onClear: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -257,6 +293,13 @@ private fun CodeResultPanel(running: Boolean, result: ExecResult?, onClear: () -
                 CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp, color = BrewChat)
                 Spacer(Modifier.width(6.dp))
                 Text(stringResource(R.string.chat_code_running), color = BrewMuted, fontSize = 11.sp)
+                Spacer(Modifier.weight(1f))
+                CardIconButton(
+                    icon = Icons.Outlined.Stop,
+                    description = stringResource(R.string.chat_code_stop),
+                    tint = BrewRed,
+                    onClick = onStop,
+                )
             } else {
                 val r = result!!
                 val ok = r.launched && r.code == 0
@@ -287,9 +330,13 @@ private fun CodeResultPanel(running: Boolean, result: ExecResult?, onClear: () -
             }
         }
 
-        val r = result
-        if (!running && r != null && r.launched) {
+        // ── 输出区：运行中显示实时流，结束后显示汇总 ──
+        if (running) {
             val outScroll = rememberScrollState()
+            // 新输出到达时滚到底部（跟随最新行）
+            androidx.compose.runtime.LaunchedEffect(liveOutput) {
+                outScroll.animateScrollTo(outScroll.maxValue)
+            }
             Box(
                 modifier = Modifier
                     .padding(top = 6.dp)
@@ -297,35 +344,57 @@ private fun CodeResultPanel(running: Boolean, result: ExecResult?, onClear: () -
                     .heightIn(max = 150.dp)
                     .verticalScroll(outScroll),
             ) {
-                Column {
-                    if (r.stdout.isNotBlank()) {
-                        ResultStreamLabel(stringResource(R.string.chat_code_stdout))
-                        Text(
-                            text = r.stdout,
-                            color = BrewTextBright,
-                            fontSize = 11.5.sp,
-                            lineHeight = 16.sp,
-                            fontFamily = FontFamily.Monospace,
-                            softWrap = true,
-                        )
-                    }
-                    if (r.stderr.isNotBlank()) {
-                        ResultStreamLabel(stringResource(R.string.chat_code_stderr))
-                        Text(
-                            text = r.stderr,
-                            color = BrewRed.copy(alpha = 0.9f),
-                            fontSize = 11.5.sp,
-                            lineHeight = 16.sp,
-                            fontFamily = FontFamily.Monospace,
-                            softWrap = true,
-                        )
-                    }
-                    if (r.stdout.isBlank() && r.stderr.isBlank()) {
-                        Text(
-                            text = stringResource(R.string.chat_code_no_output),
-                            color = BrewDim,
-                            fontSize = 11.sp,
-                        )
+                Text(
+                    text = liveOutput.ifBlank { stringResource(R.string.chat_code_no_output) },
+                    color = BrewTextBright,
+                    fontSize = 11.5.sp,
+                    lineHeight = 16.sp,
+                    fontFamily = FontFamily.Monospace,
+                    softWrap = true,
+                )
+            }
+            // 输入走聊天框的"程序模式"（InteractiveRunManager 联动），卡片内不再有独立输入行
+        } else {
+            val r = result
+            if (r != null && r.launched) {
+                val outScroll = rememberScrollState()
+                Box(
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .fillMaxWidth()
+                        .heightIn(max = 150.dp)
+                        .verticalScroll(outScroll),
+                ) {
+                    Column {
+                        if (r.stdout.isNotBlank()) {
+                            ResultStreamLabel(stringResource(R.string.chat_code_stdout))
+                            Text(
+                                text = r.stdout,
+                                color = BrewTextBright,
+                                fontSize = 11.5.sp,
+                                lineHeight = 16.sp,
+                                fontFamily = FontFamily.Monospace,
+                                softWrap = true,
+                            )
+                        }
+                        if (r.stderr.isNotBlank()) {
+                            ResultStreamLabel(stringResource(R.string.chat_code_stderr))
+                            Text(
+                                text = r.stderr,
+                                color = BrewRed.copy(alpha = 0.9f),
+                                fontSize = 11.5.sp,
+                                lineHeight = 16.sp,
+                                fontFamily = FontFamily.Monospace,
+                                softWrap = true,
+                            )
+                        }
+                        if (r.stdout.isBlank() && r.stderr.isBlank()) {
+                            Text(
+                                text = stringResource(R.string.chat_code_no_output),
+                                color = BrewDim,
+                                fontSize = 11.sp,
+                            )
+                        }
                     }
                 }
             }
@@ -384,9 +453,85 @@ private fun interpreterScript(ctx: Context, interpreter: String, missingMsgRes: 
     """.trimIndent() + "\n"
 }
 
+/**
+ * 生成 Java 运行脚本：探测 javac → 落盘 → 找 public 类名（用它命名文件，否则 javac 拒编）→
+ * 编译 → 运行。
+ *
+ * 与 [interpreterScript] 同样的理由走 base64 管道（代码里的引号 / `${'$'}` 是注入面）。
+ * 类名提取走 grep 启发式：优先 `public (final|abstract)? class`，退而取第一个 class 定义 ——
+ * 覆盖模型生成的常规单文件程序足够；找不到类名时如实报错而不是猜。
+ * JDK 未预装（可选组件）：缺 javac 时引导去「设置 → 本机执行环境」。
+ */
+private fun javaScript(ctx: Context, code: String): String {
+    val missing = ctx.getString(R.string.chat_code_java_missing).replace("'", "").replace("\n", " ")
+    val noClass = ctx.getString(R.string.chat_code_java_noclass).replace("'", "").replace("\n", " ")
+    val hint = ctx.getString(R.string.chat_code_java_interactive).replace("'", "").replace("\n", " ")
+    val b64 = Base64.encodeToString(code.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+    val d = "${'$'}D"
+    val cls = "${'$'}CLS"
+    val rc = "${'$'}RC"
+    return """
+        command -v javac >/dev/null 2>&1 || { echo '$missing'; exit 91; }
+        D=${'$'}(mktemp -d) || exit 92
+        echo '$b64' | base64 -d > $d/Code.java
+        cd $d || exit 92
+        CLS=${'$'}(grep -oE 'public[[:space:]]+(final[[:space:]]+|abstract[[:space:]]+)?class[[:space:]]+[A-Za-z0-9_]+' Code.java | head -1 | grep -oE '[A-Za-z0-9_]+' | tail -1)
+        [ -n "$cls" ] || CLS=${'$'}(grep -oE '(^|[[:space:]])class[[:space:]]+[A-Za-z0-9_]+' Code.java | head -1 | grep -oE '[A-Za-z0-9_]+' | tail -1)
+        [ -n "$cls" ] || { echo '$noClass'; exit 93; }
+        mv Code.java "$cls.java" 2>/dev/null || true
+        javac "$cls.java" || exit 94
+        java -cp "$d" "$cls"
+        RC=${'$'}?
+        [ "$rc" -ne 0 ] && echo '$hint'
+        exit "$rc"
+    """.trimIndent() + "\n"
+}
+
+/**
+ * 按语言把代码包成容器可执行脚本 —— 代码卡「运行键」与聊天「说运行」共用这一份封装，
+ * 保证两条入口跑出来的行为完全一致（探测缺失组件 / base64 防注入 / Java 类名提取）。
+ */
+internal fun buildRunScript(ctx: Context, runnable: CodeLanguage.Runnable, code: String): String = when (runnable) {
+    CodeLanguage.Runnable.SHELL -> code + "\n"
+    CodeLanguage.Runnable.PYTHON ->
+        interpreterScript(ctx, "python3", R.string.chat_code_python_missing, code)
+    CodeLanguage.Runnable.NODE ->
+        interpreterScript(ctx, "node", R.string.chat_code_node_missing, code)
+    CodeLanguage.Runnable.JAVA -> javaScript(ctx, code)
+}
+
+/**
+ * 会话里「最近一个可运行的代码块」：聊天输入"运行"时免点运行键的直接执行目标。
+ * 从最新消息往回扫（状态行 / 运行卡片跳过），命中第一个语言可运行的围栏块即返回；
+ * 用户自己贴的代码（用户气泡）同样算数。
+ */
+internal fun findLastRunnableCode(messages: List<ChatMsg>): MdBlock.Code? {
+    for (msg in messages.asReversed()) {
+        if (msg.isStatus || msg.runId != null) continue
+        for (block in parseChatMarkdown(msg.content).asReversed()) {
+            if (block is MdBlock.Code && CodeLanguage.support.containsKey(block.lang)) return block
+        }
+    }
+    return null
+}
+
+/**
+ * 聊天输入是不是「就跑一下」的短指令（说"运行"免点运行键）。
+ * 必须**整条**匹配 —— 带别的意思的句子（"帮我写个运行的代码"）照常发给 AI，不劫持正常对话。
+ */
+private val RUN_INTENT_ZH = Regex(
+    "^(帮我|给我|再|再次|直接|现在|就)*(运行|执行|跑)(一下|起来|吧|它|这个|这段|代码|程序|这段代码|这个代码)?$",
+)
+private val RUN_INTENT_EN = setOf("run", "runit", "runcode", "runthis", "runthecode", "runagain")
+
+internal fun isRunIntent(text: String): Boolean {
+    val t = text.replace(Regex("\\s+"), "").lowercase()
+    return RUN_INTENT_ZH.matches(t) || t in RUN_INTENT_EN
+}
+
 /** 语言 → 能力（可否运行）与落盘文件名（扩展名/MIME）映射。 */
 internal object CodeLanguage {
-    enum class Runnable { SHELL, PYTHON, NODE }
+    enum class Runnable { SHELL, PYTHON, NODE, JAVA }
 
     data class FileKind(val namePrefix: String, val ext: String, val mime: String)
 
@@ -401,6 +546,7 @@ internal object CodeLanguage {
         "javascript" to Runnable.NODE,
         "js" to Runnable.NODE,
         "node" to Runnable.NODE,
+        "java" to Runnable.JAVA,
     )
 
     fun fileKind(lang: String): FileKind = when (lang) {

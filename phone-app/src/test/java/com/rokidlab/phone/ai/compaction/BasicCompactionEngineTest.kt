@@ -62,11 +62,12 @@ class BasicCompactionEngineTest {
     }
 
     @Test
-    fun `A3 字符超上限时压缩并保证总量回落`() {
-        val h = historyOf(4, answer = "R".repeat(1500))
-        val r = requireNotNull(engine().compactIfNeeded(h)) { "字符超上限必须触发压缩" }
-        val chars = h.sumOf { it.content.length }
-        assertTrue("总字符应 ≤ ${policy.maxChars}，实际 $chars", chars <= policy.maxChars)
+    fun `A3 token超上限时压缩并保证总量回落`() {
+        // 4 轮 × 3000 个「很」≈ 1.2 万 token，远超默认 4000（重复汉字在 cl100k 下也 ≈1 字 1 token）
+        val h = historyOf(4, answer = "很".repeat(3000))
+        val r = requireNotNull(engine().compactIfNeeded(h)) { "token 超上限必须触发压缩" }
+        val tokens = h.sumOf { TokenMeter.count(it.content) }
+        assertTrue("总 token 应 ≤ ${policy.maxTokens}，实际 $tokens", tokens <= policy.maxTokens)
         assertTrue(h.size <= policy.maxMessages)
         assertEquals("压缩后最旧应成为 system 摘要", "system", h[0].role)
         assertTrue(h[0].content.startsWith("[更早对话摘要]"))
@@ -81,7 +82,10 @@ class BasicCompactionEngineTest {
             h.add(ChatMessage(role = "assistant", content = "答案" + "很".repeat(800)))
         }
         engine().compactIfNeeded(h)
-        assertTrue(h.sumOf { it.content.length } <= policy.maxChars)
+        assertTrue(
+            "总 token 应 ≤ ${policy.maxTokens}，实际 ${h.sumOf { TokenMeter.count(it.content) }}",
+            h.sumOf { TokenMeter.count(it.content) } <= policy.maxTokens,
+        )
         assertTrue(h.size <= policy.maxMessages)
         assertTrue("不能把上下文清空", h.isNotEmpty())
         assertEquals("最新回复应保留", "答案" + "很".repeat(800), h.last().content)
@@ -106,17 +110,18 @@ class BasicCompactionEngineTest {
 
     @Test
     fun `A6 小窗口策略下摘要同步缩小且仍然收敛`() {
-        // 本地 4096 窗口：历史预算被压到 983 字符，摘要上限随之缩到 245
+        // 本地 4096 窗口：历史预算被压到 614 token，摘要上限随之缩到 153 字符。
+        // 每轮控制在 ~285 token：给"最后一条永不压（size≤2 兜底）"的语义留出收敛空间
         val p = CompactionPolicy.forWindow(4096)
         val h = mutableListOf<ChatMessage>()
         repeat(10) { i ->
-            h.add(ChatMessage(role = "user", content = "问题$i" + "问".repeat(300)))
-            h.add(ChatMessage(role = "assistant", content = "答案" + "答".repeat(300)))
+            h.add(ChatMessage(role = "user", content = "问题$i" + "问".repeat(140)))
+            h.add(ChatMessage(role = "assistant", content = "答案" + "答".repeat(140)))
         }
         engine(p).compactIfNeeded(h)
         assertTrue(
-            "收紧后的总字符必须落在收紧后的预算内，实际 ${h.sumOf { it.content.length }} / ${p.maxChars}",
-            h.sumOf { it.content.length } <= p.maxChars,
+            "收紧后的总 token 必须落在收紧后的预算内，实际 ${h.sumOf { TokenMeter.count(it.content) }} / ${p.maxTokens}",
+            h.sumOf { TokenMeter.count(it.content) } <= p.maxTokens,
         )
         assertTrue(
             "摘要必须跟着缩（小窗口下 800 字符摘要是窗口的 1/5），实际 ${h[0].content.length} / ${p.digestMaxChars}",

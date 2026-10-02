@@ -7,14 +7,23 @@ import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.hardware.camera2.CameraAccessException
+import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.ContactsContract
@@ -190,6 +199,11 @@ object PhoneTools {
     /** [sendSms] 等系统发送回执的最长时间 */
     private const val SMS_SENT_TIMEOUT_MS = 8000L
 
+    /** [sendSms] 回执 action 序号：并发两次发短信时 action 必须唯一，
+     *  否则固定 action + 固定 requestCode 会拿到同一条 one-shot PendingIntent（第二次发送永远等不到回执），
+     *  且两个 receiver 注册在同一 action 上会互相收到对方的回执 */
+    private val SMS_ACTION_SEQ = AtomicInteger(0)
+
     /**
      * 发短信：参数是手机号直接发；是姓名则查通讯录（唯一命中发出，多个命中返回候选）。
      *
@@ -257,7 +271,8 @@ object PhoneTools {
 
             val code = AtomicInteger(Int.MIN_VALUE)
             val latch = CountDownLatch(1)
-            val action = "com.rokidlab.phone.SMS_SENT"
+            // 每次调用唯一 action：并发调用互不串台（见 SMS_ACTION_SEQ 注释）
+            val action = "com.rokidlab.phone.SMS_SENT.${SMS_ACTION_SEQ.incrementAndGet()}"
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(c: Context?, i: Intent?) {
                     code.set(resultCode)
@@ -381,7 +396,9 @@ object PhoneTools {
             } else if (minutesFromNow != null && minutesFromNow > 0) {
                 val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
                     putExtra(AlarmClock.EXTRA_MESSAGE, label)
-                    putExtra(AlarmClock.EXTRA_LENGTH, minutesFromNow * 60)
+                    // EXTRA_LENGTH 契约是 int：Long 直接 putExtra 会让时钟 App getIntExtra
+                    // 拿到默认值 → 倒计时实际没设上却回复成功（假成功）
+                    putExtra(AlarmClock.EXTRA_LENGTH, (minutesFromNow * 60).coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
                     putExtra(AlarmClock.EXTRA_SKIP_UI, true)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
@@ -536,6 +553,147 @@ object PhoneTools {
         }
     }
 
+    // ═══════════════════════════ 导航 / 卸载 / 手电筒 / 计步 ═══════════════════════════
+
+    /**
+     * 打开地图 / 发起导航（`geo:` URI 交给系统挑选地图应用）。
+     *
+     * `geo:0,0?q=<目的地>` 是各地图 App 的通用入口；mode 以附加查询参数带上
+     * （不认识该参数的应用会忽略它，不影响 q 的解析），目的地为空则只打开地图。
+     */
+    fun openNavigation(context: Context, destination: String, mode: String): String {
+        ensureCanLaunchUi(context)?.let { return it }
+        return try {
+            val dest = destination.trim()
+            val uri = if (dest.isEmpty()) {
+                Uri.parse("geo:0,0")
+            } else {
+                val flag = when (mode.trim().lowercase()) {
+                    "walk" -> "w"
+                    "bike" -> "b"
+                    "transit" -> "r"
+                    else -> "d"
+                }
+                Uri.parse("geo:0,0?q=" + Uri.encode(dest) + "&mode=" + flag)
+            }
+            context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            if (dest.isEmpty()) "已打开手机地图" else "已在地图中定位「$dest」，请在地图上确认路线后开始导航"
+        } catch (e: ActivityNotFoundException) {
+            "手机上没有安装地图应用，无法导航"
+        } catch (e: Exception) {
+            "打开地图失败：${e.message}"
+        }
+    }
+
+    /**
+     * 请求卸载手机应用：走系统 `ACTION_DELETE`，**真正的卸载由用户在系统确认框里点头**。
+     * 包名缺失时按应用名解析（与打开应用同一套 label 匹配）。
+     */
+    fun uninstallPhoneApp(context: Context, packageName: String, appName: String): String {
+        var pkg = packageName.trim()
+        if (pkg.isEmpty()) {
+            val name = appName.trim()
+            if (name.isEmpty()) return "请提供要卸载的应用包名或名称"
+            pkg = resolvePackageByLabel(context, name)
+                ?: return "手机上没有找到应用「$name」，可先用 list_phone_apps 查一下包名"
+        }
+        ensureCanLaunchUi(context)?.let { return it }
+        return try {
+            val intent = Intent(Intent.ACTION_DELETE, Uri.parse("package:$pkg"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            "已请求卸载「$pkg」，请在弹出的系统确认框里确认"
+        } catch (e: ActivityNotFoundException) {
+            "系统不支持应用卸载请求"
+        } catch (e: Exception) {
+            "请求卸载失败：${e.message}"
+        }
+    }
+
+    /** 应用名 → 包名（取带启动入口的应用：精确命中优先，其次双向包含） */
+    private fun resolvePackageByLabel(context: Context, query: String): String? {
+        val pm = context.packageManager
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val candidates = LinkedHashMap<String, String>()
+        pm.queryIntentActivities(launcherIntent, 0).forEach { ri ->
+            val label = runCatching { ri.loadLabel(pm).toString() }.getOrDefault("")
+            if (label.isNotBlank()) candidates.putIfAbsent(label, ri.activityInfo.packageName)
+        }
+        return candidates[query]
+            ?: candidates.entries.firstOrNull {
+                it.key.contains(query, ignoreCase = true) || query.contains(it.key, ignoreCase = true)
+            }?.value
+    }
+
+    /** 开关手电筒（闪光灯补光）；无闪光灯机型 / 被相机占用时如实回报 */
+    fun setFlashlight(context: Context, enabled: Boolean): String {
+        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH)) {
+            return "这台手机没有闪光灯，无法使用手电筒"
+        }
+        return try {
+            val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+                ?: return "这台手机没有闪光灯，无法使用手电筒"
+            cm.setTorchMode("0", enabled)
+            if (enabled) "手电筒已打开" else "手电筒已关闭"
+        } catch (e: CameraAccessException) {
+            Log.w(TAG, "torch unavailable (camera in use?), enabled=$enabled", e)
+            "闪光灯当前不可用（可能正被相机占用），请稍后再试"
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "no flash unit for camera 0", e)
+            "这台手机没有闪光灯，无法使用手电筒"
+        } catch (e: Exception) {
+            Log.w(TAG, "set torch mode failed, enabled=$enabled", e)
+            "${if (enabled) "打开" else "关闭"}手电筒失败：${e.message}"
+        }
+    }
+
+    /**
+     * 读取计步传感器（`TYPE_STEP_COUNTER`）：**自开机以来的累计步数**，重启清零 ——
+     * 口径必须如实回报，不能谎称"今日步数"。一次性监听：取到首个事件立即注销。
+     */
+    fun readStepCount(context: Context): String {
+        // 缺身体活动权限统一走权限桥：现场拉起系统授权框（后台退通知栏兜底），不自己写"去设置里开"
+        PermissionBridge.ensure(
+            context,
+            context.getString(R.string.permission_reason_activity),
+            AppPermission.ACTIVITY_RECOGNITION,
+        )?.let { return it }
+
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+            ?: return "这台手机不支持计步传感器"
+        val sensor = sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+            ?: return "这台手机不支持计步传感器"
+        val latch = CountDownLatch(1)
+        var steps = -1f
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                if (event.values.isNotEmpty()) steps = event.values[0]
+                latch.countDown()
+            }
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+        }
+        // 工具跑在无 Looper 的工作线程上，事件投递必须显式指定主线程 Handler
+        val registered = try {
+            sm.registerListener(
+                listener, sensor, SensorManager.SENSOR_DELAY_NORMAL,
+                Handler(Looper.getMainLooper()),
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "register step counter listener failed", e)
+            false
+        }
+        if (!registered) return "计步传感器不可用，请稍后再试"
+        try {
+            latch.await(2, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } finally {
+            sm.unregisterListener(listener)
+        }
+        if (steps < 0) return "暂时没有取到计步数据，请稍后再试"
+        return "自开机以来累计 ${steps.toLong()} 步（重启清零，可作今日活动量参考）"
+    }
+
     // ═══════════════════════════ 日历 ═══════════════════════════
 
     /** 解析日期词 → 当天 00:00 的 Calendar；失败返回 null（统一清零时分秒） */
@@ -553,14 +711,18 @@ object PhoneTools {
             d == "后天" -> cal.also { it.add(Calendar.DAY_OF_YEAR, 2) }
             d.matches(Regex("^\\d{4}-\\d{1,2}-\\d{1,2}$")) -> {
                 val parts = d.split("-").map { it.toInt() }
+                if (parts[1] !in 1..12 || parts[2] !in 1..31) return null
                 cal.set(parts[0], parts[1] - 1, parts[2])
+                // 宽松日历会把不存在的日期静默滚动（2-30 → 3-2），解算后月份对不上即拒绝
+                if (cal.get(Calendar.MONTH) != parts[1] - 1 || cal.get(Calendar.DAY_OF_MONTH) != parts[2]) return null
                 cal
             }
             d.matches(Regex("^\\d{1,2}-\\d{1,2}$")) -> {
-                // 「9-10」默认当年
+                // 「9-10」默认当年。范围校验 + 解算后核对，防 2-30 之类被宽松日历滚走
                 val parts = d.split("-").map { it.toInt() }
-                cal.set(Calendar.MONTH, parts[0] - 1)
-                cal.set(Calendar.DAY_OF_MONTH, parts[1])
+                if (parts[0] !in 1..12 || parts[1] !in 1..31) return null
+                cal.set(cal.get(Calendar.YEAR), parts[0] - 1, parts[1])
+                if (cal.get(Calendar.MONTH) != parts[0] - 1 || cal.get(Calendar.DAY_OF_MONTH) != parts[1]) return null
                 cal
             }
             else -> null
@@ -693,5 +855,212 @@ object PhoneTools {
         } catch (e: Exception) {
             "创建日程失败：${e.message}"
         }
+    }
+
+    // ═══════════════════ 日历删 / 改（R4，2026-09-30） ═══════════════════
+    // 判据（对齐 delete_knowledge_doc 的先例）：删除不可恢复 ⇒ 独立工具 + EXTERNAL + BLOCK，
+    // 不并进 manage_calendar（那会把 query/create 一起拉进确认闸门，「记个日程」也要弹确认）。
+
+    /** 日历事件定位单元：id 是删改的精确句柄，title/time 是确认摘要与候选列表的展示素材 */
+    internal data class CalEventRef(
+        val id: Long,
+        val title: String,
+        val start: Long,
+        val end: Long,
+    )
+
+    /** WRITE_CALENDAR 闸门：缺权限时自动拉起系统授权界面，拿到可读提示（非 null）即应原样返回 */
+    private fun ensureCalendarWrite(context: Context): String? =
+        if (has(context, Manifest.permission.WRITE_CALENDAR)) null
+        else PermissionBridge.ensure(
+            context,
+            context.getString(R.string.permission_reason_calendar),
+            AppPermission.CALENDAR_WRITE,
+        ) ?: missingPermTip("日历")
+
+    /**
+     * 查某天（或全日历范围）的事件原行，供删改前定位。
+     * 用 Events 表直查（不是 Instances）：删改要的是**事件本体**的 id，
+     * Instances 是展开后的实例视图（重复日程会展开成多行），拿它改会改错对象。
+     */
+    internal fun findEventsOnDay(context: Context, date: String?, keyword: String?): List<CalEventRef> {
+        val dayStart = parseDayStart(date) ?: return emptyList()
+        val dayEnd = (dayStart.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 1) }
+        val sel = "${CalendarContract.Events.DTSTART} >= ? AND ${CalendarContract.Events.DTSTART} < ?"
+        val args = arrayOf(dayStart.timeInMillis.toString(), dayEnd.timeInMillis.toString())
+        val out = mutableListOf<CalEventRef>()
+        context.contentResolver.query(
+            CalendarContract.Events.CONTENT_URI,
+            arrayOf(
+                CalendarContract.Events._ID,
+                CalendarContract.Events.TITLE,
+                CalendarContract.Events.DTSTART,
+                CalendarContract.Events.DTEND,
+            ),
+            sel,
+            args,
+            "${CalendarContract.Events.DTSTART} ASC",
+        )?.use { c ->
+            while (c.moveToNext()) {
+                val title = c.getString(1) ?: ""
+                if (!keyword.isNullOrBlank() && !title.contains(keyword.trim(), ignoreCase = true)) continue
+                out.add(CalEventRef(c.getLong(0), title.ifBlank { "(无标题)" }, c.getLong(2), c.getLong(3)))
+            }
+        }
+        return out
+    }
+
+    /**
+     * 删除一个日历日程（**不可恢复**）。定位方式二选一：
+     * `eventId`（queryCalendar 列表拿到的 id，精确）或 `date`+`title` 关键词（模糊）。
+     * 关键词命中多个时**不删**，把候选连 id 列出来让模型带 eventId 重调 ——
+     * 模糊匹配 + 静默删错，是这类接口最坏的失败形状。
+     */
+    fun deleteCalendarEvent(context: Context, eventId: Long, date: String?, title: String?): String {
+        ensureCalendarWrite(context)?.let { return it }
+        return try {
+            val target: CalEventRef = when {
+                eventId > 0 -> loadEvent(context, eventId)
+                    ?: return "没有找到 id=$eventId 的日程（它可能已被删除；用 queryCalendar 确认现状后再试）"
+                else -> {
+                    if (title.isNullOrBlank()) {
+                        return "请指明要删除的日程：传 eventId（最稳妥）或 date+title 关键词；不要不带条件地整日清除"
+                    }
+                    val hits = findEventsOnDay(context, date, title)
+                    when {
+                        hits.isEmpty() -> return "「$date」没有找到标题含「$title」的日程；用 queryCalendar 确认日程确实存在"
+                        hits.size > 1 -> return "「$title」匹配到 ${hits.size} 个日程，为避免删错请确认后用 eventId 精确删除：\n" +
+                            hits.joinToString("\n") { fmtEventRef(it) }
+                        else -> hits[0]
+                    }
+                }
+            }
+            val uri = android.content.ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, target.id)
+            val deleted = context.contentResolver.delete(uri, null, null)
+            if (deleted > 0) {
+                "已删除日程「${target.title}」（${fmtRange(target.start, target.end)}）"
+            } else {
+                "删除失败（日程可能来自只读账户或已被删除）"
+            }
+        } catch (e: Exception) {
+            "删除日程失败：${e.message}"
+        }
+    }
+
+    /**
+     * 修改一个日历日程（可再次编辑，属本机可撤销操作 ⇒ LOCAL 档不走确认闸门）。
+     * 只更新用户明确给的字段；改时间时未给日期则沿用原日期，未给时刻则沿用原时刻。
+     */
+    fun updateCalendarEvent(
+        context: Context,
+        eventId: Long,
+        date: String?,
+        title: String?,
+        newTitle: String?,
+        newDate: String?,
+        newStartTime: String?,
+        newDurationMinutes: Int?,
+        newNote: String?,
+    ): String {
+        ensureCalendarWrite(context)?.let { return it }
+        return try {
+            val target: CalEventRef = when {
+                eventId > 0 -> loadEvent(context, eventId)
+                    ?: return "没有找到 id=$eventId 的日程（它可能已被删除；用 queryCalendar 确认现状后再试）"
+                else -> {
+                    if (title.isNullOrBlank()) {
+                        return "请指明要修改的日程：传 eventId（最稳妥）或 date+title 关键词"
+                    }
+                    val hits = findEventsOnDay(context, date, title)
+                    when {
+                        hits.isEmpty() -> return "「$date」没有找到标题含「$title」的日程；用 queryCalendar 确认日程确实存在"
+                        hits.size > 1 -> return "「$title」匹配到 ${hits.size} 个日程，为避免改错请确认后用 eventId 精确修改：\n" +
+                            hits.joinToString("\n") { fmtEventRef(it) }
+                        else -> hits[0]
+                    }
+                }
+            }
+            // 读取原备注：newNote 未给时保持原值（不覆盖成空串）
+            var origNote = ""
+            context.contentResolver.query(
+                android.content.ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, target.id),
+                arrayOf(CalendarContract.Events.DESCRIPTION),
+                null, null, null,
+            )?.use { c -> if (c.moveToFirst()) origNote = c.getString(0) ?: "" }
+
+            val origBegin = java.util.Calendar.getInstance().apply { timeInMillis = target.start }
+            val durationMin = newDurationMinutes
+                ?: ((target.end - target.start) / 60_000L).toInt().takeIf { it > 0 }
+                ?: 60
+            // 日期基座：给了 newDate 用新日期，否则沿用原事件的日期
+            val begin = if (newDate.isNullOrBlank()) {
+                origBegin.clone() as java.util.Calendar
+            } else {
+                val d = parseDayStart(newDate) ?: return "新日期格式不正确，请用 today/tomorrow 或 YYYY-MM-DD"
+                // 只改日期不给新时刻：parseDayStart 返回当天 00:00，不回填原事件的时分秒
+                // 会把日程静默改到凌晨零点（注释承诺"沿用原时刻"仅在不给日期时成立）
+                d.set(java.util.Calendar.HOUR_OF_DAY, origBegin.get(java.util.Calendar.HOUR_OF_DAY))
+                d.set(java.util.Calendar.MINUTE, origBegin.get(java.util.Calendar.MINUTE))
+                d.set(java.util.Calendar.SECOND, origBegin.get(java.util.Calendar.SECOND))
+                d
+            }
+            // 时刻：给了 newStartTime 用新时刻，否则沿用原事件的时刻
+            if (!newStartTime.isNullOrBlank()) {
+                val m = Regex("^(\\d{1,2}):(\\d{1,2})$").find(newStartTime.trim())
+                    ?: return "新开始时间格式不正确，请用 24 小时制 HH:mm，例如 14:30"
+                val h = m.groupValues[1].toInt()
+                val min = m.groupValues[2].toInt()
+                if (h !in 0..23 || min !in 0..59) return "时间超出范围（00:00 ~ 23:59）"
+                begin.set(java.util.Calendar.HOUR_OF_DAY, h)
+                begin.set(java.util.Calendar.MINUTE, min)
+                begin.set(java.util.Calendar.SECOND, 0)
+            }
+            val end = (begin.clone() as java.util.Calendar).apply {
+                add(java.util.Calendar.MINUTE, durationMin.coerceIn(5, 24 * 60))
+            }
+            val values = android.content.ContentValues().apply {
+                if (!newTitle.isNullOrBlank()) put(CalendarContract.Events.TITLE, newTitle.trim())
+                if (newNote != null) put(CalendarContract.Events.DESCRIPTION, newNote) else put(CalendarContract.Events.DESCRIPTION, origNote)
+                put(CalendarContract.Events.DTSTART, begin.timeInMillis)
+                put(CalendarContract.Events.DTEND, end.timeInMillis)
+            }
+            val uri = android.content.ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, target.id)
+            val updated = context.contentResolver.update(uri, values, null, null)
+            if (updated > 0) {
+                val shownTitle = newTitle?.trim()?.takeIf { it.isNotBlank() } ?: target.title
+                "已更新日程「$shownTitle」：现在为 ${fmtRange(begin.timeInMillis, end.timeInMillis)}" +
+                    if (newNote != null) "，备注已更新" else ""
+            } else {
+                "更新失败（日程可能来自只读账户或已被删除）"
+            }
+        } catch (e: Exception) {
+            "修改日程失败：${e.message}"
+        }
+    }
+
+    /** 按 id 读单条事件（删改共用的精确路径）；不存在返回 null */
+    private fun loadEvent(context: Context, eventId: Long): CalEventRef? =
+        context.contentResolver.query(
+            android.content.ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
+            arrayOf(
+                CalendarContract.Events._ID,
+                CalendarContract.Events.TITLE,
+                CalendarContract.Events.DTSTART,
+                CalendarContract.Events.DTEND,
+            ),
+            null, null, null,
+        )?.use { c ->
+            if (c.moveToFirst()) {
+                CalEventRef(c.getLong(0), (c.getString(1) ?: "").ifBlank { "(无标题)" }, c.getLong(2), c.getLong(3))
+            } else null
+        }
+
+    /** 候选列表行：模型据此拿 eventId 回调（id 是唯一稳定句柄） */
+    private fun fmtEventRef(e: CalEventRef): String = "· id=${e.id}「${e.title}」${fmtRange(e.start, e.end)}"
+
+    private fun fmtRange(startMs: Long, endMs: Long): String {
+        val df = SimpleDateFormat("M月d日 HH:mm", Locale.CHINA)
+        val tf = SimpleDateFormat("HH:mm", Locale.CHINA)
+        return "${df.format(startMs)} ~ ${tf.format(endMs)}"
     }
 }

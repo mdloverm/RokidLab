@@ -258,6 +258,44 @@ object AgentTaskStore {
             "若用户要放弃该任务，调用 clear_agent_task。"
     }
 
+    /**
+     * 计划驱动续做提示（todo 驱动重入，2026-10-02，补评估 C 档 #7）。
+     *
+     * 与 [pendingContext] 的分工：pendingContext 是「跨轮续做」—— 下一轮对话开始时注入，
+     * 模型自行决定是否接着做；本方法是「轮内重入」—— 模型给出收尾回复但计划未完成时，
+     * 由主循环拉回来继续干，措辞更直接（点名剩余步骤 + 要求逐步 update_plan）。
+     *
+     * 返回 null = 无活跃计划 / 已完成 / 过期 / 步骤全部 done，调用方按正常收尾处理。
+     */
+    fun planContinuationPrompt(context: Context): String? {
+        val snap = load(context) ?: return null
+        if (snap.status == STATUS_DONE) return null
+        if (System.currentTimeMillis() - snap.updatedAt > TTL_MS) return null
+        val pending = snap.steps.filter { it.status != "done" }
+        if (pending.isEmpty()) return null
+        val sb = StringBuilder("你的任务计划还有未完成的步骤，本轮还不能收尾，请继续执行：\n")
+        pending.forEach { s ->
+            sb.append(mark(s.status)).append(" ").append(s.title).append("\n")
+        }
+        sb.append(
+            "从「→」那一步接着做（已完成的不要重做）；每完成一步就用 update_plan 更新一次状态，" +
+                "全部完成后把所有步骤标为 done，最后用一两句中文总结。",
+        )
+        if (snap.artifacts.isNotEmpty()) {
+            val byProject = snap.artifacts.groupBy { it.project }
+            sb.append("\n已产出（可直接用，不要重新生成）：")
+            sb.append(
+                byProject.entries.joinToString("；") { (p, list) ->
+                    "$p/${list.joinToString("、") { it.file }}"
+                },
+            )
+        }
+        if (!snap.lastError.isNullOrBlank()) {
+            sb.append("\n上次中断原因：").append(snap.lastError)
+        }
+        return sb.toString().trimEnd()
+    }
+
     private fun render(snap: Snapshot): String {
         val sb = StringBuilder()
         if (snap.goal.isNotBlank()) sb.append("用户原话：").append(snap.goal).append("\n")

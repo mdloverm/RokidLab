@@ -957,7 +957,7 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 | 本地模型 | `SESSION_LOCAL_DOMAINS` = 空集 | 本地小模型背不动数十个 schema |
 | AIUI / 代码生成 | `SESSION_AIUI_DOMAINS` = aiui + files + info | 命中技能后切到子集省 token |
 
-**执行（`ai/tools/`）**：`ToolRegistry.execute` 解析参数后按 `toolNames` 路由到 15 个**静态** `ToolProvider` 之一（Info / Knowledge / Glasses / Timer / Media / Display / Web / Files / **Shell** / Aiui / Phone / Status / Subagent / Vision / **Motion**；接口 `ToolProvider.kt` + schema `ToolSchemas.kt`），外加 1 个**动态** provider（`McpToolProvider`，工具集运行期才知道，见 §8.2.1）。
+**执行（`ai/tools/`）**：`ToolRegistry.execute` 解析参数后按 `toolNames` 路由到 20 个**静态** `ToolProvider` 之一（Info / Knowledge / Glasses / Timer / Media / Display / Web / Files / **Shell** / Aiui / Phone / Status / Subagent / Vision / **Motion** / Script / ScreenOp / WebPreview / Hearing / **Browser**；接口 `ToolProvider.kt` + schema `ToolSchemas.kt`），外加 1 个**动态** provider（`McpToolProvider`，工具集运行期才知道，见 §8.2.1）。
 **新增工具 = 在对应 Provider 的 `tools()` 里加一条 `ToolEntry` + 在 `execute` 加一个分支**（风险档/副作用/要眼镜/过程文案都在那条声明里，六张表由它派生）；网关 / 协议 / JS / skill 全不动。
 ⚠️ 但**模型可见文案仍是手工同步的**：`OpenAiService` 系统提示词、其他 schema 的交叉引用、`assets/skills/aiui-dev/lab-runtime.md`。漏了这些不会编译错，只会让模型不知道该在什么时候用这个工具。
 ⚠️ **改完必跑** `skills/rokidlab-chat-standalone-mode/scripts/check_tool_wiring.py`：它守住「每个 provider 的 `toolNames` ↔ `tools()` 双向相等」「声明必带 risk/schema/statusText」「字符串资源存在」等自洽性。工具名支持三种写法（字面量 / `接收者.常量` / 同 object 内**裸常量名**）。

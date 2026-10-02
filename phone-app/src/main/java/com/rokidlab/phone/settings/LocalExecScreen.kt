@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Coffee
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.FolderShared
@@ -63,7 +64,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 失败原因留在屏幕上（[errorMsg]），不吞掉。
  */
 
-private enum class Task { NONE, INSTALL, PYTHON, NODE, GIT, UV, SELFTEST, UNINSTALL }
+private enum class Task { NONE, INSTALL, PYTHON, NODE, GIT, UV, JAVA, SELFTEST, UNINSTALL }
 
 /**
  * 一张组件卡在安装中要显示的东西。
@@ -144,8 +145,13 @@ internal fun LocalExecScreen(onBack: () -> Unit) {
         }
     }
 
-    // ── 走 apt 装组件（Python / Git 共用；Node.js 走下载，见 installNode）──
-    fun installAptAddon(target: Task, packages: List<String>, verify: String) {
+    // ── 走 apt 装组件（Python / Git / Java 共用；Node.js 走下载，见 installNode）──
+    fun installAptAddon(
+        target: Task,
+        packages: List<String>,
+        verify: String,
+        timeoutSec: Long = 900L,
+    ) {
         if (task != Task.NONE) return
         task = target
         scope.launch {
@@ -153,7 +159,7 @@ internal fun LocalExecScreen(onBack: () -> Unit) {
             report = null
             addon = null
             val r = withContext(Dispatchers.IO) {
-                ProotShell.installPackages(ctx, packages) { p ->
+                ProotShell.installPackages(ctx, packages, timeoutSec = timeoutSec) { p ->
                     addon = AddonProgress(p.percent, aptPhaseLabel(ctx, p), p.detail)
                 }
             }
@@ -446,6 +452,32 @@ internal fun LocalExecScreen(onBack: () -> Unit) {
                         Task.GIT,
                         listOf("git", "ca-certificates"),
                         "command -v git && git --version",
+                    )
+                },
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            // ── Java（OpenJDK 21）：apt 大件，排最后 —— 下载 82 MB / 装后 290 MB，属低频重型组件。
+            //    apt 源装机时已切清华 ubuntu-ports（ensureGuestConfig），下载走国内镜像；
+            //    openjdk 的 update-alternatives 需要 /usr/share/man/man1（ubuntu-base 缺），
+            //    ensureGuestDirs 每次 runScript 前幂等补齐，postinst 不会再挂在 dpkg 配置阶段 ──
+            AddonCard(
+                icon = Icons.Outlined.Coffee,
+                title = ctx.getString(R.string.local_exec_java_name),
+                hint = ctx.getString(
+                    if (status.javaReady) R.string.local_exec_java_ready_hint
+                    else R.string.local_exec_java_hint,
+                ),
+                ready = status.javaReady,
+                progress = if (task == Task.JAVA) addon else null,
+                enabled = task == Task.NONE,
+                onInstall = {
+                    installAptAddon(
+                        Task.JAVA,
+                        listOf("openjdk-21-jdk-headless", "ca-certificates"),
+                        "command -v java && java -version 2>&1 | head -1",
+                        timeoutSec = 1800L,
                     )
                 },
             )
@@ -891,6 +923,7 @@ private data class StatusSnapshot(
     val nodeReady: Boolean = false,
     val gitReady: Boolean = false,
     val uvReady: Boolean = false,
+    val javaReady: Boolean = false,
     val sharePublic: Boolean = false,
     val accessOn: Boolean = false,
 ) {
@@ -913,7 +946,7 @@ private data class StatusSnapshot(
 private suspend fun readStatus(ctx: Context): StatusSnapshot = withContext(Dispatchers.IO) {
     val installed = ProotInstaller.isInstalled(ctx)
     val share = ProotShell.shareStatus(ctx)
-    val probe = if (installed) ProotShell.probeCommands(ctx, listOf("python3", "node", "git", "uv")) else emptyMap()
+    val probe = if (installed) ProotShell.probeCommands(ctx, listOf("python3", "node", "git", "uv", "java")) else emptyMap()
     StatusSnapshot(
         installed = installed,
         version = if (installed) ProotInstaller.installedVersion(ctx) else null,
@@ -923,6 +956,7 @@ private suspend fun readStatus(ctx: Context): StatusSnapshot = withContext(Dispa
         nodeReady = probe["node"] == true,
         gitReady = probe["git"] == true,
         uvReady = probe["uv"] == true,
+        javaReady = probe["java"] == true,
         sharePublic = share.publicDownload,
         accessOn = LabAccessibility.isEnabled(ctx),
     )

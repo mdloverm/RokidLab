@@ -153,8 +153,8 @@ object AiuiAppRegistry {
     fun purgeObsoleteFiles(context: Context) {
         namedThread("aiui-registry-io", start = true) {
             PURGED_AGENT_IDS.forEach { id ->
-                runCatching { AiuiProject.packageFile(context, id).takeIf { it.isFile }?.delete() }
-                    .onSuccess { Log.i(TAG, "purged local package: $id.aix") }
+                runCatching { AiuiProject.deletePackageFiles(context, id) }
+                    .onSuccess { if (it > 0) Log.i(TAG, "purged local package: $id.aix x$it") }
                 runCatching {
                     val err = AiuiProject.deleteAixOnGlasses(context, id)
                     if (err == null) Log.i(TAG, "purged glasses package: $id.aix")

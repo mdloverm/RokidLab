@@ -59,6 +59,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -87,6 +88,7 @@ import com.rokidlab.phone.ai.ContextUsage
 import com.rokidlab.phone.aiui.AiuiDemoCard
 import com.rokidlab.phone.aiui.AiuiDemoController
 import com.rokidlab.phone.app.LabApplication
+import androidx.compose.material.icons.outlined.Terminal
 import com.rokidlab.phone.design.BrewBg
 import com.rokidlab.phone.design.BrewBorder
 import com.rokidlab.phone.design.BrewChat
@@ -95,8 +97,11 @@ import com.rokidlab.phone.design.BrewPanel
 import com.rokidlab.phone.design.BrewPanelHi
 import com.rokidlab.phone.design.BrewRed
 import com.rokidlab.phone.design.BrewShapeLarge
+import com.rokidlab.phone.design.BrewSuccess
+import com.rokidlab.phone.design.BrewText
 import com.rokidlab.phone.design.BrewTextBright
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
+import com.rokidlab.phone.platform.InteractiveRunManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -175,6 +180,14 @@ internal data class ChatMsg(
     val fileName: String? = null,
     /** 附件字符数（文件卡显示"约 N 字"；null = 未知，例如二进制或还没读过） */
     val fileChars: Int? = null,
+    /**
+     * 非空 = 这是一条**运行卡片**消息（本地交互式程序的输出流，[InteractiveRunManager]）。
+     *
+     * ★ **刻意不落盘**：运行是临时的（程序结束卡片只留最终输出，但程序/输出在会话重放里
+     *   没有意义），且输出高频原地更新 —— 走 [ChatStateHolder.addRunCard] 的独立入口，
+     *   不进 [ChatStateHolder.persist]。会话重载后运行卡自然消失（和"过程"不落盘同理）。
+     */
+    val runId: String? = null,
 )
 
 /**
@@ -303,6 +316,14 @@ internal fun ChatModule(app: LabApplication) {
     // 「本机模式」开关（不连眼镜也能聊）：状态源是 LabApplication（每次发送时读取），
     // 这里只做 UI 镜像，因此首次组合时取当前值即可。
     var localOnly by remember { mutableStateOf(app.chatLocalOnlyEnabled) }
+    // ── 程序模式：输入直接发给运行中的本地程序（见 InteractiveRunManager）──
+    // 最新启动的活跃程序；没有活跃程序时 programMode 自动退回（LaunchedEffect 复位）
+    val activeRuns = com.rokidlab.phone.platform.InteractiveRunManager.runs.collectAsState()
+    val latestRun = activeRuns.value.lastOrNull { it.alive }
+    var programMode by remember { mutableStateOf(false) }
+    LaunchedEffect(latestRun) {
+        if (latestRun == null) programMode = false
+    }
     // 环境音持续录入（顶栏耳朵按钮）：默认关、状态不持久。状态源在协调器（snapshot state），
     // 静默 10s 自动停等后台触发的关闭也会自动反映到 UI，无需手动镜像。
     val ambientActive = runCatching { app.cxrL }.getOrNull()?.ambientListen?.uiActive ?: false
@@ -752,6 +773,51 @@ internal fun ChatModule(app: LabApplication) {
         dispatchAi(text, turnBefore, contextText = context, imageBase64 = img?.base64Jpeg)
     }
 
+    /**
+     * 聊天里说「运行」→ 直接执行会话里最近一个可运行代码块（免点运行键、零 token）。
+     * 返回 false = 不是运行指令 / 没有可运行代码块 ⇒ 照常走 AI 派发，不劫持正常对话
+     * （"运行"也可能是想让 AI 用 run_shell 干活 —— 没有代码块时不拦）。
+     * 用户消息 turn=null（同程序模式先例，不进 AI 事件流）；启动成功自动进程序模式，
+     * 后续聊天输入即直发程序 stdin。脚本封装与运行键共用 [buildRunScript]，行为完全一致。
+     */
+    fun tryRunLastCode(text: String): Boolean {
+        if (!isRunIntent(text)) return false
+        val block = findLastRunnableCode(ChatStateHolder.messages) ?: return false
+        val runnable = CodeLanguage.support[block.lang] ?: return false
+        appendMsg(true, text)
+        input = ""
+        val label = block.lang.uppercase()
+        val script = buildRunScript(ctx, runnable, block.code)
+        scope.launch(Dispatchers.IO) {
+            var rid: String? = null
+            val rs = com.rokidlab.phone.platform.InteractiveRunManager.start(ctx, script, label) { r, finishedRun ->
+                scope.launch(Dispatchers.Main) {
+                    val id = rid
+                    if (id == null) {
+                        // 没起来（环境忙等）：onFinished 无论成败都会回调，把原因弹出来
+                        Toast.makeText(
+                            ctx,
+                            ctx.getString(R.string.chat_code_launch_failed, r.failure ?: "unknown"),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    } else {
+                        val body = finishedRun?.output?.value ?: ""
+                        val tail = r.failure ?: ctx.getString(R.string.chat_code_exit, r.code)
+                        ChatStateHolder.finishRunCard(id, body, tail)
+                    }
+                }
+            }
+            rid = rs?.id
+            withContext(Dispatchers.Main) {
+                if (rs != null) {
+                    ChatStateHolder.addRunCard(rs.id, label)
+                    programMode = true
+                }
+            }
+        }
+        return true
+    }
+
     /** 发送输入框内容（回车 / 发送按钮）。编辑态下发送 = 编辑重发 */
     fun send() {
         val target = editingTarget
@@ -761,7 +827,19 @@ internal fun ChatModule(app: LabApplication) {
             return
         }
         val text = input.trim()
-        if (text.isEmpty() || sending) return
+        if (text.isEmpty()) return
+        // ── 程序模式：输入直接发给运行中的本地程序 ──
+        // 不调 dispatchAi ⇒ 不开轮、不进事件流（用户消息 turn=null，同拍照答题先例）；
+        // 程序输出经 InteractiveRunManager → 运行卡片消息实时回显。
+        // ⚠️ 故意放在 sending 检查**之前**：AI 正在回复时也可以继续跟程序交互（互不干扰）。
+        val runTarget = if (programMode) com.rokidlab.phone.platform.InteractiveRunManager.latestActive else null
+        if (runTarget != null) {
+            appendMsg(true, text)
+            runTarget.writeLine(text)
+            input = ""
+            return
+        }
+        if (sending) return
         if (target != null) {
             editingTarget = null
             draftBeforeEdit = ""
@@ -769,6 +847,8 @@ internal fun ChatModule(app: LabApplication) {
             resendEdited(target, text)
             return
         }
+        // ── 说「运行」：直接跑最近一个可运行代码块（免点运行键、零 token）──
+        if (tryRunLastCode(text)) return
         // 轮号必须在加气泡**之前**取：这一轮会是 turnBefore + 1（beginTurn 在服务层异步执行）
         val turnBefore = AgentSessionManager.currentTurn()
         appendMsg(true, text, turn = turnBefore + 1)
@@ -1036,6 +1116,54 @@ internal fun ChatModule(app: LabApplication) {
             ChatContextBar(usage = usage, onClick = { showContextInfo = true })
         }
 
+        // 程序模式条：运行中的本地程序 ↔ 聊天输入框的连接开关
+        // 未连接 = 灰条提示"点这里把输入接给程序"；已连接 = 绿条 + 退出按钮
+        latestRun?.let { run ->
+            val connected = programMode
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // ⚠️ 不能写 `padding(horizontal = …, top = …)` —— 没有这个重载
+                    .padding(start = 12.dp, end = 12.dp, top = 8.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (connected) BrewSuccess.copy(alpha = 0.12f) else BrewPanel)
+                    .border(1.dp, if (connected) BrewSuccess else BrewBorder, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .let { m -> if (connected) m else m.clickable { programMode = true } },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Terminal,
+                    contentDescription = null,
+                    tint = if (connected) BrewSuccess else BrewChat,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    text = if (connected) {
+                        stringResource(R.string.chat_program_mode_banner, run.label)
+                    } else {
+                        stringResource(R.string.chat_program_mode_connect, run.label)
+                    },
+                    color = BrewText,
+                    fontSize = 11.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                if (connected) {
+                    Text(
+                        text = stringResource(R.string.chat_program_mode_exit),
+                        color = BrewSuccess,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { programMode = false }
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                    )
+                }
+            }
+        }
+
         // 编辑态横幅：说明"正在编辑哪一条、其后的对话会被清掉"，并给一个退出口。
         // ★ 它替代了原来的独立编辑弹窗 —— 编辑就在下面这个输入框里发生（见 startEdit）。
         editingTarget?.let {
@@ -1204,22 +1332,27 @@ internal fun ChatModule(app: LabApplication) {
                 maxLines = 4,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { send() }),
-                decorationBox = { inner ->
-                    Box(
-                        modifier = Modifier.fillMaxWidth(),
-                        // 单行（≤最小高度）时居中；多行后内容撑满，对齐方式不再起作用
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        if (input.isEmpty()) {
-                            Text(
-                                text = stringResource(R.string.chat_input_hint),
-                                color = BrewMuted,
-                                fontSize = 18.sp,
-                            )
+                    decorationBox = { inner ->
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            // 单行（≤最小高度）时居中；多行后内容撑满，对齐方式不再起作用
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            if (input.isEmpty()) {
+                                Text(
+                                    // 程序模式下提示语换成"发给程序"，读的人不用猜输入去哪了
+                                    text = if (programMode && latestRun != null) {
+                                        stringResource(R.string.chat_input_hint_program, latestRun.label)
+                                    } else {
+                                        stringResource(R.string.chat_input_hint)
+                                    },
+                                    color = BrewMuted,
+                                    fontSize = 18.sp,
+                                )
+                            }
+                            inner()
                         }
-                        inner()
-                    }
-                },
+                    },
             )
             Spacer(Modifier.height(8.dp))
             // 下层工具行：左＝供应商图标（已配置则画该品牌图标，未配置默认云图标）+ 思考深度（默认自动）
@@ -1367,6 +1500,8 @@ internal fun ChatModule(app: LabApplication) {
                         .background(
                             when {
                                 sending -> BrewRed
+                                // 程序模式：绿色 = 输入直发程序（不进 AI）；与未连接时的 BrewChat 区分
+                                canSend && programMode && latestRun != null -> BrewSuccess
                                 canSend -> BrewChat
                                 else -> BrewPanelHi
                             }

@@ -33,13 +33,49 @@ import com.rokidlab.phone.ai.compaction.CompactionTrigger
 internal class AgentSessionStore(
     private val log: SessionLog,
     private val onTrim: (String) -> Unit = {},
+    /**
+     * 滚动摘要的 **LLM 精炼器**（可空 = 用本地摘要，行为与改造前逐字一致）。
+     *
+     * 背景：本地摘要是"各取首句、截断 60 字"，保得住话题名，保不住**结论**——
+     * "用户问了天气，AI 答…（首句）"这种摘要回填给模型后，它只能知道自己聊过天气，
+     * 不知道聊出了什么。精炼器在压缩发生后用被压缩轮的**原文**重写一版高密度摘要。
+     *
+     * 契约：
+     *  - 输入 [DigestRefiner.refine] 收到（role, text）顺序对与摘要字符预算；
+     *  - 返回 null / 抛异常 / 空串 = 放弃，**保留本地摘要**（网络失败是常态，绝不能让
+     *    "精炼摘要"变成"压缩失败"—— 压缩本身必须无条件成功，那是防 400 的底线）；
+     *  - 返回文本时**不带标题行**（标题由 store 统一加，精炼器只出要点）。
+     *
+     * ⚠️ 实现方应在**回复已送达之后**的路径上被调用（见 [compact]），单次耗时建议
+     *    有界（15s 级）；它是同步调用，调用方线程会被占住。
+     */
+    private val digestRefiner: DigestRefiner? = null,
 ) {
 
     private companion object {
         const val ROLE_SYSTEM = "system"
 
+        // 摘要精炼（refineDigest）要用到的角色名（与投影 buildHistory 的口径一致）
+        const val ROLE_USER = "user"
+        const val ROLE_ASSISTANT = "assistant"
+
         /** 单条注入上下文的落盘上限（比 [SessionLog.MAX_FIELD_CHARS] 更紧：注入是每轮都可能写的） */
         const val CONTEXT_INJECT_MAX_CHARS = 2000
+
+        /**
+         * 送精炼器的输入上限（字符）。
+         *
+         * 溢出恢复（[CompactionTrigger.CONTEXT_OVERFLOW]）可能一次压掉几万字符 —— 全文发过去
+         * 既慢又可能打爆小窗口模型。取**尾部**：摘要的价值在"最近聊出了什么结论"，
+         * 最旧的部分本地摘要行已经在兜底了。
+         */
+        const val REFINE_INPUT_MAX_CHARS = 12000
+    }
+
+    /** 压缩后的滚动摘要精炼器（见构造参数 [digestRefiner] 的契约说明） */
+    fun interface DigestRefiner {
+        /** @return 精炼后的摘要要点（**不含标题行**）；null = 放弃，保留本地摘要 */
+        fun refine(turns: List<Pair<String, String>>, budgetChars: Int): String?
     }
 
     /** 已加载的记录（懒加载；本实例是唯一写者，所以只需在 append 时增量维护） */
@@ -330,6 +366,75 @@ internal class AgentSessionStore(
         } else if (!projection().isTurnBalanced()) {
             onTrim("WARN: turn balance broken after compaction ($result) — 请求可能出现连续同角色消息")
         }
+
+        // ── 摘要精炼（LLM 摘要化）：本地摘要先用（压缩必须无条件成功），精炼是**追加的升级** ──
+        // 成功 = 追加一条 shadowedSeqs 为空的 CompactionSummary（投影取最后一次的 text，
+        // 恰好是事件层预留的"只重建摘要文本"语义）；失败 = 本地摘要原样保留，什么都不追加。
+        // 溢出恢复路径（CONTEXT_OVERFLOW）不精炼：那是用户正在等回复的轮中恢复，不该再加一跳网络。
+        if (digestRefiner != null && trigger != CompactionTrigger.CONTEXT_OVERFLOW && removed > 0) {
+            refineDigest(bodyBefore.take(removed))
+        }
         return result
+    }
+
+    /**
+     * 用 LLM 重写当前滚动摘要（成功后**追加**一条新的 [CompactionSummary] 声明）。
+     *
+     * 输入 = 刚被折进摘要的那批消息原文（尾部截到 [REFINE_INPUT_MAX_CHARS]）；
+     * 任何失败（异常 / 空结果 / 超预算空内容）都静默保留本地摘要 —— 打点留痕即可。
+     */
+    private fun refineDigest(shadowed: List<SessionRecord>) {
+        val ref = digestRefiner ?: return
+        // 只取对话本体（UserMessage/AssistantMessage），按时间序拼成 (role, text) 对。
+        // assistant 附上本轮工具轨迹（与 SessionProjection 的 traceByTurn 同口径）——
+        // 否则 LLM 重写的摘要会丢掉「查了天气/设了闹钟」这类动作证据（2026-10-02 补）。
+        val traceByTurn = shadowed.filterIsInstance<ToolCall>()
+            .groupBy({ it.turn }, { "${it.name}(${it.args})" })
+        val turns = ArrayList<Pair<String, String>>(shadowed.size)
+        for (r in shadowed) {
+            when (val e = r.event) {
+                is UserMessage -> turns.add(ROLE_USER to e.text)
+                is AssistantMessage -> {
+                    val trace = traceByTurn[e.turn].orEmpty()
+                    turns.add(
+                        ROLE_ASSISTANT to
+                            if (trace.isEmpty()) e.text
+                            else e.text + "（调用 " + trace.joinToString("、") + "）",
+                    )
+                }
+                else -> Unit
+            }
+        }
+        if (turns.isEmpty()) return
+        // 输入超限时从尾部截：保留最近语境（截点切在消息边界上，不把一条消息劈成两半）
+        var from = 0
+        var total = 0
+        for (i in turns.indices.reversed()) {
+            val next = total + turns[i].second.length
+            if (next > REFINE_INPUT_MAX_CHARS && i < turns.indices.last) break
+            total = next
+            from = i
+        }
+        val input = turns.subList(from, turns.size)
+        val budget = (policy.digestMaxChars - BasicCompactionEngine.DIGEST_HEADER.length - 1).coerceAtLeast(60)
+        val refined = runCatching { ref.refine(input, budget) }
+            .onFailure { onTrim("digest refine failed: ${it.message}（保留本地摘要）") }
+            .getOrNull()
+            ?.trim()
+            ?.take(budget)
+            .orEmpty()
+        if (refined.isBlank()) return
+        append(CompactionStart(turn = null, trigger = "digest_refine"))
+        append(
+            CompactionSummary(
+                turn = null,
+                // 空 seq 集 = 不再隐藏任何事件，**只换摘要文本**（投影取最后一次的 text）
+                shadowedSeqs = emptyList(),
+                text = BasicCompactionEngine.DIGEST_HEADER + "\n" + refined,
+                turnsCompressed = 0,
+            ),
+        )
+        append(CompactionEnd(turn = null))
+        onTrim("digest refined by LLM (${refined.length} chars, was local extraction)")
     }
 }

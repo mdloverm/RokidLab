@@ -47,6 +47,8 @@
         android:name="android.permission.USE_EXACT_ALARM"
         tools:targetApi="33" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 计步（get_step_count）：读 TYPE_STEP_COUNTER，Android 10+ 需身体活动权限 -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <!-- 本地模型：通过 RUN_COMMAND 在 Termux 中启动/停止 Ollama 服务 -->
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
     <!-- 本机执行环境：proot 容器的 /mnt/lab 直通公共「下载/Lab」目录（分区存储下 File 路径直读写必需） -->
@@ -148,6 +150,27 @@
             android:noHistory="true"
             android:theme="@style/Theme.RokidLabPhone.Transparent" />
 
+        <!-- MCP OAuth 回调落地页：浏览器完成授权后重定向 rokidlab://mcp/callback 拉起本页换 token。
+             ⚠️ exported=true 是必须的 —— 回调来自**浏览器进程**，与无障碍服务同理属于少数例外；
+             ⚠️ intent-filter 的 scheme/host/pathPrefix 必须与 McpOAuth.REDIRECT_URI 同步改。 -->
+        <activity
+            android:name=".ai.mcp.McpCallbackActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:noHistory="true"
+            android:theme="@style/Theme.RokidLabPhone.Transparent">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="rokidlab"
+                    android:host="mcp"
+                    android:pathPrefix="/callback" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".glasses.PhoneInstallResultReceiver"
             android:exported="false" />
@@ -160,6 +183,15 @@
         <receiver
             android:name=".proactive.IdleCheckReceiver"
             android:exported="false" />
+
+        <!-- 「走走拍拍」闹钟入口：Manifest 注册保证进程死后到点广播仍能拉起进程续链 -->
+        <receiver
+            android:name=".proactive.VisionTickReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.rokidlab.phone.proactive.VISION_TICK" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".proactive.NudgeCheckReceiver"
