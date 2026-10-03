@@ -103,6 +103,7 @@ import com.rokidlab.phone.design.BrewTextBright
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import com.rokidlab.phone.platform.InteractiveRunManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -1052,6 +1053,37 @@ internal fun ChatModule(app: LabApplication) {
         // 不在这里读的话 LazyColumn 的 item 集合不会跟着变。
         val aiuiDemoShowing = AiuiDemoController.current != null
 
+        // 气泡喇叭点播：云萌音色 = 手机出声（VoiceBroadcast）；默认音色 = 眼镜端离线 TTS。
+        // 再点同一条 = 停止。高亮状态在播完/停止后自动恢复。
+        var speakingMsgId by remember { mutableStateOf<Long?>(null) }
+        fun speakMsg(msg: ChatMsg) {
+            if (speakingMsgId == msg.id) {
+                VoiceBroadcast.cancel()
+                runCatching { app.cxrL }.getOrNull()?.stopTtsOnGlass()
+                speakingMsgId = null
+                return
+            }
+            val voiceId = VoicePrefs.voiceId
+            speakingMsgId = msg.id
+            val text = msg.content
+                .replace(Regex("[*_`#>]"), "")
+                .trim()
+            scope.launch(Dispatchers.IO) {
+                if (voiceId.isBlank()) {
+                    // 默认音色：眼镜端离线 TTS（播放时长未知，按字数估时后清高亮）
+                    val session = runCatching { app.cxrL }.getOrNull()
+                    val ok = session != null &&
+                        runCatching { session.sendTtsToGlass(text) == 0 }.getOrDefault(false)
+                    if (ok) delay((text.length * 260L + 1200L).coerceIn(1500L, 30_000L))
+                } else {
+                    VoiceBroadcast.broadcast(text, voiceId, rate = VoicePrefs.rate)
+                }
+                withContext(Dispatchers.Main) {
+                    if (speakingMsgId == msg.id) speakingMsgId = null
+                }
+            }
+        }
+
         // 卡片排在最后一条消息下方，出现时很可能落在屏幕外 —— 滚到底把它露出来，
         // 否则用户的观感是"说了演示，屏幕上什么都没有"。
         LaunchedEffect(aiuiDemoShowing) {
@@ -1090,6 +1122,13 @@ internal fun ChatModule(app: LabApplication) {
                     ChatBubble(
                         msg,
                         onActions = { actionTarget = msg },
+                        // AI 回复气泡右下角喇叭 = 点播本条内容（云萌手机播 / 默认眼镜 TTS）
+                        onSpeak = if (!msg.isUser && !msg.isStatus) {
+                            { speakMsg(msg) }
+                        } else {
+                            null
+                        },
+                        speaking = speakingMsgId == msg.id,
                         // 用户发言**点一下就是编辑重发**（以前要先点「···」再选「编辑重发」）：
                         // 用户对一条自己说过的话最常做的动作就是"改一下再说一遍"。
                         // 发送中不给点 —— 编辑重发会截断历史，与在飞的请求冲突。

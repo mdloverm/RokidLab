@@ -184,6 +184,10 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            // sherpa-onnx static-link aar 仅在 arm 系把 onnxruntime 静态编进 jni.so，
+            // x86 仍带独立 libonnxruntime.so，与 onnxruntime-android:1.22.0 同名冲突；
+            // abiFilters 仅 arm64，x86 实际不打包，pickFirst 仅让 merge 任务通过。
+            pickFirsts += "lib/x86/libonnxruntime.so"
         }
     }
 

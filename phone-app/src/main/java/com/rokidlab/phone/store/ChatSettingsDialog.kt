@@ -117,6 +117,8 @@ internal fun ChatSettingsDialog(
     var showMcpServers by remember { mutableStateOf(false) }
     // Agent 会话记忆子页面
     var showAgentSection by remember { mutableStateOf(false) }
+    // 音色管理子页面（对话播报音色：默认眼镜端离线 / 云萌双端同步）
+    var showVoiceManage by remember { mutableStateOf(false) }
     // AI 技能管理子页面（用户自定义技能）
     var showSkillsManage by remember { mutableStateOf(false) }
     // AIUI 应用管理子页面（对话生成/本地上传的智能体应用）
@@ -606,6 +608,36 @@ internal fun ChatSettingsDialog(
             )
 
             Spacer(Modifier.height(16.dp))
+            // 音色管理入口 → 子页面（对话播报音色，眼镜与手机同步）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(BrewPanelHi.copy(alpha = 0.5f))
+                    .border(1.dp, BrewBorder, RoundedCornerShape(12.dp))
+                    .clickable { showVoiceManage = true }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.voice_manage_title),
+                        color = BrewTextBright,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = stringResource(R.string.voice_manage_desc),
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(text = "›", color = BrewMuted, fontSize = 20.sp)
+            }
+
+            Spacer(Modifier.height(16.dp))
             // Agent 会话记忆入口 → 子页面
             Row(
                 modifier = Modifier
@@ -775,6 +807,10 @@ internal fun ChatSettingsDialog(
 
     if (showAgentSection) {
         AgentSectionPage(app = app, onBack = { showAgentSection = false })
+    }
+
+    if (showVoiceManage) {
+        VoicePickPage(app = app, onBack = { showVoiceManage = false })
     }
 
     if (showToolsManage) {

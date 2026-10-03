@@ -307,6 +307,40 @@ internal class CxrBridgeCoordinator(
             )
             Log.i(TAG, "subscribe(${LinkProtocol.TOPIC_AMBIENT_CTRL}) -> $ambientCtrlResult")
 
+            // 离线 TTS PCM 流（B 方案）：手机端合成 → CXR 下发 → 本地 AudioTrack 播放。
+            // ctrl 通道管生命周期，PCM 通道喂流，见 PcmStreamPlayer。
+            val pcmCtrlResult = core.bridge?.subscribe(
+                LinkProtocol.TOPIC_TTS_PCM_CTRL,
+                CXRServiceBridge.MsgCallback { _, args, _ ->
+                    core.markDownlink()
+                    val action = runCatching { args.at(0).getString() }.getOrNull()
+                    when (action) {
+                        "start" -> {
+                            val sr = runCatching { args.at(1).getInt() }.getOrDefault(0)
+                            Log.i(TAG, "tts_pcm start (sr=$sr)")
+                            PcmStreamPlayer.start(sr)
+                        }
+                        "end" -> PcmStreamPlayer.end()
+                        "stop" -> PcmStreamPlayer.stop()
+                    }
+                }
+            )
+            Log.i(TAG, "subscribe(${LinkProtocol.TOPIC_TTS_PCM_CTRL}) -> $pcmCtrlResult")
+
+            val pcmResult = core.bridge?.subscribe(
+                LinkProtocol.TOPIC_TTS_PCM,
+                CXRServiceBridge.MsgCallback { _, args, value ->
+                    core.markDownlink()
+                    // PCM 在 caps[0]（TYPE_BINARY）；若分发把原始 payload 放 value，兜底取之
+                    val pcm = runCatching { args.at(0).getBinary() }.getOrNull()?.let { b ->
+                        if (b.offset == 0 && b.length == b.data.size) b.data
+                        else b.data.copyOfRange(b.offset, b.offset + b.length)
+                    } ?: value?.takeIf { it.isNotEmpty() }
+                    pcm?.let { PcmStreamPlayer.feed(it) }
+                }
+            )
+            Log.i(TAG, "subscribe(${LinkProtocol.TOPIC_TTS_PCM}) -> $pcmResult")
+
             // 官方字幕频道广播：活跃会话期间把字幕 ASR JSON 经推送通道上行手机端
             val ambientAsrResult = core.bridge?.subscribe(
                 LinkProtocol.CXR_CHANNEL_ACCESSIBILITY,

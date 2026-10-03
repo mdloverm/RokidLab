@@ -1707,6 +1707,16 @@
     <string name="save_log_done">Log saved</string>
     <string name="save_log_failed">Failed to save log</string>
     <string name="export_compat_diag">Compatibility Report</string>
+    <!-- Voice management (chat reply voice) -->
+    <string name="voice_manage_title">Voice</string>
+    <string name="voice_manage_desc">Synced on glasses &amp; phone</string>
+    <string name="voice_manage_page_desc">Pick a voice for replies</string>
+    <string name="voice_pick_default">Default·Glass</string>
+    <string name="voice_pick_glass_offline">Glasses not connected</string>
+    <string name="voice_pick_rate">Speed</string>
+    <string name="voice_pick_audition">Preview</string>
+    <string name="voice_pick_auditioning">Previewing…</string>
+    <string name="chat_speaker_play">Play</string>
     <string name="export_compat_diag_desc">Export device, ROM and Bluetooth info for reports</string>
     <string name="save_compat_done">Compatibility diagnostics exported</string>
     <string name="save_compat_failed">Failed to export compatibility diagnostics</string>

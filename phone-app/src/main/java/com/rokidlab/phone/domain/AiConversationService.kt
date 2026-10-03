@@ -10,6 +10,8 @@ import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.design.RokidHostApp
 import com.rokidlab.phone.glasses.AiChannel
 import com.rokidlab.phone.glasses.LinkProtocol
+import com.rokidlab.phone.store.VoiceBroadcast
+import com.rokidlab.phone.store.VoicePrefs
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -763,6 +765,10 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         var reply = ""
         var asrResult: Int? = 0
         var endResult: Int? = 0
+        // 播报文本（口语文本，剥 markdown；与显示文本分离的口径见下方 TTS_Result 段注释）
+        var glassSpoken = ""
+        // 云萌音色预合成的 PCM（reply ready 后填充；发送段起播用，null = 未启用/准备失败）
+        var cloudPcm: ByteArray? = null
 
         try {
         // ===== 步骤-1: （可选）先打断官方乐奇会话 =====
@@ -2561,6 +2567,23 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             return
         }
         Log.i(TAG, "AI reply ready: ${reply.take(40)}")
+        glassSpoken = com.rokidlab.phone.ai.ReplySanitizer.sanitizeForGlass(reply).ifBlank { reply }
+        // 云萌音色：先把语音备好（合成+下载+解码约 1-2s，期间文字不下发），
+        // ready 后 onReply/TTS_Result/起播三步紧挨着执行 —— 文字与声音同步出现。
+        // 备声失败置空，下方回退眼镜端离线 TTS。
+        if (VoicePrefs.cloudEnabled && glassSpoken.isNotBlank()) {
+            val prepared = VoiceBroadcast.prepare(glassSpoken, VoicePrefs.voiceId, VoicePrefs.rate).getOrNull()
+            if (prepared != null && prepared.size >= 2) cloudPcm = prepared
+            if (isSuperseded()) {
+                Log.i(TAG, "sendAiTextViaLink: reply superseded during voice prepare, skip downlink")
+                session.mainHandler.post {
+                    session.connection.completeActiveOperation()
+                    session.onBusyChanged(false)
+                    onResult?.invoke(false, null)
+                }
+                return
+            }
+        }
         // 手机气泡拿 Markdown 原文（渲染代码块卡片等富文本）；眼镜版在步骤4 下发前现算
         onReply?.invoke(reply)
         } catch (e: Exception) {
@@ -2581,6 +2604,12 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             // 表现为发送按钮转圈不停/后续消息被当成并发而拒绝。
             if (link == null) {
                 Log.i(TAG, "local-only: skip TTS_Result/tts_play downlink, reply delivered to chat only")
+                // 云萌音色：本机模式没有眼镜链路，语音在手机端播（上面已备好）
+                val localPcm = cloudPcm
+                if (localPcm != null) {
+                    Thread { VoiceBroadcast.playPcm(localPcm) }
+                        .apply { name = "voice-broadcast"; isDaemon = true }.start()
+                }
                 session.mainHandler.post {
                     session.onStatus("AI 回复已生成（本机模式：仅手机端）")
                     session.connection.completeActiveOperation()
@@ -2619,7 +2648,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             // 符号，围栏代码块不播报（整段是代码时引导看手机）。
             // ⚠️ 若真机上官方渲染器把 MD 原文显示成裸符号，回退点＝把下面的 ttsCaps.write(reply)
             // 改回 glassSpoken（一行）。
-            val glassSpoken = com.rokidlab.phone.ai.ReplySanitizer.sanitizeForGlass(reply).ifBlank { reply }
+            // （glassSpoken 声明已提前到 try 外的共享变量区，reply ready 后即刻填充）
             // 官方协议: caps[0] = "TTS_Result", caps[1] = 回复文字，
             // caps[2] = Lab 来源标记（眼镜端据此区分 Lab 回复与官方回声，见 LinkProtocol.AI_REPLY_MARK）。
             // 官方只按索引读前两个元素，多写一个会被忽略，向后兼容。
@@ -2632,10 +2661,12 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             Log.i(TAG, "sendCustomCmd(Ai, TTS_Result, \"${reply.take(40)}...\") -> $ttsResult")
 
             // 与 tts_play 之间加 300ms 间隔，降低链路抖动时两条指令一起丢失的概率
-            Thread.sleep(300)
+            // （云萌音色没有第二条指令，跳过间隔直接起合成线程）
 
-            // ===== 步骤4.5: 发送 TTS_Play（触发 RokidLink 眼镜本地语音播放）=====
-            // RokidLink 通过 CXRServiceBridge.subscribe("tts_play") 收到后，
+            // ===== 步骤4.5: 播报 =====
+            // 云萌音色：语音已在上方（reply ready 后）预合成备好，这里直接起播 ——
+            // 文字（onReply/TTS_Result）与声音几乎同时出现。仅手机出声（外放眼镜可听）。
+            // 默认音色：眼镜端离线 TTS（tts_play）原链路。RokidLink 收到 tts_play 后
             // 调用系统 TtsService 本地合成并播放语音
             fun sendTtsPlay(): Int? {
                 if (!abortAiSendIfLinkInvalid(link, onResult)) return -99
@@ -2643,13 +2674,30 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 AiChannel.encodeTtsPlay(glassSpoken).forEach { ttsPlayCaps.write(it) }
                 return link.sendCustomCmd(AiChannel.TOPIC_TTS_PLAY, ttsPlayCaps)
             }
-            var ttsPlayResult: Int? = sendTtsPlay()
-            Log.i(TAG, "sendCustomCmd(tts_play, \"${reply.take(40)}...\") -> $ttsPlayResult")
-            // 发送失败（返回值 != 0）时延迟 500ms 重发一次，降低偶发丢包
-            if (ttsPlayResult != 0) {
-                Thread.sleep(500)
-                ttsPlayResult = sendTtsPlay()
-                Log.w(TAG, "retry sendCustomCmd(tts_play) -> $ttsPlayResult")
+            fun sendTtsPlayWithRetry() {
+                val r = sendTtsPlay()
+                Log.i(TAG, "sendCustomCmd(tts_play, \"${reply.take(40)}...\") -> $r")
+                // 发送失败（返回值 != 0）时延迟 500ms 重发一次，降低偶发丢包
+                if (r != 0) {
+                    Thread.sleep(500)
+                    val retry = sendTtsPlay()
+                    Log.w(TAG, "retry sendCustomCmd(tts_play) -> $retry")
+                }
+            }
+            if (VoicePrefs.cloudEnabled) {
+                val pcm = cloudPcm
+                Thread {
+                    if (pcm != null && VoiceBroadcast.playPcm(pcm).isSuccess) {
+                        Log.i(TAG, "cloud voice broadcast done")
+                    } else {
+                        // 预合成/播放失败 → 回退眼镜端离线 TTS，保证「有声音」不缺位
+                        Log.w(TAG, "cloud voice unavailable, fallback to glass TTS")
+                        runCatching { sendTtsPlayWithRetry() }
+                    }
+                }.apply { name = "voice-broadcast"; isDaemon = true }.start()
+            } else {
+                Thread.sleep(300)
+                sendTtsPlayWithRetry()
             }
 
             // 发送 TTS_AudioFinished 通知眼镜播放完毕（可选，官方 App 也会发）。
@@ -2707,6 +2755,15 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         traceFinishSink?.invoke(true)
         // 同步通知眼镜端停止正在播放的语音（tts_stop 下行通道）
         session.stopTtsOnGlass()
+        // 云萌 PCM 流同步打断：手机端 AudioTrack 作废 + 眼镜端 PcmStreamPlayer 立即静音
+        VoiceBroadcast.cancel()
+        runCatching {
+            session.cxrLink?.let { l ->
+                val caps = Caps()
+                caps.write("stop")
+                l.sendCustomCmd(LinkProtocol.TOPIC_TTS_PCM_CTRL, caps)
+            }
+        }
     }
 
     /** 注册眼镜端语音对话的 UI 回调（乐奇聊天界面进入时调用）：

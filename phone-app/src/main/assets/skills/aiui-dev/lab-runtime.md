@@ -42,7 +42,7 @@
   - `.board { display: grid; grid-template-columns: 72px 72px 72px 72px; grid-template-rows: 72px 72px 72px 72px; gap: 6px; }`，16 个 `<view>` 作**直接子节点**（顺序即行列，不要嵌套 4 个 row）。
   - 每格：`<view class="{{ c00 }}"><text class="num">{{ v00 }}</text></view>`；`data` 里为每格声明 `cNN`（class 串）与 `vNN`（文字）两字段，onLoad 里先初始化。
   - 配色靠 class，用官方透明度阶梯（**仅单色绿屏**；彩色项目改用 §2.4 的全彩 token）：空 `rgba(64,255,94,.06)` → `.24` → `.48` → `.72` → 最大 `#40ff5e`（如 2048 瓦片）；一格一个 class，**不要用 style 内联绑定**。
-  - 刷新：全部格子一次 `setData`（32 个字段无压力）；**状态变化一律由按键驱动** —— 本宿主**定时器不执行**（见 §9.0），别用 `setInterval`/`setTimeout`。
+  - 刷新：全部格子一次 `setData`（32 个字段无压力）；Lab 自托管宿主上**状态变化一律按键驱动**（该宿主定时器不执行，见 §9.0）；手机预览/官方宿主可用 `setInterval` 做动画（见 §9.0.1）。
 
 ### 2.4 彩色显示（yodaos-sprite-full）★仅手机预览可用
 - 眼镜屏是**单色绿光波导**，物理上没有彩色通道，**永远不支持彩色**；彩色只对手机预览有意义。
@@ -126,12 +126,21 @@ onKeyDown(e) {
 **不开放的只有 5 个**：`open_aiui_app`（页面打开自己＝自指递归）、`list_sessions` / `read_session` / `session_trace`（会读到用户的全部会话与完整事件流，页面是第三方制品不该能批量枚举导出）、`research_subtask`（会另起子代理）。调它们只会收到明确的拒绝文案，**别把它当成工具名写错**。
 ⚠️ `shell` 域与 `screen` 域（`run_shell`、`install_packages`、`save_script`、`list_scripts`、`run_script`、`delete_script`、`start_web_preview`、`stop_web_preview`、`read_screen`、`tap_screen`、`swipe_screen`、`press_key`、`type_text`）是**带闸门开放**（2026-10-01 起）：能调用，但**每一次都会先向用户弹确认**，用户同意才执行、问不到用户（眼镜/手机都无确认通道）直接拒。页面里调用它们**不会**立刻执行——回调会等到用户点头或超时拒绝；⚠️ 超时可能较长（等用户确认），不要在页面里连续重试刷确认框。此外 `delete_knowledge_doc`、`manage_glasses_app` 是**确认闸门 BLOCK 级**工具：它们出现在清单里，但页面路径必然被拒（不可恢复的操作只对对话中本人在场开放）。不确定现在能调什么，调 `list_tools` 拿一份实时清单。
 
-### 9.0 ⚠️ 本宿主无事件循环 —— 工具调用必须回调式（最高频翻车点）
-ink 沙箱**只执行同步代码**：`Promise.then` / `await` / `setTimeout` / `setInterval` 的回调**一个都不执行**（真机实测零输出）；只有 `onLoad`/`onShow`/`onKeyDown`/`onMessage` 这类**事件回调**有效。
+### 9.0 ⚠️ 宿主差异：定时器与事件循环（2026-10-02 修正）
+**官方宿主（assistserver / AiuiInkRenderEngine）定时器完全可用**：官方《闪电战机》实机以 `setInterval(() => this.tick(), FRAME_MS)` 驱动弹幕射击主循环、全页数十处 `setTimeout`（aix 实包解析验证）。**Canvas 2D（`getContext('2d')` + `fillRect`/`drawImage`）+ `setInterval` 帧循环就是官方实时游戏的标准范式**（见 §9.0.1）。
+**Lab 自托管宿主（AiuiLinkActivity）**：此前真机实测 `setTimeout`/`setInterval`/`Promise.then` 回调零执行——在该宿主上工具调用**必须回调式**：
 - ✅ 唯一正确写法：`globalThis.Lab.callTool(名字, 参数对象, function (结果, 错误) { … })`
 - ❌ 禁止 `await globalThis.Lab.callTool(...)` / `.then(...)` / `Promise.all` —— **永不返回，页面当场卡死**。
-- ❌ 禁止用 `setTimeout`/`setInterval` 做超时、重试、动画（超时保护在宿主侧，页面拿不到）。
 - 必须写 `globalThis.Lab` 或 `window.Lab`（裸 `Lab` 在页面 realm 不可用）。
+**手机预览（AiuiDemoActivity）**：同款 wasm ink 跑在普通 WebView，定时器大概率可用；用 `open_aiui_app(target=phone)` 装一个 `setInterval` 探针页即可一测定论。
+
+### 9.0.1 官方实时游戏范式（《闪电战机》2026-10 实包解析）
+- 主循环：页面主 realm `setInterval(tick, FRAME_MS)`，`onHide` 时 `clearInterval` 防重复 tick。
+- 渲染：`<canvas>` + `getContext('2d')` 逐帧重绘（星空/弹幕/飞机全用 `fillRect`/`drawImage`）；`setData` 只管 level、statusText 等 UI 状态，**不进帧循环**。
+- 结构：单页 `index.ink` 实测 **144KB** + 逻辑拆 `assets/*.js`（弹幕模式库 53KB、常量 25KB）——运行时无体积上限，§1 的 8000 字符是**生成可靠性软规则**（大型游戏按模块分文件即可）。
+- 输入：`onKeyDown`/长按 + `absolute-orientation`（头部姿态传感器控制飞机移动）。
+- 音频：BGM/SFX 走 Web Audio（mp3/wav/ogg 放 assets）。
+- 官方包元数据：viewport device-width（实渲染 480×640）、`inkVersion >=0.14.0`——未用 0.18 worker。
 
 ### 9.1 onMessage：既要转发工具结果，也要**执行启动参数**（两件都必须写）
 ```js

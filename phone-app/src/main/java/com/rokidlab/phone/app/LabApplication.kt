@@ -198,6 +198,9 @@ class LabApplication : Application() {
         // （闸门会走"问不到用户"分支，按工具声明的 ToolConfirmPolicy 分流）。
         com.rokidlab.phone.ai.PhoneToolConfirmChannel.init(this)
 
+        // 音色与播报三态（VoicePrefs）：ChatBubble / AiConversationService 首次读取前必须就绪
+        com.rokidlab.phone.store.VoicePrefs.ensure(this)
+
         // 启动自检：工具风险表是否漏登记（漏登记会让该工具被误判为外部副作用而被拦下，
         // 历史事故：save_code_file 漏登记 → AIUI 生成整链路失败）。应为空。
         runCatching {

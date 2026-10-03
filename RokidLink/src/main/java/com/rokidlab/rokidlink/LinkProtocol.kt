@@ -69,6 +69,16 @@ object LinkProtocol {
     /** 控制下行：caps[0] = "start" / "stop"。眼镜端据此开/关官方字幕链路（远场麦）。 */
     const val TOPIC_AMBIENT_CTRL = "rokidlab_ambient_ctrl"
 
+    // ── 离线 TTS PCM 流（手机端 → 眼镜端，B 方案）──
+    /**
+     * PCM 音频数据下行：caps[0] = 16k/mono/16bit PCM 原始字节（TYPE_BYTES），流式分块
+     * （每块约 100ms / 4KB）。眼镜端 PcmStreamPlayer 用 AudioTrack 播放。
+     */
+    const val TOPIC_TTS_PCM = "rokidlab_tts_pcm"
+
+    /** PCM 流控制下行：caps = ["start", 采样率] / ["end"] / ["stop"]（打断立即静音）。 */
+    const val TOPIC_TTS_PCM_CTRL = "rokidlab_tts_pcm_ctrl"
+
     /**
      * 连续对话（多轮免唤醒）续听请求：**眼镜端 → 手机端**，经 RFCOMM 推送通道上行。
      *
@@ -129,8 +139,10 @@ object LinkProtocol {
         const val OPEN_APP = 1 shl 5
         /** 支持环境音监听（[TOPIC_AMBIENT_CTRL] + 官方字幕链路白嫖，[CXR_CHANNEL_ACCESSIBILITY]） */
         const val AMBIENT_LISTEN = 1 shl 6
+        /** 支持手机端离线 TTS PCM 流播放（[TOPIC_TTS_PCM] / [TOPIC_TTS_PCM_CTRL]） */
+        const val TTS_PCM = 1 shl 7
         /** 当前版本眼镜端默认能力全集 */
-        const val ALL = TOOL_CONFIRM or LYRIC_OVERLAY or AIUI_HOST or SELF_HEAL_PING or SHOW_IMAGE or OPEN_APP or AMBIENT_LISTEN
+        const val ALL = TOOL_CONFIRM or LYRIC_OVERLAY or AIUI_HOST or SELF_HEAL_PING or SHOW_IMAGE or OPEN_APP or AMBIENT_LISTEN or TTS_PCM
     }
 
     /**

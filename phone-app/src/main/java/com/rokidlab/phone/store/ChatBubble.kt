@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.MenuBook
@@ -75,6 +76,13 @@ internal fun ChatBubble(
      * 传 null 表示不显示操作入口（状态气泡与旧调用点）。
      */
     onActions: (() -> Unit)? = null,
+    /**
+     * 点喇叭 = 用当前音色播报本条 AI 回复（云萌 = 手机出声；默认 = 眼镜端离线 TTS）。
+     * 传 null 表示不显示播放按钮（状态气泡 / 用户消息 / 旧调用点）。
+     */
+    onSpeak: (() -> Unit)? = null,
+    /** 本条是否正在播报中（喇叭高亮；再点一次 = 停止） */
+    speaking: Boolean = false,
     /**
      * 点**用户发言**气泡本体的回调 = 编辑重发（进入输入框就地编辑）。
      *
@@ -200,6 +208,19 @@ internal fun ChatBubble(
                                 modifier = Modifier
                                     .size(18.dp)
                                     .clickable { onActions() },
+                            )
+                        }
+                        // 播放按钮（仅 AI 回复）：点一下用当前音色播报本条内容。
+                        // 云萌音色 = 手机出声；默认音色 = 眼镜端离线 TTS。再点一次 = 停止。
+                        if (!isUser && onSpeak != null) {
+                            Spacer(Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Filled.VolumeUp,
+                                contentDescription = stringResource(R.string.chat_speaker_play),
+                                tint = if (speaking) BrewChat else BrewMuted,
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .clickable { onSpeak() },
                             )
                         }
                     }

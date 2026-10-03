@@ -1477,8 +1477,10 @@ internal class SseStreamAccumulator(
         if (fr.isNotEmpty()) finishReason = fr
         val delta = choice.optJSONObject("delta") ?: return true
         // 推理内容增量（deepseek reasoner / 带思考的模型）：累计长度用于诊断 + 全文留作多轮回传；
-        // 同时转发给 UI 让手机端聊天窗口能显示「思考」过程（思考内容不作为回复正文）
-        val reasoningDelta = delta.optString("reasoning_content")
+        // 同时转发给 UI 让手机端聊天窗口能显示「思考」过程（思考内容不作为回复正文）。
+        // ⚠️ 必须先 isNull 判空：optString 对 JSON null 返回字符串 "null"（org.json 的坑），
+        // 服务端发 "reasoning_content": null 时会把 "null" 字面量拼进思考预览（真机复现：连续 null）
+        val reasoningDelta = if (delta.isNull("reasoning_content")) "" else delta.optString("reasoning_content")
         if (reasoningDelta.isNotEmpty()) {
             reasoningChars += reasoningDelta.length
             reasoning.append(reasoningDelta)

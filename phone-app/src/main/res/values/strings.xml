@@ -1716,6 +1716,16 @@
     <string name="save_log_done">日志已保存</string>
     <string name="save_log_failed">日志保存失败</string>
     <string name="export_compat_diag">兼容性诊断</string>
+    <!-- 音色管理（对话播报音色） -->
+    <string name="voice_manage_title">音色管理</string>
+    <string name="voice_manage_desc">眼镜与手机同步发音</string>
+    <string name="voice_manage_page_desc">选对话播报音色，双端同步</string>
+    <string name="voice_pick_default">默认·眼镜语音</string>
+    <string name="voice_pick_glass_offline">眼镜未连接</string>
+    <string name="voice_pick_rate">语速</string>
+    <string name="voice_pick_audition">试听</string>
+    <string name="voice_pick_auditioning">试听中…</string>
+    <string name="chat_speaker_play">播放</string>
     <string name="export_compat_diag_desc">导出机型、ROM、蓝牙等信息用于反馈</string>
     <string name="save_compat_done">兼容性诊断已导出</string>
     <string name="save_compat_failed">兼容性诊断导出失败</string>
