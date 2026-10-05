@@ -2,7 +2,11 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=480, user-scalable=no">
+<!-- width=480：眼镜屏 480×640 物理、density 1.5（WebView 视口本为 320 CSS px）。
+     指定 layout viewport=480 后 WebView 自动以 2/3 缩放渲染，1 CSS px = 1 物理 px，
+     引擎写入的 canvas CSS 尺寸（480×360 等）才能与物理屏 1:1 对齐——
+     用 device-width 时 canvas 480 CSS px 会被放大 1.5 倍导致画面溢出。 -->
 <style>
   html, body { margin: 0; padding: 0; background: #000; width: 100%; height: 100%; overflow: hidden; }
   #loading {
@@ -10,7 +14,63 @@
     align-items: center; justify-content: center; color: #999;
     font-size: 13px; font-family: sans-serif;
   }
-  #ink-root { display: block; touch-action: none; }
+  /* auto-height 布局：引擎只改写 canvas 的宽/高（px），不碰 position/top ——
+     垂直居中由 host.js 在 onContentSizeChanged 里用显式 px 设置 top
+     （新 Chromium 把 top:50% 按 auto→0 解析，CSS 百分比不可靠，见 host.js）。
+
+     ⚠️ 这里**故意不加**任何裁剪 / 遮罩 / 负边距（clip-path、margin、overflow 都试过并否决）：
+     它们都会改变 AIUI 的可见尺寸（480×360 → 478×358），违反"保持原有尺寸"这条硬要求。 */
+  #ink-root {
+    display: block; touch-action: none;
+    position: absolute; top: 0; left: 0;
+
+    /* ✅ 上下那两条横贯 480px 的亮线的**真根因修复**（2026-10-04 定位，diag3 铁证）────
+       canvas 获得了焦点，Chromium 按`:focus-visible`默认样式给它画了一圈焦点环：
+           [diag3] CANVAS-STYLE outline = "rgb(229, 151, 0) auto 1px"
+           [diag5] activeElement=canvas#ink-root  MATCHES :focus-visible = true
+       而截图中线的实测颜色**正是** `(229,151,0)`，位置**正是**盒外 1px：
+           上线 y=140/141（盒顶 141 之外）
+           下线 y=500/501/502（盒底 500 之外）
+       `outline` 画在**盒模型之外**、且颜色与像素**精确吻合** ⇒ 决定性证据。
+
+       ⚠️ 本问题共误诊 9 轮（硬件鬼影→overscan→page 缺样式→窗口没铺满→portrait→
+          绿边是页面边框→窗口超屏→page 默认样式→旋转插值），
+          前 8 轮都在「像素来源层」，而责任层是**CSS 焦点环**。
+          判据教训：`getComputedStyle(el).outline` / `border` / `boxShadow` /
+          `filter` / `transform` 这几项**必须与实测像素颜色逐一比对**——
+          颜色精确吻合即铁证，像素级证据只能证伪来源，不能替代「问浏览器这个元素
+          到底是什么样式」。
+
+       ⚠️ 另一现象「环绕全屏一圈的绿框」与本行**无关**，请勿在这里加任何补丁。
+       【2026-10-04 定位结论（13 轮探针实测，勿再重查）】
+       绿框由 **Chromium M95 的 WebView 在自身盒边缘常驻绘制**，**不是**页面 CSS。
+       probe=4（**空白 WebView、不加载任何页面**）框依然完整存在；
+       probe=6（软件渲染）与硬件渲染**逐像素一致**；
+       probe=9（WebView 缩到中心 100x100）框**精确缩到该方块四边**、
+       屏幕四边 100% 纯黑 ⇒ 框绑定 WebView 几何。
+       本机WebView＝纯净 AOSP 95.0.4638.74，**无 public API 可关**
+       （`setUseWebViewBackgroundForOverscrollBackground` 是空方法 no-op；
+         `AwSettings` 字段全被 ProGuard 混淆）。
+       ✅ **最终采用遮盖方案**：在 `AiuiLinkActivity` 里叠一层 4px 纯黑边框
+          （盖住最外 3px 绿边；实测内容内边距 ≥200px，**不裁到任何画面**）。
+       ⚠️ 旧注释曾说框色 ≈ Launcher 品牌绿 #99BA00 且「已由删 portrait 修复」，
+          **两处都已被实测推翻**：框色实为 (154,205,0)=#9ACD00，且删 portrait 后框仍在。
+
+       ✅ outline 不参与布局、不改变盒尺寸/位置 ⇒ 不违反「保持 AIUI 原有尺寸」。
+          （`border` 会改变尺寸、`box-shadow` 也在盒外但当前已是 none，都不用。）
+    */
+    outline: none;
+  }
+
+  /* ── ink引擎的默认 `<page>` 样式（2026-10-04 记录，勿再尝试覆盖）──────
+     引擎日志每条 INFO 都拖着`color: white; padding: 0 3px; background: green`，
+     该字符串编在 21MB 的 `pkg/ink_web_bg.wasm` 里（grep 源码搜不到）。
+     ⚠️曾据此写 `page { background:#000 !important; padding:0 !important }`覆盖它 ——
+     **无效，已撤回**。diag 实测`document.querySelector('page')` = **NOT FOUND**，
+     `.screen` 同样 NOT FOUND ⇒ ink 根本不把页面建成DOM 元素，而是**直接画进 canvas 位图**
+     （证据：位图 row1 打出 `60,239,88` = `#3CEF58`，正是页面 .frame 的绿色边框）。
+     `padding: 0 3px` 只是引擎内部布局参数，不存在于CSS盒模型里，CSS 无法覆盖。
+     ⇒ 与 `<page>` 相关的排查到此为止，别再重复。 */
 </style>
 </head>
 <body>

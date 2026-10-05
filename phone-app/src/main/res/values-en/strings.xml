@@ -395,6 +395,9 @@
     <string name="chat_code_stdout">stdout</string>
     <string name="chat_code_stderr">stderr</string>
     <string name="chat_code_env_missing">Local Linux environment is not installed. Set it up in Settings → Local exec to run code.</string>
+    <string name="chat_code_web_started">Web app started (%1$s). Tap the preview bar above the chat to open it.</string>
+    <string name="chat_code_gui_unsupported">The container has no display server, so windowed apps (tkinter/pygame) cannot run. Ask the AI to rewrite it with remi (GUI shows in the preview bar) or as an HTML5 page.</string>
+    <string name="chat_file_running">Started — see the run card below for output</string>
     <string name="chat_code_python_missing">python3 is not installed in the container. Install Python in Settings → Local exec.</string>
     <string name="chat_code_node_missing">node is not installed in the container. Install it in the local exec environment first.</string>
     <string name="chat_code_java_missing">Java (javac) is not installed in the container. Install Java in Settings → Local exec, or ask the AI to install it.</string>
@@ -1067,6 +1070,8 @@
     <string name="ai_tool_stop_aiui_app_desc">Close phone demo or glasses AIUI app</string>
     <string name="ai_tool_list_my_aiui_apps_name">My AI Apps</string>
     <string name="ai_tool_list_my_aiui_apps_desc">List generated AIUI apps</string>
+    <string name="ai_tool_pull_official_aiui_name">Get Official AIUI</string>
+    <string name="ai_tool_pull_official_aiui_desc">Pull official agents from glasses</string>
     <string name="aiui_demo_badge">Phone demo</string>
     <string name="aiui_demo_close">Close</string>
     <string name="aiui_demo_fullscreen">Fullscreen</string>
@@ -1161,6 +1166,7 @@
     <string name="aiui_upload_fail">Upload failed: %1$s</string>
     <string name="aiui_origin_generated">Chat-generated</string>
     <string name="aiui_origin_uploaded">Local upload</string>
+    <string name="aiui_origin_official">Official</string>
     <string name="aiui_origin_legacy">Built-in/history</string>
     <string name="aiui_status_on_glasses">On glasses</string>
     <string name="aiui_status_local">Phone only</string>
@@ -1750,6 +1756,9 @@
     <string name="local_exec_uv_name">uv / uvx</string>
     <string name="local_exec_uv_hint">Python tool runner; uvx runs PyPI MCP servers on demand · about 35 MB</string>
     <string name="local_exec_uv_ready_hint">Ready — use uvx commands in stdio MCP configs</string>
+    <string name="local_exec_remi_name">remi (Python GUI)</string>
+    <string name="local_exec_remi_hint">Run windowed Python apps in chat · about 3 MB</string>
+    <string name="local_exec_remi_ready_hint">Ready — ask AI for a remi app, tap run, open it in the preview bar</string>
     <string name="local_exec_pip_install">Installing via pip (TUNA mirror)</string>
     <string name="local_exec_git_hint">Clone and manage repos · about 10 MB</string>
     <string name="local_exec_git_ready_hint">Ready to clone and manage repos</string>

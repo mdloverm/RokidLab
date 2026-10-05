@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +51,7 @@ import com.rokidlab.phone.design.BrewPanel
 import com.rokidlab.phone.design.BrewPanelAlt
 import com.rokidlab.phone.design.BrewTextBright
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -133,6 +136,67 @@ internal fun ChatFileCard(path: String, name: String, chars: Int?) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            // 运行/预览：仅可运行语言（py/js/sh/html…）显示。与代码卡同一条分流链路
+            // （decideRunPlan）：GUI 库拦截、网页型走预览条、普通脚本进运行卡。
+            if (runnableLang(name) != null) {
+                val scope = rememberCoroutineScope()
+                var running by remember(path) { mutableStateOf(false) }
+                Icon(
+                    imageVector = Icons.Outlined.PlayArrow,
+                    contentDescription = stringResource(R.string.chat_code_run),
+                    tint = if (running) BrewMuted.copy(alpha = 0.35f) else BrewChat,
+                    modifier = Modifier
+                        .size(16.dp)
+                        .clickable(enabled = !running) {
+                            val lang = runnableLang(name)!!
+                            val code = content
+                            if (code.isNullOrBlank()) {
+                                Toast.makeText(ctx, R.string.chat_file_missing, Toast.LENGTH_SHORT).show()
+                                return@clickable
+                            }
+                            if (!com.rokidlab.phone.platform.ProotInstaller.isInstalled(ctx)) {
+                                Toast.makeText(ctx, R.string.chat_code_env_missing, Toast.LENGTH_LONG).show()
+                                return@clickable
+                            }
+                            running = true
+                            when (decideRunPlan(lang, code)) {
+                                CodeRunPlan.BLOCKED_GUI -> {
+                                    running = false
+                                    Toast.makeText(ctx, R.string.chat_code_gui_unsupported, Toast.LENGTH_LONG).show()
+                                }
+                                CodeRunPlan.WEB_PREVIEW -> scope.launch {
+                                    // 成功 Toast 由 startAsWebPreview 内部统一弹
+                                    startAsWebPreview(ctx, scope, buildWebAppScript(ctx, CodeLanguage.support[lang]!!, code)) {
+                                        running = false
+                                        if (!it.ok) {
+                                            Toast.makeText(
+                                                ctx,
+                                                ctx.getString(R.string.chat_code_launch_failed, it.stderrTail(3)),
+                                                Toast.LENGTH_LONG,
+                                            ).show()
+                                        }
+                                    }
+                                }
+                                CodeRunPlan.NORMAL -> scope.launch(Dispatchers.IO) {
+                                    val rs = com.rokidlab.phone.platform.InteractiveRunManager.start(
+                                        ctx,
+                                        buildRunScript(ctx, CodeLanguage.support[lang]!!, code),
+                                        lang.uppercase(),
+                                    ) { _, _ -> running = false }
+                                    withContext(Dispatchers.Main) {
+                                        if (rs != null) {
+                                            ChatStateHolder.addRunCard(rs.id, lang.uppercase())
+                                            Toast.makeText(ctx, R.string.chat_file_running, Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            running = false
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                )
+                Spacer(Modifier.width(10.dp))
+            }
             // 复制：只在内容读到了才可用
             Icon(
                 imageVector = Icons.Outlined.ContentCopy,
@@ -231,3 +295,18 @@ internal fun ChatFileCard(path: String, name: String, chars: Int?) {
 
 /** 收起态预览行数无关；展开态最多渲染这么多行（再多就让用户去文件管理器看） */
 private const val MAX_RENDER_LINES = 400
+
+/**
+ * 文件名扩展名 → CodeLanguage.support 的语言 key（可运行才返回非 null）。
+ * 与代码卡围栏语言同一张映射表，保证「文件卡运行」与「代码块运行」行为一致。
+ */
+private fun runnableLang(name: String): String? {
+    val ext = name.substringAfterLast('.', "").lowercase()
+    return when (ext) {
+        "py", "py3" -> "python"
+        "js", "mjs", "cjs" -> "javascript"
+        "sh", "bash" -> "bash"
+        "html", "htm" -> "html"
+        else -> null
+    }
+}

@@ -250,6 +250,8 @@ object MotionPatternDetector {
     /** 判定所需最少样本数：窗口至少 ~200ms（20Hz×4）才谈得上「动作」 */
     private const val MIN_SAMPLES = 5
 
+    private const val RAD_TO_DEG = 57.2958f
+
     /** 窗口时间覆盖率闸门：样本跨度不足窗口 60% 视为「数据流刚启动/断流」，不做判定 */
     private const val MIN_WINDOW_COVERAGE = 0.6f
 
@@ -265,6 +267,55 @@ object MotionPatternDetector {
         val pitch = Math.toDegrees(asin(sinP))
         val yaw = Math.toDegrees(atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)))
         return floatArrayOf(pitch.toFloat(), yaw.toFloat(), roll.toFloat())
+    }
+
+    /**
+     * 四元数把传感器系向量旋到世界系（游戏旋转矢量约定：sensor → world，世界系 Z 轴向上）。
+     */
+    private fun rotateSensorToWorld(
+        s: AiChannel.ImuSample,
+        vx: Float, vy: Float, vz: Float,
+    ): FloatArray {
+        val qw = s.qw.toDouble(); val qx = s.qx.toDouble()
+        val qy = s.qy.toDouble(); val qz = s.qz.toDouble()
+        val tx = 2.0 * (qy * vz - qz * vy)
+        val ty = 2.0 * (qz * vx - qx * vz)
+        val tz = 2.0 * (qx * vy - qy * vx)
+        return floatArrayOf(
+            (vx + qw * tx + qy * tz - qz * ty).toFloat(),
+            (vy + qw * ty + qz * tx - qx * tz).toFloat(),
+            (vz + qw * tz + qx * ty - qy * tx).toFloat(),
+        )
+    }
+
+    /**
+     * 审批手势评分（v2c 修订）：点头/摇头的**姿态无关**判定。
+     *
+     * 为什么不用欧拉角振荡计数：ZYX 欧拉角在低头/前倾姿态下轴耦合严重 —— 头前倾 30° 时
+     * 纯点头（绕水平耳轴）会在欧拉 yaw 上耦合出同等量级的角度变化，被误判成摇头
+     * （实测 2026-10-04：用户点头 -> `approval gesture: shake -> deny`，确认被取消）。
+     *
+     * 改用**重力轴分解角速度**：把陀螺仪角速度经四元数旋到世界系，
+     *  - 摇头 = 绕竖直轴（颈轴）旋转 → shakeScore = 世界系竖直分量峰值；
+     *  - 点头 = 绕水平轴（耳轴）旋转 → nodScore = 世界系水平分量峰值。
+     * 旋转轴向与头部俯仰角无关，低头时两轴不再互相污染。侧歪头（绕近水平的视线轴）
+     * 会计入 nodScore —— 审批场景可接受（只引导点头/摇头两种输入）。
+     *
+     * @return [nodScore, shakeScore]，deg/s（窗口内峰值）
+     */
+    fun approvalGestureScores(samples: List<AiChannel.ImuSample>, windowMs: Long): FloatArray {
+        val window = tailWindow(samples, windowMs) ?: return floatArrayOf(0f, 0f)
+        if (window.size < MIN_SAMPLES) return floatArrayOf(0f, 0f)
+        var nod = 0f
+        var shake = 0f
+        for (s in window) {
+            val w = rotateSensorToWorld(s, s.gx, s.gy, s.gz) // rad/s
+            val vert = abs(w[2]) * RAD_TO_DEG
+            val horiz = kotlin.math.sqrt(w[0] * w[0] + w[1] * w[1]) * RAD_TO_DEG
+            if (horiz > nod) nod = horiz
+            if (vert > shake) shake = vert
+        }
+        return floatArrayOf(nod, shake)
     }
 
     /**

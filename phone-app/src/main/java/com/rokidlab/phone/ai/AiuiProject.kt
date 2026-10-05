@@ -47,6 +47,17 @@ object AiuiProject {
     /** 眼镜开发者 WebServer（AssistServer 内 WebServerService）固定监听端口 */
     private const val GLASSES_WEB_PORT = 8848
 
+    /**
+     * 官方 AIUI（REMOTE_SYNC 策略）在眼镜上的落盘目录。
+     *
+     * 2026-10-04 抓「陀螺战士」官方下载实测确认：商店同步的包落
+     * `files/aiui/package/remote_sync/<agentId>.aix`（下载中临时名
+     * `<agentId>.aix.<md5前8>.download`，完成后改名）；`cxr/` 子目录只放
+     * CXR 直传的包 —— 官方拉取必须扫 remote_sync。
+     */
+    const val OFFICIAL_AIX_DIR =
+        "/data/user_de/0/com.rokid.os.sprite.assistserver/files/aiui/package/remote_sync"
+
     /** 打包结果 */
     data class AixResult(
         val agentId: String,
@@ -139,13 +150,237 @@ object AiuiProject {
         }
     }
 
-    /**
-     * 本地 .aix 文件名 → 合法 agentId（眼镜 cxr 目录文件名 / Sys_AIUI_Start 包名）。
-     * 去 .aix 后缀并清洗非法字符；为空则回退 UUID（眼镜按文件名落盘与启动）。
-     */
+    /** 本地 .aix 文件名 → 合法 agentId（眼镜 cxr 目录文件名 / Sys_AIUI_Start 包名）。 */
     fun agentIdFromFileName(fileName: String): String {
         val base = fileName.trim().substringBeforeLast('.', fileName)
         return sanitizeName(base).ifEmpty { UUID.randomUUID().toString() }
+    }
+
+    /**
+     * 官方拉取副本的 agentId：由眼镜端原始 agentId 确定性派生（`official_` 前缀）。
+     *
+     * 刻意**不复用**原始 agentId（2026-10-04 与用户确认）：眼镜 cxr 目录里的官方包必须
+     * 保持原封不动 —— 同 ID 的话，修改后重装会覆盖眼镜上的官方包且无法回滚。
+     * 确定性派生保证「重复拉取幂等」：同一条官方包拉两次得到同一记录，不产生重复条目。
+     */
+    fun officialAgentId(originalId: String): String =
+        sanitizeName("official_${originalId.trim()}").ifEmpty { UUID.randomUUID().toString() }
+
+    /**
+     * 从 .aix（zip）里解析应用展示名，供官方拉取时命名记录/项目：
+     * 1) AGENTS.md 的首个一级标题（与 [projectDisplayName] 同款约定）；
+     * 2) 任一页面 `<script def>` JSON 的 navigationBarTitleText（官方包无 AGENTS.md 时的来源）；
+     * 都取不到返回 null（调用方兜底 agentId）。
+     */
+    fun parseAixDisplayName(aix: File): String? {
+        return runCatching {
+            java.util.zip.ZipFile(aix).use { zip ->
+                val byName = LinkedHashMap<String, java.util.zip.ZipEntry>()
+                val en = zip.entries()
+                while (en.hasMoreElements()) {
+                    val e = en.nextElement()
+                    if (!e.isDirectory) byName[e.name.removePrefix("/").removePrefix("package/")] = e
+                }
+                byName["AGENTS.md"]?.let { e ->
+                    zip.getInputStream(e).bufferedReader(Charsets.UTF_8).readText()
+                        .lineSequence()
+                        .firstOrNull { it.trim().startsWith("# ") }
+                        ?.trim()?.removePrefix("#")?.trim()?.takeIf { it.isNotEmpty() }
+                }?.let { return@runCatching it }
+                for ((name, e) in byName) {
+                    if (!name.endsWith(".ink")) continue
+                    val text = zip.getInputStream(e).bufferedReader(Charsets.UTF_8).readText()
+                    val m = Regex("<script\\s+def[^>]*>([\\s\\S]*?)</script>").find(text) ?: continue
+                    val def = runCatching { JSONObject(m.groupValues[1].trim()) }.getOrNull() ?: continue
+                    def.optString("navigationBarTitleText").takeIf { it.isNotBlank() }
+                        ?.let { return@runCatching it }
+                }
+                null
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * 把 .aix（zip）解包为**可编辑的项目源码目录**（aiui_projects/<project>/），
+     * 供官方拉取后的「修改 → 重打包 → ink 宿主演示」链路使用。
+     *
+     * 条目名归一与 [com.rokidlab.phone.aiui.AixBundleReader] 同款：剥开头 `/` 与
+     * `package/` 前缀，跳过 __MACOSX 与目录条目；二进制资源原样落盘。
+     * agentId 写入 `.rokid_agent_id` sidecar（buildAix 打包时复用同一 ID，保持记录对齐）。
+     *
+     * @return null = 成功；否则为失败原因（可直接用于工具回复）
+     */
+    fun unpackAixToProject(context: Context, aix: File, project: String, agentId: String): String? {
+        if (!aix.isFile) return ".aix 文件不存在：${aix.absolutePath}"
+        if (project.isBlank()) return "项目名为空"
+        val dest = projectDir(context, project)
+        return runCatching {
+            dest.deleteRecursively()
+            if (!dest.mkdirs()) return@runCatching "无法创建项目目录：${dest.absolutePath}"
+            java.util.zip.ZipFile(aix).use { zip ->
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val e = entries.nextElement()
+                    if (e.isDirectory) continue
+                    val clean = e.name.removePrefix("/").removePrefix("package/")
+                    if (clean.isEmpty() || clean.startsWith("__MACOSX")) continue
+                    val out = File(dest, clean)
+                    // 防 zip-slip：条目路径必须落在项目目录内
+                    if (!out.canonicalPath.startsWith(dest.canonicalPath + File.separator)) continue
+                    out.parentFile?.mkdirs()
+                    zip.getInputStream(e).use { ins -> out.outputStream().use { ins.copyTo(it) } }
+                }
+            }
+            runCatching { File(dest, ".rokid_agent_id").writeText(agentId) }
+            if (!File(dest, "app.json").isFile) {
+                return@runCatching "解包结果缺少 app.json（不是有效的 AIUI 包）：${aix.name}"
+            }
+            null
+        }.getOrElse { "解包失败：${it.message ?: it.javaClass.simpleName}" }
+    }
+
+    /**
+     * 从眼镜 logcat 缓冲提取官方（商店下载）AIUI 的 agentId 清单与 agentId→名称映射。
+     *
+     * 为什么靠日志而不是列目录（2026-10-04 实测，此处留痕避免重蹈）：
+     *  - shell 用户读不了 AssistServer 私有目录（/data/user_de/... Permission denied，
+     *    生产版 adb root 不可用、无 su、run-as 不适用系统应用）→ adb sync / cp 兜底全走不通；
+     *  - WebServer openFileList 有媒体目录白名单（/storage/emulated/0 可列，
+     *    /sdcard、/data 私有路径一律静默返回空 data）→ 不能用它做清单；
+     *  - 但 AssistServer 每次与云端同步都会把完整 agent 清单打进 logcat
+     *    （AIUI_AgentAppManager syncAgentList agentId=...），云端 JSON 响应行还带
+     *    "agentId":"...","agentName":"..." 相邻字段 —— 缓冲区未被冲掉时即可还原清单。
+     *
+     * @return null = ADB 通道不可用；否则 (agentId 清单, agentId→名称映射)
+     */
+    fun listOfficialAgents(app: LabApplication): Pair<List<String>, Map<String, String>>? {
+        val adb = app.cxrL.getAdbShellClient() ?: return null
+        // 正则刻意不含双引号字符：adb 传输层会剥双引号破坏正则（实测教训），
+        // 用 `.` 匹配 JSON 的引号字符；眼镜 logcat 也不支持 -a 选项（老版 logcat）。
+        // -t 4000 只取最近 4000 行：logcat -d 全量 dump 经蓝牙隧道要 10s+，限行后秒级；
+        // syncAgentList 每次云端同步都打，近期缓冲内必然有。
+        // 清单三来源（一次 logcat 全抓）：
+        //  1) syncAgentList agentId=<id> —— 云端同步时打（缓冲冲掉后拿不到）
+        //  2) agentId":"<id>","agentName":"<名>" —— 云端同步 JSON 响应（带名字）
+        //  3) remote_sync/<id>.aix —— 引擎 openPackage/解包日志：用户在眼镜上**单独启动**
+        //     任一 AIUI 时必然出现（眼镜上没有 AI 列表页，逐个启动是常态操作）→ id 进清单，
+        //     名字由拉取后包内解析补全
+        val out = adb.executeShellCommand(
+            "logcat -d -t 4000 | grep -aoE 'syncAgentList agentId=[0-9a-f]{32}|" +
+                "agentId.:.?[0-9a-f]{32}.{0,3}agentName.:.?[^,}]+" +
+                "|remote_sync.[0-9a-f]{32}.aix'",
+            timeoutMs = 20_000,
+        )
+        val ids = LinkedHashSet<String>()
+        val names = HashMap<String, String>()
+        Regex("syncAgentList agentId=([0-9a-f]{32})").findAll(out).forEach { ids.add(it.groupValues[1]) }
+        Regex("remote_sync.?([0-9a-f]{32})")   // openPackage 日志里 .aix 前是引号或路径分隔
+            .findAll(out)
+            .forEach { ids.add(it.groupValues[1]) }
+        // 字符类排除 \r\n：`[^,}]` 在 Kotlin findAll 里会跨行吞并后续输出（实测教训，
+        // 名字被污染成 "陀螺战士"\nagentId...），grep -o 是逐行的、这里不是
+        Regex("agentId.:.?([0-9a-f]{32}).{0,3}agentName.:.?([^,}\\r\\n]+)").findAll(out).forEach {
+            val name = it.groupValues[2].trim().trim('"', ' ', '\t')
+            if (name.isNotEmpty()) {
+                ids.add(it.groupValues[1])
+                names[it.groupValues[1]] = name
+            }
+        }
+        return ids.toList() to names
+    }
+
+    /** 已见官方 agent 清单的本地持久化文件（agentId→名称）。眼镜日志缓冲有限
+     *  （syncAgentList 行会被高频日志冲掉），落一份在手机端：registry 被删后
+     *  仍可凭清单 + WebServer downloadFile 全量重建，不再依赖日志时机。 */
+    private fun officialListFile(context: Context): File =
+        File(context.filesDir, "aiui_official_list.json")
+
+    fun saveOfficialList(context: Context, names: Map<String, String>) {
+        if (names.isEmpty()) return
+        runCatching {
+            val json = org.json.JSONObject()
+            names.forEach { (id, name) -> json.put(id, name) }
+            officialListFile(context).writeText(json.toString())
+        }
+    }
+
+    fun loadOfficialList(context: Context): Map<String, String> = runCatching {
+        val f = officialListFile(context)
+        if (!f.isFile) return emptyMap()
+        val json = org.json.JSONObject(f.readText())
+        val out = LinkedHashMap<String, String>()
+        json.keys().forEach { id -> out[id] = json.optString(id) }
+        out
+    }.getOrDefault(emptyMap())
+
+    /**
+     * 从眼镜拉取一个文件到手机（走开发者 WebServer POST /server/downloadFile）。
+     *
+     * 2026-10-04 实测：downloadFile 无路径白名单，可直拉 AssistServer 私有目录的
+     * .aix（2338872 字节与引擎日志 size 完全一致）；失败响应为 JSON（HTTP 非 2xx 或
+     * content-type=application/json），成功响应为二进制文件流。
+     *
+     * @return null = 成功；否则为失败原因（可直接用于工具回复）
+     */
+    fun pullAixFromGlasses(context: Context, remotePath: String, localFile: File): String? {
+        val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
+        // 8848 WebServer 按需启动 / 空闲 90s 自毁，先广播拉起再选线路
+        ensureGlassesWebServer(app)
+        runCatching { if (localFile.exists()) localFile.delete() }
+        localFile.parentFile?.mkdirs()
+        val wifiIp = app.glassesIp
+        val route = runBlocking { app.routeManager.resolve(wifiIp, GLASSES_WEB_PORT) }
+        return when (route) {
+            is ConnectionRoute.Wifi -> try {
+                postAixDownload(remotePath, route.ip, route.port, localFile)
+            } catch (e: IOException) {
+                // 同 uploadOnce：WiFi 首选失败（含明文被 NSC 拒、8848 未监听 ECONNREFUSED）一律降级蓝牙隧道重试
+                Log.w(
+                    TAG,
+                    "download via WiFi ${route.ip}:${route.port} failed " +
+                        "(${e.javaClass.simpleName}: ${e.message}), 降级蓝牙隧道重试",
+                )
+                app.routeManager.noteWifiFailure()
+                val localPort = app.routeManager.tunnelTo(GLASSES_WEB_PORT) ?: throw e
+                postAixDownload(remotePath, "127.0.0.1", localPort, localFile)
+            }
+            is ConnectionRoute.Bluetooth -> postAixDownload(remotePath, route.ip, route.localPort, localFile)
+            is ConnectionRoute.None -> "无法连接到眼镜（WiFi 与蓝牙隧道均不可用），请先确认手机与眼镜已连接"
+        }
+    }
+
+    /** 单次 HTTP 文件下载（不换线路）；null = 成功，否则为失败原因 */
+    private fun postAixDownload(remotePath: String, ip: String, port: Int, localFile: File): String? {
+        val url = URL("http://$ip:$port/server/downloadFile")
+        val conn = url.openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 10_000
+            // .aix 可达数 MB，蓝牙隧道吞吐约 1-2Mbps，读超时放宽到 120s
+            conn.readTimeout = 120_000
+            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+            DataOutputStream(conn.outputStream).use { out ->
+                out.writeBytes("filePath=${URLEncoder.encode(remotePath, "UTF-8")}")
+            }
+            val code = conn.responseCode
+            val contentType = conn.contentType.orEmpty()
+            if (code !in 200..299 || contentType.contains("application/json")) {
+                // 错误响应：JSON（errorCode/errorMsg）
+                val body = if (code in 200..299) {
+                    conn.inputStream.bufferedReader().readText()
+                } else {
+                    conn.errorStream?.bufferedReader()?.readText().orEmpty()
+                }
+                return "眼镜下载接口响应异常（HTTP $code）：${body.take(120)}"
+            }
+            conn.inputStream.use { ins -> localFile.outputStream().use { ins.copyTo(it) } }
+            if (!localFile.isFile || localFile.length() <= 0) return "下载内容为空：$remotePath"
+            Log.i(TAG, "postAixDownload: $remotePath -> ${localFile.length()} bytes")
+            return null
+        } finally {
+            conn.disconnect()
+        }
     }
 
     private fun sanitizeName(name: String): String =
@@ -645,13 +880,20 @@ object AiuiProject {
         }
     }
 
+    /** 上次 ensureGlassesWebServer 成功广播的时间戳（节流用） */
+    @Volatile
+    private var lastWebServerEnsureAt = 0L
+
     /**
      * 通过 ADB-over-蓝牙隧道在眼镜上发广播拉起开发者 WebServer（8848）。
      * 广播 action/cmd 与眼镜端 AssistServer 的 WebServerService 约定一致
      * （com.rokid.glass.er.webserver.command / running_start）；
      * 服务已在运行时该命令幂等（仅复用已绑定端口，不重复 bind）。
+     *
+     * 30s 内已确保过则直接跳过（连续拉多个包时不重复广播 + 白等 2.5s）。
      */
     private fun ensureGlassesWebServer(app: LabApplication) {
+        if (System.currentTimeMillis() - lastWebServerEnsureAt < 30_000) return
         val cmd = "am broadcast -a com.rokid.glass.er.webserver.command --es cmd running_start"
         runCatching {
             val adb = app.cxrL.getAdbShellClient()
@@ -664,6 +906,7 @@ object AiuiProject {
         }.onFailure { Log.w(TAG, "ensureGlassesWebServer failed", it) }
         // WebServerService onStartCommand → NanoHTTPD bind 很快，留 2.5s 余量等端口就绪
         Thread.sleep(2500)
+        lastWebServerEnsureAt = System.currentTimeMillis()
     }
 
     /** 单次上传尝试；null = 成功，否则为失败原因 */

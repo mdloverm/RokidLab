@@ -187,7 +187,16 @@ internal fun CodeBlockCard(langRaw: String, code: String) {
                         Toast.makeText(ctx, R.string.chat_code_env_missing, Toast.LENGTH_LONG).show()
                         return@CardIconButton
                     }
-                    startRun(buildRunScript(ctx, runnable, code), label)
+                    val script = buildWebAppScript(ctx, runnable, code)
+                    when (decideRunPlan(lang, code)) {
+                        CodeRunPlan.BLOCKED_GUI -> {
+                            running = false
+                            result = ExecResult(-1, "", ctx.getString(R.string.chat_code_gui_unsupported))
+                        }
+                        CodeRunPlan.WEB_PREVIEW ->
+                            startAsWebPreview(ctx, scope, script) { running = false; result = it }
+                        CodeRunPlan.NORMAL -> startRun(script, label)
+                    }
                 }
             }
             CardIconButton(
@@ -491,6 +500,19 @@ private fun javaScript(ctx: Context, code: String): String {
  * 按语言把代码包成容器可执行脚本 —— 代码卡「运行键」与聊天「说运行」共用这一份封装，
  * 保证两条入口跑出来的行为完全一致（探测缺失组件 / base64 防注入 / Java 类名提取）。
  */
+/**
+ * 运行分流决策（代码卡与文件卡共用）：同一份代码从哪张卡点运行，走的链路必须一致。
+ */
+internal enum class CodeRunPlan { BLOCKED_GUI, WEB_PREVIEW, NORMAL }
+
+internal fun decideRunPlan(lang: String, code: String): CodeRunPlan = when {
+    // 桌面窗口库（tkinter/pygame/…）：容器无显示服务器，直接拦截给引导
+    looksLikeDesktopGui(code) && lang != "html" && lang != "htm" -> CodeRunPlan.BLOCKED_GUI
+    // 常驻网页服务（remi/flask/…）与 HTML 页面：普通运行必被看狗杀掉，走预览链路
+    looksLikeWebApp(code) || lang == "html" || lang == "htm" -> CodeRunPlan.WEB_PREVIEW
+    else -> CodeRunPlan.NORMAL
+}
+
 internal fun buildRunScript(ctx: Context, runnable: CodeLanguage.Runnable, code: String): String = when (runnable) {
     CodeLanguage.Runnable.SHELL -> code + "\n"
     CodeLanguage.Runnable.PYTHON ->
@@ -498,6 +520,122 @@ internal fun buildRunScript(ctx: Context, runnable: CodeLanguage.Runnable, code:
     CodeLanguage.Runnable.NODE ->
         interpreterScript(ctx, "node", R.string.chat_code_node_missing, code)
     CodeLanguage.Runnable.JAVA -> javaScript(ctx, code)
+    CodeLanguage.Runnable.HTML -> htmlScript(ctx, code)
+}
+
+/**
+ * HTML 网页脚本：把代码落盘成 index.html，起 python3 静态服务（端口用管理器注入的
+ * $PREVIEW_PORT）——浏览器/WebView 对 file:// 私有目录有访问限制，静态服务最稳。
+ * 单文件小游戏（2048/贪吃蛇）与静态页都走这条。
+ */
+private fun htmlScript(ctx: Context, code: String): String {
+    val missing = ctx.getString(R.string.chat_code_python_missing).replace("'", "").replace("\n", " ")
+    val b64 = Base64.encodeToString(code.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+    return """
+        command -v python3 >/dev/null 2>&1 || { echo '$missing'; exit 91; }
+        mkdir -p /tmp/rl_html_app && echo '$b64' | base64 -d > /tmp/rl_html_app/index.html || exit 92
+        exec python3 -m http.server "${'$'}{PREVIEW_PORT:-8080}" --bind 127.0.0.1 --directory /tmp/rl_html_app
+    """.trimIndent() + "\n"
+}
+
+// ═══════════════════ 网页应用（remi / flask / streamlit…）═══════════════════
+
+/**
+ * 嗅探「常驻网页服务型」脚本：这类脚本（remi/flask/streamlit 等）起 HTTP 服务后**永不退出**，
+ * 走普通运行会被超时/空闲看狗杀掉，窗口也无处可画——必须经 [WebPreviewManager] 常驻启动、
+ * 由聊天页预览条（WebView）打开。关键词取主流 Python web 框架 + 显式端口约定。
+ */
+internal fun looksLikeWebApp(code: String): Boolean = code.length < 100_000 && WEB_APP_HINT.containsMatchIn(code)
+
+private val WEB_APP_HINT = Regex(
+    "(?i)(\\bremi\\b|\\bstreamlit\\b|\\bgradio\\b|\\bflask\\b|\\bfastapi\\b|\\buvicorn\\b" +
+        "|\\bbottle\\b|\\btornado\\b|\\baiohttp\\b|\\bdjango\\b|http\\.server|serve_forever|PREVIEW_PORT)",
+)
+
+/**
+ * 兜底嗅探「桌面窗口库」脚本（tkinter/pygame/PyQt…）：容器没有显示服务器，这些库**必然
+ * 开不出窗口**——普通运行只会挂到超时或抛 Display/Video 错。拦截下来直接给引导文案，
+ * 提示改用 remi 或 HTML5（AI 侧工具描述已同步此约定）。
+ */
+internal fun looksLikeDesktopGui(code: String): Boolean =
+    code.length < 100_000 && DESKTOP_GUI_HINT.containsMatchIn(code)
+
+private val DESKTOP_GUI_HINT = Regex(
+    "(?i)(\\btkinter\\b|\\bpygame\\b|\\bPyQt[456]?\\b|\\bPySide[26]?\\b|\\bkivy\\b|\\bPySimpleGUI\\b|\\bfreegames\\b)",
+)
+
+/**
+ * 网页应用启动脚本：普通脚本原样透传；**remi 场景注入端口桥接**——用户从网上抄的 demo
+ * 几乎都写死 `start(MyApp, port=8081)`，而 [com.rokidlab.phone.platform.WebPreviewManager]
+ * 分配的是动态端口并注入 `PREVIEW_PORT` 环境变量，不桥接必端口错位。
+ *
+ * 桥接方式：先把用户代码落盘，再用一段 patch 器 `exec` 它——把 `remi.start` 的 port/address
+ * 强制改为 `$PREVIEW_PORT`/127.0.0.1（用户显式写的 port 被覆盖，没写的补默认）。
+ * remi 未安装时给中文引导（而不是裸 ModuleNotFoundError）。
+ */
+internal fun buildWebAppScript(ctx: Context, runnable: CodeLanguage.Runnable, code: String): String {
+    val base = buildRunScript(ctx, runnable, code)
+    val isRemi = runnable == CodeLanguage.Runnable.PYTHON && Regex("(?i)\\bremi\\b").containsMatchIn(code)
+    if (!isRemi) return base
+    val missing = ctx.getString(R.string.chat_code_python_missing).replace("'", "").replace("\n", " ")
+    val b64 = Base64.encodeToString(code.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+    return """
+        command -v python3 >/dev/null 2>&1 || { echo '$missing'; exit 91; }
+        echo '$b64' | base64 -d > /tmp/rl_webapp.py || exit 92
+        python3 - /tmp/rl_webapp.py <<'RLPYEOF'
+        import os, sys
+        try:
+            import remi
+        except ImportError:
+            sys.stderr.write('容器里还没装 remi：先 pip install remi（可让 AI 帮你装，装完再运行）\n')
+            sys.exit(91)
+        _orig_start = remi.start
+        def _patched_start(app, *a, **kw):
+            kw['port'] = int(os.environ.get('PREVIEW_PORT') or kw.get('port') or 8081)
+            kw.setdefault('address', '127.0.0.1')
+            return _orig_start(app, *a, **kw)
+        remi.start = _patched_start
+        g = {'__name__': '__main__', '__file__': sys.argv[1]}
+        exec(compile(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1], 'exec'), g)
+        RLPYEOF
+    """.trimIndent() + "\n"
+}
+
+/**
+ * 以「常驻网页服务」模式运行代码：[WebPreviewManager.start] 拉起长驻进程并自动分配端口，
+ * 聊天页的预览条（[com.rokidlab.phone.store.WebPreviewBar]）随即出现，点开即 WebView 渲染 GUI。
+ *
+ * 结果就地写回代码卡的运行结果区（[onResult]），与普通运行同一块展示位；成功额外 Toast
+ * 引导点预览条。阻塞调用，须在 IO 线程。
+ */
+internal fun startAsWebPreview(
+    ctx: Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    script: String,
+    onResult: (ExecResult) -> Unit,
+) {
+    if (!ProotInstaller.isInstalled(ctx)) {
+        Toast.makeText(ctx, R.string.chat_code_env_missing, Toast.LENGTH_LONG).show()
+        return
+    }
+    scope.launch(Dispatchers.IO) {
+        val res = when (val r = com.rokidlab.phone.platform.WebPreviewManager.start(ctx, script, cwd = "")) {
+            is com.rokidlab.phone.platform.WebPreviewManager.StartResult.Started -> {
+                val url = r.info.url
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        ctx,
+                        ctx.getString(R.string.chat_code_web_started, url),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+                ExecResult(0, "网页应用运行中：$url" + (r.note?.let { "\n$it" } ?: ""), "")
+            }
+            is com.rokidlab.phone.platform.WebPreviewManager.StartResult.Failed ->
+                ExecResult(-1, "", r.message)
+        }
+        withContext(Dispatchers.Main) { onResult(res) }
+    }
 }
 
 /**
@@ -531,7 +669,7 @@ internal fun isRunIntent(text: String): Boolean {
 
 /** 语言 → 能力（可否运行）与落盘文件名（扩展名/MIME）映射。 */
 internal object CodeLanguage {
-    enum class Runnable { SHELL, PYTHON, NODE, JAVA }
+    enum class Runnable { SHELL, PYTHON, NODE, JAVA, HTML }
 
     data class FileKind(val namePrefix: String, val ext: String, val mime: String)
 
@@ -547,6 +685,9 @@ internal object CodeLanguage {
         "js" to Runnable.NODE,
         "node" to Runnable.NODE,
         "java" to Runnable.JAVA,
+        // 网页（HTML5 小游戏/静态页）：运行 = 落盘起静态服务 → 聊天预览条打开
+        "html" to Runnable.HTML,
+        "htm" to Runnable.HTML,
     )
 
     fun fileKind(lang: String): FileKind = when (lang) {

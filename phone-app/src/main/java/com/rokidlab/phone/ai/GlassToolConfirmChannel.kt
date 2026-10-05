@@ -6,6 +6,8 @@ import com.rokidlab.phone.ai.approval.ApprovalGate
 import com.rokidlab.phone.glasses.CxrLHiRokidSession
 import com.rokidlab.phone.glasses.GlassesHandshake
 import com.rokidlab.phone.glasses.LinkProtocol
+import com.rokidlab.phone.glasses.MotionBuffer
+import com.rokidlab.phone.glasses.MotionRuleEngine
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -150,6 +152,7 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
             Log.w(TAG, "confirm request rejected: link not ready")
             return false
         }
+        ensureApprovalGestureAlive(s)
         val id = "tc-${System.currentTimeMillis()}-${seq.incrementAndGet()}"
         val waiter = ConfirmWaiter()
         pending[id] = waiter
@@ -177,6 +180,26 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
         } finally {
             pending.remove(id)
         }
+    }
+
+    /**
+     * 审批手势保活：眼镜端「点头=确认、摇头=取消」（MotionRuleEngine v2c）依赖
+     * 「IMU 数据流 + 规则引擎」活着，但二者的启动点（CUSTOMAPP 会话就绪 onOpenAppResult /
+     * 头动工具懒重启）与确认通道（只要求链路在线）生命周期不同步 —— 普通对话路径弹确认时
+     * 两者可能都没起，用户点头没反应，只能干等 30s 超时。
+     * 发确认请求前兜底拉起：init/start 幂等；IMU 缓冲陈旧 >15s 才补发 imu_start
+     * （眼镜端对重复 start 幂等，与 probe 兜底同判据）。失败只记日志不阻塞确认本身。
+     */
+    private fun ensureApprovalGestureAlive(s: CxrLHiRokidSession) {
+        runCatching {
+            MotionRuleEngine.init(s.appContext)
+            MotionRuleEngine.start()
+            val staleMs = System.currentTimeMillis() - (MotionBuffer.latest()?.t ?: 0L)
+            if (staleMs > 15_000L) {
+                val r = s.deviceControl.sendImuControl(true)
+                Log.i(TAG, "approval gesture re-arm: imu stale ${staleMs}ms -> imu_start $r")
+            }
+        }.onFailure { Log.w(TAG, "approval gesture re-arm failed", it) }
     }
 
     /** 眼镜端确认结果回执（由 Session 全局指令监听回调，binder 线程安全）。 */
@@ -208,7 +231,24 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
         val earliest = pending.entries.minByOrNull { it.value.createdAt }?.key ?: return false
         Log.i(TAG, "resolve by motion (allowed=$allowed id=$earliest)")
         onResult(earliest, allowed)
+        notifyGlassesClose(earliest)
         return true
+    }
+
+    /**
+     * 通知眼镜端关闭确认悬浮窗：手势应答发生在手机端，眼镜端按键路径的 respond() 不会跑，
+     * 不通知的话悬浮窗要挂满 30s 超时才消失。旧版眼镜端未订阅此 topic —— 发送失败静默，
+     * 悬浮窗仍由眼镜端 30s 超时兜底。
+     */
+    private fun notifyGlassesClose(id: String) {
+        runCatching {
+            val s = session ?: return
+            val link = s.cxrLink ?: return
+            val caps = Caps()
+            caps.write(id)
+            val r = s.rawSendCustomCmd(link, LinkProtocol.TOPIC_TOOL_CONFIRM_CLOSE, caps)
+            Log.i(TAG, "notify glasses close (id=$id) -> $r")
+        }.onFailure { Log.w(TAG, "notify glasses close failed", it) }
     }
 
     /** 清空全部等待中的确认（连接断开 / Session.cleanup 时调用，避免线程挂满 35s）。 */

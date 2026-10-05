@@ -5,7 +5,7 @@
     android:layout_height="match_parent"
     android:gravity="center"
     android:orientation="vertical"
-    android:background="@android:color/transparent"
+    android:background="#FF000000"
     android:padding="40dp"
     android:visibility="invisible">
 

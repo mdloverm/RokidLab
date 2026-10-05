@@ -41,6 +41,7 @@ internal object AiuiToolProvider : ToolProvider {
         "stop_aiui_app",
         "install_aiui_project",
         "list_my_aiui_apps",
+        "pull_official_aiui",
     )
 
     override fun tools(): List<ToolEntry> = listOf(
@@ -140,6 +141,30 @@ internal object AiuiToolProvider : ToolProvider {
                     "type" to "object",
                     "properties" to mapOf(
                         "keyword" to mapOf("type" to "string", "description" to "可选：按应用名/项目名过滤的关键字，不传则列出全部"),
+                    ),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "pull_official_aiui",
+            group = ToolRegistry.DOMAIN_AIUI,
+            displayNameRes = R.string.ai_tool_pull_official_aiui_name,
+            descriptionRes = R.string.ai_tool_pull_official_aiui_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            requiresGlasses = true,
+            statusText = "正在从眼镜获取官方 AIUI 应用…",
+            summarize = { args ->
+                val n = args.optString("appName").trim()
+                if (n.isEmpty()) "获取官方 AIUI 应用" else "获取官方 AIUI：$n"
+            },
+            schema = toolSchema(
+                name = "pull_official_aiui",
+                description = "把眼镜上已安装的官方 AIUI 智能体应用（商店下载，.aix 落在眼镜 AssistServer 私有 remote_sync 目录）拉取到手机：解包出可编辑源码 + 保留 .aix 本地包，登记进 AIUI 应用管理并标记为「官方」。清单来自眼镜日志中的云端同步记录（syncAgentList），拉包走眼镜 WebServer /server/downloadFile。触发口径：用户说“获取官方aiui/拉取官方智能体/把眼镜上的官方应用弄到手机/导入官方 AI 应用”等时调用。不传 appName = 拉取全部；传 appName（可模糊）= 只拉匹配的那个。拉取是幂等的：已拉过的应用自动跳过。拉取副本用独立 agentId，与眼镜官方包完全隔离 —— 删除记录只删手机端，永不触碰眼镜官方包。拉取后用户可直接“打开 <名字>”（走 Lab ink 宿主）或“修改 <名字>”。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "appName" to mapOf("type" to "string", "description" to "可选：只要拉取名字匹配的这个官方应用（模糊匹配）；不传则拉取眼镜上全部官方应用"),
                     ),
                 ),
             ),
@@ -393,6 +418,7 @@ internal object AiuiToolProvider : ToolProvider {
                         val src = when (r.origin) {
                             AiuiAppRegistry.ORIGIN_UPLOADED -> "本地上传"
                             AiuiAppRegistry.ORIGIN_GENERATED -> "对话生成"
+                            AiuiAppRegistry.ORIGIN_OFFICIAL -> "官方拉取"
                             else -> "内置/历史"
                         }
                         val proj = r.project?.let { "，项目名:$it" } ?: ""
@@ -405,8 +431,129 @@ internal object AiuiToolProvider : ToolProvider {
                     }
                     val lines = rows.mapIndexed { i, s -> "[${i + 1}] $s" }
                     "你共有 ${rows.size} 个 AIUI 智能体应用：\n" + lines.joinToString("\n") +
-                        "\n如需修改某个“对话生成”的应用，告诉我应用名或项目名，我会先读取它现有的代码，改好后再在手机上演示确认、必要时重新安装到眼镜；也可以让我直接打开或关闭某个应用。"
+                        "\n如需修改某个“对话生成/官方拉取”的应用，告诉我应用名或项目名，我会先读取它现有的代码，改好后再在手机上演示确认、必要时重新安装到眼镜；也可以让我直接打开或关闭某个应用。"
                 }
+            }
+
+            "pull_official_aiui" -> {
+                val appName = args.optString("appName").trim()
+                val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
+                // 清单双来源合并：
+                //  1) 眼镜 logcat 的 syncAgentList（增量：新装的官方应用；日志冲掉后拿不到）
+                //  2) 手机端持久化清单 aiui_official_list.json（兜底：拉取成功过一次就永久在）
+                // 拉包走 WebServer downloadFile（WiFi/蓝牙隧道），不依赖 ADB ——
+                // 即使 logcat 抓不到（ADB 断/缓冲冲掉），本地清单依然能全量重建。
+                val agentIds: List<String>
+                val nameMap: Map<String, String>
+                run {
+                    val merged = LinkedHashMap<String, String>() // id -> name（本地清单打底）
+                    AiuiProject.loadOfficialList(context).forEach { (id, name) -> merged[id] = name }
+                    val listed = AiuiProject.listOfficialAgents(app)
+                    if (listed != null) {
+                        val (ids, names) = listed
+                        ids.forEach { id -> merged.putIfAbsent(id, names[id] ?: id) }
+                        names.forEach { (id, name) -> merged[id] = name }
+                    }
+                    agentIds = merged.keys.toList()
+                    nameMap = merged
+                }
+                if (agentIds.isEmpty()) {
+                    return "没有找到官方 AIUI 应用清单。" +
+                        "请先在官方 App 下载至少一个 AIUI 应用，或在眼镜上打开一次 AI 应用列表（触发与云端同步），再试一次。"
+                }
+                fun nameMatch(n: String): Boolean {
+                    if (appName.isEmpty()) return true
+                    val q = appName.lowercase()
+                    val l = n.lowercase()
+                    return l.contains(q) || q.contains(l)
+                }
+                val pulled = ArrayList<String>()
+                val known = ArrayList<String>()
+                val fails = ArrayList<String>()
+                val seenNames = LinkedHashMap<String, String>() // 原始 agentId -> 干净名字（拉取后落盘）
+                for (id in agentIds) {
+                    val newId = AiuiProject.officialAgentId(id)
+                    // 幂等：登记过且本地 .aix 还在的官方副本直接跳过（只报名字，不重拉）
+                    val cached = AiuiAppRegistry.getByAgentId(context, newId)
+                    if (cached != null && AiuiProject.packageFile(context, newId).isFile) {
+                        // 名字自动纠正：早期版本正则跨行污染过 appName（"陀螺战士"\nagentId...），
+                        // 云端映射的名字更干净时刷新登记
+                        var finalName = cached.appName
+                        val clean = nameMap[id]
+                        if (clean != null && clean != cached.appName) {
+                            finalName = clean
+                            AiuiAppRegistry.upsert(context, cached.copy(appName = clean))
+                        }
+                        seenNames[id] = finalName
+                        if (nameMatch(finalName)) known += finalName
+                        continue
+                    }
+                    val local = java.io.File(context.cacheDir, "official_pull_$newId.aix")
+                    val pullErr = AiuiProject.pullAixFromGlasses(
+                        context,
+                        "${AiuiProject.OFFICIAL_AIX_DIR}/$id.aix",
+                        local,
+                    )
+                    if (pullErr != null) {
+                        fails += "$id：$pullErr"
+                        continue
+                    }
+                    // 名字优先取云端同步映射（agentName），包内解析（AGENTS.md/页面标题）兜底
+                    val displayName = nameMap[id]?.takeIf { it.isNotBlank() }
+                        ?: AiuiProject.parseAixDisplayName(local)
+                        ?: id
+                    if (!nameMatch(displayName)) {
+                        runCatching { local.delete() }
+                        continue
+                    }
+                    // 项目目录名 = 展示名（清洗在 projectDir 内做）；目录已归属其他 agentId 时加后缀互踩隔离
+                    var project = displayName
+                    val dir = AiuiProject.projectDir(context, project)
+                    val dirAgent = runCatching { java.io.File(dir, ".rokid_agent_id").readText().trim() }.getOrNull()
+                    if (dir.isDirectory && dirAgent != newId) project = "${displayName}_${id.take(8)}"
+                    val unpackErr = AiuiProject.unpackAixToProject(context, local, project, newId)
+                    if (unpackErr != null) {
+                        fails += "$displayName：$unpackErr"
+                        runCatching { local.delete() }
+                        continue
+                    }
+                    // .aix 保留为本地包副本：open_aiui_app 见本地包即走 Lab ink 宿主（不碰眼镜官方包）
+                    runCatching {
+                        local.copyTo(AiuiProject.packageFile(context, newId), overwrite = true)
+                        local.delete()
+                    }
+                    val pageName = runCatching {
+                        org.json.JSONObject(
+                            java.io.File(AiuiProject.projectDir(context, project), "app.json").readText(),
+                        ).optJSONArray("pages")?.optString(0)?.takeIf { it.isNotBlank() }
+                    }.getOrNull() ?: AiuiAppRegistry.DEFAULT_PAGE_NAME
+                    AiuiAppRegistry.upsert(
+                        context,
+                        AiuiAppRegistry.AiuiAppRecord(
+                            appName = displayName,
+                            agentId = newId,
+                            project = project,
+                            pageName = pageName,
+                            sourceProjectDir = AiuiProject.projectDir(context, project).absolutePath,
+                            origin = AiuiAppRegistry.ORIGIN_OFFICIAL,
+                            // 官方原包确实还装在眼镜 remote_sync 目录 —— 如实登记；
+                            // 但 official 记录的删除/重装护栏保证永远不会触达它
+                            aixOnGlasses = true,
+                        ),
+                    )
+                    pulled += displayName
+                    seenNames[id] = displayName
+                }
+                // 成功确认过的（新拉取 + 已登记）落盘持久化：下次日志冲掉也能凭清单全量重建
+                if (seenNames.isNotEmpty()) AiuiProject.saveOfficialList(context, seenNames)
+                val parts = ArrayList<String>()
+                if (pulled.isNotEmpty()) parts.add("新拉取 ${pulled.size} 个：" + pulled.joinToString("、"))
+                if (known.isNotEmpty()) parts.add("之前已拉取 ${known.size} 个：" + known.joinToString("、"))
+                if (fails.isNotEmpty()) parts.add("失败 ${fails.size} 个：\n" + fails.joinToString("\n"))
+                if (parts.isEmpty()) return "眼镜上没有匹配“$appName”的官方 AIUI 应用"
+                "已获取官方 AIUI 应用（${parts.joinToString("；")}）。\n" +
+                    "源码已保存在手机上并标记为「官方」：说“打开 <名字>”可在 Lab ink 宿主演示，" +
+                    "说“修改 <名字>”我会读取它的源码按要求修改。删除这条记录只会删手机端副本，不会动眼镜上的官方包。"
             }
 
         else -> throw IllegalArgumentException("未知工具: $name")

@@ -788,7 +788,26 @@ internal fun ChatModule(app: LabApplication) {
         appendMsg(true, text)
         input = ""
         val label = block.lang.uppercase()
-        val script = buildRunScript(ctx, runnable, block.code)
+        val script = buildWebAppScript(ctx, runnable, block.code)
+        // 桌面窗口库（tkinter/pygame/…）：容器无显示服务器，直接拦截给引导
+        if (looksLikeDesktopGui(block.code) && runnable != CodeLanguage.Runnable.HTML) {
+            Toast.makeText(ctx, R.string.chat_code_gui_unsupported, Toast.LENGTH_LONG).show()
+            return true
+        }
+        // 常驻网页服务（remi/flask/…）与 HTML 页面：走 WebPreviewManager + 聊天页预览条
+        // （成功 Toast 由 startAsWebPreview 内部统一弹；这里只补失败提示）
+        if (looksLikeWebApp(block.code) || runnable == CodeLanguage.Runnable.HTML) {
+            startAsWebPreview(ctx, scope, script) { res ->
+                if (!res.ok) {
+                    Toast.makeText(
+                        ctx,
+                        ctx.getString(R.string.chat_code_launch_failed, res.stderrTail(3)),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+            return true
+        }
         scope.launch(Dispatchers.IO) {
             var rid: String? = null
             val rs = com.rokidlab.phone.platform.InteractiveRunManager.start(ctx, script, label) { r, finishedRun ->

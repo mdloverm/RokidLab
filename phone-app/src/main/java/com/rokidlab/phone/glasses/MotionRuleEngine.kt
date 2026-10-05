@@ -50,9 +50,10 @@ object MotionRuleEngine {
     /** 数据流陈旧判定：超过即认为眼镜端流断，空转等待 */
     private const val DATA_STALE_MS = 2_000L
 
-    // ── v2c 审批手势参数（刻意比用户动作默认阈值更严，防误确认）──
+    // ── v2c 审批手势参数 ──
     private const val APPROVAL_GESTURE_WINDOW_MS = 2_500L
-    private const val APPROVAL_GESTURE_THRESHOLD_DEG = 18f
+    /** 角速度下限（deg/s）：低于它的窗口视为噪声/微动，不触发审批（正常点头峰值 ~40-80°/s） */
+    private const val APPROVAL_GESTURE_MIN_DPS = 25f
 
     @Volatile
     private var appContext: Context? = null
@@ -213,19 +214,19 @@ object MotionRuleEngine {
                 } else {
                     samples
                 }
-                val nod = MotionPatternDetector.countOscillations(
-                    gestureSamples, APPROVAL_GESTURE_WINDOW_MS, MotionAxes.PITCH, APPROVAL_GESTURE_THRESHOLD_DEG,
+                // 重力轴分解角速度（姿态无关）—— 欧拉角判定在低头姿态下会把点头耦合进
+                // yaw 误判成摇头（2026-10-04 实测），已弃用，见 approvalGestureScores 注释
+                val score = MotionPatternDetector.approvalGestureScores(
+                    gestureSamples, APPROVAL_GESTURE_WINDOW_MS,
                 )
-                val shake = MotionPatternDetector.countOscillations(
-                    gestureSamples, APPROVAL_GESTURE_WINDOW_MS, MotionAxes.YAW, APPROVAL_GESTURE_THRESHOLD_DEG,
-                )
+                val nodScore = score[0]; val shakeScore = score[1]
                 when {
-                    nod >= 1 && nod > shake -> {
-                        Log.i(TAG, "approval gesture: nod -> confirm")
+                    nodScore > shakeScore && nodScore >= APPROVAL_GESTURE_MIN_DPS -> {
+                        Log.i(TAG, "approval gesture: nod (nod=%.0f°/s shake=%.0f°/s) -> confirm".format(nodScore, shakeScore))
                         confirm.resolveByMotion(true)
                     }
-                    shake >= 1 && shake > nod -> {
-                        Log.i(TAG, "approval gesture: shake -> deny")
+                    shakeScore > nodScore && shakeScore >= APPROVAL_GESTURE_MIN_DPS -> {
+                        Log.i(TAG, "approval gesture: shake (nod=%.0f°/s shake=%.0f°/s) -> deny".format(nodScore, shakeScore))
                         confirm.resolveByMotion(false)
                     }
                 }

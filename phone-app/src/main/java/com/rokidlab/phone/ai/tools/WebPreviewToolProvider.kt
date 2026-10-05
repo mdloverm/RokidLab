@@ -52,11 +52,12 @@ internal object WebPreviewToolProvider : ToolProvider {
                 name = TOOL_START,
                 description = "在本机 Linux 环境（Ubuntu 容器）里启动一个**持续运行**的网页服务，" +
                     "并在聊天窗口给用户一个实时预览入口（用户点开就能看到页面效果）。" +
-                    "适用于：静态网页/前端项目、Flask/FastAPI 应用、plotly/pyecharts 等生成的交互式图表、" +
+                    "适用于：静态网页/前端项目（含 HTML5 canvas 小游戏）、Flask/FastAPI 应用、plotly/pyecharts 等生成的交互式图表、" +
                     "任何需要常驻进程才能看的东西。⚠️ **监听端口必须用环境变量 \$PREVIEW_PORT**" +
                     "（已自动分配并注入，不要自己挑端口、不要写死端口），绑定 0.0.0.0 或 127.0.0.1。" +
                     "例：python3 -m http.server \$PREVIEW_PORT --directory /mnt/lab/site；" +
                     "python3 app.py（app 内读 os.environ[\"PREVIEW_PORT\"]）；node server.js。" +
+                    "remi 窗口应用**优先直接给 ```python 代码块让用户点运行**（端口已自动桥接）；确要用本工具启动时，脚本里写 start(MyApp, port=int(os.environ['PREVIEW_PORT']))。" +
                     "⚠️ 前提要自己备好：页面文件先写好（可运行项目统一写到 /mnt/lab/<项目名>/）；缺依赖先用 install_packages 装（如 flask）。" +
                     "⚠️ save_code_file 存到「下载/<项目名>/」的项目，容器内挂载于 **/mnt/download/<项目名>**" +
                     "（需已授予「所有文件访问」权限；未授予时该目录不存在，改把文件写进 /mnt/lab 再预览）。" +

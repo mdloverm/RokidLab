@@ -6,9 +6,11 @@ import com.rokid.cxr.Caps
 /**
  * KeyButtonService 的工具确认窗口控制器（v3.9 拆分自 KeyButtonService）。
  *
- * 手机端副作用工具（call_phone 等）执行前的用户确认交互：
- * 悬浮层显示操作摘要 + TTS 播报，短按 = 允许，双击/长按 = 取消，
- * 30s 无操作超时视为取消。结果经 [LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT] 上行回手机端。
+ * 手机端副作用工具（delete_file 等）执行前的用户确认交互：
+ * 悬浮层显示操作摘要 + TTS 播报，点头 = 允许、摇头 = 取消（手势识别在手机端
+ * MotionRuleEngine，应答后经 TOPIC_TOOL_CONFIRM_CLOSE 通知本端清窗）；
+ * 按键仍可用：短按 = 允许，双击/长按 = 取消，30s 无操作超时视为取消。
+ * 结果经 [LinkProtocol.TOPIC_TOOL_CONFIRM_RESULT] 上行回手机端。
  */
 internal class ToolConfirmController(
     private val service: KeyButtonService,
@@ -49,9 +51,9 @@ internal class ToolConfirmController(
             core.mainHandler.post {
                 clear()
                 pendingToolConfirmId = id
-                overlays.showLyricOverlay("⚠ $summary\n[短按]允许  [双击]取消")
+                overlays.showLyricOverlay("⚠ $summary\n[点头]允许  [摇头]取消")
                 if (summary.isNotBlank()) {
-                    runCatching { TtsPlaybackHelper.play(service, "是否$summary？短按确认，双击取消") }
+                    runCatching { TtsPlaybackHelper.play(service, "是否$summary？点头允许，摇头取消") }
                 }
                 toolConfirmTimeoutRunnable = Runnable {
                     Log.i(TAG, "tool confirm timeout (id=$id) -> deny")

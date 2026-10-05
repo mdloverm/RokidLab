@@ -23,8 +23,13 @@ import android.widget.ImageView
  * - 旋转双线性采样会让窗口最外缘 1~2px 半透明，漏出下层 Launcher 形成一圈亮边
  *   （screencap 可实测到边缘恒定亮度像素），故对画面做约 2% overscan 覆盖边缘。
  * - 画面 FIT_CENTER 保比例，手机超长屏 / 横屏时上下或左右的纯黑 letterbox 属正常。
- *   纯黑区域里偶尔可见的顶部左右镜像淡影是光机棱镜二次反射的物理鬼影，
- *   不进 framebuffer、与本应用无关，保持纯黑底（BG=0），不做软件补偿。
+ *   ⚠️ 旧注释曾把「顶部左右镜像淡影」定性为光机棱镜二次反射的物理鬼影、与本应用无关，
+ *   据此未做处理 —— 该结论已被证伪：同一条AIUI 链路在 [AiuiLinkActivity] 上实测到
+ *   两条**横贯整屏、颜色恒定、位置精确等于位图边界**的亮线，经像素取证确认是
+ *   overscan(1.02) 重采样放大位图边缘暖色行所致（手机端同页 0 暖色像素），
+ *   去掉 overscan 即根除。故此处若再见到类似亮线，先查 overscan，别归因硬件。
+ *   投屏显示的是手机截图位图、非引擎 canvas，边缘不会被重采样出暖色行，
+ *   故本Activity 的 OVERSCAN 保留（它服务于旋转采样漏底，与上述问题不同源）。
  */
 class PhoneMirrorActivity : Activity(), PhoneMirrorServer.OnFrameListener {
 

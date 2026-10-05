@@ -115,6 +115,8 @@ object LinkProtocol {
     const val TOPIC_TOOL_CONFIRM = "rokidlab_tool_confirm"
     /** 确认结果上行（眼镜端 → 手机端）：caps = [requestId, "yes"/"no"] */
     const val TOPIC_TOOL_CONFIRM_RESULT = "rokidlab_tool_confirm_result"
+    /** 确认窗口关闭下行（手机端 → 眼镜端）：点头/摇头手势在手机端应答后，通知眼镜端清掉悬浮窗。caps = [requestId] */
+    const val TOPIC_TOOL_CONFIRM_CLOSE = "rokidlab_tool_confirm_close"
 
     // ── 协议版本与能力握手（插播 B · LinkProtocol v2）──
     /** 当前协议版本。手机端据此判断眼镜端能力，不再靠 try-and-catch 探测。 */

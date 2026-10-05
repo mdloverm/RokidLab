@@ -179,6 +179,17 @@ internal class CxrBridgeCoordinator(
             )
             Log.i(TAG, "subscribe(${LinkProtocol.TOPIC_TOOL_CONFIRM}) -> $toolConfirmResult")
 
+            // 确认窗口关闭（手机端 → 眼镜端）：点头/摇头手势在手机端应答，眼镜端按键路径收不到
+            // respond()，悬浮窗需由手机端通知关闭（旧版手机端不发此消息 → 悬浮窗仍由 30s 超时兜底）。
+            val toolConfirmCloseResult = core.bridge?.subscribe(
+                LinkProtocol.TOPIC_TOOL_CONFIRM_CLOSE,
+                CXRServiceBridge.MsgCallback { _, _, _ ->
+                    core.markDownlink()
+                    core.mainHandler.post { toolConfirm.clear() }
+                }
+            )
+            Log.i(TAG, "subscribe(${LinkProtocol.TOPIC_TOOL_CONFIRM_CLOSE}) -> $toolConfirmCloseResult")
+
             val quizResult = core.bridge?.subscribe(KeyButtonService.QUIZ_TOPIC, CXRServiceBridge.MsgCallback { _, args, _ ->
                 configHandlers.handleQuizConfig(args)
             })

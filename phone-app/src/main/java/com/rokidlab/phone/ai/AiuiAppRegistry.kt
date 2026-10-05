@@ -10,9 +10,11 @@ import java.io.File
 /**
  * AIUI 应用（.aix 智能体卡片）记录注册表 —— 手机端唯一事实源。
  *
- * 每条记录对应一个可在眼镜上渲染的 AIUI 应用，来源有三类：
+ * 每条记录对应一个可在眼镜上渲染的 AIUI 应用，来源有四类：
  *  - [ORIGIN_GENERATED]：对话中 save_code_file 生成 + install_aiui_project 打包直传（关联项目源码目录，可再编辑/更新重装）；
  *  - [ORIGIN_UPLOADED]：管理页本地 .aix 上传（无源码目录，不可再编辑，只能重新上传）；
+ *  - [ORIGIN_OFFICIAL]：从眼镜 cxr 目录拉取的官方智能体副本（关联解包出的源码目录，可再编辑；
+ *    agentId 为 `official_` 前缀的独立派生 ID，与眼镜上的官方包隔离 —— 删除只删手机端，永不触碰官方包）；
  *  - [ORIGIN_LEGACY]：从旧 aiui_registry.json 迁移而来。
  *
  * 持久化在 filesDir/aiui_apps.json，App 重启不丢；供 AIUI 管理页、list_my_aiui_apps
@@ -25,6 +27,7 @@ object AiuiAppRegistry {
 
     const val ORIGIN_GENERATED = "generated"
     const val ORIGIN_UPLOADED = "uploaded"
+    const val ORIGIN_OFFICIAL = "official"
     const val ORIGIN_LEGACY = "legacy"
 
     /**
@@ -50,9 +53,9 @@ object AiuiAppRegistry {
         val project: String? = null,
         val pageName: String = DEFAULT_PAGE_NAME,
         val nativeVersion: String = "0.0.74",
-        /** 手机端源码目录绝对路径（generated）；其余为 null */
+        /** 手机端源码目录绝对路径（generated / official 拉取解包）；其余为 null */
         val sourceProjectDir: String? = null,
-        /** generated / uploaded / legacy */
+        /** generated / uploaded / official / legacy */
         val origin: String = ORIGIN_GENERATED,
         /** .aix 是否已直传眼镜 cxr 目录（true 走 Sys_AIUI_Start 直启） */
         val aixOnGlasses: Boolean = false,
@@ -87,11 +90,14 @@ object AiuiAppRegistry {
                 sourceProjectDir = record.sourceProjectDir ?: old.sourceProjectDir,
                 // 页名：新记录是默认值说明它没带页面信息（本地上传/旧记录），保留旧值
                 pageName = if (record.pageName == DEFAULT_PAGE_NAME) old.pageName else record.pageName,
-                // 来源只升不降：同一 agentId 的「对话生成」记录被本地同名上传再登记时，
-                // 不能降级成 uploaded —— 管理页的「重装」按钮与语音侧的「可再编辑」提示
-                // 都以 origin==generated 为准，降级会让这条应用从此改不动（而它的
-                // project/sourceProjectDir 明明还在，正是上面两行刻意保全的）。
-                origin = if (old.origin == ORIGIN_GENERATED && record.origin != ORIGIN_GENERATED) {
+                // 来源只升不降：同一 agentId 的「对话生成 / 官方拉取」记录被本地同名上传
+                // 或安装流程再登记时，不能降级成 uploaded/generated —— 管理页的「重装」按钮、
+                // 「官方」标记与官方记录「删除只删手机端」的护栏都以 origin 为准，
+                // 降级会让官方副本从此可被连眼镜端删除（而它的 project/sourceProjectDir
+                // 明明还在，正是上面两行刻意保全的）。
+                origin = if ((old.origin == ORIGIN_GENERATED || old.origin == ORIGIN_OFFICIAL) &&
+                    record.origin != old.origin
+                ) {
                     old.origin
                 } else {
                     record.origin

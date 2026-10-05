@@ -1,19 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 🚫 已废弃（2026-10-04）：透明窗口在 Rokid 绿光波导上等于「漏底色」。
+         物理约束：绿光波导只发绿光，"黑"= 不发光 = 看起来透明；而 `color/transparent`
+         是真的透明 ⇒ 会把下层 Launcher 的品牌绿 `#99BA00` 透出来，显示为淡绿底。
+         ⚠️ 原判断"隐形入口页就该透明"是反的：这两个页面恰恰**不希望**透出任何东西
+         （它们是常驻前台窗口，自启时压在 Launcher 上），透明只有害无益。
+         下面保留仅为兼容旧引用，请勿在新页面使用；需要"看起来透明"一律用**不透明纯黑**。 -->
     <style name="Theme.RokidLink.Transparent" parent="@android:style/Theme.NoTitleBar.Fullscreen">
-        <!-- 窗口背景透明：MainActivity 仅作为隐形启动入口（服务启动后自动退后台），
-             自启/被 appStart 拉起时不显示黑底界面影响视线 -->
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowContentOverlay">@null</item>
     </style>
 
-    <!-- 不透明全屏主题：投屏 / AIUI 等实际铺满屏幕的页面必须使用。
-         本机屏为 640x480 横屏 buffer 经系统旋转 90° 上屏，旋转采样会让
-         半透明窗口最外缘 1~3px 与下层 Launcher（绿色系 UI）混合，形成一圈绿边，
-         故这些页面窗口必须 isOpaque=1、背景纯黑，杜绝下层透出（配合画面 2% overscan）。
-         注意：纯黑区域里顶部偶发的左右镜像淡影是光机棱镜二次反射的物理鬼影，
-         独立 App 同样复现，与主题/透明度无关，不在软件层处理。 -->
+    <!-- 不透明全屏主题：投屏 / AIUI / 常驻入口页一律用它。
+         绿光波导上"不透明纯黑"才是正确的"看起来透明"（黑=不发光）。
+         任何 `windowIsTranslucent=true` / `windowBackground=@android:color/transparent`
+         都会漏出下层绿色 ⇒ 页面底色发绿。 -->
     <style name="Theme.RokidLink.Opaque" parent="@android:style/Theme.NoTitleBar.Fullscreen">
         <item name="android:windowBackground">@android:color/black</item>
         <item name="android:windowIsTranslucent">false</item>

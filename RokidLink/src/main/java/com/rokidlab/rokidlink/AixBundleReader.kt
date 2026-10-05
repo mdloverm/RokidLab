@@ -26,7 +26,27 @@ object AixBundleReader {
         val initialPage: String?,
     )
 
-    private val MAX_BINARY_B64 = 1_500_000 // 超过 1.5MB 的二进制资源跳过（生成项目基本纯文本+小图）
+    /**
+     * 二进制资源的 base64 内联上限。
+     *
+     * ⚠️ 为什么音频**必须**内联（2026-10-05 从 wasm 取证）：
+     *   ink 把 aix 挂成虚拟文件系统（wasm 里有 `/__ink_bundle__/`、`ink://`、
+     *   `"VFS resources must use relative or ..."`），音频由 `Resolved Web audio src=`
+     *   在 VFS 里查；查不到就打 `"Web audio bundle lookup miss for src="`。
+     *   `host.js` 的 `toFiles()` 只会把 b64 解成 Uint8Array，**没有"路径"这条形态**
+     *   ⇒ 「落盘 + 传 path」方案走不通，**只能调大阈值**。
+     *
+     * 代价（base64 膨胀 ~33%，随后进 JSON、跨 JNI、再解成 Uint8Array，三处都有拷贝）：
+     *   1.84MB wav → 2.34MB base64 → JSON 转义后 ~2.46MB → 峰值约 5MB
+     * 眼镜堆内存量级 96-256MB，音频级 8MB 上限（base64 后 10.7MB、峰值约 13MB）仍安全。
+     */
+    private val MAX_BINARY_B64 = 1_500_000      // 图片等普通二进制：1.5MB
+    private val MAX_AUDIO_B64 = 8_388_608       // 音频：8MB（覆盖常见 BGM 长度）
+
+    /** 音频扩展名：走更宽的上限（见 MAX_AUDIO_B64 注释） */
+    private val AUDIO_EXT = setOf(
+        "mp3", "wav", "ogg", "m4a", "aac", "flac", "opus", "weba", "aiff"
+    )
 
     fun read(aix: File, appIdFallback: String? = null): Bundle {
         val files = LinkedHashMap<String, FileVal>()
@@ -51,11 +71,18 @@ object AixBundleReader {
                         if (clean == "app.json") appJsonText = text
                     } else {
                         val bytes = stream.readBytes()
-                        if (bytes.size <= MAX_BINARY_B64) {
+                        // 音频走更宽的上限：ink 的音频只能内联进 bundle（见 MAX_AUDIO_B64 注释），
+                        // 超阈值被跳过 ⇒ VFS 查不到 ⇒ "Web audio bundle lookup miss" ⇒ BGM/音效全无声。
+                        val limit = if (ext in AUDIO_EXT) MAX_AUDIO_B64 else MAX_BINARY_B64
+                        if (bytes.size <= limit) {
                             files[clean] = FileVal(b64 = Base64.encodeToString(bytes, Base64.NO_WRAP))
                         } else {
                             skipped++
-                            Log.w(TAG, "skip oversized binary: $clean (${bytes.size}B)")
+                            Log.w(
+                                TAG,
+                                "skip oversized ${if (ext in AUDIO_EXT) "audio" else "binary"}: " +
+                                    "$clean (${bytes.size}B > ${limit}B)",
+                            )
                         }
                     }
                 }

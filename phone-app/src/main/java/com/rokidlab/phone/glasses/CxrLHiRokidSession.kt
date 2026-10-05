@@ -1378,6 +1378,10 @@ class CxrLHiRokidSession(
         delay(PROBE_ACK_TIMEOUT_MS)
         if (GlassesHandshake.lastHelloAtMs > before) {
             Log.d(TAG, "probe: glasses resident service healthy (hello refreshed)")
+            // 同类横扫（审批手势保活）：probe 复活不走 onOpenAppResult，此前只补 IMU 流不补引擎 ——
+            // 引擎没 start 时 MotionBuffer 有数据也没人消费（点头确认无反应）。init/start 均幂等。
+            MotionRuleEngine.init(appContext)
+            MotionRuleEngine.start()
             // IMU 流活性兜底：会话恢复（probe 复活）不走 onOpenAppResult，imu_start 可能永远补不上；
             // 眼镜端 IMU 默认关 + 断连自停 —— 数据 stale > 15s 时补发拉流（眼镜端幂等，重复 start 会被忽略）
             appScope.launch(Dispatchers.IO) {

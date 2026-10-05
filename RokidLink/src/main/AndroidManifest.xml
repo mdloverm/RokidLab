@@ -45,10 +45,16 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">
         
+        <!-- ⚠️ 主题必须是 Opaque（不透明纯黑），**不可**用Theme.RokidLink.Transparent：
+             Rokid 是绿光波导，只发绿光，「黑」= 不发光 = 看起来透明；
+             而 `windowIsTranslucent=true` / `windowBackground=@android:color/transparent`
+             是真透明，会把下层 Launcher 的品牌绿 `#99BA00` 透出来 ⇒ 页面底色发绿。
+             本页是**常驻前台**窗口（自启即前台，否则服务会被后台限制杀掉），
+             透明窗口等于长期漏底色。原判断"隐形入口就该透明"是反的。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.RokidLink.Transparent">
+            android:theme="@style/Theme.RokidLink.Opaque">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -63,16 +69,50 @@
             android:configChanges="orientation|screenSize|smallestScreenSize"
             android:theme="@style/Theme.RokidLink.Opaque" />
 
+        <!-- 同上：纯中转页、连 setContentView 都没有，若用透明主题会是一整块漏底色窗口 -->
         <activity
             android:name=".ScreenMirrorIntentActivity"
             android:exported="true"
-            android:theme="@style/Theme.RokidLink.Transparent" />
+            android:theme="@style/Theme.RokidLink.Opaque" />
 
         <!-- AIUI Web 宿主（官方 @yodaos-pkg/ink browser-integration + wasm）：
              渲染 Lab 生成的 .aix，眼镜按键 / Lab 蓝牙手柄(HID→KeyEvent) 注入为 ink 输入。
              exported=false：唯一启动方是同进程的 KeyButtonService（AiuiLinkActivity.open），
              不对外暴露 —— 否则任何第三方可带任意 aix_path 拉起本宿主，
-             借页面 JS 桥直调手机端工具（工具数量见 ToolGateway）。 -->
+             借页面 JS 桥直调手机端工具（工具数量见 ToolGateway）。
+
+             ⚠️ **这里曾长期写着 `android:screenOrientation="portrait"` 并被注释标注
+             「修绿边的关键」—— 该结论是反的，绿边恰恰是它造成的**（2026-10-04 修正）。
+             判据来自 `dumpsys SurfaceFlinger`（铁证，非像素猜测）：
+
+               ① 屏幕 HWC 真实模式是 **landscape 640x480**：
+                  `activeMode={width=640, height=480}`，display transform = **ROT_270**。
+                  「物理 480x640 竖屏」只是**上屏后的视觉方向**，HWC 全程按 640x480 工作。
+               ② 声明 portrait 后，窗口拿到 `480x640` 的 buffer，与 HWC 模式方向**相反**，
+                  SF 只能补一次变换把buffer 转回 640x480 再交给 display：
+                  `geomBufferSize=[0 0 480 640]  geomBufferTransform=4 (ROT_90)`
+                  `geomContentCrop=[0 0 640 480]`← 注意crop 宽高是**反的**，
+                  正是「buffer 480x640 被当 640x480 消费」的证据。
+               ③ 这一层额外旋转/缩放采样让窗口**最外 1~2px 与下层 Launcher 品牌绿
+                  `#99BA00`(153,186,0) 混合**，形成精确环绕全屏一圈的绿框。
+                  截图实测框色 `rgb(127,169,0)` ≈ `#99BA00`×暗，与该混合比值吻合；
+                  而页面自身绿是 `rgb(64,255,94)`（=设计主色 #40FF5E），两者完全不同，
+                  可排除「页面画的边框」。
+
+             ⇒ 修法＝**删掉 `screenOrientation="portrait"`**，让窗口与 HWC 模式同向
+               （640x480），SF 无需补变换 ⇒ 无插值 ⇒ 无绿边。
+               这也与两个已知无绿边的对照组完全一致：
+                 - 官方 AssistServer 窗口：不声明 orientation；
+                 - 本工程投屏页 `PhoneMirrorActivity`：只 `FLAG_FULLSCREEN`、无orientation
+                   （见其 onCreate，历史上就无绿边）。
+
+             ⚠️ 别再为「窗口不够大/没铺满」去加 OVERSCAN 或 FLAG_LAYOUT_NO_LIMITS：
+               `dumpsys window` 实测窗口已是 `mBounds=Rect(0,0-480,640)`（系统钳在 480x640，
+               超屏压根不生效），而 WebView 会被撑到 488 宽 ⇒ meta viewport=480 时浏览器
+               自动缩放 1.0167 ⇒ 内容被放大 2%，违反「保持 AIUI 原有尺寸」。
+             ⚠️ 也不必再加 `FLAG_FULLSCREEN` 对应的窗口尺寸补丁：那两条亮线是
+               Chromium 的canvas 焦点环（`outline: rgb(229,151,0) auto 1px`，
+               已由 `index.html` 的 `#ink-root{outline:none}` 消除，与窗口无关）。 -->
         <activity
             android:name=".AiuiLinkActivity"
             android:exported="false"

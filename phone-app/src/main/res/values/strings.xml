@@ -398,6 +398,9 @@
     <string name="chat_code_stdout">标准输出</string>
     <string name="chat_code_stderr">标准错误</string>
     <string name="chat_code_env_missing">本机执行环境未安装：到「设置 → 本机执行环境」安装后才能运行</string>
+    <string name="chat_code_web_started">网页应用已启动（%1$s），点聊天页上方的预览条打开</string>
+    <string name="chat_code_gui_unsupported">容器没有显示服务器，tkinter/pygame 这类窗口程序跑不了。让 AI 改用 remi 写（图形界面会显示在预览条），或改成 HTML5 网页</string>
+    <string name="chat_file_running">已开始运行，输出见下方运行卡片</string>
     <string name="chat_code_python_missing">容器里还没装 python3：到「设置 → 本机执行环境」安装 Python</string>
     <string name="chat_code_node_missing">容器里还没装 node：先在本机执行环境里安装</string>
     <string name="chat_code_java_missing">容器里还没装 Java（javac）：到「设置 → 本机执行环境」安装 Java，或让 AI 帮你装</string>
@@ -1076,6 +1079,8 @@
     <string name="ai_tool_stop_aiui_app_desc">关闭手机演示或眼镜上的 AIUI 应用</string>
     <string name="ai_tool_list_my_aiui_apps_name">我的AI应用</string>
     <string name="ai_tool_list_my_aiui_apps_desc">列出生成过的 AIUI 应用</string>
+    <string name="ai_tool_pull_official_aiui_name">获取官方AIUI</string>
+    <string name="ai_tool_pull_official_aiui_desc">从眼镜拉取官方智能体到手机</string>
     <string name="aiui_demo_badge">手机演示</string>
     <string name="aiui_demo_close">关闭</string>
     <string name="aiui_demo_fullscreen">全屏操作</string>
@@ -1170,6 +1175,7 @@
     <string name="aiui_upload_fail">上传失败：%1$s</string>
     <string name="aiui_origin_generated">对话生成</string>
     <string name="aiui_origin_uploaded">本地上传</string>
+    <string name="aiui_origin_official">官方</string>
     <string name="aiui_origin_legacy">内置/历史</string>
     <string name="aiui_status_on_glasses">已在眼镜</string>
     <string name="aiui_status_local">仅在手机</string>
@@ -1759,6 +1765,9 @@
     <string name="local_exec_uv_name">uv / uvx</string>
     <string name="local_exec_uv_hint">Python 工具运行器，uvx 即取即用 PyPI 生态的 MCP server · 约 35 MB</string>
     <string name="local_exec_uv_ready_hint">已就绪：MCP 配置里写 uvx 命令即可使用</string>
+    <string name="local_exec_remi_name">remi（Python 图形界面）</string>
+    <string name="local_exec_remi_hint">在聊天里跑带窗口按钮的 Python 程序 · 约 3 MB</string>
+    <string name="local_exec_remi_ready_hint">已就绪：让 AI 写 remi 程序，点运行后在预览条打开</string>
     <string name="local_exec_pip_install">pip 安装中（清华镜像）</string>
     <string name="local_exec_git_hint">克隆与管理仓库 · 约 10 MB</string>
     <string name="local_exec_git_ready_hint">可克隆与管理仓库</string>

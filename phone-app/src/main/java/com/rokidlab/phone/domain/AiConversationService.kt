@@ -2369,6 +2369,28 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         "抱歉，这次没能成功生成文件，生成被中断了。请再说一次，或把需求拆小一点（比如先只做首页）。"
                     }
                     reply = com.rokidlab.phone.ai.finalizeCodeGenReply(reply, authoritative)
+                    // 落盘产物 → 聊天文件卡：收敛后的回复只有一句「已生成 N 个文件」，
+                    // 用户在聊天流里没有任何运行入口（2048 那次：代码进了文件，找遍聊天没按钮）。
+                    // writeProjectFile 落盘时在私有目录留了镜像（filesDir/aiui_projects/<项目>/），
+                    // 文件卡读镜像即可，不用碰 MediaStore；可运行文件（py/js/sh/html）的卡上
+                    // 自带运行键，与代码块卡片同一条分流链路。
+                    runCatching {
+                        val appCtx = session.appContext
+                        genFilesByProject.forEach { (proj, files) ->
+                            files.forEach { rel ->
+                                val mirror = java.io.File(appCtx.filesDir, "aiui_projects/$proj/$rel")
+                                if (mirror.isFile) {
+                                    android.util.Log.i(TAG, "codegen file card: $proj/$rel (${mirror.length()}B)")
+                                    com.rokidlab.phone.store.ChatStateHolder.addFile(
+                                        isUser = false,
+                                        path = mirror.absolutePath,
+                                        name = "$proj/$rel",
+                                        chars = mirror.length().toInt(),
+                                    )
+                                }
+                            }
+                        }
+                    }.onFailure { Log.w(TAG, "codegen file cards failed: ${it.message}") }
                 }
                 // 走到这里仍无正文 = 模型既没给结论、也没落盘过文件（codeGenUsed=false 时
                 // finalizeCodeGenReply 不会兜底）：只有这种情况才用固定兜底文案。
@@ -2689,6 +2711,11 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 Thread {
                     if (pcm != null && VoiceBroadcast.playPcm(pcm).isSuccess) {
                         Log.i(TAG, "cloud voice broadcast done")
+                        // 云萌音色只在手机外放，眼镜端没有 TTS 播完事件、不会上行续听标记
+                        // （默认音色链路 = 眼镜 TTS 播完 -> __LAB_CONTINUE_DIALOG__ -> 重开拾音）。
+                        // 这里播放完成后由手机端代发，连续对话在自定义音色下同样生效。
+                        // 失败回退走眼镜端离线 TTS，那条链路眼镜自己会发标记，不在此重复。
+                        requestGlassesContinueDialog()
                     } else {
                         // 预合成/播放失败 → 回退眼镜端离线 TTS，保证「有声音」不缺位
                         Log.w(TAG, "cloud voice unavailable, fallback to glass TTS")

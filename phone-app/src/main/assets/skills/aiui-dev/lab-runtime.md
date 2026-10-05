@@ -111,6 +111,44 @@ onKeyDown(e) {
 
 ## 7. 视觉与防鬼影
 
+### 7.0 `<page>` 根元素**必须**显式定尺寸 + 纯黑底（与官方对齐的硬约束）
+
+**每个页面的 `<style>` 里第一条规则必须是 `page`，且必须同时写 `width` / `height` / `background-color: #000000FF`。**
+
+为什么：
+- `<page>` 是 ink 的根元素，**不写样式就继承引擎内置默认值**。实测引擎日志会打出
+  `App Show color: white; padding: 0 3px; background: green` —— 即默认带白色文字 + 绿色背景 + 左右 3px 内边距。
+  这层默认背景会跟着页面尺寸走，落在 canvas 位图边缘。
+- **官方每个页面都写了这条规则**，一个不落（反编译 `builtin.rokid.ride.aix` 实测）：
+  ```css
+  page, .scr { width: 450px; height: 206px; background-color: #000000FF; }
+  page        { overflow: hidden; position: relative; }
+  ```
+  官方 `page` 宽 **450px < 视口**，左右各留 15px 黑边⇒ 最外圈天然落在纯黑区。
+
+正确写法（把 450/206 换成你自己的尺寸，但 `page` 必须显式写、且宽度留边）：
+```css
+page { width: 450px; height: 360px; background-color: #000000FF; overflow: hidden; position: relative; }
+.screen { display: flex; align-items: center; justify-content: center; width: 450px; height: 360px; background-color: #000000; box-sizing: border-box; }
+```
+- 尺寸建议：内容区用 **≤ 470px 宽**（视口 480，留 ≥5px 边距），高度按内容自定。
+- 与 §2.4 彩色版**不冲突**：`page` 是根容器、必须纯黑不透明，页面内部的卡片/分区仍可用 §2.4 的彩色 token 自由配色。
+- 这条规则同时解决手机端预览与眼镜端表现不一致的问题（两端共用同一份 ink 源码）。
+
+> **历史归因纠错（2026-10-04，勿再据旧说法排查）**：本节早前版本写
+> 「缺 `page` 样式 => 默认背景落在位图最外圈 => 眼镜上出现两条横贯整屏的亮线」。
+> 该归因**已证伪**：canvas 位图与 CSS 盒**完全 1:1**（实测 `bitmap=480x360` /
+> `style=480pxx360px`），最外 4 行与末 4 行**全部纯黑 `0,0,0,255`**，内容占满 `0..359`
+> ⇒ 位图内一根亮线都没有。
+> **真正根因（已修复）**：宿主 Activity 的**窗口没铺满屏幕** —— 主题 parent
+> `Theme.NoTitleBar.Fullscreen` 只去标题栏、不保证全屏尺寸 ⇒ 窗口小于屏幕，
+> 窗口边界处由系统合成层填出两条亮线。已用 `FLAG_FULLSCREEN` 修复
+> （见 `AiuiLinkActivity.onCreate`）。**与页面 CSS 无关**。
+> 本节规则**仍要遵守**（与官方对齐、避免默认样式污染），但它**不是**亮线的原因。
+> ⚠️ 另一条硬约束：**页面必须显式写 `width`/`height`，不要写 `height: 100%` 之类**
+> —— 眼镜屏是 480x640，写 100% 会让页面高 640，与官方 `fillxwrap` 语义不符。
+
+## 7.1 配色
 - 背景用 `#000000`（透明底）：光波导对大面积高亮内容会产生光学鬼影（右上角倒置虚影），低亮度页面可显著抑制；**不要大面积铺 24% 以上的绿色填充**（泛光并遮蔽内容，官方 luminance rules 明令禁止）。
 - 避免纯白全屏闪烁与超大纯白字体；正文用 72% 绿。
 

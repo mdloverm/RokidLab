@@ -72,6 +72,84 @@ class MotionRulesTest {
         return out
     }
 
+    // ═══════════════════ 审批手势评分（重力轴分解，姿态无关） ═══════════════════
+
+    /**
+     * 追加一个带真实角速度的采样点：世界系角速度（rad/s）经四元数共轭旋到传感器系。
+     * 姿态与角速度允许物理不自洽（评分器逐帧独立消费 q 与 ω，不做一致性校验）。
+     */
+    private fun stepWithWorldOmega(
+        wx: Double = 0.0, wy: Double = 0.0, wz: Double = 0.0,
+        pitch: Double = 0.0, yaw: Double = 0.0, roll: Double = 0.0,
+    ): ImuSample {
+        val q = quat(pitch, yaw, roll)
+        // 共轭四元数做 v_sensor = q^-1 ⊗ v_world（q 约定 sensor→world）
+        val qw = q[0].toDouble(); val qx = -q[1].toDouble()
+        val qy = -q[2].toDouble(); val qz = -q[3].toDouble()
+        val tx = 2.0 * (qy * wz - qz * wy)
+        val ty = 2.0 * (qz * wx - qx * wz)
+        val tz = 2.0 * (qx * wy - qy * wx)
+        val s = ImuSample(
+            t = clock, ax = 0f, ay = 0f, az = 9.8f,
+            gx = (wx + qw * tx + qy * tz - qz * ty).toFloat(),
+            gy = (wy + qw * ty + qz * tx - qx * tz).toFloat(),
+            gz = (wz + qw * tz + qx * ty - qy * tx).toFloat(),
+            qw = q[0], qx = q[1], qy = q[2], qz = q[3],
+        )
+        clock += stepMs
+        return s
+    }
+
+    /** 正弦振荡的世界系角速度序列（rad/s 峰值 amp），持续 totalMs */
+    private fun oscillateWorldOmega(
+        axis: Int, amp: Double, totalMs: Double,
+        pitch: Double = 0.0, yaw: Double = 0.0,
+    ): List<ImuSample> {
+        val out = mutableListOf<ImuSample>()
+        var t = 0.0
+        while (t < totalMs) {
+            val w = amp * Math.sin(2 * Math.PI * t / 500.0)
+            out.add(
+                when (axis) {
+                    0 -> stepWithWorldOmega(wx = w, pitch = pitch, yaw = yaw) // 世界 X（水平）
+                    1 -> stepWithWorldOmega(wy = w, pitch = pitch, yaw = yaw) // 世界 Y（水平）
+                    else -> stepWithWorldOmega(wz = w, pitch = pitch, yaw = yaw) // 世界 Z（竖直）
+                },
+            )
+            t += stepMs
+        }
+        return out
+    }
+
+    @Test
+    fun `低头30度下纯点头判为点头而不是摇头（2026-10-04 误判回归）`() {
+        // 头前倾 30° 时纯点头（绕世界水平轴）：欧拉 yaw 会被耦合出大角度误判成摇头；
+        // 重力轴分解下水平角速度应远大于竖直分量
+        resetClock()
+        val samples = oscillateWorldOmega(axis = 0, amp = 1.2, totalMs = 2000.0, pitch = -30.0)
+        val score = MotionPatternDetector.approvalGestureScores(samples, windowMs = 2500)
+        assertTrue("nodScore 应超阈值，actual=${score[0]}", score[0] > 25f)
+        assertTrue("点头不应被判成摇头：nod=${score[0]} shake=${score[1]}", score[0] > score[1])
+    }
+
+    @Test
+    fun `摇头判为摇头`() {
+        resetClock()
+        val samples = oscillateWorldOmega(axis = 2, amp = 1.2, totalMs = 2000.0)
+        val score = MotionPatternDetector.approvalGestureScores(samples, windowMs = 2500)
+        assertTrue("shakeScore 应超阈值，actual=${score[1]}", score[1] > 25f)
+        assertTrue("摇头不应被判成点头：nod=${score[0]} shake=${score[1]}", score[1] > score[0])
+    }
+
+    @Test
+    fun `静止时双分数为零`() {
+        resetClock()
+        val samples = (0 until 30).map { stepWithWorldOmega(0.0, 0.0, 0.0) }
+        val score = MotionPatternDetector.approvalGestureScores(samples, windowMs = 2500)
+        assertEquals(0f, score[0])
+        assertEquals(0f, score[1])
+    }
+
     // ═══════════════════ 换算 ═══════════════════
 
     @Test

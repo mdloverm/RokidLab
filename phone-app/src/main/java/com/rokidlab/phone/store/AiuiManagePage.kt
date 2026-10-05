@@ -179,6 +179,7 @@ internal fun AiuiManagePage(
                             val originLabel = when (r.origin) {
                                 AiuiAppRegistry.ORIGIN_UPLOADED -> stringResource(R.string.aiui_origin_uploaded)
                                 AiuiAppRegistry.ORIGIN_GENERATED -> stringResource(R.string.aiui_origin_generated)
+                                AiuiAppRegistry.ORIGIN_OFFICIAL -> stringResource(R.string.aiui_origin_official)
                                 else -> stringResource(R.string.aiui_origin_legacy)
                             }
                             val statusLabel = if (r.aixOnGlasses) {
@@ -235,9 +236,10 @@ internal fun AiuiManagePage(
                                     }
                                 }
                                 ActionText(stringResource(R.string.aiui_action_delete), busy == null) {
-                                    // 弹确认框：询问是否连带删除项目源文件 / 眼镜端文件
+                                    // 弹确认框：询问是否连带删除项目源文件 / 眼镜端文件。
+                                    // 官方拉取副本永不提供「连眼镜端删除」—— 眼镜上的官方包必须原封不动
                                     delSource = canReinstall
-                                    delGlasses = r.aixOnGlasses
+                                    delGlasses = r.aixOnGlasses && r.origin != AiuiAppRegistry.ORIGIN_OFFICIAL
                                     pendingDelete = r
                                 }
                             }
@@ -271,7 +273,7 @@ internal fun AiuiManagePage(
                     if (hasSource) {
                         CheckRow(stringResource(R.string.aiui_delete_opt_source), delSource) { delSource = it }
                     }
-                    if (target.aixOnGlasses) {
+                    if (target.aixOnGlasses && target.origin != AiuiAppRegistry.ORIGIN_OFFICIAL) {
                         CheckRow(stringResource(R.string.aiui_delete_opt_glasses), delGlasses) { delGlasses = it }
                     }
                 }
@@ -355,13 +357,16 @@ private suspend fun deleteRecord(
     deleteSource: Boolean,
     deleteOnGlasses: Boolean,
 ): String = withContext(Dispatchers.IO) {
+    // 护栏（双保险）：官方拉取副本（origin=official，独立 agentId）一律只删手机端 ——
+    // 即使调用方误传 true 也绝不触达眼镜；眼镜上的官方包永远不被本页删除。
+    val glasses = deleteOnGlasses && r.origin != AiuiAppRegistry.ORIGIN_OFFICIAL
     AiuiAppRegistry.remove(ctx, r.agentId)
     if (deleteSource) {
         runCatching { r.sourceProjectDir?.let { File(it).deleteRecursively() } }
         runCatching { r.project?.takeIf { it.isNotBlank() }?.let { com.rokidlab.phone.ai.WebTools.deleteDownloadedProject(ctx, it) } }
     }
     runCatching { AiuiProject.deletePackageFiles(ctx, r.agentId) }
-    if (deleteOnGlasses) {
+    if (glasses) {
         val err = AiuiProject.deleteAixOnGlasses(ctx, r.agentId)
         if (err != null) return@withContext ctx.getString(R.string.aiui_delete_glasses_fail, err)
         return@withContext ctx.getString(R.string.aiui_delete_glasses_ok, r.appName)

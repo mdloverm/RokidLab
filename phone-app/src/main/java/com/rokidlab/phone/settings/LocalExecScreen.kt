@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.FolderShared
 import androidx.compose.material.icons.outlined.IntegrationInstructions
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -64,7 +65,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 失败原因留在屏幕上（[errorMsg]），不吞掉。
  */
 
-private enum class Task { NONE, INSTALL, PYTHON, NODE, GIT, UV, JAVA, SELFTEST, UNINSTALL }
+private enum class Task { NONE, INSTALL, PYTHON, NODE, GIT, UV, REMI, JAVA, SELFTEST, UNINSTALL }
 
 /**
  * 一张组件卡在安装中要显示的东西。
@@ -220,6 +221,63 @@ internal fun LocalExecScreen(onBack: () -> Unit) {
                     // ③ 验证：uvx 落在 /usr/local/bin（系统 pip 的脚本目录，天然在 PATH 上）
                     val check = withContext(Dispatchers.IO) {
                         ProotShell.runCommand(ctx, "command -v uvx >/dev/null && uv --version")
+                    }
+                    if (check.ok) {
+                        report = check.stdout
+                    } else {
+                        errorMsg = ctx.getString(R.string.local_exec_state_failed, check.summary())
+                    }
+                } else {
+                    errorMsg = ctx.getString(
+                        R.string.local_exec_state_failed,
+                        pip.stderrTail(4).ifBlank { pip.summary() },
+                    )
+                }
+            } else {
+                errorMsg = ctx.getString(
+                    R.string.local_exec_state_failed,
+                    apt.stderrTail(4).ifBlank { apt.summary() },
+                )
+            }
+            status = readStatus(ctx)
+            task = Task.NONE
+        }
+    }
+
+    // ── remi（纯 Python 的 web GUI 框架）：聊天里跑图形化 Python 程序的运行时 ──
+    // 安装路径与 uv 同款：apt 补 pip（python3 就绪则秒过）→ 清华 PyPI 装 remi → import 验证。
+    fun installRemi() {
+        if (task != Task.NONE) return
+        task = Task.REMI
+        scope.launch {
+            errorMsg = null
+            report = null
+            addon = null
+            // ① pip 本体（python3 未装时连带装上，装完 aliases/pip.conf 由 ProotShell 幂等补齐）
+            val apt = withContext(Dispatchers.IO) {
+                ProotShell.installPackages(
+                    ctx,
+                    listOf("python3", "python3-pip", "ca-certificates"),
+                ) { p ->
+                    addon = AddonProgress(p.percent, aptPhaseLabel(ctx, p), p.detail)
+                }
+            }
+            if (apt.ok) {
+                addon = AddonProgress(-1, ctx.getString(R.string.local_exec_pip_install), "")
+                val pip = withContext(Dispatchers.IO) {
+                    ProotShell.runCommand(
+                        ctx,
+                        "python3 -m pip install --break-system-packages " +
+                            "-i https://pypi.tuna.tsinghua.edu.cn/simple remi",
+                        timeoutSec = 600L,
+                        onStdoutLine = { line ->
+                            addon = AddonProgress(-1, ctx.getString(R.string.local_exec_pip_install), line)
+                        },
+                    )
+                }
+                if (pip.ok) {
+                    val check = withContext(Dispatchers.IO) {
+                        ProotShell.runCommand(ctx, "python3 -c 'import remi; print(remi.__version__)'")
                     }
                     if (check.ok) {
                         report = check.stdout
@@ -430,6 +488,23 @@ internal fun LocalExecScreen(onBack: () -> Unit) {
                 progress = if (task == Task.UV) addon else null,
                 enabled = task == Task.NONE,
                 onInstall = { installUv() },
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            // ── remi：纯 Python 的 web GUI 框架，聊天里跑图形化程序（窗口/按钮/图表）的运行时。
+            //    Python 程序起本地网页服务，App 内 WebView 直接渲染，无需显示服务器 ──
+            AddonCard(
+                icon = Icons.Outlined.Public,
+                title = ctx.getString(R.string.local_exec_remi_name),
+                hint = ctx.getString(
+                    if (status.remiReady) R.string.local_exec_remi_ready_hint
+                    else R.string.local_exec_remi_hint,
+                ),
+                ready = status.remiReady,
+                progress = if (task == Task.REMI) addon else null,
+                enabled = task == Task.NONE,
+                onInstall = { installRemi() },
             )
 
             Spacer(Modifier.height(10.dp))
@@ -923,6 +998,7 @@ private data class StatusSnapshot(
     val nodeReady: Boolean = false,
     val gitReady: Boolean = false,
     val uvReady: Boolean = false,
+    val remiReady: Boolean = false,
     val javaReady: Boolean = false,
     val sharePublic: Boolean = false,
     val accessOn: Boolean = false,
@@ -947,6 +1023,9 @@ private suspend fun readStatus(ctx: Context): StatusSnapshot = withContext(Dispa
     val installed = ProotInstaller.isInstalled(ctx)
     val share = ProotShell.shareStatus(ctx)
     val probe = if (installed) ProotShell.probeCommands(ctx, listOf("python3", "node", "git", "uv", "java")) else emptyMap()
+    // remi 是 pip 包不是命令，command -v 探测不到 ⇒ python 就绪后单独 import 试一次
+    val remiReady = probe["python3"] == true &&
+        ProotShell.runCommand(ctx, "python3 -c 'import remi'").ok
     StatusSnapshot(
         installed = installed,
         version = if (installed) ProotInstaller.installedVersion(ctx) else null,
@@ -956,6 +1035,7 @@ private suspend fun readStatus(ctx: Context): StatusSnapshot = withContext(Dispa
         nodeReady = probe["node"] == true,
         gitReady = probe["git"] == true,
         uvReady = probe["uv"] == true,
+        remiReady = remiReady,
         javaReady = probe["java"] == true,
         sharePublic = share.publicDownload,
         accessOn = LabAccessibility.isEnabled(ctx),

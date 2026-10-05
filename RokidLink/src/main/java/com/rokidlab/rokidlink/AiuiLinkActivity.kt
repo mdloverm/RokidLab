@@ -6,11 +6,16 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
@@ -51,11 +56,16 @@ class AiuiLinkActivity : Activity() {
     /** boot 后双击 BACK 逃生计时（页面若不响应 Backspace 可强制退出宿主） */
     private var lastBackMs = 0L
 
-    /** 传给 ink 的画布尺寸 = 眼镜整屏尺寸（用户要求任何情况下不留边框，全屏渲染） */
+    /** 传给 ink 的画布宽度 = 眼镜整屏宽；高度在 auto-height 布局下随内容自适应并垂直居中 */
     private var contentW = 0
     private var contentH = 0
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** 传感器（IMU 头控）注册表：JS 类型码 → 活动监听器（host.js 经 Android.sensorStart/Stop 驱动） */
+    private var sensorManager: SensorManager? = null
+    private val activeSensorListeners = mutableMapOf<Int, SensorEventListener>()
+    private val sensorLock = Any()
 
     /** 自动注入到每个 AIUI 页面的 Lab 桥（页面 realm 可见，解决 host.js 主 realm Lab 隔离问题）。
      *  从 assets 读取一次缓存，避免每次装配都 IO。 */
@@ -104,6 +114,24 @@ class AiuiLinkActivity : Activity() {
         }
 
         /**
+         * 页面传感器（IMU 头控）桥：页面用 W3C Generic Sensor API（new Gyroscope() 等），
+         * ink 引擎经 hostCapabilities.handleRequest 通知宿主 start/stop。
+         * type 码：0 陀螺仪 / 1 加速度计 / 2 旋转向量（绝对朝向） / 3 磁力计。
+         * 运行在 JS 线程，SensorManager 注册须线程安全（sensorLock）。
+         */
+        @JavascriptInterface
+        fun sensorStart(type: Int, freq: Int, targetId: String, sessionId: String): Boolean {
+            Log.i(TAG, "sensorStart type=$type freq=$freq session=$sessionId")
+            return startSensorListener(type, freq)
+        }
+
+        @JavascriptInterface
+        fun sensorStop(type: Int, targetId: String, sessionId: String) {
+            Log.i(TAG, "sensorStop type=$type session=$sessionId")
+            stopSensorListener(type)
+        }
+
+        /**
          * 页面调用手机端工具（window.Lab.callTool 的底层）。
          *
          * 上行复用 ASR 推送的 RFCOMM 通道（带 CTRL_TOOL_CALL 前缀以区别于 ASR 文字），
@@ -149,6 +177,80 @@ class AiuiLinkActivity : Activity() {
         }
     }
 
+    // ── 传感器（IMU 头控）：页面 W3C Generic Sensor ← host.js hostCapabilities ← 本桥 ──
+
+    /** JS 传感器类型码 → Android 传感器类型 */
+    private fun androidSensorType(type: Int): Int = when (type) {
+        0 -> Sensor.TYPE_GYROSCOPE
+        1 -> Sensor.TYPE_ACCELEROMETER
+        2 -> Sensor.TYPE_ROTATION_VECTOR // 绝对朝向（页面按 x,y,z,w 消费四元数）
+        3 -> Sensor.TYPE_MAGNETIC_FIELD
+        else -> -1
+    }
+
+    /** JS 类型码 → host.js pushSensor 的能力名（两端约定，勿单侧改动） */
+    private fun sensorCapName(type: Int): String = when (type) {
+        0 -> "gyroscope"
+        1 -> "accelerometer"
+        2 -> "absoluteOrientation"
+        else -> "magnetometer"
+    }
+
+    private fun startSensorListener(type: Int, freq: Int): Boolean {
+        val sensorType = androidSensorType(type)
+        if (sensorType < 0) return false
+        val sm = sensorManager
+            ?: (getSystemService(Context.SENSOR_SERVICE) as? SensorManager)
+                ?.also { sensorManager = it }
+            ?: return false
+        val sensor = sm.getDefaultSensor(sensorType) ?: run {
+            Log.w(TAG, "sensor type=$type unavailable on device")
+            return false
+        }
+        synchronized(sensorLock) {
+            if (activeSensorListeners.containsKey(type)) return true // 重复 start 幂等
+            // 频率夹 5~100Hz：官方页面用 60Hz，FASTEST(~200Hz) 对头控毫无必要还费电
+            val periodUs = 1_000_000 / freq.coerceIn(5, 100)
+            val listener = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent?) {
+                    val e = event ?: return
+                    var x = if (e.values.size > 0) e.values[0] else 0f
+                    var y = if (e.values.size > 1) e.values[1] else 0f
+                    var z = if (e.values.size > 2) e.values[2] else 0f
+                    var w = 0f
+                    if (sensorType == Sensor.TYPE_ROTATION_VECTOR) {
+                        // 旋转向量 → 四元数：SensorManager 返回 [w,x,y,z]，页面要 [x,y,z,w]
+                        val q = FloatArray(4)
+                        SensorManager.getQuaternionFromVector(q, e.values)
+                        w = q[0]; x = q[1]; y = q[2]; z = q[3]
+                    }
+                    // ns → ms：对齐 DOMHighResTimeStamp（页面只关心数值与差值，基准无关）
+                    val ts = e.timestamp / 1_000_000L
+                    val js = "window.__aiuiHost && window.__aiuiHost.pushSensor(" +
+                        "'${sensorCapName(type)}',$x,$y,$z,$w,$ts)"
+                    runOnUiThread {
+                        runCatching { webView?.evaluateJavascript(js, null) }
+                    }
+                }
+
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+            }
+            activeSensorListeners[type] = listener
+            sm.registerListener(listener, sensor, periodUs)
+            Log.i(TAG, "sensor listening type=$type period=${periodUs}us")
+        }
+        return true
+    }
+
+    private fun stopSensorListener(type: Int) {
+        val sm = sensorManager ?: return
+        synchronized(sensorLock) {
+            val listener = activeSensorListeners.remove(type) ?: return
+            runCatching { sm.unregisterListener(listener) }
+            Log.i(TAG, "sensor unregistered type=$type")
+        }
+    }
+
     /**
      * .aix 路径白名单：只接受本应用 `filesDir/aiui_host/` 目录下的真实文件，
      * 该目录的唯一写入方是 [AiuiPackageServer]（手机端推送落盘）。
@@ -170,6 +272,27 @@ class AiuiLinkActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // 窗口必须**真正**占满整屏：主题里的 Theme.NoTitleBar.Fullscreen 只是去掉标题栏，
+        // 并不保证窗口拿到全屏尺寸。与 PhoneMirrorActivity（投屏页，实测无绿边无亮线）对齐。
+        //
+        // 【2026-10-04 修正】此前这里写的根因说明是**错的**（说绿边/亮线来自「窗口没铺满」）。
+        // 真实情况分成两个互不相同的现象，别再混为一谈：
+        //   ① 亮线（canvas 上下各一条横贯 480px 的线）＝ **Chromium 给获得焦点的 canvas
+        //      画的默认焦点环**。铁证：`getComputedStyle(canvas).outline` 实测
+        //      `rgb(229,151,0) auto 1px`，而截图中线的颜色**正是** `rgb(229,151,0)`、位置
+        //      **正在盒外 1px**。已由 `assets/ink/index.html` 的 `#ink-root{outline:none}`
+        //      消除（outline 不参与布局，不改 AIUI 尺寸）。本层无需处理。
+        //   ② 绿边（精确环绕全屏一圈）＝ **窗口 buffer 方向与 HWC 模式相反导致 SF 补旋转**，
+        //      最外 1~2px 与下层 Launcher 品牌绿混合。修法在 AndroidManifest：
+        //      **删掉 `android:screenOrientation="portrait"`**（不是加它！）。
+        //      详见 AndroidManifest 中 AiuiLinkActivity 上方的完整证据链。
+        //
+        // ⚠️ 下面这段 setFlags 保留不动：窗口确实需要真全屏（主题不保证），
+        //    但它**只解决「窗口尺寸」**，与绿框/亮线都无关，别当成后两者的修复。
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_FULLSCREEN,
+            WindowManager.LayoutParams.FLAG_FULLSCREEN
+        )
 
         val aixPath = intent?.getStringExtra(EXTRA_AIX_PATH)
         if (aixPath == null || !isAllowedAixPath(aixPath)) {
@@ -206,17 +329,116 @@ class AiuiLinkActivity : Activity() {
     private fun createWebView() {
         val root = FrameLayout(this)
         root.setBackgroundColor(Color.BLACK)
-        // 窗口与 WebView 强制不透明纯黑底：本 Activity 是 windowIsTranslucent 窗口，
+        // 窗口与 WebView 强制不透明纯黑底：本 Activity 用 Theme.RokidLink.Opaque
+        // （windowIsTranslucent=false + 窗口背景纯黑，见 AndroidManifest），
         // 页面若有透明像素会直接穿透露出下层（Launcher）造成背景虚影。
         window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
         val wv = WebView(this)
         wv.setBackgroundColor(Color.BLACK)
-        // 全屏渲染，不留任何边框（用户明确要求任何情况下都无黑边）
+
+        // ⚠️ 这几行**不是**绿框的修复（它无public API 可关，见下方遮罩层注释）。
+        // 保留它们只作无害卫生措施（确实能避免滚动条 / 按压高亮进画面）。
+        // ⚠️ 别据此重查 overscroll：Chromium 官方文档明确 WebView 的 root glow
+        //    走 **Java 层 `EdgeEffect`**、**绕过 `View.setOverScrollMode()`**，
+        //    所以「设了没变化」是**预期表现**，不能用来否定假设。
+        wv.overScrollMode = View.OVER_SCROLL_NEVER
+        wv.isVerticalScrollBarEnabled = false
+        wv.isHorizontalScrollBarEnabled = false
+        wv.setBackgroundColor(Color.BLACK)
+        // ── 画面尺寸：必须严格 1:1，不缩放、不超屏 ──────────────────────
+        // 【2026-10-04 回归修正】此前这里设过`物理屏 + 2*BLEED`(488x648)想「窗口超屏」，
+        // 是**错的**，两条证据：
+        //   ① `dumpsys window` 实测本窗口 `mBounds=Rect(0,0-480,640)`、
+        //      `mMaxBounds` 同值 ⇒ **系统把窗口钳在 480x640，超屏压根没生效**，
+        //      FLAG_LAYOUT_NO_LIMITS 也拿它没办法。
+        //   ② 但 WebView 真的变成了 488 宽，而 `index.html` 的 meta viewport 写死
+        //      `width=480` ⇒ 浏览器为把 480 塞进 488 **自动缩放 1.0167**。
+        //      像素反推证实：页面 .frame 实测外沿 469x351，CSS 声明 460x344，
+        //      比值469/460=1.0196、351/344=1.0203 ⇒ **内容被放大 2%**。
+        //      这直接违反「保持 AIUI 原有尺寸」这条硬要求。
+        // ⇒结论：窗口已由 FLAG_FULLSCREEN 铺满，WebView 就该是窗口的 MATCH_PARENT，
+        //   一个像素都不多不少，让 meta viewport=480 与物理 480 天然 1:1。
         wv.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         )
+        // ── 绿框遮罩层（2026-10-04 定位后落地）────────────────────────────────
+        // 【根因】Chromium M95 的 WebView 会在**自身盒边缘**常驻画一圈 3px 半透明绿边。
+        // 该绿边无任何可关闭的 API（见下方取证），因此采用**遮盖**方式绕过。
+        //
+        // 【全部实测铁证，勿再回头重查——共 13 轮探针实验】
+        //   probe=1  WebView 不获焦 ............... 框不变 ⇒ 排除焦点高亮
+        //   probe=2  **整个移除 WebView**（纯黑 ImageView）
+        //       ⇒ 四边 1760 采样点**100% 纯黑** ⇒ 框必属 WebView
+        //   probe=3  defaultFocusHighlightEnabled=false ... 框不变 ⇒ 同上
+        //   probe=4  **空白 WebView**（不 loadUrl、无任何页面）
+        //       ⇒ 框**依然完整存在**，3px 渐变 (127,169,0)→(114,152,0)→(4,6,0)
+        //       ⇒ 排除 ink 引擎 / CSS / outline / box-shadow / JS 绘制
+        //   probe=5  极简空白 HTML（无 ink/host.js）... 框不变 ⇒ 与 ink 无关
+        //   probe=6  LAYER_TYPE_SOFTWARE（**绕开 GPU 合成**）
+        //       ⇒ 与硬件渲染**逐像素一致**（仅 (4,6,0)↔(4,5,0) 舍入抖动）
+        //       ⇒ 排除整个 GPU / 合成器 / hardware layer 路径
+        //   probe=9  WebView **缩到屏幕中心 100x100**
+        //       ⇒ 非黑像素包围盒精确等于 100x100 且中心与屏幕中心重合，
+        //         同时屏幕四边**100% 纯黑**
+        //       ⇒ **决定性**：框由 WebView 自己绘制、**随其几何尺寸变化**，
+        //         彻底排除「屏幕边缘 / 窗口边缘 / 刘海」整类假设
+        //   辅助：WebView 侧反编译 ⇒ 纯净 AOSP WebView 95.0.4638.74（ROM 零改动，
+        //        资源里搜 #9ACD00 为 0 命中）；`setUseWebViewBackgroundForOverscroll
+        //        Background` 是**空方法（return-void）＝no-op**；
+        //        `AwSettings` 的 44 个 boolean 字段**全被 ProGuard 混淆**，
+        //        无法反射定位 ⇒ **无 public API 可关**。
+        //   ⚠️ 别再试 `View.setOverScrollMode`：Chromium 官方文档明确 WebView 的
+        //      root glow 走**Java 层 EdgeEffect**、**绕过** View 层这个开关，
+        //      所以「设了没变化」是预期表现，**不能据此否定假设**。
+        //
+        // 【遮盖方案的安全余量（已实测确认）】
+        //绿框精确占**最外 3px**（第 3 档 (4,6,0) 已近黑，取 4px 保险）。
+        // 实测 AIUI 内容（.frame 外沿）在 480x640 屏上**上下左右内边距均 ≥ 200px**
+        //（截图：标题栏从 y≈205 才开始，上方 205px 纯黑）
+        // ⇒ **盖 4px 纯黑边框不会裁到任何有效内容**，且不改 WebView 尺寸、
+        //   不改 meta viewport ⇒ **不违反「保持 AIUI 原有尺寸」这条硬要求**。
+        //
+        // ⚠️ 遮盖条必须**完全不吃触摸事件**，否则会挡住 AIUI 的按键/ 滑动交互。
+        //   FrameLayout 的命中分发是**自上而下、找不到处理者就继续往下传**，
+        //   所以只要 4 条薄条自己是「不可点击 + 不消费」的 View，
+        //   落在它们上面的触摸会**自动落到下层 WebView**（等价于没被遮），
+        //   **不需要任何事件转发代码**（转发反而会引入重复派发/时序坑）。
+        val EDGE_PX = 4
+        // ⚠️ **添加顺序＝Z 序**：FrameLayout 里后addView 的盖在先加的上面。
+        //   所以必须**先加 WebView、再加薄条**，否则薄条会被 WebView 压在下面看不见。
+        //   （薄条放在上层只是为遮住 WebView 最外 3px 绿边，不影响中间内容可见性。）
         root.addView(wv)
+        // 四条边各铺一个纯黑薄条盖住最外 3px 绿框；中间的 WebView 完整可见、可交互。
+        // ⚠️ 薄条**绝对不能**有 `isClickable = true`（否则会吃掉落在它上的触摸）。
+        listOf(
+            android.view.Gravity.TOP,
+            android.view.Gravity.BOTTOM,
+            android.view.Gravity.START,
+            android.view.Gravity.END,
+        ).forEach { g ->
+            root.addView(
+                View(this).apply {
+                    setBackgroundColor(Color.BLACK)
+                    isClickable = false
+                    isFocusable = false
+                    isFocusableInTouchMode = false
+                },
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ).apply {
+                    gravity = g
+                    if (g == android.view.Gravity.TOP || g == android.view.Gravity.BOTTOM) {
+                        height = EDGE_PX
+                        width = ViewGroup.LayoutParams.MATCH_PARENT
+                    } else {
+                        width = EDGE_PX
+                        height = ViewGroup.LayoutParams.MATCH_PARENT
+                    }
+                },
+            )
+        }
         setContentView(root)
         webView = wv
 
@@ -413,6 +635,7 @@ class AiuiLinkActivity : Activity() {
         }
     }
 
+
     /** 页面 module 加载完后调用 __aiuiHost.boot；带重试防竞态 */
     private fun retryBoot() {
         maybeBoot()
@@ -425,7 +648,7 @@ class AiuiLinkActivity : Activity() {
     private fun maybeBoot() {
         if (booted || bundleJson == null || !jsHostReady || isFinishing) return
         booted = true
-        // 传内容区尺寸（已扣除四周边距），与 WebView 实际渲染区域一致
+        // 传整屏尺寸；auto-height 布局下高度仅作初值，内容尺寸回调后收缩并垂直居中
         bootJs(contentW, contentH)
     }
 
@@ -520,6 +743,14 @@ class AiuiLinkActivity : Activity() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
+        // 注销全部传感器监听（IMU 头控），避免 Activity 销毁后仍持有回调
+        synchronized(sensorLock) {
+            val sm = sensorManager
+            for (listener in activeSensorListeners.values) {
+                runCatching { sm?.unregisterListener(listener) }
+            }
+            activeSensorListeners.clear()
+        }
         runCatching {
             webView?.loadUrl("about:blank")
             webView?.stopLoading()
@@ -542,6 +773,9 @@ class AiuiLinkActivity : Activity() {
     companion object {
         private const val TAG = "AiuiLink"
         private const val BASE_URL = "https://ink.local/"
+
+
+
         const val EXTRA_AIX_PATH = "aix_path"
         /** 启动参数（JSON 对象字符串）：由手机端 open 命令携带，页面 boot 后作为首条 hostMessage 下发 */
         const val EXTRA_LAUNCH_PARAMS = "launch_params"
@@ -727,6 +961,17 @@ class AiuiLinkActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        // 🚨【2026-10-04 修复「AIUI 管理→关闭当前」按钮失效】
+        // 本项目**全文件只有 onStop 里那一句把 activeActivity 置 null，
+        // 却从没有任何一处把它赋成 this** ⇒ `closeActive()` 里
+        //   `val a = activeActivity; a?.runOnUiThread { a.finish() }`
+        // 永远拿到 null ⇒ 手机侧 `closeAiuiHost()` 下发了 close 命令、
+        // 眼镜端 AiuiHostController 也确实执行了 `AiuiLinkActivity.closeActive()`，
+        // 但什么都不会发生 —— 表现就是「关闭当前按钮点了没反应」。
+        // 同一条链路还有第二个坑：`dispatchMessageToActive` / `injectKeyToActive`
+        // 也都读 activeActivity，同一个空引用让「工具消息回不到页面」一并静默失效。
+        // ⇒ 在 onStart 登记（与 onStop 的清理成对），而不是 onResume：
+        //   closeActive 要在 Activity 只是 started 时也能命中。
         synchronized(lock) { activeActivity = this }
     }
 
