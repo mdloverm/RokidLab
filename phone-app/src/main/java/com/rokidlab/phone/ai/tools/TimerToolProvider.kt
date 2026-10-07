@@ -57,7 +57,9 @@ internal object TimerToolProvider : ToolProvider {
                     "type" to "object",
                     "properties" to mapOf(
                         "action" to mapOf("type" to "string", "enum" to listOf("create", "list", "cancel"), "description" to "create=创建；list=列出全部；cancel=取消"),
-                        "time" to mapOf("type" to "string", "description" to "action=create 时的时间，24 小时制 HH:mm，如 17:00"),
+                        "schedule_type" to mapOf("type" to "string", "enum" to listOf("fixed", "countdown"), "description" to "action=create 时的时间口径：fixed=某个固定时刻（默认，需给 time）；countdown=相对时长（需给 seconds，用户说「5分钟后/半小时后」时用这个）"),
+                        "time" to mapOf("type" to "string", "description" to "schedule_type=fixed（默认）时的时间，24 小时制 HH:mm，如 17:00"),
+                        "seconds" to mapOf("type" to "integer", "description" to "schedule_type=countdown 时，距现在多少秒后触发（须 > 0，如「5分钟后」传 300）"),
                         "content" to mapOf("type" to "string", "description" to "action=create 时的提醒内容 / 任务名，如「喝水」「开会」"),
                         "repeatDaily" to mapOf("type" to "boolean", "description" to "action=create 时是否每天重复，默认 false；用户说「每天」时传 true"),
                         "timerAction" to mapOf("type" to "string", "enum" to listOf("notify", "launch"), "description" to "action=create 时到点做什么：notify=只提醒（默认）；launch=提醒并在眼镜上打开某应用（需同时给 appName）"),
@@ -156,19 +158,60 @@ internal object TimerToolProvider : ToolProvider {
                 }
 
                 else -> {
-                    val time = args.optString("time").trim()
                     val content = args.optString("content").trim().ifBlank { "定时提醒" }
                     // 旧 set_timer 的 action 参数改名为 timerAction（外层 action 已被意图占用），
                     // 取值与语义不变：notify=只提醒 / launch=额外在眼镜上打开某应用
                     val timerAction = args.optString("timerAction", "notify")
                     val appName = args.optString("appName").trim()
                     val repeatDaily = args.optBoolean("repeatDaily", false)
-                    val m = Regex("^(\\d{1,2}):(\\d{1,2})$").find(time)
-                        ?: return "时间格式不正确，请用 24 小时制 HH:mm，例如 17:00"
-                    val hour = m.groupValues[1].toInt()
-                    val minute = m.groupValues[2].toInt()
-                    if (hour !in 0..23 || minute !in 0..59) return "时间超出范围（00:00 ~ 23:59）"
                     val app = context.applicationContext as? LabApplication ?: return "应用上下文异常"
+
+                    // ★ 调度口径（2026-10-06 审计修）：原先**只**认 HH:mm 且硬编码
+                    // FixedTime，于是「5 分钟后提醒我」「半小时后叫我」这类高频句式
+                    // 直接返回"时间格式不正确"—— 而本工具自己的 description 第一条
+                    // 就举了这个例子。底层 [TimerSchedule.Countdown] 早就存在，
+                    // 同文件的 schedule_agent_task 也已用 schedule_type 暴露过 countdown，
+                    // 只有这里漏了。现在按 schedule_type 分派（默认 fixed，兼容旧调用）。
+                    val scheduleType = args.optString("schedule_type", "fixed").ifBlank { "fixed" }
+                    val schedule: TimerSchedule
+                    val dayLabel: String
+                    val timeLabel: String
+                    when (scheduleType) {
+                        "countdown" -> {
+                            val seconds = args.optLong("seconds", 0L)
+                            if (seconds <= 0L) {
+                                return "相对时长必须大于 0 秒（如「5 分钟后」传 seconds=300）"
+                            }
+                            schedule = TimerSchedule.Countdown(seconds)
+                            dayLabel = ""
+                            timeLabel = "${formatSeconds(seconds)}后"
+                        }
+
+                        "fixed" -> {
+                            val time = args.optString("time").trim()
+                            val m = Regex("^(\\d{1,2}):(\\d{1,2})$").find(time)
+                                ?: return "时间格式不正确：固定时刻请用 24 小时制 HH:mm（如 17:00）；" +
+                                    "相对时长（如「5 分钟后」）请用 schedule_type=\"countdown\" 并传 seconds"
+                            val hour = m.groupValues[1].toInt()
+                            val minute = m.groupValues[2].toInt()
+                            if (hour !in 0..23 || minute !in 0..59) return "时间超出范围（00:00 ~ 23:59）"
+                            schedule = TimerSchedule.FixedTime(hour, minute, repeatDaily)
+                            val now = Calendar.getInstance()
+                            val todayTarget = Calendar.getInstance().apply {
+                                set(Calendar.HOUR_OF_DAY, hour)
+                                set(Calendar.MINUTE, minute)
+                                set(Calendar.SECOND, 0)
+                            }
+                            dayLabel = when {
+                                repeatDaily -> "每天"
+                                todayTarget.timeInMillis > now.timeInMillis -> "今天"
+                                else -> "明天"
+                            }
+                            timeLabel = String.format(Locale.CHINA, "%02d:%02d", hour, minute)
+                        }
+
+                        else -> return "schedule_type 只支持 fixed 或 countdown，收到「$scheduleType」"
+                    }
 
                     val actions = mutableListOf<TimerAction>()
                     if (timerAction == "launch") synchronized(ToolRegistry.adbLock) {
@@ -188,26 +231,16 @@ internal object TimerToolProvider : ToolProvider {
                     val task = TimerTask(
                         id = UUID.randomUUID().toString(),
                         name = content,
-                        schedule = TimerSchedule.FixedTime(hour, minute, repeatDaily),
+                        schedule = schedule,
                         actions = actions,
                         running = true,
                     )
                     app.timerScheduler.addTask(task)
                     app.timerScheduler.startTask(task)
-                    val now = Calendar.getInstance()
-                    val todayTarget = Calendar.getInstance().apply {
-                        set(Calendar.HOUR_OF_DAY, hour)
-                        set(Calendar.MINUTE, minute)
-                        set(Calendar.SECOND, 0)
-                    }
-                    val dayLabel = when {
-                        repeatDaily -> "每天"
-                        todayTarget.timeInMillis > now.timeInMillis -> "今天"
-                        else -> "明天"
-                    }
-                    val timeLabel = String.format(Locale.CHINA, "%02d:%02d", hour, minute)
                     val actionLabel = if (timerAction == "launch") "并打开 $appName" else ""
-                    "已设置定时任务：$dayLabel $timeLabel $actionLabel，提醒：$content" + exactAlarmHint(context)
+                    // countdown 的 dayLabel 是空串，拼接时前面留一个空格
+                    val when0 = (dayLabel + " " + timeLabel).trim()
+                    "已设置定时任务：$when0 $actionLabel，提醒：$content" + exactAlarmHint(context)
                 }
             }
 

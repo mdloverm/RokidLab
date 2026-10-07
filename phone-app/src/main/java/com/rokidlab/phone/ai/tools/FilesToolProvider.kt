@@ -47,6 +47,8 @@ internal object FilesToolProvider : ToolProvider {
         "read_text_file",
         "search_files",
         "edit_text_file",
+        "apply_patch",
+        "restore_file",
         "delete_file",
         "move_file",
         "zip_files",
@@ -84,7 +86,8 @@ internal object FilesToolProvider : ToolProvider {
             statusText = "正在生成代码文件…",
             schema = toolSchema(
                 name = "save_code_file",
-                description = "把生成的一段代码保存为项目文件，写入手机“下载/项目名/”目录。当用户要求“写代码/生成页面或应用/创建项目文件”等需要产出代码、脚本、配置或页面文件时使用；一次调用只写一个文件，一个项目有多个文件时按文件逐个调用（每次用相同的项目名）。必须通过本工具把代码落盘，不要把整段代码直接当作回复内容发给用户；回复只简短告知项目名与文件数量。若目标是“AIUI 智能体应用（.aix）”，至少需要 app.json（页面清单）与 pages/index/index.ink（首页），可再加 VERSION/AGENTS.md/app.js 与更多 pages/*/index.ink；app.json 的页面路径与文件名一致。每个 .ink 页面必须遵循 AIUI SFC 四块结构并按顺序书写：<script def>（页面级 JSON 配置，如导航栏标题）→ <script setup>（export default 逻辑/data/生命周期）→ <page>（WXML 模板，根标签必须是 <page>，禁止用 <template>）→ <style>（样式）。写成 Vue 风格（<template>/<script>）会被拒绝保存，眼镜上也无法渲染。若页面需要调用手机端能力（放歌、查天气、搜网页、设提醒等），只能走 Lab 工具口。⚠️ ink 沙箱只执行同步代码、不执行 Promise 回调：禁止 await、.then、Promise.all、setTimeout/setInterval（写了会永不返回，页面当场卡死）。唯一正确写法是回调式：globalThis.Lab.callTool('工具名', {参数}, function(res, err){ 在回调里 setData 刷新界面 })，查可用工具名用 globalThis.Lab.listTools(function(tools, err){...})；必须写 globalThis.Lab 或 window.Lab（裸 Lab 在页面 realm 不可用）；工具名必须与清单逐字一致，禁止自造名字；一次只调一个工具，失败不要写自动重试循环。若目标是修改一个已生成的项目，请先调用 read_code_file 读取该文件当前的真实内容，在它基础上改动后覆盖写回同一路径，不要凭印象整文件重编。",
+                description = "把生成的一段代码保存为项目文件，写入手机「下载/项目名/」目录。当用户要求「写代码/生成页面或应用/创建项目文件」等需要产出代码、脚本、配置或页面文件时使用。一次调用只写一个文件；一个项目有多个文件时按文件逐个调用，每次用相同的项目名。必须通过本工具把代码落盘，不要把整段代码直接当作回复内容发给用户，回复只简短告知项目名与文件数量。\n" +
+                    "⚠️ 写 .ink 页面或调手机端能力前，先用 load_skill 加载 aiui-dev 技能读 lab-runtime.md（SFC 四块结构、Lab.callTool 回调式写法、同步沙箱禁令都在那里，不在本desc 里重复）。要改已生成的文件先用 read_code_file 读真实内容再改，不要凭印象重编。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -212,8 +215,11 @@ internal object FilesToolProvider : ToolProvider {
                 name = "edit_text_file",
                 description = "修改**项目工程目录**里已有文本文件的内容（该目录是 App 私有镜像，也是后续安装 AIUI 项目读取的源）。" +
                     "mode=\"append\" 追加到文件末尾（文件必须已存在）；mode=\"overwrite\" 整文件替换。" +
-                    "⚠️ 只改一小段也必须先用 read_text_file 读到全文，改完把**完整内容**用 overwrite 写回——" +
-                    "本工具没有「替换某一行」能力，不要凭记忆只写改动片段，否则会丢掉其余内容。" +
+                    "⚠️ **只改一小段时优先用 apply_patch**（不必读全文、不必重写整份，也不会误伤其它内容）。" +
+                    "本工具只适合「往末尾追加」或「整份重写」两种场景：" +
+                    "改中间某几行必须先 read_text_file 读到全文，再把**完整内容**用 overwrite 写回——" +
+                    "不要凭记忆只写改动片段，否则会丢掉其余内容。" +
+                    "两种写入都会自动备份原内容，改坏了可用「恢复文件」退回。" +
                     "改完若要同步到手机下载目录，需用户重新执行「保存代码文件」或安装 AIUI 项目。",
                 parameters = mapOf(
                     "type" to "object",
@@ -228,6 +234,83 @@ internal object FilesToolProvider : ToolProvider {
                         "content" to mapOf("type" to "string", "description" to "要写入的内容（overwrite 时为完整新内容）"),
                     ),
                     "required" to listOf("project", "path", "content"),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "apply_patch",
+            group = ToolRegistry.DOMAIN_FILES,
+            displayNameRes = R.string.ai_tool_apply_patch_name,
+            descriptionRes = R.string.ai_tool_apply_patch_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在应用补丁…",
+            schema = toolSchema(
+                name = "apply_patch",
+                description = "用**补丁**局部修改项目工程目录里的文件（只改动片段，不必读全文、不必重写整份）。" +
+                    "**改已有文件的一小段时优先用本工具**，不要用「修改文件」整份覆盖。\n" +
+                    "补丁写法（每行开头必须有前缀）：\n" +
+                    "  ` 空格` = 上下文行（原样保留）\n" +
+                    "  `-` = 删除这一行\n" +
+                    "  `+` = 新增这一行\n" +
+                    "  `@@` = 下一片段的开头（可写 `@@ 第 42 行` 之类的**大致位置提示**）\n" +
+                    "⚠️ 三个最容易踩的坑：①**空行必须写成单个空格**（` `）或 `+`，裸空行会被当成片段结束；" +
+                    "②上下文要够独特，同一段文字在文件里出现多次时工具会**拒绝**并告诉你是哪几行，" +
+                    "此时请多带几行上下文；③找不到或找到多处时工具**不会瞎改**，会如实报错并告诉你下一步，" +
+                    "这时先 read_text_file 确认当前内容再改。\n" +
+                    "⚠️ 每次应用前会自动备份原内容，改坏了可以用「恢复文件」退回。" +
+                    "新建文件用 operation=create（整份内容都用 + 写），删文件用 operation=delete。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "project" to mapOf("type" to "string", "description" to "项目名，如 aiui-demo"),
+                        "path" to mapOf("type" to "string", "description" to "文件相对路径，如 pages/index/index.ink"),
+                        "operation" to mapOf(
+                            "type" to "string",
+                            "enum" to listOf("update", "create", "delete"),
+                            "description" to "update=改已有文件（默认）；create=新建文件；delete=删除文件",
+                        ),
+                        "patch" to mapOf(
+                            "type" to "string",
+                            "description" to "补丁文本。例：\"@@\\n-旧的一行\\n+新的一行\\n 保持不变的下一行\"",
+                        ),
+                        "line_hint" to mapOf(
+                            "type" to "integer",
+                            "description" to "可选：@@ 里那个大致行号（1 起）。定位优先按上下文匹配，这个只是兜底提示",
+                        ),
+                    ),
+                    "required" to listOf("project", "path", "patch"),
+                ),
+            ),
+        ),
+        ToolEntry(
+            name = "restore_file",
+            group = ToolRegistry.DOMAIN_FILES,
+            displayNameRes = R.string.ai_tool_restore_file_name,
+            descriptionRes = R.string.ai_tool_restore_file_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            sideEffect = true,
+            statusText = "正在恢复文件…",
+            schema = toolSchema(
+                name = "restore_file",
+                description = "把**项目工程目录**里的文件回退到某次修改**之前**的备份。" +
+                    "每次「修改文件」都会自动先把原内容存成 `.文件名.时间戳.bak`（新建文件不产生备份）。" +
+                    "当你用修改/增量编辑改坏了文件、或者想撤销上一次改动时用它。" +
+                    "⚠️ 只传 project + path 即可，默认恢复到**最近一个**备份；" +
+                    "要从更早的版本恢复时，先用 read_text_file 之外的方式确认需要哪个备份名" +
+                    "（备份名格式：`.文件名.时间戳.bak`，传 backup 即可；不确定就别传 backup）。" +
+                    "⚠️ 恢复动作本身也会先备份当前内容，所以「恢复错了」还能再退回来。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "project" to mapOf("type" to "string", "description" to "项目名，如 aiui-demo"),
+                        "path" to mapOf("type" to "string", "description" to "文件相对路径，如 pages/index/index.ink"),
+                        "backup" to mapOf(
+                            "type" to "string",
+                            "description" to "备份文件名（留空 = 最近一个）。格式 `.文件名.时间戳.bak`，如 `.index.ink.1757048000000.bak`",
+                        ),
+                    ),
+                    "required" to listOf("project", "path"),
                 ),
             ),
         ),
@@ -426,6 +509,22 @@ internal object FilesToolProvider : ToolProvider {
                 path = args.optString("path"),
                 mode = args.optString("mode"),
                 content = args.optString("content"),
+            )
+
+            "apply_patch" -> FileWorkspace.applyPatch(
+                context,
+                project = args.optString("project"),
+                path = args.optString("path"),
+                operation = args.optString("operation"),
+                patch = args.optString("patch"),
+                lineHint = args.optInt("line_hint", 0),
+            )
+
+            "restore_file" -> FileWorkspace.restoreFile(
+                context,
+                project = args.optString("project"),
+                path = args.optString("path"),
+                backupName = args.optString("backup"),
             )
 
             "delete_file" -> FileWorkspace.deleteEntry(

@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import com.rokidlab.phone.ai.AgentSessionManager
 import com.rokidlab.phone.ai.AgentStep
+import com.rokidlab.phone.ai.writeTextFileAtomically
 import com.rokidlab.phone.util.LogCollector
 import java.io.File
 import java.text.SimpleDateFormat
@@ -98,14 +99,22 @@ internal object ChatStateHolder {
         if (traceAnchorId > 0L) messages.indexOfFirst { it.id == traceAnchorId } else -1
 
     /**
-     * 把一组过程步骤里仍处于 [AgentStep.State.RUNNING] 的置为终态。
+     * 把一组过程步骤里仍处于「进行中」的置为终态。
      *
-     * @return 有改动时返回新列表；**本来就没有 RUNNING 时返回 null**（调用方据此跳过落盘）
+     * 判据含 [AgentStep.State.AWAITING_CONFIRM]（2026-10-06）：它同样表示
+     * "这一轮还没结束"，若不收尾，UI 上那颗点会停在"等你确认…"再也不会动
+     * —— 而闸门返回后本来是会有 OK/CANCELLED 覆盖的，
+     * 没覆盖到说明这一轮中途异常退出了。
+     *
+     * @return 有改动时返回新列表；**本来就没有进行中步骤时返回 null**（调用方据此跳过落盘）
      */
     private fun settledSteps(steps: List<AgentStep>, failed: Boolean): List<AgentStep>? {
-        if (steps.none { it.state == AgentStep.State.RUNNING }) return null
+        fun isPending(state: AgentStep.State) =
+            state == AgentStep.State.RUNNING || state == AgentStep.State.AWAITING_CONFIRM
+
+        if (steps.none { isPending(it.state) }) return null
         return steps.map {
-            if (it.state != AgentStep.State.RUNNING) it
+            if (!isPending(it.state)) it
             else it.copy(state = if (failed) AgentStep.State.FAILED else AgentStep.State.OK)
         }
     }
@@ -154,6 +163,33 @@ internal object ChatStateHolder {
     private fun newSessionId(): String =
         UUID.randomUUID().toString().replace("-", "").take(12)
 
+    /**
+     * 索引损坏时，从**会话消息文件**重建列表（2026-10-06 审计修）。
+     *
+     * ## 为什么消息文件才是真相源
+     * 索引（`chat_sessions.json`）是「读旧 + 拼新 + 写回」的产物，只存列表页要的展示字段；
+     * 而每个 `chat_sessions/<id>.jsonl` 才是消息本体。索引坏了时**消息一条都没丢**，
+     * 所以能从文件重建列表，而不是让用户面对一个空的历史。
+     *
+     * 📌 恢复的精度：标题/预览/条数从消息重新派生（与 [ChatSessionStore.titleFrom] /
+     * [previewFrom] 同一套口径，恢复后与原索引基本一致）；只有 `systemPrompt` 恢复不了
+     * （它只存在索引里）—— 那是个别会话的附加人设，缺失不影响历史可见性。
+     */
+    private fun rebuildFromSessionFiles(ctx: Context): List<ChatSessionMeta> {
+        val dir = File(ctx.filesDir, ChatSessionStore.SESSION_DIR)
+        return ChatSessionStore.rebuildIndexFrom(
+            sessionDir = dir,
+            readCount = { f -> runCatching { ChatHistoryStore.readHistory(f) }.getOrDefault(emptyList()).size },
+            titleOf = { f ->
+                runCatching { ChatSessionStore.titleFrom(ChatHistoryStore.readHistory(f)) }
+                    .getOrDefault(ChatSessionStore.DEFAULT_TITLE)
+            },
+            previewOf = { f ->
+                runCatching { ChatSessionStore.previewFrom(ChatHistoryStore.readHistory(f)) }.getOrDefault("")
+            },
+        )
+    }
+
     // ===== 初始化与迁移 =====
 
     /** 应用启动时初始化上下文，并在后台加载会话索引与当前会话消息 */
@@ -173,9 +209,25 @@ internal object ChatStateHolder {
         val ctx = appContext ?: return
         submit("bootstrap") {
             val idx = indexFile(ctx)
-            var list = ChatSessionStore.parseIndex(if (idx.exists()) idx.readText() else "")
+            val raw = if (idx.exists()) idx.readText() else ""
+            // ★ 关键区分（2026-10-06 审计修）：`null` = 索引**损坏**，不是"没有会话"。
+            // 旧实现对半截/ 0 字节索引与"首次启动"一视同仁地返回空列表 ⇒ 走新建分支 ⇒
+            // **磁盘上的会话文件全都还在，但整个历史列表消失**（用户以为数据被清空）。
+            val parsed = ChatSessionStore.parseIndexOrNull(raw)
+            var list = parsed.orEmpty()
+            var indexWasCorrupt = parsed == null
             var active = ctx.getSharedPreferences(STATE_PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_ACTIVE_SESSION, "").orEmpty()
+
+            // 索引坏了但消息文件还在 ⇒ 从消息文件（真相源）重建，而不是当作没有会话。
+            if (indexWasCorrupt && list.isEmpty()) {
+                val rebuilt = rebuildFromSessionFiles(ctx)
+                if (rebuilt.isNotEmpty()) {
+                    LogCollector.w(TAG, "session index corrupted; rebuilt ${rebuilt.size} sessions from files")
+                    list = rebuilt
+                    indexWasCorrupt = false
+                }
+            }
 
             if (list.isEmpty()) {
                 val id = newSessionId()
@@ -205,8 +257,12 @@ internal object ChatStateHolder {
                     )
                 )
                 active = id
-                idx.writeText(ChatSessionStore.toIndexJson(list))
+                writeTextFileAtomically(idx, ChatSessionStore.toIndexJson(list))
                 setActiveIdPref(ctx, id)
+            } else if (indexWasCorrupt) {
+                // 走到这里说明重建也没成功（消息文件确实不存在）⇒ 保持"没有会话"的原语义，
+                // 但把索引**重新写一份合法的**，否则损坏的原文会一直留着。
+                writeTextFileAtomically(idx, ChatSessionStore.toIndexJson(list))
             }
 
             val ordered = ChatSessionStore.sorted(list)
@@ -529,6 +585,14 @@ internal object ChatStateHolder {
      * 原地更新末尾状态消息（用于 OCR 模型下载百分比等高频进度）。
      * 末尾是状态消息就覆盖内容（不新增气泡、不落盘，避免每 1% 刷一条 + 高频写文件）；
      * 末尾不是状态消息时退化为新增一条状态消息。必须在主线程调用。
+     *
+     * ⚠️ **不落盘是有意的**（高频），但它有个后果必须配套处理（2026-10-06 审计修）：
+     * 首次 [add] 时落的是**最初那条**文案（如"正在识别文字…"），后续覆盖只在内存里。
+     * 于是进程被杀 / 用户强退后，盘上留下的是那条**永远不会再更新**的进度文案 ⇒
+     * 重启后聊天里立着一行"正在识别文字…"，永远转不完。
+     *
+     * ⇒ 配套：[clearStatusLines] 在**一轮结束时**把状态行删掉并落盘一次。
+     * 高频期间不写盘、结束时一次写，既不刷屏也不会残留。
      */
     fun updateLastStatus(content: String) {
         val last = messages.lastOrNull()
@@ -537,6 +601,32 @@ internal object ChatStateHolder {
         } else {
             add(false, content, isStatus = true)
         }
+    }
+
+    /**
+     * 清掉末尾连续的状态消息，并在有改动时落盘一次（2026-10-06 审计修）。
+     *
+     * ## 为什么必须清而不是留着
+     * 状态行的语义是"**进行中**"。一轮结束后它就变成了一句**过期的话**——
+     * 尤其"正在识别文字…"这种，重启后永远停在那里，用户以为 App 卡住了。
+     * 项目里已有同类纪律：会话标题/摘要都排除状态行（[ChatSessionStore]）、
+     * 代码卡的"运行最近代码"也跳过状态行 —— 状态行**本来就不该进入历史**。
+     *
+     * 📌 只删**末尾连续**的那些：中间的状态行（若有）可能是另一轮的，
+     * 删掉会丢掉"当时正在做什么"的历史信息，而末尾这些是**当前这轮**的残留。
+     *
+     * @return 有改动时返回 true（调用方据此决定要不要播报）
+     */
+    fun clearStatusLines(): Boolean {
+        var removed = 0
+        while (messages.lastOrNull()?.isStatus == true) {
+            messages.removeAt(messages.size - 1)
+            removed++
+        }
+        if (removed == 0) return false
+        // 一次性落盘：把"残留的进行中文案"从历史里抹掉（高频期间不写盘的代价在这里还清）
+        persistAll()
+        return true
     }
 
     // ═══════════ 运行卡片（本地交互式程序，见 InteractiveRunManager） ═══════════
@@ -848,11 +938,21 @@ internal object ChatStateHolder {
         submit("persist all") { ChatHistoryStore.rewrite(sessionFile(ctx, id), lines) }
     }
 
-    /** 写会话索引 */
+    /**
+     * 写会话索引。
+     *
+     * ⚠️ 走**原子写**（2026-10-06 审计修）：这里也是「读旧 + 拼新 + 写回」序列
+     * （[sessions] 是内存全量，重算后整体覆盖）。
+     * 裸写时提交后台线程后被 LMK 杀掉 ⇒ 索引成半截/ 0 字节，而
+     * [ChatSessionStore.parseIndex] 对残缺 JSON **静默返回空列表** ⇒
+     * `bootstrap()` 判定"索引为空"并走新建会话分支 ⇒
+     * **磁盘上的会话文件全都还在，但整个历史列表消失**（用户以为数据被清空），
+     * 且后续持久化会用新索引覆盖，原始索引彻底不可恢复。
+     */
     private fun persistIndex() {
         val ctx = appContext ?: return
         val snapshot = ChatSessionStore.toIndexJson(sessions.toList())
-        submit("persist index") { indexFile(ctx).writeText(snapshot) }
+        submit("persist index") { writeTextFileAtomically(indexFile(ctx), snapshot) }
     }
 
     /**

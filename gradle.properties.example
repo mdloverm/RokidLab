@@ -7,8 +7,18 @@
 # ── Android / Gradle 基础项 ──
 android.useAndroidX=true
 android.nonTransitiveRClass=true
-android.suppressUnsupportedCompileSdk=35
-org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+# ⚠️ 不要设 android.suppressUnsupportedCompileSdk —— 本工程 compileSdk=34、AGP 8.5.0 本就最高支持 34，
+#    该属性只在用更新 compileSdk 时才有意义，设了等于把真实告警压掉。
+#    真要升 compileSdk 时，正确做法是升 AGP，而不是加这个属性。
+org.gradle.jvmargs=-Xmx2560m -Dfile.encoding=UTF-8
+# ⚠️ 这行别漏。release（R8 + 全量 Kotlin）默认沿用上面的 jvmargs 上限，
+#    实测会报 "Not enough memory to run compilation"。CI 跑 assembleRelease 时
+#    runner 只有 7GB 内存、2 核，比开发机更紧，漏了这行会**间歇性**构建失败。
+kotlin.daemon.jvmargs=-Xmx3072m
+# 双模块并行 + 构建缓存：R8 是最慢的一步且不可增量，收益最明显。
+# 内存紧张的 runner（如 7GB）若发现构建变慢或 OOM，可先注释掉 parallel 定位。
+org.gradle.parallel=true
+org.gradle.caching=true
 
 # ── release 签名（四项全部必需，缺失时构建会直接失败）──
 # keystore 文件路径，可省略（默认 D:\rokidapp\release.keystore）

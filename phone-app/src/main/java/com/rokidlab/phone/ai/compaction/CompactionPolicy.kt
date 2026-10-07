@@ -45,14 +45,31 @@ internal data class CompactionPolicy(
     val keepRecentTurns: Int = DEFAULT_KEEP_RECENT_TURNS,
 ) {
     companion object {
-        /** 约 6 轮对话 */
-        const val DEFAULT_MAX_MESSAGES = 12
+        /**
+         * 默认历史消息**条数**上限。
+         *
+         * ⚠️ 2026-10-06 从 12 提到 25：与 [DEFAULT_MAX_TOKENS] 4000→8000 配套。
+         *
+         * 原来 12 是"4000 token ÷ 320 token/条 ≈ 12 条"这个换算的产物，
+         * 改成 8000 后若不同步抬条数，**窗口未知档会退化成"token 翻倍、条数不变"** ——
+         * 症状是历史条数被 12 卡死，用户仍然觉得"几句话就满"（真因是条数不是 token）。
+         * 25 条 ≈ 12 轮，与 8000 token / 320 ≈ 25 条正好自洽。
+         */
+        const val DEFAULT_MAX_MESSAGES = 25
 
         /**
-         * 默认历史 token 预算 ≈ 原 6000 字中文 × 0.65 token/字（cl100k / DeepSeek 系
-         * 中文粒度）。取整到 4000：与旧默认**同一历史规模**，默认行为不因单位切换而漂移。
+         * 默认历史 token 预算。
+         *
+         * ★ 2026-10-06 从 **4000 提到 8000**：原值是"与改造前硬编码同一历史规模"的锚点
+         *   （12 条 / 4000 token ≈ 6 轮），当时的问题是**太紧** —— 用户反馈"随便几句就满"。
+         *   真正的量级对照（本项目实测口径）：
+         *   - 每轮**固定**开销 ≈ 30k token（105 个工具 schema 本身约 27k + 人设/记忆/知识库约 3k）；
+         *   - 给历史 4000 意味着在 32k 窗口下历史只占 12%，而固定开销已占 92% ⇒
+         *     历史**永远是最先被挤掉的那一块**，表现正是"几句话就忘"。
+         *   提到 8000 让"窗口未知"这个最大用户群（国产端点不报 `contextWindow`）
+         *   从约 6 轮提升到约 12 轮，且仍远低于固定开销，不会造成溢出。
          */
-        const val DEFAULT_MAX_TOKENS = 4000
+        const val DEFAULT_MAX_TOKENS = 8000
 
         const val DEFAULT_DIGEST_MAX_CHARS = 800
 
@@ -61,12 +78,25 @@ internal data class CompactionPolicy(
         /**
          * 历史最多占上下文窗口的比例。
          *
-         * 窗口的其余部分要留给：全部工具 schema（数十条，不在此写死数量 —— 见 `ToolRegistry`）、
-         * 人设 / 长期记忆 / 知识库注入、
-         * 以及单轮输出预算（8192，开思考时 32000）。取 **15%** 是刻意保守 ——
-         * 它的作用不是"把窗口用满"，而是给历史一个**可解释、随窗口缩放**的份额。
+         * ⚠️ 2026-10-06 从 **0.15 提到 0.30**。
+         *
+         * 原值 15% 是按"窗口要留给工具 schema + 记忆注入 + 单轮输出"这个结构估的，
+         * 但它假设**工具 schema 没有单独膨胀**。实测本项目每轮固定开销 ≈ 30k token
+         *（105 个工具 × 约 260 token，加人设/记忆/知识库注入约 3k），
+         * 于是 15% 在中小窗口下**小于固定开销本身**：
+         * | 窗口 | 固定开销占比 | 旧份额(15%) | 新份额(30%) |
+         * |---|---|---|---|
+         * | 8k | 370% | 1228 | 2457 |
+         * | 32k | 92% | 4915 | 9830 |
+         * | 131k | 23% | 19660 | 38000（触天花板）|
+         *
+         * 症状就是用户反馈的"随便几句就满" —— 压缩在**工具开销之外**抢不到空间。
+         *
+         * 取 30% 的理由：剩下 70% 仍显著大于固定开销（30%）+ 单轮输出预算
+         * （8k，开思考 32k）。对超大窗口（≥ 256k）由 [MAX_TOKENS_CEIL] 兜住，
+         * 不会因为份额变大而让每轮请求无限膨胀。
          */
-        private const val HISTORY_SHARE = 0.15
+        private const val HISTORY_SHARE = 0.30
 
         /**
          * token 上限的下限：比这还小就完全没有上下文可言了，宁可让它溢出也不要退化到失忆
@@ -90,10 +120,11 @@ internal data class CompactionPolicy(
         const val MAX_DIGEST_CEIL = 6000
 
         /**
-         * 平均一条消息的 token 数（= [DEFAULT_MAX_TOKENS] / [DEFAULT_MAX_MESSAGES]）。
+         * 平均一条消息的 token 数。用于把 token 额度换算成条数。
          *
-         * 用它把 token 额度换算成条数：默认档下 4000 / 320 ≈ 12，与改造前的硬编码值**恰好相等**，
-         * 所以默认行为一点没变；额度放大时条数同步放大，否则"token 数放开了、却仍被 12 条卡死"。
+         * ⚠️ 2026-10-06 核对：默认档 8000 / 320 = 25，与 [DEFAULT_MAX_MESSAGES] 自洽。
+         * 额度放大时条数同步放大，否则"token 数放开了、却仍被条数卡死" ——
+         * 那正是 4000→8000 那次改动差点踩的坑（只改 token 忘了改条数）。
          */
         private const val TOKENS_PER_MESSAGE = 320
 
@@ -113,10 +144,10 @@ internal data class CompactionPolicy(
          *  1. 窗口未知（`contextWindow <= 0`，见 `ModelCapabilities`）→ 原样返回 [DEFAULT]。
          *     "不知道"不能变成"给你调小"，那会平白损失用户的上下文。
          *  2. 推导额度 < 默认值 → **收紧** [maxTokens] 与 [digestMaxChars]；[maxMessages] 不动
-         *     （这个档位下真正的约束是 token 数：380 token 早已把 12 条压到更少）。
+         *     （这个档位下真正的约束是 token 数：几百 token 早已把 25 条压到更少）。
          *  3. 推导额度 = 默认值 → 原样返回 [DEFAULT]。
          *  4. 推导额度 > 默认值 → **放宽** [maxTokens]、[maxMessages]、[digestMaxChars] 三者，
-         *     并各自受天花板约束。三者必须一起放 —— 只放 token 数会被 12 条卡死（症状与没改一样）。
+         *     并各自受天花板约束。三者必须一起放 —— 只放 token 数会被条数卡死（症状与没改一样）。
          *
          * @param contextWindowTokens 模型上下文窗口（token）；0 = 未知
          */
@@ -151,7 +182,7 @@ internal data class CompactionPolicy(
     /**
      * 预算是否被窗口改过（无论方向）。
      *
-     * UI 用它决定要不要解释"上限怎么不是 4000 了" —— 只有一个方向的解释会让用户
+     * UI 用它决定要不要解释"上限怎么不是默认档了" —— 只有一个方向的解释会让用户
      * 在另一种情况下找不到原因（放宽时说"被收紧了"是错的）。
      */
     val windowAdjusted: Boolean

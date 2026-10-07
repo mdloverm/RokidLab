@@ -184,10 +184,33 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            // sherpa-onnx static-link aar 仅在 arm 系把 onnxruntime 静态编进 jni.so，
-            // x86 仍带独立 libonnxruntime.so，与 onnxruntime-android:1.22.0 同名冲突；
-            // abiFilters 仅 arm64，x86 实际不打包，pickFirst 仅让 merge 任务通过。
-            pickFirsts += "lib/x86/libonnxruntime.so"
+            // ⚠️ 这里曾有一条 pickFirsts += "lib/x86/libonnxruntime.so"，已删除。
+            // 起因是 sherpa-onnx static-link aar 仅在 arm 系把 onnxruntime 静态编进 jni.so，
+            // x86 仍带独立的同名 so 会与 onnxruntime-android:1.22.0 冲突。
+            // 但上方 abiFilters 只保留 arm64-v8a ⇒ x86 产物根本不进包，该规则永不生效，
+            // 留着只会让人误以为「还在支持 x86 / 还需处理 so 冲突」。
+            // 若将来真要加 x86_64（模拟器调试），届时再按实际冲突的so 加回 pickFirst，
+            // 代价是 opencv + onnxruntime 各带一份 x86 版本，APK 体积会显著变大。
+        }
+
+        // ── 排掉从未使用的 BPE 编码表（2026-10-05，约-2.8 MB）──
+        // jtokkit 1.1.0 把 5 张 tiktoken 表全打进包里，但本项目**只用 cl100k_base**
+        // （`ai/compaction/TokenMeter.kt` 里硬编码 EncodingType.CL100K_BASE）。
+        // 保留的三张纯白带，合计 5.04 MB raw / 约 2.8 MB stored：
+        //   o200k_base 3.61 MB、p50k_base 0.84 MB、r50k_base 0.84 MB
+        //
+        // ⚠️ **前置条件（缺一不可）**：TokenMeter 必须用 `Encodings.newLazyEncodingRegistry()`。
+        //   反编译确认 DefaultEncodingRegistry 构造时遍历全部 5 个 EncodingType 急加载建表，
+        //   表被排掉后构造期就会抛资源缺失，且 count() 的 runCatching 会静默降级成
+        //   「1 字 1 token」让预算口径悄悄失真。改这一项前先看 TokenMeter 的类注释。
+        // ⚠️ 若将来要支持 o200k 系模型（如 gpt-4o），必须同步撤销这里的 p50k/r50k 排除，
+        //    并改 TokenMeter 用对应的 EncodingType。
+        resources {
+            excludes += setOf(
+                "com/knuddels/jtokkit/o200k_base.tiktoken",
+                "com/knuddels/jtokkit/p50k_base.tiktoken",
+                "com/knuddels/jtokkit/r50k_base.tiktoken",
+            )
         }
     }
 
@@ -443,7 +466,11 @@ tasks.matching { it.name == "preBuild" }.configureEach {
 // 存量在后续改动该文件时顺手收敛（预算可随之下调）。
 // 2026-09-18 收敛：基线 47 → 42（实测全仓 68 处，已标注 26 / 未标注 42），
 // 按 RULES §12.14「只降不升」同步下调基线。
-val bareCatchBudget = 42
+// 2026-10-06 收紧：42 → 41（实测未标注 41，任务自己提示「可下调为 41」）。
+// 顺带记一条实测结论：门禁是**逐行**正则匹配，跨行写法 `catch (e: X) {\n}` 扫不到，
+// 但全仓实扫**跨行空 catch 为 0 处**（代码风格统一）⇒ 该盲区当前零实际影响，
+// 故不为它改门禁实现（改正则本身有误报风险，收益为零）。若将来有人写跨行风格再补 DOT_MATCHES_ALL。
+val bareCatchBudget = 41
 
 val checkNoBareCatch by tasks.registering {
     group = "verification"

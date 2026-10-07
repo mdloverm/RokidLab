@@ -639,6 +639,11 @@ object LongTermMemoryManager {
      *
      * 编号取该条在**全量列表** `items()` 里的位置（1 起），
      * 因此 AI 用 `manage_memory(delete, content="3")` 删除时不会错位 —— 教训混在列表里也不影响。
+     *
+     * ⚠️ 输出经 [UntrustedContent.wrapInjected] 包成隔离段（2026-10-07 安全修复）。
+     * 理由：条目内容**不一定**来自用户亲口陈述 —— `manage_memory` 允许模型写入，
+     * 而模型可能刚读过一段含注入的网页/文档。包在这一层（数据源头）而不是
+     * 提示词装配层，是因为本函数有多个调用方，只改一处会漏。
      */
     fun memoriesContext(context: Context, query: String? = null): String? {
         val d = db(context)
@@ -649,10 +654,15 @@ object LongTermMemoryManager {
             .filter { it.value.kind == KIND_FACT }
             .map { it.index to it.value }
         val picked = pickRelevant(context, d, facts, query, INJECT_TOP_K) ?: return null
-        return buildString {
+        val body = buildString {
             append("以下是与当前话题可能相关的长期记忆（跨会话积累，可据此个性化回答）：\n")
             picked.forEach { (i, r) -> append("${i + 1}. ${r.content}\n") }
         }.trimEnd()
+        return com.rokidlab.phone.ai.UntrustedContent.wrapInjected(
+            toolName = "memories",
+            content = body,
+            sourceNote = "你过去在这台设备上积累的长期记忆（用户事实）",
+        )
     }
 
     /**
@@ -661,16 +671,31 @@ object LongTermMemoryManager {
      * ⚠️ 这里刻意**不编号**（用 `·` 圆点）：编号在 [memoriesContext] 里是删除用的定位符，
      * 教训在自己窗口里另起一套编号只会诱导模型拿它去 `manage_memory(delete, "1")`
      * —— 那删掉的是第一条**用户事实**。要删教训就让模型传内容片段。
+     *
+     * ⚠️⚠️ 输出必须经 [UntrustedContent.wrapInjected] 包装，且**这一段是全项目
+     * 注入风险最高的地方**（2026-10-07 安全修复）：
+     *  1. **教训会被框架自动播种**（工具失败时由 `AiConversationService` 写入），
+     *     而错误串可能整段来自网页正文 ⇒ 攻击者只需构造一个让工具失败的网页，
+     *     注入内容就进了长期库。
+     *  2. 提示词里这一段的尾句是**指令性**的「做同类事情时按它来」
+     *     （`OpenAiService.buildSystemMessage`）—— 模型被显式要求服从整段内容。
+     *
+     * 不加隔离标记 = 让模型分不清「该服从的框架指令」与「框内数据里的伪装指令」。
      */
     fun lessonsContext(context: Context, query: String? = null): String? {
         val d = db(context)
         pruneExpired(d)
         val lessons = retrievalRows(d, KIND_LESSON).mapIndexed { i, r -> i to r }
         val picked = pickRelevant(context, d, lessons, query, LESSON_INJECT_TOP_K) ?: return null
-        return buildString {
+        val body = buildString {
             append("以下是你过去在这台设备上踩过的坑或验证过的做法（跨会话积累）。做同类事情时先照它来，不要重复试错：\n")
             picked.forEach { (_, r) -> append("· ").append(r.content).append('\n') }
         }.trimEnd()
+        return com.rokidlab.phone.ai.UntrustedContent.wrapInjected(
+            toolName = "lessons",
+            content = body,
+            sourceNote = "你过去在这台设备上积累的经验教训",
+        )
     }
 
     /**
@@ -1082,11 +1107,14 @@ object LongTermMemoryManager {
      * 同时把 `kind=lesson` 的用法写清楚 —— 这是**教训自动积累**的入口，
      * 不写明文模型不会自己想到用（它默认把 manage_memory 理解为"记用户的事"）。
      */
-    fun schema(): JSONObject {
-        return JSONObject().apply {
-            put("type", "function")
-            put("function", JSONObject().apply {
-                put("name", TOOL_NAME)
+    // ⚠️ `by lazy` 缓存（2026-10-05）：无参纯常量（KIND_FACT/KIND_LESSON 是编译期常量），
+    // 缓存理由与共享前提见 [SkillRegistry.schema] 的 KDoc。
+    fun schema(): JSONObject = SCHEMA
+
+    private val SCHEMA: JSONObject = JSONObject().apply {
+        put("type", "function")
+        put("function", JSONObject().apply {
+            put("name", TOOL_NAME)
                 put("description",
                     "管理长期记忆（跨会话持久生效）：两种用途 —— " +
                         "①kind=fact（默认）记住关于**用户本人**的事实与偏好，" +
@@ -1122,7 +1150,6 @@ object LongTermMemoryManager {
                 })
             })
         }
-    }
 
     /** 执行记忆工具，返回给 AI 的结果文本 */
     fun execute(context: Context, arguments: String): String {

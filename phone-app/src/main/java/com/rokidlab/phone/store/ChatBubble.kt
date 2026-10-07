@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Compress
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.CircularProgressIndicator
@@ -151,15 +152,20 @@ internal fun ChatBubble(
                     .let { m -> if (isUser && onClickUser != null) m.clickable { onClickUser?.invoke() } else m }
                     .padding(horizontal = 12.dp, vertical = 8.dp)
                 Column(modifier = bubbleModifier) {
-                    // 图片消息：先渲染图片卡片，再附 caption 文本（仅手机端；眼镜端 TTS/显示不受影响）。
+                    // 图片消息：先渲染图片卡片，再附caption 文本（仅手机端；眼镜端 TTS/显示不受影响）。
                     msg.imageUrl?.let { url ->
                         ChatImageCard(url)
                         if (msg.content.isNotBlank()) {
-                            Text(
+                            // ★ 走 markdown 而不是纯 Text（2026-10-06 审计修）：
+                            // caption 由模型自由填写，它常写成
+                            //「这是 **架构图**：\n- 第一层\n- 第二层」这种带格式的内容。
+                            // 用 Text 的话星号与连字符会**原样显示**。
+                            // 更要紧的是：一条消息里"先流出一段正文、再挂上图"时，
+                            // 整个气泡会改走这条分支 ⇒ 前面那段已排版的正文
+                            // 也会跟着退化成纯文本（整条回复掉格式）。
+                            ChatMarkdownBody(
                                 text = msg.content,
-                                color = if (isUser) BrewBg else BrewTextBright,
-                                fontSize = 14.sp,
-                                lineHeight = 20.sp,
+                                textColor = if (isUser) BrewBg else BrewTextBright,
                                 modifier = Modifier.padding(top = 6.dp),
                             )
                         }
@@ -171,11 +177,10 @@ internal fun ChatBubble(
                             chars = msg.fileChars,
                         )
                         if (msg.content.isNotBlank()) {
-                            Text(
+                            // 同上：caption 也要走 markdown（理由见图片分支的注释）
+                            ChatMarkdownBody(
                                 text = msg.content,
-                                color = if (isUser) BrewBg else BrewTextBright,
-                                fontSize = 14.sp,
-                                lineHeight = 20.sp,
+                                textColor = if (isUser) BrewBg else BrewTextBright,
                                 modifier = Modifier.padding(top = 6.dp),
                             )
                         }
@@ -185,6 +190,14 @@ internal fun ChatBubble(
                             text = msg.content,
                             textColor = if (isUser) BrewBg else BrewTextBright,
                         )
+                    }
+                    // ★ Token 成本的**兜底出口**（2026-10-06 审计修）：
+                    // [TraceCostLine] 原本只在过程卡 `if (expanded)` 分支里，而**纯闲聊消息
+                    // 的 `trace` 为空 ⇒ 过程卡根本不渲染** ⇒ 那条消息的 usage 落盘了却
+                    // 在UI 上没有任何出口（用户问一句"你好"，服务端回了 usage，看不到）。
+                    // 这里在气泡内补一行，只有"过程卡不存在"时才显示，避免与卡内那份重复。
+                    if (msg.trace.isEmpty() && msg.usage != null) {
+                        InlineCostText(msg.usage)
                     }
                     Row(
                         modifier = Modifier
@@ -255,7 +268,11 @@ private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, ex
     // null = 用户没单独动过这张卡 ⇒ 跟随设置页默认值；非 null = 用户点过 ⇒ 以他为准
     var manual by remember(msgId) { mutableStateOf<Boolean?>(null) }
     val expanded = manual ?: expandByDefault
-    val running = steps.any { it.state == AgentStep.State.RUNNING }
+    // AWAITING_CONFIRM 也算"进行中" —— 它同样在等一个外部回应（用户点头），
+    // 若不算，卡片会提前收起那颗转圈点，用户反而看不到"正在等你确认"。
+    val running = steps.any {
+        it.state == AgentStep.State.RUNNING || it.state == AgentStep.State.AWAITING_CONFIRM
+    }
 
     Column(
         modifier = Modifier
@@ -336,6 +353,29 @@ private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, ex
  * ⚠️ **拿不到用量就不编数字**：服务端没返回 usage 时显示"用量未知"，而不是"输入 0 / 输出 0" ——
  *   后者是**错误信息**，比不显示更糟（用户会拿它当账单）。
  */
+/**
+ * 气泡内的紧凑成本行（无过程卡时的兜底出口，见调用处注释）。
+ *
+ * 复用 [usageCostText] —— 与 [TraceCostLine] 同一份文案生成逻辑，
+ * 不另写一套格式化（否则两处口径迟早漂移）。
+ */
+@Composable
+private fun InlineCostText(usage: MsgUsage) {
+    val ctx = LocalContext.current
+    val text = remember(usage) { usageCostText(ctx, usage) } ?: return
+    Text(
+        text = text,
+        color = BrewDim,
+        fontSize = 10.sp,
+        // 📌 右对齐靠 Row 的 Arrangement.End 更稳；这里用 fillMaxWidth + 文本右对齐，
+        //不依赖 ColumnScope.align（那要求调用点必须处在 ColumnScope 内，脆）。
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        textAlign = TextAlign.End,
+    )
+}
+
 @Composable
 private fun TraceCostLine(usage: MsgUsage?) {
     val ctx = LocalContext.current
@@ -409,8 +449,12 @@ internal fun fmtElapsed(ms: Long): String = when {
 private fun TraceStepRow(step: AgentStep) {
     val color = when (step.state) {
         AgentStep.State.RUNNING -> BrewAmber
+        // ★ 与 RUNNING 同色（进行中），但文案不同 —— 关键区别是"现在轮到你"而不是"我在忙"
+        AgentStep.State.AWAITING_CONFIRM -> BrewAmber
         AgentStep.State.OK -> BrewSuccess
         AgentStep.State.FAILED -> BrewRed
+        // 中性灰：用户自己点的取消是**他的决定**，不是错误，不该显示成红色失败
+        AgentStep.State.CANCELLED -> BrewMuted
     }
     // 思考全文展开/收起：detail 只压一行预览，fullText 是整段推理（落盘限长 8000）
     var thinkExpanded by remember(step.key) { mutableStateOf(false) }
@@ -436,6 +480,9 @@ private fun TraceStepRow(step: AgentStep) {
                         AgentStep.Kind.KNOWLEDGE -> Icons.Outlined.MenuBook
                         AgentStep.Kind.TOOL -> Icons.Outlined.Build
                         // PLAN 不走进时间线（由 PlanStepCard 渲染），仅为 when 穷尽
+                        // 压缩历史：用"压缩"图标（与「思考」「工具」不同，
+                        // 用户需要区分"它在想" vs"框架改了我的上下文"）
+                        AgentStep.Kind.COMPRESS -> Icons.Outlined.Compress
                         AgentStep.Kind.PLAN -> Icons.Outlined.Checklist
                     },
                     contentDescription = null,
@@ -619,6 +666,18 @@ private fun stepLabel(step: AgentStep): String = when {
         stringResource(R.string.chat_trace_kb_running)
 
     step.kind == AgentStep.Kind.KNOWLEDGE -> stringResource(R.string.chat_trace_kb_done)
+
+    // 压缩历史：标题说动作，细节（压了多少/失败）在 detail 里
+    step.kind == AgentStep.Kind.COMPRESS -> stringResource(R.string.chat_trace_compress_done)
+
+    // ★ 「等你点头」与「已取消」独立成文案（2026-10-06 审计修）：
+    // 确认等待是 18~40s 的同步阻塞，若沿用"执行中…"，用户看到的是一个
+    // 无任何说明的转圈点 —— 分不出"正在拨号"和"正在等我点头"，会以为卡死。
+    step.kind == AgentStep.Kind.TOOL && step.state == AgentStep.State.AWAITING_CONFIRM ->
+        stringResource(R.string.chat_trace_tool_awaiting_confirm)
+
+    // 用户自己点的取消：用"已取消"而不是红色失败 —— 那是他的决定，不是错误
+    step.state == AgentStep.State.CANCELLED -> stringResource(R.string.chat_trace_tool_cancelled)
 
     // 防御性兜底，不是常规路径：工具步骤的 title 按约定恒非空（见 AgentStep.tool），
     // 所以正常永远走不到这一行。之所以保留而不是删掉 —— 一旦服务层漏填了工具名，

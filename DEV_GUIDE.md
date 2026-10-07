@@ -988,12 +988,19 @@ L0  platform/                       能力与 hook 适配（CapabilityProbe / Sd
 
 **策略闸门（`ApprovalGate.preExecute`，唯一审批入口）**：每次工具执行（AIUI 页面路径 / 对话路径 / 伪工具）都先过它：
 
-1. 页面准入（仅 AIUI 页面）：域白名单 + 黑名单
+1. 页面准入（仅 AIUI 页面）：域白名单（`DOMAIN_ALL − shell − screen`）+ 黑名单 `DENY_TOOLS`
 2. 未知名：既不是真实工具也不是伪工具 → 单调拒绝（旧实现会让它走风险兜底、白等一次确认）
-3. per-source 滑动窗口限流：AIUI 页面 30/min（防页面死循环刷工具）、对话路径 120/min（兜底失控循环）—— **被拒的调用不扣配额**
-4. 本机模式（仅对话路径）：用户开了「本机模式」时，需要眼镜的工具单调拒绝
-5. 风险闸门：`EXTERNAL_SIDE_EFFECT` 必须经用户确认（内置工具当前是**四个**：`delete_file` / `delete_script` / `install_packages` / `send_sms`；外部未信任的 MCP 工具默认此档）。**问不到用户时放行还是拒绝，由该工具自己声明的 `confirmPolicy` 决定**（见下）
-6. 审计：每次决策打一行日志（ALLOW/DENY + `[ORIGIN]` + 原因），系统日志面板（`LogCollector`）可观测；TAG 为 `ApprovalGate`
+3. 工具开关：设置页里被关掉的工具 → 单调拒绝（模型看不到它的 schema，但防 MCP 侧漏检）
+4. 无人值守范围：定时自主任务只许跑只读工具，非只读一律拒绝
+5. per-source 滑动窗口限流：AIUI 页面 30/min（防页面死循环刷工具）、对话路径 120/min（兜底失控循环）
+6. 页面提权域（仅 AIUI 页面）：调 shell / screen 域工具强制 `fail-closed` 确认
+7. 眼镜依赖（仅对话路径）：用户开了「本机模式」时，需要眼镜的工具单调拒绝
+8. 风险闸门：`EXTERNAL_SIDE_EFFECT` 必须经用户确认。**问不到用户时放行还是拒绝，由该工具自己声明的 `confirmPolicy` 决定**；缺省按风险档派生 ⇒ 未信任的 MCP 工具与 `send_sms` 等必然拒绝。当前显式豁免 fail-open（PROCEED）的只有**四个**：`delete_file` / `delete_script` / `install_packages` / `restore_container`（均只影响本机、可重建，理由见 `ToolGuards` 里的豁免注释）
+9. 审计：每次决策打一行日志（ALLOW/DENY + `[ORIGIN]` + 原因），系统日志面板（`LogCollector`）可观测；TAG 为 `ApprovalGate`
+
+⚠️ **限流扣费口径**（2026-10-07 更正，此处原文与实现不符）：限流在第 5 位，因此
+**被 6/7/8 拒掉的调用已经扣过配额**（计数在 [SourceRateLimitGuard] 里先于判定发生）；
+只有被 1–4 这些纯判定 guard 拒掉的才不扣。排查"为什么被限流"时别按"没被拒就不扣"来推断。
 
 合成规则（`ApprovalGate.compose`）：任一 guard 返回 `Deny` **立即短路**（单调最终拒绝，对齐 DSH 的 `ctx.tools.guard()`）；否则取**第一个** `Ask`；都不表态则 `Allow`。
 

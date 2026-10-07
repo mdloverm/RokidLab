@@ -20,6 +20,18 @@ import com.knuddels.jtokkit.api.EncodingType
  *
  * 线程安全：全部访问收口到本对象的锁上（编码调用也在锁内）—— jtokkit 的
  * Encoding 实例虽是无状态读，但统一串行化省得逐处论证；单次调用毫秒级，无争用风险。
+ *
+ * ⚠️ 为什么必须用 `newLazyEncodingRegistry()` 而不是 `newDefaultEncodingRegistry()`
+ *   （2026-10-05，为配合 build.gradle.kts 排除未用编码表而改）：
+ *   反编译 jtokkit 1.1.0 确认，DefaultEncodingRegistry 构造函数会调
+ *   `initializeDefaultEncodings()`，**遍历 EncodingType 全部 5 个枚举值逐个
+ *   computeIfAbsent 建表** —— 即「拿一个编码」也会把5 张表全部读进内存。
+ *   而本项目只用 CL100K_BASE（见下），另外 4 张表（o200k/p50k/r50k …）是纯白带：
+ *   实测 3 张表合计 5.04 MB raw（APK 内约 2.8 MB），已在
+ *   `phone-app/build.gradle.kts` 的 `packaging.resources.excludes` 里排掉。
+ *   ⚠️ **若改回 newDefaultEncodingRegistry()，那些表被排除后构造期就会抛
+ *   资源缺失**（且 `count()` 的 runCatching 兜底会静默降级成「1 字 1 token」，
+ *   预算口径悄悄失真却不报错 —— 那种坑比崩掉更难查）。改这一行前先看这段注释。
  */
 internal object TokenMeter {
 
@@ -27,7 +39,8 @@ internal object TokenMeter {
     private const val CACHE_MAX = 256
 
     private val encoding by lazy {
-        Encodings.newDefaultEncodingRegistry().getEncoding(EncodingType.CL100K_BASE)
+        // lazy registry 只在 getEncoding 时才建表 ⇒ 实际只读 cl100k_base 一张
+        Encodings.newLazyEncodingRegistry().getEncoding(EncodingType.CL100K_BASE)
     }
 
     private val cache = object : LinkedHashMap<String, Int>(64, 0.75f, true) {
@@ -40,7 +53,8 @@ internal object TokenMeter {
         if (text.isEmpty()) return 0
         synchronized(cache) {
             cache[text]?.let { return it }
-            // 兜底：jtokkit 理论上不会抛（纯 Java、无 IO）；万一抛了按 1 字 1 token 保守计 ——
+            // 兜底：首轮 encoding 懒加载时要读 cl100k_base 表资源，万一读不到
+            // （表被误排除 / 资源损坏）就按 1 字 1 token 保守计——
             // 宁可早压（多压几轮）也不要低估导致整轮请求溢出 400
             val n = runCatching { encoding.countTokens(text) }.getOrDefault(text.length)
             cache[text] = n

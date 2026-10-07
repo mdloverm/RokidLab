@@ -52,12 +52,26 @@ internal class AgentSessionStore(
     private val digestRefiner: DigestRefiner? = null,
 ) {
 
-    private companion object {
-        const val ROLE_SYSTEM = "system"
+    // ⚠️ companion **不能是 private**（2026-10-07）：`private companion object` 会让
+// internal 成员对测试也不可见，而有界性断言必须能读到 [MAX_LOADED_RECORDS] 这个真值。
+// 其余常量一律标 `private`，不因此扩大可见面。
+internal companion object {
+        private const val ROLE_SYSTEM = "system"
 
         // 摘要精炼（refineDigest）要用到的角色名（与投影 buildHistory 的口径一致）
-        const val ROLE_USER = "user"
-        const val ROLE_ASSISTANT = "assistant"
+        private const val ROLE_USER = "user"
+        private const val ROLE_ASSISTANT = "assistant"
+
+        /**
+         * 内存中已加载记录条数的上限（2026-10-07 有界性修复）。
+         *
+         * ⚠️ **故意 `internal` 而非 `private`**：单测要断言「记录数 ≤ 上限」，
+         * 而测试若自己写一份数字，就等于给"测试通过"上了假保险 ——
+         * 上限被改大时测试不会红。断言必须指向**生产代码本身**这个值。
+         * 📌 经验：这类"上限/常量型不变量"若不给测试可读的入口，下一个人
+         * 会选择在测试里复刻一份，然后两边悄悄漂开。
+         */
+        internal const val MAX_LOADED_RECORDS = 2000
 
         /** 单条注入上下文的落盘上限（比 [SessionLog.MAX_FIELD_CHARS] 更紧：注入是每轮都可能写的） */
         const val CONTEXT_INJECT_MAX_CHARS = 2000
@@ -80,6 +94,16 @@ internal class AgentSessionStore(
 
     /** 已加载的记录（懒加载；本实例是唯一写者，所以只需在 append 时增量维护） */
     private val records = ArrayList<SessionRecord>()
+
+    /**
+     * 内存中已加载记录的上限（2026-10-07 安全修复）—— 见 [MAX_LOADED_RECORDS] 的判据说明。
+     *
+     * ⚠️ 旧实现**没有 trim**，全仓只有 `wipe()` 会 `records.clear()` ⇒ 一个长会话的
+     * 完整事件流（含每轮工具参数与返回值）在内存里**单调增长**；而落盘 jsonl 也只有
+     * 单字段 `MAX_FIELD_CHARS` 的上限，**没有条数/体积上限** ⇒ 长时间使用后占用无界。
+     */
+    private val maxLoadedRecords = MAX_LOADED_RECORDS
+
     private var loaded = false
 
     /** 投影缓存（任何 append 都会失效） */
@@ -99,6 +123,12 @@ internal class AgentSessionStore(
     private fun allRecords(): List<SessionRecord> {
         if (!loaded) {
             records.addAll(log.read())
+            // 重开一个超长会话时会一次读入全部历史 ⇒ 加载路径同样要裁，
+            // 否则「有界」只在追加时生效，重启一次就又满了（这正是无界缓存的典型形状：
+            // 写入点有上限、恢复点没上限，等于没有上限）。
+            if (records.size > maxLoadedRecords) {
+                records.subList(0, records.size - maxLoadedRecords).clear()
+            }
             loaded = true
         }
         return records
@@ -153,6 +183,14 @@ internal class AgentSessionStore(
     /** 轨迹规模摘要（轨迹视图顶部一行） */
     fun traceSummary(): SessionTrace.Summary = SessionTrace.summary(allRecords())
 
+    /**
+     * 当前**内存里**已加载的记录条数（仅供测试断言有界性与日志诊断）。
+     *
+     * 走`allRecords()` 而不直接读 `records` ⇒ 语义统一（懒加载也计入），
+     * 避免出现"测试断言的是另一个数"的情况。
+     */
+    internal fun loadedRecordCount(): Int = allRecords().size
+
     // ═══════════════════════ 写 ═══════════════════════
 
     /** 追加一个事件（唯一写入口径；分配 seq/ts 由 [SessionLog] 负责） */
@@ -160,6 +198,11 @@ internal class AgentSessionStore(
         allRecords() // 先确保历史已加载，否则会把"新记录"当成全部
         val r = log.append(event)
         records.add(r)
+        // 内存有界：只在**新增时**裁一次最旧，且不碰投影缓存之外的任何状态。
+        // 落盘 jsonl 不受影响（log.append 已先写盘），所以数据不会丢，只是内存里不再留。
+        if (records.size > maxLoadedRecords) {
+            records.subList(0, records.size - maxLoadedRecords).clear()
+        }
         cachedProjection = null
         return r
     }

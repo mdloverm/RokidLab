@@ -78,7 +78,7 @@ class ToolIntentRouterTest {
         assertTrue(routed.containsAll(setOf("set_phone_alarm", "manage_timer")))
     }
 
-    // ── 结构排除：看着像意图、实际是任务 → 一律不路由（落回全量） ──────────
+    // ── 结构排除：看着像意图、实际是任务 → 不路由（落回全量） ──────────
 
     @Test
     fun `task-shaped sentences are never routed`() {
@@ -86,6 +86,83 @@ class ToolIntentRouterTest {
         assertNull(ToolIntentRouter.route("做一个天气页面"))
         assertNull(ToolIntentRouter.route("把今天的天气生成一张图片"))
         assertNull(ToolIntentRouter.route("帮我搜一下附近的超市")) // 搜索是独立任务，不抢 location 路由
+    }
+
+    // ── 逐规则冲突（2026-10-07）：动作感词不是任务形状 ──────────────────
+    //
+    // 早期是一份全局 STRUCTURAL_HINTS 一票否决，把「打开音乐」「查一下快递」这类
+    // 日常高频轮次一起误杀成全价（路由只覆盖 14/105）。现改为逐规则否决。
+
+    @Test
+    fun `action verbs no longer kill unrelated intents`() {
+        // 「打开」不再否决 music —— 这类轮次该省成2 个 Schema，而不是背 105 个
+        assertTrue(ToolIntentRouter.route("打开音乐")!!.contains("control_music"))
+        assertTrue(ToolIntentRouter.route("启动音乐")!!.contains("control_music"))
+        // 「查一下」对 weather 无害：查天气就该路由
+        assertTrue(ToolIntentRouter.route("查一下明天的天气")!!.contains("get_weather"))
+        assertTrue(ToolIntentRouter.route("帮我打开闹钟")!!.contains("set_phone_alarm"))
+    }
+
+    @Test
+    fun `rule level conflict only blocks its own rule`() {
+        // location 被「搜一下」否决 → 无其他命中 ⇒ null（保住task-shaped 那条语义）
+        assertNull(ToolIntentRouter.route("帮我搜一下附近的超市"))
+        // 同一句里 weather 规则不受「搜一下」影响：取并集后仍能路由
+        val mixed = ToolIntentRouter.route("搜一下附近的超市顺便看天气")
+        assertTrue(mixed!!.contains("get_weather"))
+        // 「应用/app」只否决 weather+time：写个天气 app 落回全量，但同句的 time 仍成立
+        assertNull(ToolIntentRouter.route("写个天气app"))
+        assertTrue(ToolIntentRouter.route("天气app几点更新")!!.contains("get_current_time"))
+    }
+
+    @Test
+    fun `true task shapes still block every rule`() {
+        // 全局表里的词必须仍然一票否决 —— 这是路由的安全底线，不能被「逐规则」改松
+        for (shape in listOf("写", "生成", "页面", "代码", "翻译", "截图", "视频", "文件")) {
+            assertNull(
+                "「$shape」应全局否决",
+                ToolIntentRouter.route("${shape}一个查天气的东西"),
+            )
+        }
+    }
+
+    // ── 并集收敛（2026-10-07）：通用动作词必须给领域词让位 ────────────
+    //
+    // app/search 的关键词（打开/启动/查一下）是**通用动作词**，任何句子都可能出现；
+    // music/timer/weather 的关键词（音乐/闹钟/天气）是**领域词**，指向性明确。
+    // 两者同时命中若直接取并集 ⇒ 子集白白变大（打开音乐 2→4、帮我打开闹钟 3→5）。
+    //
+    // ⚠️ 下面的**工具数量**是与实现绑定的断言，不只是「路由成功」：
+    // 一旦有人把优先级机制删掉、或给别的规则也标 GENERIC_PRIORITY，这里会红。
+
+    @Test
+    fun `generic verbs yield to domain rules`() {
+        assertEquals(
+            setOf("control_music", "get_now_playing"),
+            ToolIntentRouter.route("打开音乐"),
+        )
+        assertEquals(
+            setOf("set_phone_alarm", "manage_timer", "schedule_agent_task"),
+            ToolIntentRouter.route("帮我打开闹钟"),
+        )
+        assertEquals(
+            setOf("get_weather", "get_current_time"),
+            ToolIntentRouter.route("查一下明天天气"),
+        )
+        assertEquals(
+            setOf("manage_calendar", "get_current_time"),
+            ToolIntentRouter.route("查一下明天的日程"),
+        )
+    }
+
+    @Test
+    fun `generic verbs still work when no domain rule matched`() {
+        // 让位不是失效 —— 纯动作句仍要路由到通用规则
+        assertTrue(ToolIntentRouter.route("查一下快递")!!.contains("search_web"))
+        assertTrue(ToolIntentRouter.route("打开空调")!!.contains("open_phone_app"))
+        // 无领域规则的纯动作句，工具数应等于通用规则自身的宽度（不被别的规则撑大）
+        assertEquals(2, ToolIntentRouter.route("打开空调")!!.size)
+        assertEquals(2, ToolIntentRouter.route("查一下快递")!!.size)
     }
 
     // ── 不该路由的形状 ────────────────────────────────────────────────────

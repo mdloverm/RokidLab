@@ -46,14 +46,34 @@ internal object VisionToolProvider : ToolProvider {
      * 本次调用拍到的图片（base64，不含 `data:` 前缀）。
      *
      * 用 ThreadLocal 而不是普通字段：工具**并发执行**（`AiConversationService` 里
-     * 每次 toolCall 起一个 `ai-turn-worker` 线程），普通字段会让两条 look 调用互相覆盖。
+     * 每次 toolCall 起一根专属 `ai-turn-worker` 线程），普通字段会让两条 look 调用互相覆盖。
      * ThreadLocal 正好表达"这条调用的产出属于这条调用" —— 主循环在**同一个线程**
      * 紧跟着 `runTool` 之后取走，语义闭环。
+     *
+     * ⚠️ 这个前提是"写入与读取**同线程**"。并发泳道因此必须用**专属线程**而不是
+     * 复用池线程（`Dispatchers.IO` 的线程跨任务复用会让读不到本任务的产出，
+     * 更糟的是把**上一个任务的残留**投递给下一个任务）。
+     * 故 [clearPendingImage] 是必需的配套：泳道结束时显式清残留。
      */
     private val pendingImage = ThreadLocal<String?>()
 
     /** 取走并清空本线程刚拍到的图片；没有则返回 null（消费点：对话主循环） */
     fun takePendingImage(): String? = pendingImage.get().also { pendingImage.remove() }
+
+    /**
+     * 无条件清掉**本线程**上的残留图片（不给取，只给清）。
+     *
+     * ## 为什么需要它（2026-10-06 审计修）
+     * `takePendingImage()` 只在"该工具正常跑完并被主循环取走"时被调用。而工具执行
+     * 中途抛异常、或主循环在取图之前就抛了，图片会**留在那根线程上**。
+     * 一旦那根线程被复用（或复用给下一个任务），残留图就会被别的任务取走 ⇒
+     * **上一轮的用户画面被注入下一轮对话**。
+     *
+     * 泳道结束（`finally`）与收尾轮排水都应该调它：宁可少一张图，也不能串轮。
+     */
+    fun clearPendingImage() {
+        pendingImage.remove()
+    }
 
     /**
      * 会产出「待投递图片」的工具名 —— 对话主循环据此在工具执行后立刻取图并补一条带图 user 消息。

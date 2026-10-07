@@ -239,6 +239,49 @@ object AiChannel {
         return b64 to fields.getOrNull(3).orEmpty()
     }
 
+    // ── 图表全屏查看器（手机端 → 眼镜端，与 show_image 小悬浮层不同：全屏 + 常驻 + 可交互）──
+    // 手机端把 ECharts 图表离屏渲染成图片下发，眼镜端进入全屏查看器：
+    // 触摸板滑动切换多张图表、单击请求重发、双击退出（按键语义见 KeyRouteCoordinator）。
+    // chartId 由手机端生成（毫秒时间戳），作为重发关联键与查看器去重键。
+    const val TOPIC_CHART_PUSH = "rokidlab_chart_push"
+    const val CMD_CHART_PUSH = "chart_push"
+
+    /** 编码 chart_push：[cmd, version, chartId, base64Jpeg, caption] */
+    fun encodeChartPush(chartId: String, base64Jpeg: String, caption: String): List<String> =
+        listOf(CMD_CHART_PUSH, SCHEMA_VERSION.toString(), chartId, base64Jpeg, caption)
+
+    /**
+     * 解析 chart_push 载荷。
+     * @return (chartId, base64Jpeg, caption)；null = cmd 不符 / 版本不支持 / 关键字段缺失（整体丢弃）
+     */
+    fun decodeChartPush(fields: List<String?>): Triple<String, String, String>? {
+        if (fields.size < 4 || fields[0] != CMD_CHART_PUSH) return null
+        if (fields[1]?.toIntOrNull() != SCHEMA_VERSION) return null
+        val chartId = fields[2]?.takeIf { it.isNotBlank() } ?: return null
+        val b64 = fields[3]?.takeIf { it.isNotBlank() } ?: return null
+        return Triple(chartId, b64, fields.getOrNull(4).orEmpty())
+    }
+
+    // ── 图表重发请求（眼镜端 → 手机端）──
+    // 眼镜端查看器里单击（或短按）时上行，手机端从最近推送缓存里按 chartId 重发同一张图
+    //（覆盖「解码失败/传输损坏后自助恢复」场景）；手机端缓存未命中则静默忽略。
+    const val TOPIC_CHART_RESEND = "rokidlab_chart_resend"
+    const val CMD_CHART_RESEND = "chart_resend"
+
+    /** 编码 chart_resend：[cmd, version, chartId] */
+    fun encodeChartResend(chartId: String): List<String> =
+        listOf(CMD_CHART_RESEND, SCHEMA_VERSION.toString(), chartId)
+
+    /**
+     * 解析 chart_resend 载荷。
+     * @return chartId；null = cmd 不符 / 版本不支持 / chartId 缺失
+     */
+    fun decodeChartResend(fields: List<String?>): String? {
+        if (fields.size < 3 || fields[0] != CMD_CHART_RESEND) return null
+        if (fields[1]?.toIntOrNull() != SCHEMA_VERSION) return null
+        return fields[2]?.takeIf { it.isNotBlank() }
+    }
+
     // ── 打开页面指令（手机端 → 眼镜端）──
     // 手机端需要把眼镜上某个 Activity 拉到前台时下发（典型：说「显示歌词」→ 拉起系统音乐页
     // com.rokid.os.sprite.launcher/.page.music.MusicPageActivity）。

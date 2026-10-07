@@ -25,6 +25,7 @@ internal class CxrBridgeCoordinator(
     private val keyRoutes: KeyRouteCoordinator,
     private val toolConfirm: ToolConfirmController,
     private val overlays: GlassesOverlayController,
+    private val chartViewer: ChartViewerController,
     private val ipReporter: GlassesIpReporter,
     private val aiuiHost: AiuiHostController,
     private val configHandlers: ConfigHandlers,
@@ -297,6 +298,17 @@ internal class CxrBridgeCoordinator(
                 }
             )
             Log.i(TAG, "subscribe(${AiChannel.TOPIC_SHOW_IMAGE}) -> $showImageResult")
+
+            // 图表全屏查看器：手机端把 ECharts 图表渲染成图片下发（Cap.CHART_VIEW），
+            // 查看器全屏常驻显示，滑动切换/单击重发/双击退出，见 ChartViewerController。
+            val chartPushResult = core.bridge?.subscribe(
+                AiChannel.TOPIC_CHART_PUSH,
+                CXRServiceBridge.MsgCallback { _, args, _ ->
+                    core.markDownlink()
+                    chartViewer.handleChartPush(args)
+                }
+            )
+            Log.i(TAG, "subscribe(${AiChannel.TOPIC_CHART_PUSH}) -> $chartPushResult")
 
             // 打开页面：手机端要求把某个眼镜端 Activity 拉到前台（如说「显示歌词」→ 系统音乐页）。
             val openAppResult = core.bridge?.subscribe(

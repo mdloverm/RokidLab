@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.util.Log
+import com.rokidlab.phone.network.lruCache
 import com.rokidlab.phone.util.namedThread
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -24,7 +25,39 @@ import java.util.concurrent.TimeUnit
 internal object ChatImageCache {
     private const val TAG = "ChatImageCache"
 
-    private val memCache = ConcurrentHashMap<String, Bitmap>()
+    /**
+     * 内存缓存的条目上限。
+     *
+     * ## 为什么必须有上限（2026-10-06 审计修）
+     * 本类原先 [memCache] 是**无界** `ConcurrentHashMap<String, Bitmap>`：键是聊天图片 URL，
+     * 随会话**单调增长、永不淘汰**，而本类又是个 `object`（进程级单例）⇒ 泄漏持续整个进程生命。
+     * 单张按 [load] 的 `maxSize=600` 采样后最坏 ≈1.4MB（ARGB_8888），用户连续看 300 张 ≈**420MB**
+     * ⇒ 老机型（华为 P204GB 这类4GB 机器）必被 LMK 杀掉，症状是"聊天翻图翻久了闪退"。
+     *
+     * 与 [com.rokidlab.phone.network.MediaLoader] / [com.rokidlab.phone.network.IconLoader]
+     * **同一类缺陷、同一套修法**（都走 `lruCache`）—— 之前只有 MediaLoader 改了，
+     * 职责相同的这两个漏了，"有没有上限"在 review 时肉眼极难逐个注意到。
+     *
+     * 取 48：聊天看图的实际并发窗口很小（当前屏+ 预取几张），48 条足够，
+     * 最坏 ≈67MB，**真到极端也不至于崩**。
+     */
+    private const val MEM_CACHE_ENTRIES = 48
+
+    /**
+     * 所有 [memCache] 读写都在 [lock] 内：`LinkedHashMap` 非线程安全，
+     * 且淘汰需要在**写**路径上判断容量（CHM 不支持）。
+     * ⚠️ 锁内**绝不做 IO** —— 网络请求与解码都在锁外，只在锁内做 map 读写。
+     */
+    private val lock = Any()
+
+    /**
+     * 命中缓存（url→[Bitmap]）。**LRU + 访问序**，上限 [MEM_CACHE_ENTRIES]。
+     *
+     * ⚠️ 淘汰只**丢引用**，绝不 `recycle()` 里面的 Bitmap —— 它可能正被某个 Compose painter
+     * 持有并绘制中，recycle 会让那次绘制抛 "Canvas: trying to use a recycled bitmap"。等 GC 自然回收。
+     */
+    private val memCache = lruCache<String, Bitmap>(MEM_CACHE_ENTRIES)
+
     private val inflight = ConcurrentHashMap<String, Unit>()
 
     private val http: OkHttpClient = OkHttpClient.Builder()
@@ -45,18 +78,19 @@ internal object ChatImageCache {
             onResult(null)
             return
         }
-        memCache[url]?.let { cached ->
+        synchronized(lock) { memCache[url]?.let { cached ->
             onResult(cached)
             return
-        }
+        } }
         // 去重：同一 URL 的并发请求只发一次网络
         if (inflight.putIfAbsent(url, Unit) != null) {
             // 简单轮询等待缓存命中（最长 10s）
             namedThread("chat-image-io", start = true) {
                 val deadline = System.currentTimeMillis() + 10_000
                 while (System.currentTimeMillis() < deadline) {
-                    memCache[url]?.let {
-                        mainHandler.post { onResult(it) }
+                    val hit = synchronized(lock) { memCache[url] }
+                    if (hit != null) {
+                        mainHandler.post { onResult(hit) }
                         return@namedThread
                     }
                     Thread.sleep(120)
@@ -70,7 +104,7 @@ internal object ChatImageCache {
                 val bytes = fetchBytesLocked(url) ?: return@runCatching null
                 decodeSampled(bytes, maxSize)
             }.onFailure { Log.w(TAG, "load $url failed: ${it.message}") }.getOrNull()
-            if (bmp != null) memCache[url] = bmp
+            if (bmp != null) synchronized(lock) { memCache[url] = bmp }
             inflight.remove(url)
             mainHandler.post { onResult(bmp) }
         }

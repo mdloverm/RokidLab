@@ -15,8 +15,8 @@ import com.rokid.cxr.Caps
  * KeyButtonService 的按键路由协调器（v3.9 拆分自 KeyButtonService）。
  *
  * 职责：
- *  1. 动态注册按键广播接收器（priority=100 + abortBroadcast），按 DOWN/UP 时长或
- *     CLICK/LONG_PRESS 分发到短按/长按目标应用
+ *  1. 动态注册按键广播接收器（priority=9999 + abortBroadcast），按 DOWN/UP 时长或
+ *     CLICK/LONG_PRESS 分发到短按/长按目标应用；图表查看器活跃时按键优先服务查看器
  *  2. 「按键答题」：短按触发拍照问 AI（三通道上行：RFCOMM 控制 + photo_ask + Sys 事件）
  *  3. 工具确认窗口的按键语义（短按=允许，双击/长按=取消）
  *  4. 双击 = 退出对话（停 TTS + 上行 abort 标记）
@@ -26,6 +26,7 @@ internal class KeyRouteCoordinator(
     private val service: KeyButtonService,
     private val core: KeyServiceCore,
     private val toolConfirm: ToolConfirmController,
+    private val chartViewer: ChartViewerController,
 ) {
     companion object {
         private const val TAG = KeyButtonService.TAG
@@ -88,6 +89,58 @@ internal class KeyRouteCoordinator(
                         Log.i(TAG, "Key in confirm window -> DENY")
                         KeyButtonService.downTimeMs = 0L
                         toolConfirm.respond(false)
+                        return
+                    }
+                }
+            }
+
+            // 图表全屏查看器：活跃时按键优先服务查看器（滑动切换/单击重发/长按双击退出），
+            // 不再走 AIUI 手势路由 / 按键启动应用 / 退出对话 —— 用户此刻意图明确是操作图表。
+            // DOWN 记时必须保留，UP 才能区分短按（重发）与长按（退出）。
+            if (chartViewer.isActive) {
+                when (action) {
+                    "com.android.action.ACTION_SPRITE_BUTTON_DOWN" -> {
+                        KeyButtonService.downTimeMs = System.currentTimeMillis()
+                        abortBroadcast()
+                        return
+                    }
+                    "com.android.action.ACTION_SPRITE_BUTTON_UP" -> {
+                        val down = KeyButtonService.downTimeMs
+                        KeyButtonService.downTimeMs = 0L
+                        abortBroadcast()
+                        if (down > 0 && System.currentTimeMillis() - down >= 500L) {
+                            Log.i(TAG, "chart viewer: LONG(UP) → close")
+                            chartViewer.close()
+                        } else {
+                            Log.i(TAG, "chart viewer: SHORT(UP) → resend")
+                            chartViewer.requestResend()
+                        }
+                        return
+                    }
+                    "com.android.action.ACTION_SPRITE_BUTTON_CLICK" -> {
+                        Log.i(TAG, "chart viewer: CLICK → resend")
+                        abortBroadcast()
+                        chartViewer.requestResend()
+                        return
+                    }
+                    "com.android.action.ACTION_SPRITE_BUTTON_DOUBLE_CLICK",
+                    "com.android.action.ACTION_SPRITE_BUTTON_LONG_PRESS" -> {
+                        Log.i(TAG, "chart viewer: DOUBLE/LONG → close")
+                        // 有意 abort：双击在此语境 = 只退出查看器，官方「双击退出对话」
+                        // 不应连带触发（查看器关闭后下一次双击才回到正常退出语义）。
+                        abortBroadcast()
+                        KeyButtonService.downTimeMs = 0L
+                        chartViewer.close()
+                        return
+                    }
+                    "com.android.action.ACTION_SWIPE_LEFT" -> {
+                        abortBroadcast()
+                        chartViewer.next()
+                        return
+                    }
+                    "com.android.action.ACTION_SWIPE_RIGHT" -> {
+                        abortBroadcast()
+                        chartViewer.previous()
                         return
                     }
                 }
@@ -260,7 +313,7 @@ internal class KeyRouteCoordinator(
                 addAction("com.android.action.ACTION_TWO_FINGER_DOUBLE_TAP")
                 addAction("com.android.action.ACTION_TWO_FINGER_SWIPE_FORWARD")
                 addAction("com.android.action.ACTION_TWO_FINGER_SWIPE_BACK")
-                priority = 100
+                priority = 9999  // 压过官方场景级接收器（priority=100 时图表回合被官方抢收）
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 service.registerReceiver(keyReceiver, filter, Context.RECEIVER_EXPORTED)

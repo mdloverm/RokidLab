@@ -24,9 +24,13 @@ import java.util.concurrent.atomic.AtomicLong
  * 未连接 / 眼镜端旧版（未订阅确认通道）时 → [isAvailable] 为 false，由 [ApprovalGate]
  * 改问**手机端通道**（[PhoneToolConfirmChannel]，见 `ApprovalGate.activeChannel`）；
  * 两条通道都不可用时才按工具声明的 `ToolConfirmPolicy` 分流（PROCEED 放行 / BLOCK 拒绝）。
- * 已发送但 30s 无回执 → [confirm] 返回 false 且 [wasCancelled] 为 false，
- * 闸门同样按"没问到"处理（仅眼镜端显式回 "no" 才算用户取消 → 拒绝）。
+ * 已发送但 30s 无回执 → [confirmOutcome] 返回 `NOT_ANSWERED`（allowed=false, cancelled=false），
+ * 闸门同样按"没问到"处理（仅眼镜端显式回"no"才算用户取消 → 拒绝）。
  * 本通道**常驻**（见 [global]），会话上线时 [bind]、下线时 [unbind]，只要求眼镜在线即可用。
+ *
+ * ★ 「是否被取消」挂在**本次**的 waiter 上、随 [confirmOutcome] 一起返回，
+ * 而不是存在通道字段里 —— 并发多个确认时（主循环两级泳道会同时弹确认）
+ * 兄弟调用不会把彼此的取消标志复位。
  *
  * ★ 本类只负责**传输**：给用户看的操作摘要在调用时由闸门传入（[confirm] 的 `prompt` 参数），
  *   不再自己从 args 拼 —— 摘要的唯一产地是工具自己的 `ToolEntry.summarize`。
@@ -103,19 +107,21 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
     /** 审计标识：日志里区分"这次问的是眼镜还是手机"（手机通道是 `phone`） */
     override val channelId: String = "glass"
 
-    /** 上一次确认是否被用户**显式取消**（区分「取消」=拒绝 与「超时」=没问到） */
-    @Volatile
-    private var lastCancelled = false
-
-    override fun wasCancelled(): Boolean = lastCancelled
-
     private val seq = AtomicLong(0)
     private val pending = ConcurrentHashMap<String, ConfirmWaiter>()
 
+    /**
+     * 一次确认的等待者。**取消标志挂在 waiter 上而不是通道上** ——
+     * 主循环会并发发射多个工具，通道级标志会被兄弟调用的 [confirm] 入口复位，
+     * 导致"用户已取消"被读成"没问到" ⇒ 副作用按 PROCEED 静默放行。
+     */
     private class ConfirmWaiter {
         val createdAt = System.currentTimeMillis()
         val latch = CountDownLatch(1)
         @Volatile var allowed = false
+
+        /** 眼镜端回执「no」= 用户显式取消（区别于超时/链路不可用） */
+        @Volatile var cancelled = false
     }
 
     override fun isAvailable(): Boolean {
@@ -144,13 +150,25 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
      * 带等待上限的版本（闸门按来源收紧窗口，如 AIUI 页面路径 18s，见 ApprovalGate R7 注释）。
      * 上限只**收紧**不放宽：取 `min(maxWaitMs, 本通道 35s)`。
      */
-    override fun confirm(toolName: String, prompt: String, maxWaitMs: Long): Boolean {
-        lastCancelled = false
+    override fun confirm(toolName: String, prompt: String, maxWaitMs: Long): Boolean =
+        confirmOutcome(toolName, prompt, maxWaitMs).allowed
+
+    /**
+     * ★ 闸门唯一调用的入口：一次确认的**结果 + 是否被显式取消**打包返回。
+     *
+     * 取消标志从**本次**的 [ConfirmWaiter] 上读，而不是通道的实例字段 ——
+     * 并发多个确认时（主循环的两级泳道会同时弹两个确认），兄弟调用的复位不会串味到这里。
+     */
+    override fun confirmOutcome(
+        toolName: String,
+        prompt: String,
+        maxWaitMs: Long,
+    ): ApprovalGate.ConfirmOutcome {
         val s = session
         val link = s?.cxrLink
         if (s == null || link == null || !isAvailable()) {
             Log.w(TAG, "confirm request rejected: link not ready")
-            return false
+            return ApprovalGate.ConfirmOutcome.NOT_ANSWERED
         }
         ensureApprovalGestureAlive(s)
         val id = "tc-${System.currentTimeMillis()}-${seq.incrementAndGet()}"
@@ -166,17 +184,18 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
             Log.i(TAG, "confirm request sent (id=$id tool=$toolName wait=${wait / 1000}s) -> $r")
             if (r < 0) {
                 Log.w(TAG, "confirm request send failed -> deny")
-                return false
+                return ApprovalGate.ConfirmOutcome.NOT_ANSWERED
             }
             if (!waiter.latch.await(wait, TimeUnit.MILLISECONDS)) {
+                // 超时：latch 被 abortAll 兜底 countDown 时也走这里，那不是"用户取消"
                 Log.w(TAG, "confirm timeout (id=$id) -> deny")
-                false
+                ApprovalGate.ConfirmOutcome.NOT_ANSWERED
             } else {
-                waiter.allowed
+                ApprovalGate.ConfirmOutcome(waiter.allowed, waiter.cancelled)
             }
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
-            false
+            ApprovalGate.ConfirmOutcome.NOT_ANSWERED
         } finally {
             pending.remove(id)
         }
@@ -209,7 +228,7 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
             return
         }
         w.allowed = allowed
-        lastCancelled = !allowed   // 眼镜端回执「no」= 用户显式取消
+        w.cancelled = !allowed   // 眼镜端回执「no」= 用户显式取消
         w.latch.countDown()
         Log.i(TAG, "confirm result (id=$id allowed=$allowed)")
     }
@@ -251,10 +270,18 @@ class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
         }.onFailure { Log.w(TAG, "notify glasses close failed", it) }
     }
 
-    /** 清空全部等待中的确认（连接断开 / Session.cleanup 时调用，避免线程挂满 35s）。 */
+    /**
+     * 清空全部等待中的确认（连接断开 / Session.cleanup 时调用，避免线程挂满 35s）。
+     *
+     * 批量 countDown 后，等待方会在 [confirmOutcome] 里读到 `allowed=false, cancelled=false`
+     * ⇒ 被判为"没问到"按工具声明分流，**不会**被误读成"用户取消了"。
+     */
     fun abortAll() {
         val n = pending.size
-        pending.values.forEach { it.latch.countDown() }
+        pending.values.forEach {
+            it.cancelled = false
+            it.latch.countDown()
+        }
         pending.clear()
         if (n > 0) Log.w(TAG, "aborted $n pending confirmations")
     }

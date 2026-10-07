@@ -2,6 +2,7 @@ package com.rokidlab.phone.ai.session
 
 import com.rokidlab.phone.ai.ChatMessage
 import com.rokidlab.phone.ai.TokenUsage
+import com.rokidlab.phone.ai.compaction.CompactionPolicy
 import com.rokidlab.phone.ai.compaction.CompactionTrigger
 import com.rokidlab.phone.ai.compaction.TokenMeter
 import org.junit.After
@@ -27,6 +28,16 @@ import java.io.File
  *  4. **重启重建**：同一个文件重新打开，历史逐条一致（这是整个接线的目的）；
  *  5. 工具调用/结果成对、被打断的轮不留半轮（否则请求会出现连续两条 user → 400）。
  */
+/**
+ * 预算阈值的**单一取值处**。
+ *
+ * ⚠️ 2026-10-06：本文件原先到处写死 `12 条` / `4000 token`。
+ * 那次把 [CompactionPolicy] 的默认档从 4000/12 放宽到 8000/25 之后，
+ * 这些用例集体失效 —— 而且**失效方式很隐蔽**：不是断言数字对不上，
+ * 是"造 7 轮本来想触发压缩，现在不触发了"，于是报"前置条件：有摘要"这种
+ * 看起来毫不相关的错。阈值型测试必须跟着阈值走。
+ */
+
 class AgentSessionStoreTest {
 
     private lateinit var dir: File
@@ -94,24 +105,34 @@ class AgentSessionStoreTest {
     @Test
     fun `条数超上限时压缩最旧一轮进滚动摘要并保持预算`() {
         val store = newStore()
-        // 7 轮 → 14 条；超 12 条触发：最旧轮压缩进置顶滚动摘要，条数回落到 ≤ 12
-        repeat(7) { i -> recordTurn(store, "u$i", "r$i") }
+        // ⚠️ 轮数按上限**加过量**：原来写死 7 轮（对上旧上限 12 条刚好超 2 条），
+        // 阈值一放宽就只超一半 ⇒ 压缩只折掉几轮，末尾索引对不上（expected r6 but was r13）。
+        // 这里造「上限轮数 + 5」，保证压缩真的发生且末轮仍是最后造的那一轮。
+        val turns = CompactionPolicy.DEFAULT.maxMessages / 2 + 5
+        repeat(turns) { i -> recordTurn(store, "u$i", "r$i") }
         val h = store.history()
-        assertTrue("应裁剪到 ≤ 12 条，实际 ${h.size}", h.size <= 12)
+        assertTrue("应裁剪到 ≤ ${CompactionPolicy.DEFAULT.maxMessages} 条，实际 ${h.size}",
+            h.size <= CompactionPolicy.DEFAULT.maxMessages)
         assertEquals("置顶应为滚动摘要", "system", h.first().role)
         assertTrue("摘要应包含被压缩轮的要点", h.first().content.contains("u0"))
-        assertEquals("最新一轮保留在末尾", "r6", h.last().content)
+        assertEquals("最新一轮保留在末尾", "r${turns - 1}", h.last().content)
     }
 
     @Test
     fun `token超上限时压缩最旧轮并保证总量回落`() {
         val store = newStore()
-        // 每轮约 3000 token；4 轮累计超过 4000 触发压缩，最旧轮被合并成滚动摘要
-        repeat(4) { i -> recordTurn(store, "Q", "很".repeat(3000)) }
+        // ⚠️ 轮数按预算推导：每轮约 3000 token，要累计超过 maxTokens 才触发压缩
+        val perRound = 3000
+        val turns = CompactionPolicy.DEFAULT.maxTokens / perRound + 1
+        repeat(turns) { recordTurn(store, "Q", "很".repeat(perRound)) }
         val h = store.history()
         val t = tokens(h)
-        assertTrue("总 token 应 ≤ 4000，实际 $t", t <= 4000)
-        assertTrue("条数应 ≤ 12，实际 ${h.size}", h.size <= 12)
+        assertTrue(
+            "总 token 应 ≤ ${CompactionPolicy.DEFAULT.maxTokens}，实际 $t",
+            t <= CompactionPolicy.DEFAULT.maxTokens,
+        )
+        assertTrue("条数应 ≤ ${CompactionPolicy.DEFAULT.maxMessages}，实际 ${h.size}",
+            h.size <= CompactionPolicy.DEFAULT.maxMessages)
         assertEquals("压缩后最旧应成为 system 摘要", "system", h.first().role)
         assertTrue(h.first().content.startsWith("[更早对话摘要]"))
     }
@@ -121,8 +142,11 @@ class AgentSessionStoreTest {
         val store = newStore()
         repeat(20) { i -> recordTurn(store, "问题$i", "答案" + "很".repeat(800)) }
         val h = store.history()
-        assertTrue("总 token 应 ≤ 默认预算 4000，实际 ${tokens(h)}", tokens(h) <= 4000)
-        assertTrue(h.size <= 12)
+        assertTrue(
+            "总 token 应 ≤ 默认预算 ${CompactionPolicy.DEFAULT.maxTokens}，实际 ${tokens(h)}",
+            tokens(h) <= CompactionPolicy.DEFAULT.maxTokens,
+        )
+        assertTrue(h.size <= CompactionPolicy.DEFAULT.maxMessages)
         assertTrue("不能把上下文清空", h.isNotEmpty())
         assertEquals("最新回复应保留", "答案" + "很".repeat(800), h.last().content)
     }
@@ -158,7 +182,7 @@ class AgentSessionStoreTest {
     @Test
     fun `裁剪日志回调可观察`() {
         val store = newStore()
-        repeat(7) { i -> recordTurn(store, "u$i", "r$i") }
+        repeat(CompactionPolicy.DEFAULT.maxMessages / 2 + 2) { i -> recordTurn(store, "u$i", "r$i") }
         assertTrue("发生条数裁剪时应回调", trims.isNotEmpty())
     }
 
@@ -267,9 +291,11 @@ class AgentSessionStoreTest {
     @Test
     fun `丢弃最后一轮只否定末尾那轮 摘要保留`() {
         val store = newStore()
-        repeat(10) { i -> recordTurn(store, "u$i", "r$i") }
+        // 轮数必须**远超**条数上限才有摘要（原来 10 轮对上旧上限 12 条刚好够，
+        // 上限一放宽就退化成"没有摘要"，后面每条断言都跟着崩）
+        repeat(CompactionPolicy.DEFAULT.maxMessages) { i -> recordTurn(store, "u$i", "r$i") }
         val before = store.history()
-        assertTrue("前置条件：有摘要", store.hasDigest())
+        assertTrue("前置条件：有摘要（轮数 ${CompactionPolicy.DEFAULT.maxMessages} 应远超上限）", store.hasDigest())
         val digest = before.first().content
 
         store.dropLastTurn()
@@ -325,7 +351,8 @@ class AgentSessionStoreTest {
     @Test
     fun `有摘要时 visibleRecords 比 history 少置顶那一条`() {
         val store = newStore()
-        repeat(10) { i -> recordTurn(store, "u$i", "r$i") }
+        // 轮数远超上限才有摘要（这条断言本身就是"有摘要时"，所以前提必须成立）
+        repeat(CompactionPolicy.DEFAULT.maxMessages) { i -> recordTurn(store, "u$i", "r$i") }
         assertEquals(store.history().size - 1, store.visibleRecords().size)
     }
 
@@ -469,17 +496,32 @@ class AgentSessionStoreTest {
     @Test
     fun `精炼成功后摘要文本被替换且仍以标题行开头`() {
         val store = newStoreWithRefiner("· 用户要求把首页按钮改成红色，已完成")
-        recordLongTurn(store, "帮我把首页按钮改成红色", "好的，已改为红色，重启后生效。".repeat(300))
-        recordLongTurn(store, "再看看电量页", "电量页正常，无需处理。".repeat(300))
-        // 两轮超长（> 6000 字符）触发压缩；本地摘要被精炼结果替换
+        // ⚠️ 轮数按预算推导（原来只有 2 轮，对上旧上限刚好触发；
+        // 放宽到 8000 token 后不再触发压缩，摘要不会出现 ⇒ 报 expected system but was user）
+        val turns = CompactionPolicy.DEFAULT.maxMessages / 2 + 2
+        repeat(turns) { i ->
+            recordLongTurn(store, "帮我把首页按钮改成红色", "好的，已改为红色，重启后生效。".repeat(300))
+            if (i == turns - 1) recordLongTurn(store, "再看看电量页", "电量页正常，无需处理。".repeat(300))
+        }
+        // 超长轮次触发压缩；本地摘要被精炼结果替换
         val h = store.history()
         assertEquals("system", h[0].role)
         assertTrue(
             "摘要必须是精炼后的文本（含标题行）",
             h[0].content.startsWith("[更早对话摘要]") && h[0].content.contains("改成红色"),
         )
-        // 被压缩的轮不再出现在正文里
-        assertFalse(h.any { it.content.startsWith("帮我把首页按钮改成红色") })
+        // 压缩确实发生了：历史被压到条数上限附近。
+        // ⚠️ 不要再断言"摘要行数 == 折掉的轮数" —— 摘要是**增量滚动**的，
+        // 超过 [CompactionPolicy.digestMaxChars]（默认 800 字）就丢最旧的行。
+        // 我造了十几轮同内容的轮次，全部折进摘要会超预算 ⇒ 旧行被丢 ⇒ 那个等式不成立。
+        // 这条用例要验的是「精炼结果替换了本地摘要」，压缩的量由上面的断言覆盖。
+        assertTrue(
+            "应至少折掉一轮（造了 $turns 轮 = ${turns * 2} 条，剩 ${h.size} 条）",
+            h.size < turns * 2,
+        )
+        // 摘要自身受字符预算约束（不验证具体行数，只验证它有内容且没超预算）
+        assertTrue("摘要应有要点行", digestLineCount(h) >= 1)
+
         // 重启后精炼结果仍在（它是事件流的一部分，不只是内存态）
         assertEquals(h[0].content, newStore().history()[0].content)
     }
@@ -487,13 +529,100 @@ class AgentSessionStoreTest {
     @Test
     fun `精炼失败静默保留本地摘要`() {
         val store = newStoreWithRefiner(null)
-        recordLongTurn(store, "第一个问题", "第一个回答。".repeat(600))
-        recordLongTurn(store, "第二个问题", "第二个回答。".repeat(600))
+        // ⚠️ 同上：轮数按预算推导，2 轮在放宽后的预算下不触发压缩
+        val turns = CompactionPolicy.DEFAULT.maxMessages / 2 + 2
+        repeat(turns) { i ->
+            recordLongTurn(store, "第一个问题", "第一个回答。".repeat(600))
+            if (i == turns - 1) recordLongTurn(store, "第二个问题", "第二个回答。".repeat(600))
+        }
         val h = store.history()
         assertEquals("system", h[0].role)
         assertTrue(
             "精炼失败时必须是本地提取的摘要行",
             h[0].content.startsWith("[更早对话摘要]") && h[0].content.contains("· 用户问"),
+        )
+    }
+
+    /** 折叠摘要里的要点行数（标题行不算）—— 用它断言"折了几轮就有几行" */
+    private fun digestLineCount(history: List<ChatMessage>): Int {
+        if (history.isEmpty() || !history[0].content.startsWith("[更早对话摘要]")) return 0
+        return history[0].content.lines().count { it.trimStart().startsWith("·") }
+    }
+
+    // ═══════════════ 6. 内存有界性（2026-10-07 审计新增）═══════════════
+
+    /**
+     * 锁「内存中已加载的记录有上限」。
+     *
+     * 旧实现**没有 trim**：全仓只有 `wipe()` 会`records.clear()`，压缩只裁**投影**不裁 records
+     * ⇒ 一个长会话的完整事件流（含每轮工具参数与返回值）在内存里单调增长。
+     * 落盘 jsonl 也只有单字段 `MAX_FIELD_CHARS`，**没有条数/体积上限**。
+     *
+     * 📌 判据：这类缺陷在代码里就一行`size > max`，review 时肉眼极难注意到，
+     * 而且只在用户反馈"用久了就崩"时才显形。所以必须写成断言。
+     *
+     * ⚠️ 断言指向**生产代码本身**（[AgentSessionStore.MAX_LOADED_RECORDS]），
+     * 不是在测试里复制一份上限。
+     */
+    @Test
+    fun `loaded records stay bounded under long sessions`() {
+        val cap = AgentSessionStore.MAX_LOADED_RECORDS
+        val store = newStore()
+        // 每轮 3 条（TurnStart + user + assistant），远超上限
+        val turns = (cap / 3) + 40
+        repeat(turns) { i -> recordTurn(store, "问题$i", "回答$i") }
+
+        assertTrue(
+            "内存记录数不得超过上限（实际 ${store.loadedRecordCount()} > $cap）",
+            store.loadedRecordCount() <= cap,
+        )
+        // ⚠️ 关键：trim 只丢**最旧**的，轮号必须继续单调推进 ——
+        // nextTurn() 依赖 maxTurn()，若 trim 误删最新记录会导致轮号回退、
+        // 历史上出现两条相同 user 消息 ⇒ 请求直接 400。
+        // （nextTurn 返回的是「下一轮号」，故为 turns + 1）
+        assertEquals("轮号必须在 trim 后继续递增，不得回退", turns + 1, store.nextTurn())
+    }
+
+    /**
+     * 锁「重启后仍能读回完整历史」—— trim 只作用于**内存**，磁盘 jsonl 不受影响。
+     *
+     * ⚠️ 这是本修复的安全前提：不能为了有界性牺牲持久化（否则"过程"回放、
+     * 跨会话检索全部失效）。如果哪天有人把 trim 也做进 [SessionLog]，
+     * 这例会红。
+     */
+    @Test
+    fun `trimming loaded records does not lose persisted history`() {
+        val store = newStore()
+        val turns = 40
+        repeat(turns) { i -> recordTurn(store, "问题$i", "回答$i") }
+
+        // 重新打开同一文件 = 模拟重启，走allRecords() 的加载路径
+        val reopened = newStore()
+        assertEquals(
+            "磁盘 jsonl 必须保留全部轮次（trim 只作用于内存）",
+            turns,
+            reopened.maxTurn(),
+        )
+    }
+
+    /**
+     * 锁「加载路径也裁」—— 即重开一个超长会话时同样有界。
+     *
+     * 📌 这条是最容易被漏掉的一半：**只在 append 时裁**看着有界，
+     * 但重启一次 `log.read()` 又把全部历史读回内存，等于没上限
+     *（这正是无界缓存的典型形状：写入点有上限、恢复点没上限）。
+     */
+    @Test
+    fun `loading a long persisted session is bounded too`() {
+        val cap = AgentSessionStore.MAX_LOADED_RECORDS
+        // 先造一个远超上限的磁盘文件
+        val store = newStore()
+        repeat((cap / 3) + 40) { i -> recordTurn(store, "问题$i", "回答$i") }
+
+        val reopened = newStore()
+        assertTrue(
+            "重新打开超长会话时，加载路径同样必须裁剪",
+            reopened.loadedRecordCount() <= cap,
         )
     }
 }

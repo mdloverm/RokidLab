@@ -531,6 +531,30 @@ class MainActivity : AppCompatActivity() {
     internal fun performSelfUpdate() = updates.performSelfUpdate()
 
 
+    /**
+     * 系统内存压力回调：把图片缓存**连磁盘副本一起**清掉。
+     *
+     * ## 为什么挂在这里（而不是 onCreate）
+     * `MediaLoader.clearCache()` / `IconLoader.clearCache()` 此前是**零调用方**的
+     * （只有定义、没有任何调用点 —— 审计里最强的"这段代码从来没有回收路径"信号）：
+     * 内存侧已经由 LRU 兜住，但 `cacheDir/registry-media` 与 `cacheDir/registry-icons`
+     * 里的图片副本**无限累积**（1080px JPEG 每张约 200KB，逛一天几百 MB），
+     * 只有系统清理缓存时才被动回收，用户完全无感知。
+     *
+     * 📌 挂在 `onTrimMemory` 而不是 `onCreate`：启动时无条件清缓存会让首屏重新下载一遍
+     * 全部图标/截图（多花流量与时间，且用户看不出好处）；
+     * 而"真的有内存压力了"才是清的正确时机 —— 此时清掉的是**最该回收**的那部分，
+     * 且 LRU 本来就会保留最常用的条目，代价可控。
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_RUNNING_LOW) {
+            if (::mediaLoader.isInitialized) mediaLoader.clearCache()
+            if (::iconLoader.isInitialized) iconLoader.clearCache()
+            Log.i(TAG, "trim memory level=$level: cleared media/icon caches")
+        }
+    }
+
     override fun onDestroy() {
         // 退出时清理日志，避免下次打开看到旧日志
         LogCollector.clear()

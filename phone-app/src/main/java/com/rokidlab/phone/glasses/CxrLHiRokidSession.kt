@@ -1223,6 +1223,14 @@ class CxrLHiRokidSession(
                             toolConfirm.onResult(confirmId, f.getOrNull(1) == "yes")
                         }
                     }
+                    AiChannel.TOPIC_CHART_RESEND -> {
+                        // 图表查看器单击重发（Cap.CHART_VIEW）：按 chartId 从最近推送缓存
+                        // 重发同一张图 —— 眼镜端解码失败/传输损坏后的自助恢复；未命中静默忽略。
+                        val chartId = AiChannel.decodeChartResend(capsToFieldList(data))
+                        if (!chartId.isNullOrBlank()) {
+                            appScope.launch(Dispatchers.IO) { ChartGlassPush.onResendRequest(chartId) }
+                        }
+                    }
                     LinkProtocol.TOPIC_HELLO -> {
                         // 插播 B：眼镜端协议版本/能力通告（caps = [version, capsBitmask, linkVersion]）
                         val f = capsToFieldList(data)

@@ -58,7 +58,7 @@ internal object AiuiToolProvider : ToolProvider {
             statusText = "正在打开智能体应用…",
             schema = toolSchema(
                 name = "open_aiui_app",
-                description = "打开一个 AIUI 智能体应用（.aix 卡片应用，如“音乐播放”“天气查询”）。**先按用户意图选 target**：用户说“在手机上/手机上看/手机上演示/先看看长什么样” → target=phone（在手机对话里浮出演示卡片，可点「全屏操作」用触摸滑动与点击模拟方向键/回车）；用户说“在眼镜上/戴上眼镜看/推眼镜/眼镜演示”，或没说明时 → target=glasses。**没说且你看不出意图时，先问一句「在手机上看还是眼镜上看」再调用**，不要自己替他决定。触发口径：用户说“打开/启动/演示/预览 XXX（智能体名）”“打开智能体”“打开某 AI 应用/小游戏”“用/通过/拿 XXX 智能体去做某事（如“用音乐播放智能体播放七里香”）”等、且该名字命中智能体应用列表时调用；普通应用（小智/浏览器等）请用 launch_glasses_app。刚用 save_code_file 生成、还没安装到眼镜的项目也能直接打开：传它的 project 名即可（手机上会自动就地打包演示，眼镜上会推送后打开），不必先跑安装。target=phone 只适用于本机有源码或 .aix 的应用；内置官方智能体没有本地包，只能 target=glasses。注意：不要仅仅口头回复“已经打开/已经在播放”，必须实际调用本工具才能把用户请求交给智能体执行。",
+                description = "打开一个 AIUI 智能体应用（.aix 卡片应用，如「音乐播放」「天气查询」）。用户说「在手机上/手机上看/演示」→ target=phone（对话里浮出演示卡片，可全屏用触摸操作）；说「在眼镜上/推眼镜」或没说明 → target=glasses。「没说且看不出意图时，先问一句『在手机上看还是眼镜上看』再调用」，不要替用户决定。刚用 save_code_file 生成、还没安装到眼镜的项目也能直接打开：传它的 project 名即可（手机端就地打包演示，眼镜端推送后打开），不必先跑安装。target=phone 只适用于本机有源码或 .aix 的应用，内置官方智能体没有本地包只能 target=glasses。不要仅仅口头回复「已经打开/已经在播放」，必须实际调用本工具。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(

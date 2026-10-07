@@ -339,62 +339,77 @@ object SkillRegistry {
     // load_skill / load_skill_section 伪工具（第 2 层按需加载）
     // ═══════════════════════════════════════════════
 
-    /** load_skill 工具 Schema（注册给 OpenAI 兼容协议 tools 参数） */
-    fun schema(): JSONObject {
-        return JSONObject().apply {
-            put("type", "function")
-            put("function", JSONObject().apply {
-                put("name", TOOL_NAME)
-                put("description",
-                    "加载一个自定义技能的步骤说明。当用户请求命中技能清单（system 提示中列出的 " +
-                        "「自定义技能清单」）中某个技能的用途时，必须先调用本工具：小技能返回完整步骤，直接按步骤执行；" +
-                        "大技能返回章节目录，此时再用 load_skill_section 读取所需章节正文；" +
-                        "目录型技能（如 aiui-dev，含 SKILL.md 与 components/apis 等参考文件）还会返回参考文件清单，可按需读取。")
-                put("parameters", JSONObject().apply {
-                    put("type", "object")
-                    put("properties", JSONObject().apply {
-                        put("name", JSONObject().apply {
-                            put("type", "string")
-                            put("description", "要加载的技能名（取自技能清单中的 name）")
-                        })
+    /**
+     * load_skill 工具 Schema（注册给 OpenAI 兼容协议 tools 参数）
+     *
+     * ⚠️ `by lazy` 缓存实例（2026-10-05）：本 Schema 是**无参纯常量**声明（不读任何
+     * 可变状态），但装配侧 `AiConversationService.buildTools` 单次请求内最多调用本函数
+     * 5 次（buildTools / 菜单升级 / 菜单点名 / 探测升级 / aiuiMode 切换各一次），
+     * 每次都重建 `JSONObject` 嵌套结构 + 重新拷贝长中文字符串。
+     *
+     * **共享实例的前提**：调用方只对返回的**集合**做 add/remove，绝不修改 `JSONObject`
+     * 本身。已核对三处消费路径均为只读 ——
+     * ① `auditToolSchemas` 只做 optJSONObject/toMap；
+     * ② `ToolSchemaValidator` 无任何 put/remove；
+     * ③ `OpenAiService` 只 `put("tools", JSONArray(tools))` 后整体序列化。
+     * `JSONObject` 底层是 LinkedHashMap，多线程并发**只读**安全（`aiScope` 并行装配时无碍）。
+     * ⚠️ 若将来有人在消费侧改这个 JSONObject，本缓存会变成跨轮污染源 —— 那种改法本身就是 bug。
+     */
+    fun schema(): JSONObject = SCHEMA_LOAD_SKILL
+
+    private val SCHEMA_LOAD_SKILL: JSONObject = JSONObject().apply {
+        put("type", "function")
+        put("function", JSONObject().apply {
+            put("name", TOOL_NAME)
+            put("description",
+                "加载一个自定义技能的步骤说明。当用户请求命中技能清单（system 提示中列出的 " +
+                    "「自定义技能清单」）中某个技能的用途时，必须先调用本工具：小技能返回完整步骤，直接按步骤执行；" +
+                    "大技能返回章节目录，此时再用 load_skill_section 读取所需章节正文；" +
+                    "目录型技能（如 aiui-dev，含 SKILL.md 与 components/apis 等参考文件）还会返回参考文件清单，可按需读取。")
+            put("parameters", JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("name", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "要加载的技能名（取自技能清单中的 name）")
                     })
-                    put("required", JSONArray(listOf("name")))
                 })
+                put("required", JSONArray(listOf("name")))
             })
-        }
+        })
     }
 
     /** load_skill_section 工具 Schema：读取大技能单个章节的完整正文（支持指定技能目录内的参考文件） */
-    fun sectionSchema(): JSONObject {
-        return JSONObject().apply {
-            put("type", "function")
-            put("function", JSONObject().apply {
-                put("name", TOOL_NAME_SECTION)
-                put("description",
-                    "读取大技能（load_skill 返回的是章节目录而非全文）的某个章节正文。传章节序号（目录中的 " +
-                        "1、2、3…）或章节标题。一次只取当前最需要的一章，避免上下文膨胀。\n" +
-                        "参考文件（components.md / apis-*.md / wxss.md / lab-runtime.md 等）通过可选参数 file " +
-                        "指定文件名；省略 file 时读取技能主文件 SKILL.md。")
-                put("parameters", JSONObject().apply {
-                    put("type", "object")
-                    put("properties", JSONObject().apply {
-                        put("name", JSONObject().apply {
-                            put("type", "string")
-                            put("description", "技能名（取自 load_skill 返回目录开头）")
-                        })
-                        put("file", JSONObject().apply {
-                            put("type", "string")
-                            put("description", "可选，技能目录内要读取的参考文件名（如 components.md、apis-wx.md、lab-runtime.md）；缺省读取主文件 SKILL.md")
-                        })
-                        put("section", JSONObject().apply {
-                            put("type", "string")
-                            put("description", "章节序号（如 \"1\"）或章节标题（如 \"Project Structure\"），取自 load_skill 返回的目录")
-                        })
+    fun sectionSchema(): JSONObject = SCHEMA_LOAD_SKILL_SECTION
+
+    private val SCHEMA_LOAD_SKILL_SECTION: JSONObject = JSONObject().apply {
+        put("type", "function")
+        put("function", JSONObject().apply {
+            put("name", TOOL_NAME_SECTION)
+            put("description",
+                "读取大技能（load_skill 返回的是章节目录而非全文）的某个章节正文。传章节序号（目录中的 " +
+                    "1、2、3…）或章节标题。一次只取当前最需要的一章，避免上下文膨胀。\n" +
+                    "参考文件（components.md / apis-*.md / wxss.md / lab-runtime.md 等）通过可选参数 file " +
+                    "指定文件名；省略 file 时读取技能主文件 SKILL.md。")
+            put("parameters", JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("name", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "技能名（取自 load_skill 返回目录开头）")
                     })
-                    put("required", JSONArray(listOf("name", "section")))
+                    put("file", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "可选，技能目录内要读取的参考文件名（如 components.md、apis-wx.md、lab-runtime.md）；缺省读取主文件 SKILL.md")
+                    })
+                    put("section", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "章节序号（如 \"1\"）或章节标题（如 \"Project Structure\"），取自 load_skill 返回的目录")
+                    })
                 })
+                put("required", JSONArray(listOf("name", "section")))
             })
-        }
+        })
     }
 
     /**
@@ -809,8 +824,10 @@ object SkillRegistry {
     // 不会出现"对话装进来的坏了但设置页装的是好的"这种分叉。
     // ═══════════════════════════════════════════════
 
-    /** install_skill 工具 Schema */
-    fun installSchema(): JSONObject = JSONObject().apply {
+    /** install_skill 工具 Schema（`by lazy` 缓存，理由同 [schema]） */
+    fun installSchema(): JSONObject = SCHEMA_INSTALL
+
+    private val SCHEMA_INSTALL: JSONObject = JSONObject().apply {
         put("type", "function")
         put("function", JSONObject().apply {
             put("name", TOOL_INSTALL)
@@ -841,8 +858,10 @@ object SkillRegistry {
         })
     }
 
-    /** list_skills 工具 Schema */
-    fun listSchema(): JSONObject = JSONObject().apply {
+    /** list_skills 工具 Schema（`by lazy` 缓存，理由同 [schema]） */
+    fun listSchema(): JSONObject = SCHEMA_LIST
+
+    private val SCHEMA_LIST: JSONObject = JSONObject().apply {
         put("type", "function")
         put("function", JSONObject().apply {
             put("name", TOOL_LIST)
@@ -860,8 +879,10 @@ object SkillRegistry {
         })
     }
 
-    /** delete_skill 工具 Schema */
-    fun deleteSchema(): JSONObject = JSONObject().apply {
+    /** delete_skill 工具 Schema（`by lazy` 缓存，理由同 [schema]） */
+    fun deleteSchema(): JSONObject = SCHEMA_DELETE
+
+    private val SCHEMA_DELETE: JSONObject = JSONObject().apply {
         put("type", "function")
         put("function", JSONObject().apply {
             put("name", TOOL_DELETE)

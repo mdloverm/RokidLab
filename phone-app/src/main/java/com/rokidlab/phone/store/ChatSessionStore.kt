@@ -1,7 +1,9 @@
 package com.rokidlab.phone.store
 
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 /**
  * 会话元数据（存 `chat_sessions.json` 索引，不随消息增长）。
@@ -50,8 +52,13 @@ internal data class ChatSessionMeta(
  */
 internal object ChatSessionStore {
 
+    private const val TAG = "ChatSessionStore"
+
     /** 会话索引文件名 */
     const val INDEX_FILE = "chat_sessions.json"
+
+    /** 会话消息文件扩展名（`chat_sessions/<id>.jsonl`） */
+    const val SESSION_FILE_SUFFIX = ".jsonl"
 
     /** 会话消息文件所在子目录 */
     const val SESSION_DIR = "chat_sessions"
@@ -66,11 +73,38 @@ internal object ChatSessionStore {
     private const val TITLE_MAX = 18
     private const val PREVIEW_MAX = 40
 
-    /** 索引 → 内存列表（非法条目跳过，损坏一条不拖垮整个列表） */
-    fun parseIndex(text: String): List<ChatSessionMeta> {
+    /**
+     * 索引 → 内存列表（非法条目跳过，损坏一条不拖垮整个列表）。
+     *
+     * ⚠️ 注意"**损坏**"与"**本来就没有**"在这里**不可区分**—— 两者都返回 `emptyList()`。
+     * 这就是 2026-10-06 审计里那条最严重的用户可见故障的根因：
+     * 索引文件在「读改写」中途被杀 ⇒ 半截/ 0 字节 ⇒ 这里返回空 ⇒
+     * `bootstrap` 判定"索引为空（=没有会话）" ⇒ 走新建会话分支 ⇒
+     * **磁盘上的会话文件全都还在，但整个历史列表消失**。
+     *
+     * ⇒ 要区分请用 [parseIndexOrNull]（`null` = 索引**坏**了），据此从
+     * [rebuildIndexFrom] 扫 [SESSION_DIR] 重建 —— 见 `ChatStateHolder.bootstrap`。
+     */
+    fun parseIndex(text: String): List<ChatSessionMeta> = parseIndexOrNull(text).orEmpty()
+
+    /**
+     * 同 [parseIndex]，但把"索引坏了"与"本来就没有"区分开：
+     * 返回 `null` 表示**文本存在却无法解析**（损坏）；空列表表示确实没有会话。
+     *
+     * 📌 「索引文件不存在」与「索引文件是空串」都算**没有**（不是损坏）——
+     * 首次启动就是前者，那是正常状态。
+     */
+    fun parseIndexOrNull(text: String): List<ChatSessionMeta>? {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || !trimmed.startsWith("[")) return emptyList()
-        val arr = runCatching { JSONArray(trimmed) }.getOrNull() ?: return emptyList()
+        if (trimmed.isEmpty()) return emptyList()
+        if (!trimmed.startsWith("[")) {
+            Log.w(TAG, "session index corrupted: not a JSON array (len=${trimmed.length})")
+            return null
+        }
+        val arr = runCatching { JSONArray(trimmed) }.getOrNull() ?: run {
+            Log.w(TAG, "session index corrupted: JSONArray parse failed")
+            return null
+        }
         val out = ArrayList<ChatSessionMeta>(arr.length())
         for (i in 0 until arr.length()) {
             val o = runCatching { arr.getJSONObject(i) }.getOrNull() ?: continue
@@ -108,6 +142,56 @@ internal object ChatSessionStore {
             )
         }
     }.toString()
+
+    /**
+     * **从会话消息文件重建索引**（2026-10-06 审计修：索引损坏时的兜底）。
+     *
+     * ## 为什么需要它
+     * 索引是「读旧 + 拼新 + 写回」序列的产物，落盘虽然已改成原子写，但索引**一旦损坏**
+     * （早期版本的裸写、手动改文件、磁盘异常等），旧实现会把它当成"本来就没有会话"
+     * ⇒ 用户的历史列表整个消失，而磁盘上的 `chat_sessions/<id>.jsonl` **全都还在**。
+     * 那种"数据看起来被清空了"的故障是最难排查、也最伤用户信任的一类。
+     *
+     * 这里从**消息文件本身**（真相源）重建：文件在就意味着会话存在。
+     *
+     * ## 能恢复什么、不能恢复什么
+     * - 能：会话 id、消息条数、首条消息（派生标题）、最后一条消息（预览与更新时间）
+     * - 不能：[systemPrompt]（只存在索引里）、精确的 `createdAt`（用文件 mtime 近似）
+     *
+     * 📌 重建出来的元数据**不如原索引精确**，但远好过"列表空掉"，
+     * 且只影响展示字段，不影响消息内容本身（内容始终从 `.jsonl` 读）。
+     *
+     * @param sessionDir [SESSION_DIR] 所在目录
+     * @param readCount 读一个会话文件的消息条数（由调用方注入，避免本对象依赖历史解析）
+     * @param previewOf 取预览文本（通常取最后一条非状态消息的摘要）
+     * @return 重建出的列表（按 [sorted] 排好）；目录不存在或没有会话文件返回空列表
+     */
+    fun rebuildIndexFrom(
+        sessionDir: File,
+        readCount: (File) -> Int,
+        titleOf: (File) -> String,
+        previewOf: (File) -> String,
+    ): List<ChatSessionMeta> {
+        val files = sessionDir.listFiles()?.filter { it.isFile && it.name.endsWith(SESSION_FILE_SUFFIX) }
+            ?: return emptyList()
+        val metas = files.mapNotNull { f ->
+            val id = f.name.removeSuffix(SESSION_FILE_SUFFIX)
+            if (id.isEmpty()) return@mapNotNull null
+            val mtime = f.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
+            ChatSessionMeta(
+                id = id,
+                title = titleOf(f).ifBlank { DEFAULT_TITLE },
+                // createdAt 无从恢复：用文件 mtime 近似（至少能保证排序稳定）
+                createdAt = mtime,
+                updatedAt = mtime,
+                preview = previewOf(f),
+                messageCount = runCatching { readCount(f) }.getOrDefault(0),
+                // systemPrompt 只存在于索引，无法重建 —— 留空（旧版本读到也不出错）
+                systemPrompt = "",
+            )
+        }
+        return sorted(metas)
+    }
 
     /**
      * 会话排序：最近更新的在前。

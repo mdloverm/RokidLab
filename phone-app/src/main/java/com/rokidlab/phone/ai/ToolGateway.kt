@@ -98,6 +98,20 @@ object ToolGateway {
     private const val DEDUPE_MAX_ENTRIES = 64
 
     /**
+     * **未结束**条目的强制淘汰阈值（2026-10-07 安全修复）。
+     *
+     * 旧实现在清扫时只删 `finished && 超 TTL` 的条目 ⇒ 工具 worker 永久挂住时，
+     * 那条entry 永远不会被淘汰，而每个 [InFlight] 都持一个 Thread 引用 +
+     * `AtomicReference<String>`（`get_cover_image` 的结果串可达 4 万字符）
+     * ⇒ 页面只要对同一 cbId 反复调一个挂死的工具，就能让这个 map 无界增长。
+     *
+     * ⚠️ `DEDUPE_MAX_ENTRIES` 只是**触发清扫的阈值**，本身不是内存上限 ——
+     * 「有个常量叫 MAX」很容易被误读成「最多 64 条」，所以这里必须显式兜底。
+     * 取 3×TTL：正常工具执行远小于 1 分钟，3 倍 TTL 仍未结束基本等于卡死。
+     */
+    private const val DEDUPE_STUCK_MS = DEDUPE_TTL_MS * 3
+
+    /**
      * 一次带 cbId 的工具执行：worker 与它的结果槽。
      * [finished] 由 worker 在 finally 置位，用于区分「尚未启动/正在跑」（join 等待）与「已完成」（回缓存）。
      */
@@ -115,7 +129,12 @@ object ToolGateway {
     private fun evictExpiredDedupe(now: Long) {
         if (dedupeMap.size <= DEDUPE_MAX_ENTRIES) return
         for ((k, v) in dedupeMap) {
-            if (v.finished.get() && now - v.createdAt > DEDUPE_TTL_MS) dedupeMap.remove(k, v)
+            val age = now - v.createdAt
+            // 已完成且过窗口：正常淘汰。未完成但远超 3×TTL：worker 卡死，强制淘汰（否则永驻）。
+            // 用 remove(k, v) 做值匹配删除，不会误删并发者刚换上的新 entry。
+            if ((v.finished.get() && age > DEDUPE_TTL_MS) || age > DEDUPE_STUCK_MS) {
+                dedupeMap.remove(k, v)
+            }
         }
     }
 

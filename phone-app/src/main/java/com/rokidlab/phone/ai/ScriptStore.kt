@@ -188,38 +188,15 @@ object ScriptStore {
         }
         return try {
             val f = file(context)
-            // 先写临时文件再**原子替换**：中途被杀不会留下半截 JSON 把整个脚本库读成空。
-            val tmp = File(f.parentFile, "$FILE_NAME.tmp")
-            tmp.writeText(arr.toString())
-            replaceAtomically(tmp, f)
+            // 原子替换：中途被杀不会留下半截 JSON 把整个脚本库读成空，
+            // 也不会出现「目标不存在」的窗口（那份实现见 AtomicFileWrite.replaceAtomically）。
+            // 抛异常才算失败（失败路径见 catch）；正常返回即写成功。
+            writeTextFileAtomically(f, arr.toString())
+            true
         } catch (e: Exception) {
             Log.w(TAG, "write failed: ${e.message}")
             false
         }
-    }
-
-    /**
-     * 用 `tmp` 原子替换 `dst`，返回是否成功。
-     *
-     * ⚠️ **不要**先 `dst.delete()` 再 rename：POSIX `rename` 本身就是"覆盖式原子操作"，
-     * 而 delete 与 rename 之间被杀会让**整个脚本库消失**（临时文件 + 改名的全部意义就是防这个）。
-     * 改造前就是这么写的，注释还宣称"防中途被杀"—— 实际是把自己防的那件事做成了。
-     *
-     * 主路径走 `Files.move(ATOMIC_MOVE)`；个别 ROM 的 FUSE 上不支持时才退回 `renameTo`
-     * （同目录内 rename 在 POSIX 上同样是覆盖式原子的），且**检查返回值** ——
-     * 改造前 `tmp.renameTo(f)` 的结果被丢弃，写失败会被当成保存成功。
-     */
-    private fun replaceAtomically(tmp: File, dst: File): Boolean = runCatching {
-        java.nio.file.Files.move(
-            tmp.toPath(),
-            dst.toPath(),
-            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-            java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-        )
-        true
-    }.getOrElse { e ->
-        Log.w(TAG, "atomic move unsupported, falling back to renameTo(): ${e.message}")
-        tmp.renameTo(dst)
     }
 
     /**

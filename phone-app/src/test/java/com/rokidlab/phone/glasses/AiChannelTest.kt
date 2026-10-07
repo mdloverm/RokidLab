@@ -236,6 +236,50 @@ class AiChannelTest {
         assertEquals("glasses_ip", AiChannel.CMD_GLASSES_IP)
         assertEquals("stop_phone_mirror", AiChannel.CMD_STOP_PHONE_MIRROR)
         assertEquals("tts_stop", AiChannel.CMD_TTS_STOP)
+        assertEquals("rokidlab_chart_push", AiChannel.TOPIC_CHART_PUSH)
+        assertEquals("chart_push", AiChannel.CMD_CHART_PUSH)
+        assertEquals("rokidlab_chart_resend", AiChannel.TOPIC_CHART_RESEND)
+        assertEquals("chart_resend", AiChannel.CMD_CHART_RESEND)
+    }
+
+    // ── chart_push / chart_resend（图表全屏查看器）──
+
+    @Test
+    fun `chart_push v1 roundtrip 且关键字段缺失时整体丢弃`() {
+        val encoded = AiChannel.encodeChartPush("1728200000000", "BASE64JPEG", "华为K线")
+        assertEquals(
+            listOf(AiChannel.CMD_CHART_PUSH, "1", "1728200000000", "BASE64JPEG", "华为K线"),
+            encoded,
+        )
+        assertEquals(
+            Triple("1728200000000", "BASE64JPEG", "华为K线"),
+            AiChannel.decodeChartPush(encoded),
+        )
+
+        // caption 允许缺省（查看器只显示图片）
+        assertEquals(
+            Triple("id1", "B64", ""),
+            AiChannel.decodeChartPush(listOf(AiChannel.CMD_CHART_PUSH, "1", "id1", "B64")),
+        )
+        assertNull("版本不符必须整体丢弃", AiChannel.decodeChartPush(listOf(AiChannel.CMD_CHART_PUSH, "2", "id", "b", "c")))
+        assertNull("chartId 缺失（重发关联键，不得为空）", AiChannel.decodeChartPush(listOf(AiChannel.CMD_CHART_PUSH, "1", "", "b", "c")))
+        assertNull("图片数据缺失不得下发空图", AiChannel.decodeChartPush(listOf(AiChannel.CMD_CHART_PUSH, "1", "id", "", "c")))
+        assertNull(AiChannel.decodeChartPush(listOf(AiChannel.CMD_CHART_PUSH, "1", "id", null, "c")))
+        assertNull("长度不足（无图片字段）", AiChannel.decodeChartPush(listOf(AiChannel.CMD_CHART_PUSH, "1", "id")))
+        assertNull(AiChannel.decodeChartPush(listOf("wrong", "1", "id", "b", "c")))
+    }
+
+    @Test
+    fun `chart_resend v1 roundtrip 且 chartId 缺失时拒绝`() {
+        val encoded = AiChannel.encodeChartResend("1728200000000")
+        assertEquals(listOf(AiChannel.CMD_CHART_RESEND, "1", "1728200000000"), encoded)
+        assertEquals("1728200000000", AiChannel.decodeChartResend(encoded))
+
+        assertNull("版本不符必须整体丢弃", AiChannel.decodeChartResend(listOf(AiChannel.CMD_CHART_RESEND, "2", "id")))
+        assertNull("chartId 缺失", AiChannel.decodeChartResend(listOf(AiChannel.CMD_CHART_RESEND, "1", "")))
+        assertNull(AiChannel.decodeChartResend(listOf(AiChannel.CMD_CHART_RESEND, "1", null)))
+        assertNull("长度不足", AiChannel.decodeChartResend(listOf(AiChannel.CMD_CHART_RESEND, "1")))
+        assertNull(AiChannel.decodeChartResend(listOf("wrong", "1", "id")))
     }
 
     // ── 版本契约总检 ──

@@ -967,6 +967,11 @@ internal fun ChatModule(app: LabApplication) {
                 // startPhotoAsk 内部在后台线程回调，需切回主线程更新 Compose 状态
                 scope.launch {
                     photoAsking = false
+                    // ★ 先清剩余状态行（2026-10-06 审计修）：“正在识别文字…”
+                    //   是进行中的话，一轮结束就过期了。不清的话强退后会在历史里
+                    //   留下一条永远转不完的进度文案。
+                    //   必须在 finalizeTraceReply **之前**：新消息会把状态行推到不再是末尾的位置。
+                    ChatStateHolder.clearStatusLines()
                     // 与眼镜语音同理：本轮若产生了「过程」就合并到同一条消息，否则新起一条
                     ChatStateHolder.finalizeTraceReply(reply)
                 }
@@ -990,6 +995,8 @@ internal fun ChatModule(app: LabApplication) {
                 onReply = { reply ->
                     scope.launch {
                         photoAsking = false
+                        // ★ 同上：先清剩余状态行，再合并本轮过程
+                        ChatStateHolder.clearStatusLines()
                         ChatStateHolder.finalizeTraceReply(reply)
                     }
                 },

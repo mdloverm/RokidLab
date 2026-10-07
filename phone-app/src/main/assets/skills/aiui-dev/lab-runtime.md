@@ -161,8 +161,12 @@ page { width: 450px; height: 360px; background-color: #000000FF; overflow: hidde
 ## 9. 调用手机端工具（Lab 工具口）
 
 页面可调用手机端绝大部分工具（音乐/天气/搜索/提醒/设备信息等），这是页面与外部世界交互的唯一通道——不要在页面里 fetch 外网。
-**不开放的只有 5 个**：`open_aiui_app`（页面打开自己＝自指递归）、`list_sessions` / `read_session` / `session_trace`（会读到用户的全部会话与完整事件流，页面是第三方制品不该能批量枚举导出）、`research_subtask`（会另起子代理）。调它们只会收到明确的拒绝文案，**别把它当成工具名写错**。
-⚠️ `shell` 域与 `screen` 域（`run_shell`、`install_packages`、`save_script`、`list_scripts`、`run_script`、`delete_script`、`start_web_preview`、`stop_web_preview`、`read_screen`、`tap_screen`、`swipe_screen`、`press_key`、`type_text`）是**带闸门开放**（2026-10-01 起）：能调用，但**每一次都会先向用户弹确认**，用户同意才执行、问不到用户（眼镜/手机都无确认通道）直接拒。页面里调用它们**不会**立刻执行——回调会等到用户点头或超时拒绝；⚠️ 超时可能较长（等用户确认），不要在页面里连续重试刷确认框。此外 `delete_knowledge_doc`、`manage_glasses_app` 是**确认闸门 BLOCK 级**工具：它们出现在清单里，但页面路径必然被拒（不可恢复的操作只对对话中本人在场开放）。不确定现在能调什么，调 `list_tools` 拿一份实时清单。
+**不开放的只有 6 个**：`open_aiui_app`（页面打开自己＝自指递归）、`list_sessions` / `read_session` / `session_trace`（会读到用户的全部会话与完整事件流，页面是第三方制品不该能批量枚举导出）、`research_subtask`（只读子代理）/ `execute_subtask`（**write 型子代理**，能写本机状态——比 research_subtask 更危险，2026-10-02 加入）。调它们只会收到明确的拒绝文案，**别把它当成工具名写错**。
+⚠️ `shell` 域与 `screen` 域是**带闸门开放**（2026-10-01 起）：能调用，但**每一次都会先向用户弹确认**，用户同意才执行、问不到用户（眼镜/手机都无确认通道）直接拒。页面里调用它们**不会**立刻执行——回调会等到用户点头或超时拒绝；⚠️ 超时可能较长（等用户确认），不要在页面里连续重试刷确认框。
+　· **`shell` 域全部 14 个**：`run_shell`、`install_packages`、`restore_container`、`snapshot_container`、`save_script`、`list_scripts`、`run_script`、`delete_script`、`start_web_preview`、`stop_web_preview`、`list_runs`、`read_run_output`、`write_run_input`、`stop_run`
+　· **`screen` 域全部 5 个**：`read_screen`、`tap_screen`、`swipe_screen`、`press_key`、`type_text`
+　　（按域表述而非逐个点名，是为了以后新增工具时不会再漂——逐个列举的那一版已经漏过6 个。）
+　　⚠️ `delete_knowledge_doc`、`manage_glasses_app` 是**确认闸门 BLOCK 级**工具：它们出现在清单里，但页面路径必然被拒（不可恢复的操作只对对话中本人在场开放）。不确定现在能调什么，调 `list_tools` 拿一份实时清单。
 
 ### 9.0 ⚠️ 宿主差异：定时器与事件循环（2026-10-02 修正）
 **官方宿主（assistserver / AiuiInkRenderEngine）定时器完全可用**：官方《闪电战机》实机以 `setInterval(() => this.tick(), FRAME_MS)` 驱动弹幕射击主循环、全页数十处 `setTimeout`（aix 实包解析验证）。**Canvas 2D（`getContext('2d')` + `fillRect`/`drawImage`）+ `setInterval` 帧循环就是官方实时游戏的标准范式**（见 §9.0.1）。
@@ -205,7 +209,8 @@ globalThis.Lab.callTool('control_music', { action: 'play', songName: '西厢' },
   self.setData({ tip: err ? ('失败: ' + err) : String(res).substring(0, 30) });
 });
 ```
-- 工具名**逐字照抄**，写错只会收到 `unknown tool: xxx`：`control_music` `get_now_playing` `get_cover_image` `get_weather` `search_web` `fetch_webpage` `manage_timer` `get_current_time` `calculate` `search_knowledge_base` `save_summary_txt` `show_image` `get_glasses_status` `get_phone_status`；不确定就先 `globalThis.Lab.listTools(function (tools, err) { … })`。
+- 工具名**逐字照抄**，写错只会收到 `unknown tool: xxx`：`control_music` `get_now_playing` `get_weather` `search_web` `fetch_webpage` `manage_timer` `get_current_time` `calculate` `search_knowledge_base` `save_summary_txt` `show_image` `get_glasses_status` `get_phone_status`；不确定就先 `globalThis.Lab.listTools(function (tools, err) { … })`。
+  📌 `listTools` 给出的是**当前页面可调的权威清单**——工具开关（设置页/开发者页）随时会变，**它才是唯一准确的来源**，本行只给常用范例。
 - 参数名按常规直觉（songName/keyword/city），但**必填参数不能省**：`control_music` 必须传 `{action:'play',songName:'…'}`（传 `{}` 会失败）；结果都是字符串，自己 `JSON.parse`。
 - **一次只发起一个调用**（通道串行，并发会超时）；**失败不要自动重试**（会绕过去重，造成重复拨号等副作用）。
 - 界面刷新一律由**按键事件**驱动；每次调用都要有 loading 文案（往返 1~3 秒，最长 15 秒）。

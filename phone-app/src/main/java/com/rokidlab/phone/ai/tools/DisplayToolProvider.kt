@@ -15,6 +15,7 @@ import com.rokidlab.phone.ai.GlassToolConfirmChannel
 import com.rokidlab.phone.ai.MusicPlayerController
 import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.glasses.AiChannel
+import com.rokidlab.phone.glasses.ChartGlassPush
 import com.rokidlab.phone.glasses.GlassesHandshake
 import com.rokidlab.phone.glasses.LinkProtocol
 import com.rokidlab.phone.store.ChatStateHolder
@@ -36,7 +37,7 @@ import java.net.URL
 internal object DisplayToolProvider : ToolProvider {
     private const val TAG = "DisplayToolProvider"
 
-    override val toolNames = setOf("show_image")
+    override val toolNames = setOf("show_image", "push_chart_to_glasses")
 
     override fun tools(): List<ToolEntry> = listOf(
         ToolEntry(
@@ -58,13 +59,54 @@ internal object DisplayToolProvider : ToolProvider {
                 ),
             ),
         ),
+        ToolEntry(
+            name = "push_chart_to_glasses",
+            group = ToolRegistry.DOMAIN_DISPLAY,
+            displayNameRes = R.string.ai_tool_push_chart_name,
+            descriptionRes = R.string.ai_tool_push_chart_desc,
+            risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            statusText = "正在推送图表到眼镜…",
+            schema = toolSchema(
+                name = "push_chart_to_glasses",
+                description = "把一张 ECharts 图表推到眼镜全屏显示（渲染成图片）。当用户要求在眼镜上看图表/K线/走势图，或说“把刚才的图表推到眼镜”时调用。option 传完整的 ECharts option JSON（与 echarts 代码块相同格式）；若对话里刚生成过图表卡片，直接复用那份 option。",
+                parameters = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "option" to mapOf("type" to "string", "description" to "完整的 ECharts option JSON。K线用 candlestick，数据格式 [开盘,收盘,最低,最高]。"),
+                        "title" to mapOf("type" to "string", "description" to "图表标题（可选），显示在眼镜端顶部。"),
+                    ),
+                    "required" to listOf("option"),
+                ),
+            ),
+        ),
     )
 
     override fun execute(context: Context, name: String, args: JSONObject): String {
         return when (name) {
             "show_image" -> showImage(context, args)
+            "push_chart_to_glasses" -> pushChartToGlasses(context, args)
             else -> throw IllegalArgumentException("未知工具: $name")
         }
+    }
+
+    /**
+     * push_chart_to_glasses：把一张 ECharts 图表离屏渲染成图片推到眼镜端全屏查看器
+     * （Cap.CHART_VIEW；滑动切换/单击重发/双击退出，见 ChartGlassPush 与眼镜端
+     * ChartViewerController）。option 参数与对话里 ```echarts 代码块同格式，
+     * 模型刚画完图表时源码就在手上，直接复传即可。
+     */
+    private fun pushChartToGlasses(context: Context, args: JSONObject): String {
+        val option = args.optString("option").trim()
+        val title = args.optString("title").trim()
+        if (option.isEmpty()) {
+            return "没有可推送的图表：请传完整的 ECharts option JSON"
+        }
+        // option 必须是合法 JSON：坏 JSON 渲染必白屏，提前拦下并让模型修正重试
+        val valid = runCatching { JSONObject(option) }.isSuccess
+        if (!valid) {
+            return "option 不是合法 JSON：请修正后再调用本工具"
+        }
+        return ChartGlassPush.pushBlocking(context, option, title)
     }
 
     private fun showImage(context: Context, args: JSONObject): String {

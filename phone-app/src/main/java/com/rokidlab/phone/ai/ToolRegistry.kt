@@ -542,6 +542,17 @@ object ToolRegistry {
     internal fun namesOf(schemas: List<JSONObject>): Set<String> =
         schemas.mapNotNull { functionNameOf(it).takeIf { n -> n.isNotEmpty() } }.toSet()
 
+    /**
+     * 单个 Schema → 工具名（[namesOf] 的单数版）。解析失败 / 名为空返回 **null**。
+     *
+     * ⚠️ 别用 `namesOf(listOf(schema)).firstOrNull()` 代替：那样每次调用要建
+     * 1 个单元素 List + 1 个 mapNotNull 结果 List + 1 个 LinkedHashSet，
+     * 再把除首个外的全丢掉。装配侧是**每轮必经**的热路径（103 个工具 × 3 处），
+     * 纯浪费几百次临时对象分配。
+     */
+    internal fun nameOf(schema: JSONObject): String? =
+        functionNameOf(schema).takeIf { it.isNotEmpty() }
+
     /** 全部工具（含已禁用），按声明顺序。⚠️ 必须是 `get()`：MCP 工具会在运行时报到 */
     val toolList: List<ToolMeta>
         get() = entries.map { it.toMeta() }
@@ -724,10 +735,10 @@ object ToolRegistry {
     /**
      * 轻量「工具菜单」（2026-09-29，菜单探测轮专用）。
      *
-     * 每行「工具名：一句话用途」，不含参数定义 —— 全量 83 个完整 Schema ≈ 2 万 input token，
+     * 每行「工具名：一句话用途」，不含参数定义 —— 全量 103 个完整 Schema ≈ 2 万 input token，
      * 这份菜单 ≈ 2k。主循环在**关键词路由没命中**的任务轮把它发给模型点名
      * （`ToolIntentRouter.TOOLS_PICK_MARKER` 约定），点中后再按名装配完整 Schema。
-     * 由此 83 个工具（含 MCP 动态工具、设置页隐藏的系统性工具）**全部**进入按需装配。
+     * 由此 103 个内置工具（另加 MCP 动态工具、设置页隐藏的系统性工具）**全部**进入按需装配。
      *
      * 口径与 [schemasFor] 一致：设置页禁用的不进菜单；[excludeGlassesTools] 时摘掉
      * [GLASSES_REQUIRED_TOOLS]（本机模式）。

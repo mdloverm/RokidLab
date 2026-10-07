@@ -1,5 +1,6 @@
 package com.rokidlab.phone.ai
 
+import com.rokidlab.phone.ai.approval.ApprovalGate
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -50,7 +51,16 @@ class PhoneToolConfirmChannelTest {
         // 让闸门按「问不到」处理（再由工具声明的 ToolConfirmPolicy 分流），
         // 而不是让一个需要点头的动作被静默执行。
         assertFalse(PhoneToolConfirmChannel.confirm("send_sms", "发送短信给 10086"))
-        assertFalse("未问到 ⇒ 也不能声称用户取消了", PhoneToolConfirmChannel.wasCancelled())
+    }
+
+    @Test
+    fun `未注入 Context 时 confirmOutcome 报 NOT_ANSWERED 而非 CANCELLED`() {
+        // ★ 区分「用户取消了」与「没问到」是审批链的安全底线：
+        // 误报 CANCELLED 会让不该拒的工具被拒；误报 ALLOWED 会让副作用静默执行。
+        assertEquals(
+            ApprovalGate.ConfirmOutcome.NOT_ANSWERED,
+            PhoneToolConfirmChannel.confirmOutcome("send_sms", "发送短信给 10086", 40_000L),
+        )
     }
 
     @Test

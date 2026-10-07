@@ -54,21 +54,28 @@ object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
     private var appContext: Context? = null
 
     /**
-     * 上一次确认是否被用户**显式取消**（与眼镜通道同语义：取消 ⇒ 拒绝，超时 ⇒ 按声明分流）。
+     * 与 [GlassToolConfirmChannel] 同语义：上一次确认是否被用户**显式取消**。
      *
-     * 每次 [confirm] 开头复位，避免"上一次用户点了取消"污染这一次的超时判定。
+     * ⚠️ 保留此方法只为兼容旧调用；闸门**只调[confirmOutcome]**（读返回值）。
+     * 它读不到"是哪一次调用被取消" —— 并发时不可作为判定依据。
      */
-    @Volatile
-    private var lastCancelled = false
-
-    override fun wasCancelled(): Boolean = lastCancelled
+    @Deprecated("并发下无法区分是哪一次调用被取消；请用 confirmOutcome 的返回值")
+    override fun wasCancelled(): Boolean = false
 
     private val seq = AtomicLong(0)
     private val pending = ConcurrentHashMap<String, Waiter>()
 
+    /**
+     * 一次确认的等待者。**取消标志挂在 waiter 上而不是通道上**——
+     * 并发多个确认时，通道级标志会被兄弟调用的 [confirmOutcome] 复位，
+     * 导致"用户已取消"被读成"没问到" ⇒ 副作用按 PROCEED 静默放行。
+     */
     private class Waiter {
         val latch = CountDownLatch(1)
         @Volatile var allowed = false
+
+        /** 用户显式点了「取消」（区别于没问到 / 页面被回收） */
+        @Volatile var cancelled = false
     }
 
     /**
@@ -103,10 +110,22 @@ object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
      * 带等待上限的版本（闸门按来源收紧窗口，如 AIUI 页面路径 18s，见 ApprovalGate R7 注释）。
      * 上限只**收紧**不放宽：取 `min(maxWaitMs, 本通道 40s)`。
      */
-    override fun confirm(toolName: String, prompt: String, maxWaitMs: Long): Boolean {
-        val ctx = appContext ?: return false
-        if (!isAvailable()) return false
-        lastCancelled = false
+    override fun confirm(toolName: String, prompt: String, maxWaitMs: Long): Boolean =
+        confirmOutcome(toolName, prompt, maxWaitMs).allowed
+
+    /**
+     * ★ 闸门唯一调用的入口：一次确认的**结果 + 是否被显式取消**打包返回。
+     *
+     * 取消标志从**本次**的 [Waiter] 上读，而不是通道的实例字段 ——
+     * 与 [GlassToolConfirmChannel.confirmOutcome] 同口径。
+     */
+    override fun confirmOutcome(
+        toolName: String,
+        prompt: String,
+        maxWaitMs: Long,
+    ): ApprovalGate.ConfirmOutcome {
+        val ctx = appContext ?: return ApprovalGate.ConfirmOutcome.NOT_ANSWERED
+        if (!isAvailable()) return ApprovalGate.ConfirmOutcome.NOT_ANSWERED
         val id = "pc-${System.currentTimeMillis()}-${seq.incrementAndGet()}"
         val waiter = Waiter()
         pending[id] = waiter
@@ -115,18 +134,18 @@ object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
             ctx.startActivity(ToolConfirmActivity.createIntent(ctx, id, toolName, prompt))
             if (!waiter.latch.await(wait, TimeUnit.MILLISECONDS)) {
                 Log.w(TAG, "phone confirm timeout (id=$id tool=$toolName)")
-                false
+                ApprovalGate.ConfirmOutcome.NOT_ANSWERED
             } else {
-                waiter.allowed
+                ApprovalGate.ConfirmOutcome(waiter.allowed, waiter.cancelled)
             }
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
-            false
+            ApprovalGate.ConfirmOutcome.NOT_ANSWERED
         } catch (e: Exception) {
             // BAL 拦截是**静默丢弃**（既不抛异常也不返回失败），能走到这里的只有
-            // "Activity 未注册 / 系统拒绝启动"这类硬错误 —— 如实返回 false，让闸门按"没问到"处理。
+            // "Activity 未注册 / 系统拒绝启动"这类硬错误 —— 如实报"没问到"，让闸门按声明分流。
             Log.w(TAG, "phone confirm launch failed (id=$id): ${e.javaClass.simpleName}: ${e.message}")
-            false
+            ApprovalGate.ConfirmOutcome.NOT_ANSWERED
         } finally {
             pending.remove(id)
         }
@@ -145,7 +164,7 @@ object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
             return
         }
         w.allowed = allowed
-        if (cancelled) lastCancelled = true
+        w.cancelled = cancelled
         w.latch.countDown()
         Log.i(TAG, "phone confirm result (id=$requestId allowed=$allowed cancelled=$cancelled)")
     }
@@ -156,7 +175,10 @@ object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
      */
     fun abortAll() {
         val n = pending.size
-        pending.values.forEach { it.latch.countDown() }
+        pending.values.forEach {
+            it.cancelled = false
+            it.latch.countDown()
+        }
         pending.clear()
         if (n > 0) Log.w(TAG, "aborted $n pending phone confirmations")
     }

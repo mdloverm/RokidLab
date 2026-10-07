@@ -18,8 +18,9 @@ package com.rokidlab.phone.ai
  *
  * ## 三层防线（与闲聊快路同一套哲学：宁可漏放、不可误放）
  *
- *  1. [STRUCTURAL_HINTS] 结构排除：写代码/生成页面/翻译/文件/截图等任务性字眼，
- *     哪怕同时含意图关键词（「写个天气 app」）也一律不路由 → 落回全量，绝不因省 token 丢能力；
+ *  1. **逐规则冲突排除**（[TASK_SHAPED_CONFLICTS]）：写代码/生成页面/翻译/截图这类**任务形状**
+ *     只否决与它冲突的那条意图（「写个天气 app」否决 weather），不再像早期实现那样一个词
+ *     否决全部意图 —— 后者把「打开音乐」「查一下快递」这类日常轮次也误杀成全价；
  *  2. 关键词只收高置信说法，拿不准的一概不收 —— 漏放的代价只是「这轮多花两万 token」（维持原状）；
  *  3. 运行时逃生舱（主循环接线，与本文件约定配套）：路由轮的人设/上下文里注入 [escapeNote]，
  *     模型发现手头的子集不够用时只回一行 `[NEED_TOOLS]`（[ChatFastPath.NEED_TOOLS_MARKER]），
@@ -50,7 +51,39 @@ internal object ToolIntentRouter {
         val keywords: Set<String> = emptySet(),
         val patterns: List<Regex> = emptyList(),
         val tools: Set<String>,
+        /**
+         * **独占优先级**：非空时，只有当**没有任何更高优先级规则命中**（见 [SPECIFIC_RULES]），
+         * 本规则才参与并集。
+         *
+         * ## 为什么需要它：通用词并集膨胀（2026-10-07 实测）
+         *
+         * `app` 规则的关键词是「打开/启动」，`search` 是「查一下/帮我查」—— 这些是
+         * **通用动作词**，任何句子都可能出现。而 music/timer/weather 规则的关键词
+         * （音乐/闹钟/天气）是**领域词**，指向性明确。
+         *
+         * 两类同时命中时并集会白白变大：
+         *  - 「打开音乐」→ music(2) ∪ app(2) = **4**（多带的 open_phone_app 纯浪费）
+         *  - 「帮我打开闹钟」→ timer(3) ∪ app(2) = **5**
+         *  - 「查一下明天天气」→ weather(2) ∪ search(2) = **4**
+         *
+         * 命中率涨了但token 被回吐 —— 这是「子集不自动扩全量」的**反面**：
+         * 不是自动扩全量，而是规则之间自动并集。
+         *
+         * ## 判据：用**领域词优先**，不用否决词
+         *
+         * 「打开音乐」该走 music（「音乐」比「打开」更具体）。所以 `app`/`search`
+         * 声明 [priority] = 1，凡有领域规则（priority 0）命中就自动让位。
+         * **不是把「打开」从 music 里否决掉** —— 那样「查一下快递」这类纯动作句
+         * 会连search 一起失效。
+         */
+        val priority: Int = 0,
     )
+
+    /** 优先级 0 = 领域规则（音乐/天气/闹钟…），命中即压过通用动作规则。 */
+    private val SPECIFIC_PRIORITY = 0
+
+    /** 优先级 1 = 通用动作规则（app 打开/启动、search 查一下），仅在无领域规则时生效。 */
+    private val GENERIC_PRIORITY = 1
 
     /** 算式意图：消息里含「数字 运算符」形状（378*56、(128+64)×12…） */
     private val CALC_EXPR = Regex("\\d\\s*[+\\-*/×÷^]")
@@ -111,16 +144,81 @@ internal object ToolIntentRouter {
             keywords = setOf("跑完了吗", "还在跑吗", "还在运行吗", "运行状态", "后台任务", "任务输出", "刚才的输出"),
             tools = setOf("list_runs", "read_run_output"),
         ),
+        // ── 以下三条2026-10-07 按覆盖率探针（ToolRouteCoverageProbe）补 ──
+        // 之前这些高频轮次全价背105 个 Schema，原因是压根没规则，不是被误杀。
+        Rule(
+            "search",
+            // 「查快递/查订单/搜一下 X」这类**信息查询** ⇒联网检索即可解决。
+            // ⚠️ 只收「查询/搜索」语义；「订外卖」「叫车」是**下单动作**，本工具办不了，
+            // 交location 也不对 —— 让它们落全量（无对应工具，属能力缺口）。
+            keywords = setOf("查快递", "快递到哪", "物流", "查订单", "查物流", "搜索结果", "帮我查", "查一下"),
+            tools = setOf("search_web", "fetch_webpage"),
+            // 通用动作词：「查一下明天天气」已有 weather 领域规则，不该再捎带 search
+            priority = GENERIC_PRIORITY,
+        ),
+        Rule(
+            "app",
+            // 「打开空调」这类**开/关手机应用**。open_phone_app 同时能列应用与启动，
+            // 带上 list_phone_app 让模型先确认应用名存在，不必在全量里摸索。
+            // ⚠️ 高危动作（发短信/卸载/安装）**刻意不收** —— 它们在 ApprovalGate 里
+            // 必然 Deny，路由给它们等于让用户以为能直接办。
+            keywords = setOf("打开", "启动", "开一下", "帮我打开", "帮我启动"),
+            tools = setOf("open_phone_app", "list_phone_apps"),
+            // 通用动作词：「打开音乐」让位 music、「帮我打开闹钟」让位 timer
+            priority = GENERIC_PRIORITY,
+        ),
+        Rule(
+            "nearby",
+            // 「附近有什么好吃的」这类**本地生活检索** ⇒ 搜索为主、GPS 只做定位参考。
+            // ⚠️ 「搜索/搜一下/查一下」对**这条**规则是否决（见 TASK_SHAPED_CONFLICTS）——
+            // 用户说「搜一下附近的超市」时真正要的是搜索工具，不该顺手把 GPS 带进来；
+            // 只说「附近有什么」不带搜索词才给 get_location。
+            keywords = setOf("附近有什么", "周边有什么", "附近有什么好吃的", "附近推荐", "周边推荐", "附近有哪些"),
+            tools = setOf("search_web", "get_location"),
+        ),
     )
 
     /**
-     * 结构排除：命中任何一个就不路由（落回全量）。专门拦「看着像意图、实际是任务」的句子 ——
-     * 「写个天气 app」「做一个天气页面」「把天气翻译成英文」都不能只带天气工具。
+     * 任务形状词 → **被它否决的规则名**集合。
+     *
+     * ## 为什么是「逐规则」而不是早期的一刀切
+     *
+     * 早期实现是一份全局 `STRUCTURAL_HINTS` 列表，句子里出现任意一个词就整体不路由。
+     * 意图本意是拦「看着像意图、实际是任务」的句子（写个天气 app ≠ 查天气），但它把
+     * 「打开音乐」「查一下快递」「应用商店」这类**日常高频轮次**一起误杀了 —— 那批词
+     * 恰恰不是任务形状，只是恰好带了「动作感」。结果是路由只覆盖 14/105 个工具，
+     * 而这些轮次白白全价背105 个 Schema。
+     *
+     * ## 三类归属
+     *
+     *  - `ALL`：真任务形状，对任何意图都否决（写/代码/页面/翻译/截图…）。保留原语义。
+     *  - 具体规则名：只否决那一条。「帮我搜一下附近的超市」里 `搜索` 对 location 是
+     *    「别顺手把读GPS 的 get_location 也带进来」的意思（搜超市不需要定位），
+     *    而对 weather 完全无害 —— 逐规则之后，一句话里的多个意图能各走各的。
+     *  - 不出现：不否决。「打开」之于 music 是**正向信号**（「打开音乐」= 放歌），
+     *    早期把它当结构排除词，等于把音乐轮次全价背105 个 Schema。
+     *
+     * ⚠️ 锁 `ToolIntentRouterTest.task-shaped sentences are never routed` 与
+     * `true task shapes still block every rule` —— 加词前先想清楚它在哪条规则上是反向信号。
      */
-    private val STRUCTURAL_HINTS = listOf(
-        "写", "做一", "做个", "生成", "页面", "代码", "网页", "网站", "http", "www.", ".com", ".cn",
-        "aiui", "翻译", "知识库", "文件", "视频", "图片", "画", "截图", "截屏", "拍照", "眼镜",
-        "打开", "启动", "安装", "卸载", "应用", "app", "搜索", "搜一下", "查一下", "查查",
+    private const val ALL = "*"
+
+    private val TASK_SHAPED_CONFLICTS: Map<String, Set<String>> = mapOf(
+        // 真任务形状：写/做/生成一个东西出来，与任何意图都不冲突地属于「任务」
+        ALL to setOf(
+            "写", "做一", "做个", "生成", "页面", "代码", "网页", "网站", "http", "www.", ".com", ".cn",
+            "aiui", "翻译", "知识库", "文件", "视频", "图片", "画", "截图", "截屏", "拍照", "眼镜",
+            "安装", "卸载",
+        ),
+        // 「写个天气 app」「做一个天气页面」—— 对天气是造物，不是查询
+        //（只挂 weather：time 无此歧义，「天气app几点更新」该照常路由）
+        "weather" to setOf("应用", "app"),
+        // 搜索是独立任务，不抢 location 路由（否则「搜下附近的超市」会把 GPS 工具带进来）
+        "location" to setOf("搜索", "搜一下", "查一下", "查查"),
+        // 同理对 nearby：用户明说「搜一下」就只给搜索工具，别顺手把 get_location 塞进来
+        "nearby" to setOf("搜索", "搜一下", "查一下", "查查"),
+        // ⚠️ 「打开」对 app 规则是**正向信号**，但对音乐是替代说法（「打开音乐」）。
+        // 不否决 music ⇒ 打开音乐仍只带2 个工具（2026-10-07 探针 B 组必须保持 100%）。
     )
 
     /**
@@ -133,13 +231,33 @@ internal object ToolIntentRouter {
         // 多行：粘贴的任务描述，不路由
         if (t.contains('\n') || t.contains('\r')) return null
         val lower = t.lowercase()
-        if (STRUCTURAL_HINTS.any { lower.contains(it) }) return null
-        val hits = RULES.filter { rule ->
-            rule.keywords.any { lower.contains(it) } || rule.patterns.any { it.containsMatchIn(t) }
+        // 全局任务形状：一眼就是「要造个东西出来」，任何意图都不路由
+        if (hasGlobalTaskShape(lower)) return null
+        val matched = RULES.filter { rule ->
+            val hit = rule.keywords.any { lower.contains(it) } ||
+                rule.patterns.any { it.containsMatchIn(t) }
+            hit && !hasRuleLevelConflict(lower, rule.name)
         }
-        if (hits.isEmpty()) return null
-        return hits.flatMap { it.tools }.toSet()
+        if (matched.isEmpty()) return null
+        // 通用动作规则让位给领域规则（「打开音乐」走 music，不捎带 open_phone_app）
+        val specific = matched.filter { it.priority == SPECIFIC_PRIORITY }
+        val effective = if (specific.isNotEmpty()) specific else matched
+        return effective.flatMap { it.tools }.toSet()
     }
+
+    /** 命中全局任务形状词表（写/代码/页面/翻译/截图…）。 */
+    private fun hasGlobalTaskShape(lower: String): Boolean =
+        TASK_SHAPED_CONFLICTS[ALL]!!.any { lower.contains(it) }
+
+    /**
+     * 该规则是否被**自己那一份**任务形状词表否决。
+     *
+     * 注意是**否决单条规则**而非整体落回全量 —— 这正是与早期一刀切的区别：
+     * 「帮我搜一下附近的超市」里的「搜一下」只否决 location（避免顺手把读 GPS 的
+     * `get_location` 带进来），而同一句若还有 weather 意图，weather 规则不受影响。
+     */
+    private fun hasRuleLevelConflict(lower: String, ruleName: String): Boolean =
+        TASK_SHAPED_CONFLICTS[ruleName]?.any { lower.contains(it) } == true
 
     /**
      * 菜单探测轮的点名标记：模型从工具菜单里选中工具时按约定只回复这一行 +

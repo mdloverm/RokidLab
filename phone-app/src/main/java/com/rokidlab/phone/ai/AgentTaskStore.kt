@@ -131,7 +131,14 @@ object AgentTaskStore {
     private fun save(context: Context, snap: Snapshot) {
         runCatching {
             snap.updatedAt = System.currentTimeMillis()
-            file(context).writeText(snap.toJson().toString())
+            // 🚨 必须走原子写（2026-10-07 安全修复）：5 个写入点（recordPlan/recordArtifact/
+            // markStatus 等）全是 load() → 改 → save() 的**读改写**序列，进程被杀/磁盘满会留下半截 JSON；
+            // 而 `load` 失败返回 null ⇒ 长任务的 goal/计划进度/已产出文件清单**静默丢失**，
+            // 症状是「Agent 续做能力归零」且无报错。读端容错把损坏翻译成静默归零，比崩溃更难发现。
+            com.rokidlab.phone.ai.writeTextFileAtomically(
+                file(context),
+                snap.toJson().toString(),
+            )
         }.onFailure { Log.w(TAG, "save failed: ${it.message}") }
     }
 

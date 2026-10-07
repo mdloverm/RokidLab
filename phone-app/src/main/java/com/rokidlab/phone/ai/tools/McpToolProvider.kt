@@ -15,7 +15,8 @@ import org.json.JSONObject
  * 同理，它的 `toolNames` 与 `tools()` 天然"随时可能不一致"（两次读之间 server 可能断开），
  * 因此 `check_tool_wiring.py` 的双向核对对它不适用，需要按"同一快照内自洽"来断言 —— 见该脚本。
  *
- * 本类由 [McpRegistry.rebuildIndex] 通过 `ToolRegistry.setDynamicProviders` 注入，
+ * 本类由 [McpRegistry.publish]（原 KDoc 写的是 `rebuildIndex`，**该方法并不存在**，2026-10-07 更正）
+ * 通过 `ToolRegistry.setDynamicProviders` 注入，
  * **不写进 `ToolRegistry.providers` 的静态列表**（静态列表是编译期常量，装不下运行时才知道的东西）。
  */
 internal object McpToolProvider : ToolProvider {

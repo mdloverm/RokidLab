@@ -42,6 +42,7 @@ class KeyButtonService : Service() {
     private lateinit var core: KeyServiceCore
     private lateinit var keepAlive: KeepAliveManager
     private lateinit var overlays: GlassesOverlayController
+    private lateinit var chartViewer: ChartViewerController
     private lateinit var toolConfirm: ToolConfirmController
     private lateinit var keyRoutes: KeyRouteCoordinator
     private lateinit var aiTakeover: AiTakeoverCoordinator
@@ -57,14 +58,15 @@ class KeyButtonService : Service() {
         // 按依赖顺序装配协调器（见类注释拆分说明）
         core = KeyServiceCore(this)
         overlays = GlassesOverlayController(this, core)
+        chartViewer = ChartViewerController(this, core)
         toolConfirm = ToolConfirmController(this, core, overlays)
-        keyRoutes = KeyRouteCoordinator(this, core, toolConfirm)
+        keyRoutes = KeyRouteCoordinator(this, core, toolConfirm, chartViewer)
         aiTakeover = AiTakeoverCoordinator(this, core)
         ipReporter = GlassesIpReporter(this, core)
         aiuiHost = AiuiHostController(this, core)
         configHandlers = ConfigHandlers(this, core)
         headImu = HeadImuService(this, core)
-        cxrBridge = CxrBridgeCoordinator(this, core, aiTakeover, keyRoutes, toolConfirm, overlays, ipReporter, aiuiHost, configHandlers)
+        cxrBridge = CxrBridgeCoordinator(this, core, aiTakeover, keyRoutes, toolConfirm, overlays, chartViewer, ipReporter, aiuiHost, configHandlers)
         // 装配连续对话开关关闭时撤销回调
         configHandlers.continueDialogCanceller = { aiTakeover.cancelPendingContinueDialog() }
 
@@ -128,6 +130,7 @@ class KeyButtonService : Service() {
         keepAlive.releaseWakeLock()
         keyRoutes.releaseQuizWakeLocks()
         overlays.release()
+        chartViewer.release()
         ipReporter.unregister()
         headImu.onDestroy()
         cxrBridge.onDestroy()

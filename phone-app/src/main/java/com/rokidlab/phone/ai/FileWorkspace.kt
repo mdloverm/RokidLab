@@ -485,16 +485,164 @@ object FileWorkspace {
         }
         return runCatching {
             file.parentFile?.mkdirs()
-            file.writeText(merged, Charsets.UTF_8)
+            val backup = writeTextFileWithBackup(file, merged)
             val act = if (appending) "已追加" else "已覆盖"
-            "$act「$proj/${path.trim('/')}」（${old.length} → ${merged.length} 字符）。" +
+            val undo = backup?.let { "\n（已备份原文件为 $it，需要退回可用「恢复文件」工具）" } ?: ""
+            "$act「$proj/${path.trim('/')}」（${old.length} → ${merged.length} 字符）。$undo" +
                 "注意：这是项目镜像（App 私有），要同步到手机下载目录请重新「保存代码文件」或安装 AIUI 项目。"
         }.getOrElse { "修改失败：写入出错（${it.message}）" }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ④' 恢复文件（从备份回退）—— 仅 project 作用域
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * 把文件回退到某次**修改之前**的备份。
+     *
+     * ## 为什么是独立工具而不是 `edit_text_file` 的一个 mode
+     * 「退回」和「改写」是两种意图完全不同的动作：前者是**撤销已发生的错误**
+     * （模型发现改错了，需要把文件拿回去），后者是**推进任务**。
+     * 混在一个 mode 里，模型在不确定时会在「退回」和「继续改」之间来回切，
+     * 反而更容易把文件搞乱 —— 所以这里给一个名字明确的工具。
+     *
+     * @param backupName 指定备份文件名；**空 = 取最近一个**（模型绝大多数场景要的就是它）
+     */
+    fun restoreFile(context: Context, project: String, path: String, backupName: String): String {
+        val proj = project.trim()
+        if (proj.isBlank()) return "恢复失败：project 不能为空"
+        if (path.trim().isBlank()) return "恢复失败：path 不能为空"
+        if (projectRoot(context, proj) == null) return "恢复失败：项目「$proj」不存在"
+        val file = resolveInProject(context, proj, path)
+            ?: return "恢复失败：路径不合法或越出项目目录（$path）"
+        if (file.isDirectory) return "恢复失败：「$proj/${path.trim('/')}」是目录"
+        val dir = file.absoluteFile.parentFile
+            ?: return "恢复失败：无法确定文件所在目录"
+        val all = listBackups(dir, file.name)
+        if (all.isEmpty()) {
+            return "恢复失败：「$proj/${path.trim('/')}」没有任何备份。" +
+                "备份只在文件被**修改前**自动创建（修改 / 增量编辑），新建文件不产生备份。" +
+                "如果文件已被改坏且没有备份，只能用 edit_text_file 以 mode=overwrite 重写完整内容。"
+        }
+        val chosen = if (backupName.isBlank()) {
+            all.first()
+        } else {
+            val raw = backupName.trim()
+            // 只接受裸文件名：路径不该由模型拼，目录已由 scope+path 定死了
+            val hit = all.firstOrNull { it.name == raw }
+                ?: return "恢复失败：没有名为 $raw 的备份。可用备份：" +
+                    all.joinToString("、") { it.name }
+            hit
+        }
+        val original = FileBackupNaming.originalNameOf(chosen.name)
+        return runCatching {
+            val content = TextEncoding.decode(chosen.readBytes())
+            // 恢复本身也先备份：万一"恢复"这个动作选错了备份，还能再退回来
+            writeTextFileWithBackup(file, content)
+            "已把「$proj/${path.trim('/')}」恢复到备份 $original 的内容（${content.length} 字符，" +
+                "备份时间戳 ${FileBackupNaming.timestampOf(chosen.name)}）。" +
+                "（恢复前的版本也已备份，可再次恢复回去）"
+        }.getOrElse { "恢复失败：读取备份出错（${it.message}）" }
     }
 
     // ═══════════════════════════════════════════════════════
     // ⑤ 删文件
     // ═══════════════════════════════════════════════════════
+
+    // ═══════════════════════════════════════════════════════════════
+    // ④'' 增量补丁（apply_patch 语义）—— 仅 project 作用域
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * 以**补丁**方式局部修改文件（对标 Codex 的 `apply_patch`）。
+     *
+     * ## 为什么与 [editTextFile] 并存而不是替换它
+     * - 「生成一个新文件」用 `save_code_file` / `edit_text_file(mode=overwrite)` 仍是最省事的
+     *   （补丁要写上下文，而新文件没有上下文）；
+     * - 「改已有文件的一小段」用本工具才是 O(变更量) 而不是 O(文件) ——
+     *   整份覆盖要先读全文（吃上下文）、再生成全量（吃输出、有截断风险）。
+     * 所以两者分工：**新文件走覆盖，已有文件走补丁**。
+     *
+     * @param operation `update`（改已有文件，默认）/ `create`（新建，文件必须不存在）/ `delete`（删文件）
+     */
+    fun applyPatch(
+        context: Context,
+        project: String,
+        path: String,
+        operation: String,
+        patch: String,
+        lineHint: Int,
+    ): String {
+        val proj = project.trim()
+        if (proj.isBlank()) return "补丁失败：project 不能为空"
+        if (path.trim().isBlank()) return "补丁失败：path 不能为空"
+        if (patch.isBlank()) return "补丁失败：patch 不能为空"
+        if (projectRoot(context, proj) == null) {
+            return "补丁失败：项目「$proj」不存在。请先用「保存代码文件」生成项目，或确认项目名"
+        }
+        val file = resolveInProject(context, proj, path)
+            ?: return "补丁失败：路径不合法或越出项目目录（$path）"
+        if (file.isDirectory) return "补丁失败：「$proj/${path.trim('/')}」是目录"
+        val label = "$proj/${path.trim('/')}"
+        val op = operation.trim().lowercase().ifEmpty { "update" }
+
+        if (op == "delete") {
+            if (!file.exists()) return "补丁失败：「$label」不存在，无需删除"
+            return runCatching {
+                if (file.delete()) "已删除「$label」（不可恢复）"
+                else "补丁失败：删除「$label」未成功"
+            }.getOrElse { "补丁失败：${it.message}" }
+        }
+
+        if (op == "create") {
+            if (file.exists()) {
+                return "补丁失败：「$label」已存在。⚠️ create 只用于**新**文件；" +
+                    "改已有文件请用 operation=update（或用「修改文件」整份覆盖）。"
+            }
+            val parsed = runCatching { PatchApplier.apply("", patch, null) }
+                .getOrElse { return "补丁失败：${it.message}" }
+            if (parsed.content.isEmpty()) return "补丁失败：补丁解析后内容为空，新建失败"
+            if (parsed.content.length > MAX_WRITE_CHARS) {
+                return "补丁失败：内容过大（${parsed.content.length} 字符 > $MAX_WRITE_CHARS）"
+            }
+            return runCatching {
+                file.parentFile?.mkdirs()
+                writeTextFileAtomically(file, parsed.content)
+                "已新建「$label」（${parsed.content.length} 字符，${parsed.hunks.size} 个片段）。" +
+                    "注意：这是项目镜像（App 私有），要同步到手机下载目录请重新「保存代码文件」或安装 AIUI 项目。"
+            }.getOrElse { "补丁失败：写入出错（${it.message}）" }
+        }
+
+        if (op != "update") {
+            return "补丁失败：operation 只能是 update / create / delete（收到「$operation」）"
+        }
+        if (!file.isFile) {
+            return "补丁失败：「$label」不存在。⚠️ 新建文件请用 operation=create，或先用「保存代码文件」。"
+        }
+        val old = runCatching { TextEncoding.decode(file.readBytes()) }
+            .getOrElse { return "补丁失败：无法读取原内容（${it.message}）" }
+
+        val result = runCatching {
+            PatchApplier.apply(old, patch, lineHint.takeIf { it > 0 })
+        }.getOrElse { return "补丁失败：${it.message}" }
+
+        if (result.content.length > MAX_WRITE_CHARS) {
+            return "补丁失败：应用后共 ${result.content.length} 字符 > $MAX_WRITE_CHARS，本次没有改动任何内容"
+        }
+        if (result.content == old) {
+            return "补丁应用后内容与原文完全一致（${result.hunks.size} 个片段），本次没有改动任何内容。" +
+                "如果这不符合预期，请确认补丁里「-」（删除行）与「+」（新增行）两侧是否写反。"
+        }
+        return runCatching {
+            // 写前备份：局部编辑的失败模式是"看起来成功但改错了地方"，
+            // 没有备份就只能让 AI 重新生成整个文件（那正是本工具要消除的成本）。
+            val backup = writeTextFileWithBackup(file, result.content)
+            val lines = result.hunks.joinToString("；") { "第 ${it.line} 行起 +${it.added}/-${it.removed}" }
+            "已对「$label」应用补丁（${old.length} → ${result.content.length} 字符）：$lines。" +
+                (backup?.let { "原内容已备份为 $it，需要退回可用「恢复文件」工具。" } ?: "") +
+                "注意：这是项目镜像（App 私有），要同步到手机下载目录请重新「保存代码文件」或安装 AIUI 项目。"
+        }.getOrElse { "补丁失败：写入出错（${it.message}）" }
+    }
 
     /**
      * 删除文件 / 目录。

@@ -76,7 +76,15 @@ internal object McpServerStore {
         runCatching {
             val arr = JSONArray()
             list.forEach { arr.put(toJson(it)) }
-            fileOf(ctx).writeText(JSONObject().put("servers", arr).toString())
+            // 🚨 必须走原子写（2026-10-07 安全修复）：`upsert`/`remove` 都是
+            // load() → 改 → save() 的**读改写**序列，进程被回收/磁盘满会留下半截 JSON；
+            // 而上面 `load` 对损坏是 `getOrDefault(emptyList())` ⇒ **静默当成空表**，
+            // 症状是「用户全部 MCP 服务器配置凭空消失、AIUI 与对话的第三方工具全失效」且无任何报错。
+            // 读端的容错会把损坏**翻译成静默归零**，这比崩溃更难发现。
+            com.rokidlab.phone.ai.writeTextFileAtomically(
+                fileOf(ctx),
+                JSONObject().put("servers", arr).toString(),
+            )
         }.onFailure { Log.w(TAG, "save failed: ${it.message}") }
     }
 

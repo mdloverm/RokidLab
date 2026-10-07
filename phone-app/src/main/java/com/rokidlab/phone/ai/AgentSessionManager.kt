@@ -50,13 +50,27 @@ internal object AgentSessionManager {
     @Volatile
     private var appContext: Context? = null
 
-    /** 当前绑定会话的事件流读写门面；null = 尚未绑定（启动早期）或记忆被关闭 */
-    @Volatile
-    private var store: AgentSessionStore? = null
+    /**
+     * 当前绑定（会话 id + 事件流门面）。
+ *
+ * ⚠️ 2026-10-07 修复：此前是两个独立字段 [boundSessionId] / [store]，绑定时**分两行赋值**。
+ * 并发的 `storeOrNull()` 恰好落在两行之间会取到**旧 store**（而 id 已是新的），
+ * 随后 `beginTurn` 把这一轮 append 进旧会话 ⇒ 事件流错位。
+ * 窗口极窄，但错位后症状（轨迹记到别的会话）极难排查。
+ *
+ * 📌 修法就是让「归属」变成**一个值**：单个 `@Volatile` 字段整体替换，
+ * 读方拿到的一定是自洽的一对，不存在中间态。
+ */
+private data class Binding(val id: String, val store: AgentSessionStore?)
 
-    /** 当前绑定的会话 id（空串 = 未绑定） */
-    @Volatile
-    private var boundSessionId: String = ""
+@Volatile
+private var binding = Binding("", null)
+
+/** 当前绑定会话的事件流读写门面；null = 尚未绑定（启动早期）或记忆被关闭 */
+private val store: AgentSessionStore? get() = binding.store
+
+/** 当前绑定的会话 id（空串 = 未绑定） */
+private val boundSessionId: String get() = binding.id
 
     /**
      * 应用启动时注入上下文（`LabApplication.onCreate`，**必须在 ChatStateHolder 之前** ——
@@ -75,18 +89,17 @@ internal object AgentSessionManager {
         if (sessionId == boundSessionId && store != null) return
         val ctx = appContext
         if (sessionId.isBlank()) {
-            store = null
-            boundSessionId = ""
+            binding = Binding("", null)
             return
         }
         if (ctx == null) {
             // init 还没跑：记下 id，等真正需要写的时候再懒绑定（见 storeOrNull）
-            boundSessionId = sessionId
+            binding = Binding(sessionId, null)
             Log.w(TAG, "bindSession($sessionId) before init: deferred")
             return
         }
-        boundSessionId = sessionId
-        store = newStore(ctx, sessionId)
+        // ⚠️ 一次替换 id + store（见 Binding 的 KDoc）：分两行写会留下"id 已新、store 仍旧"的中间态
+        binding = Binding(sessionId, newStore(ctx, sessionId))
         pruneSessionCap(ctx, sessionId)
         Log.i(TAG, "bind session=$sessionId")
     }
@@ -109,8 +122,7 @@ internal object AgentSessionManager {
         runCatching { SessionLog.fileFor(context.filesDir, sessionId).delete() }
             .onFailure { Log.w(TAG, "delete session log failed: $sessionId", it) }
         if (sessionId == boundSessionId) {
-            store = null
-            boundSessionId = ""
+            binding = Binding("", null)
         }
     }
 
@@ -129,7 +141,9 @@ internal object AgentSessionManager {
         val ctx = appContext ?: return null
         val id = boundSessionId
         if (id.isBlank()) return null
-        return newStore(ctx, id).also { store = it }
+        // ⚠️ 只在 id 仍是同一个时才回填 store：期间若已切到别的会话，
+        // 写回就会把 A 的 store 塞进 B 的绑定里（这正是原两字段方案的失败模式）。
+        return newStore(ctx, id).also { if (boundSessionId == id) binding = Binding(id, it) }
     }
 
     /** 会话记忆总开关（关闭后不注入历史也不记录本轮） */
@@ -214,7 +228,7 @@ internal object AgentSessionManager {
         }
         val ctx = appContext
         val id = boundSessionId
-        store = if (ctx != null && id.isNotBlank()) newStore(ctx, id) else null
+        binding = Binding(id, if (ctx != null && id.isNotBlank()) newStore(ctx, id) else null)
         Log.i(TAG, "clearAll: deleted $cleared of ${files.size} session log(s)")
         return cleared
     }
@@ -396,7 +410,7 @@ internal object AgentSessionManager {
  * 字符对中英文不等权（英文 4 字符/token、中文约 1 字/token），同一个"6000 字符"
  * 的预算在两种语言下差 4 倍；token 是模型真正消费的单位，进度条与压缩触发自此同口径。
  *
- * @param windowLimited 预算是否已被**模型窗口**调整过（不再是默认的 4000 token / 12 条）。
+ * @param windowLimited 预算是否已被**模型窗口**调整过（不再是默认档的 8000 token / 25 条）。
  *   必须让用户看得见：否则他会发现"上限怎么变成 600 token 了"（或"怎么变成 3 万了"）却找不到原因 ——
  *   前者是切到小窗口模型（本地 Ollama `num_ctx`）的正常表现，后者是切到大窗口模型后
  *   **主动放宽**的结果，两种都不是功能坏了。名字保留 `windowLimited`（调用点太多），

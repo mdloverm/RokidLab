@@ -78,6 +78,17 @@ data class AgentStep(
          * 同 `plan:auto` 键覆盖：模型每次更新计划都整体替换上一版（UI 永远只显示最新计划），
          * 渲染成勾选清单（pending/in_progress/done），不进工具时间线。
          */
+        /**
+         * **压缩历史**（上下文溢出恢复，2026-10-06 审计加）。
+         *
+         * 服务端以"输入超长"拒绝后，框架会压缩历史并原地重试同一轮。
+         * 之前这个过程**只有一行 Log** —— 用户只觉得"这轮怎么这么慢"，
+         * 不知道自己之前提过的那些历史被压掉了。
+         * 这是**用户应该知道**的事（它改变了后续回答的基础），
+         * 与 [TOOL]（模型自己调了什么）、[THINKING]（模型在想）都不同。
+         */
+        COMPRESS,
+
         PLAN,
     }
 
@@ -85,11 +96,36 @@ data class AgentStep(
         /** 进行中 */
         RUNNING,
 
+        /**
+         * **正在等用户点头确认**（2026-10-06 审计加）。
+         *
+         * ## 为什么必须与 [RUNNING] 区分开
+         * 副作用工具执行前要过审批闸门，而闸门是**同步阻塞**的：
+         * 眼镜 35s / 手机 40s / AIUI 页面 18s（[com.rokidlab.phone.ai.approval.ApprovalGate]）。
+         * 原来这条步骤在闸门**之前**就以 [RUNNING] 发出，于是过程卡片上一个点
+         * **转圈 40 秒且没有任何"等你确认"的字样** ——
+         * 用户无法区分"正在拨号"和"正在等我点头"，会以为卡死，
+         * 然后去点别的工具 ⇒ 可能触发第二个审批弹窗。
+         *
+         * 它等的恰恰是**最危险的副作用动作**（发短信/ 卸应用 / 删文档），
+         * 让用户知道"现在轮到你"比让他知道"我在忙"重要得多。
+         */
+        AWAITING_CONFIRM,
+
         /** 成功结束 */
         OK,
 
         /** 失败（工具抛错、被安全策略拦截、重试耗尽） */
         FAILED,
+
+        /**
+         * **用户明确取消**（2026-10-06 审计加）。
+         *
+         * ★ 与 [FAILED] 区分的理由很实际：用户自己点的"取消"，回来看到一圈红点 + "失败"，
+         * 等于告诉他"你的操作失败了" —— 而实际发生的是"你说了不做，它就没做"。
+         * 后者不是错误，是**用户的决定**。
+         */
+        CANCELLED,
     }
 
     /**
@@ -144,6 +180,75 @@ data class AgentStep(
         }
 
         /**
+         * 构造一条「**正在等你确认**」的工具步骤（2026-10-06 审计加）。
+         *
+         * ## 为什么需要单独一条，而不是把 RUNNING 的 detail 改一下
+         * 覆盖键必须与后续终态**相同**（`tool:<callId>`），否则闸门返回后
+         * 追加的 OK/FAILED 会变成"新的一行"，用户看到"转圈那条 + 结果那条"两条。
+         * 而 [tool] 会把 `result`拼进 detail（形如 `参数 → 结果`），
+         * 等待阶段没有结果、也不该显示参数 —— 故单开一个工厂，
+         * 只改 state 与 detail，其余（key/kind/title）完全一致 ⇒ 天然被后续终态覆盖。
+         *
+         * @param reason 给用户看的说明（为什么不问了：没人可问 / 通道不可用）
+         */
+        fun awaitingConfirm(
+            callId: String,
+            name: String,
+            argsRaw: String = "",
+            reason: String = "",
+        ): AgentStep = AgentStep(
+            key = "tool:$callId",
+            kind = Kind.TOOL,
+            title = name,
+            detail = compact(
+                listOf(argsRaw, reason).filter { it.isNotBlank() }.joinToString(" "),
+                MAX_ARGS_CHARS,
+            ),
+            state = State.AWAITING_CONFIRM,
+        )
+
+        /**
+         * 构造一条「**用户已取消**」的工具步骤（2026-10-06 审计加）。
+         *
+         * 与 [tool] 同 key ⇒ 覆盖掉那条转圈的步骤；state 区别在于 UI 上呈现为
+         * 中性的"已取消"而不是红色失败（用户自己点的取消不是错误）。
+         */
+        fun cancelled(callId: String, name: String, reason: String = "你已取消本次操作"): AgentStep =
+            AgentStep(
+                key = "tool:$callId",
+                kind = Kind.TOOL,
+                title = name,
+                detail = reason,
+                state = State.CANCELLED,
+            )
+
+        /**
+         * 构造一条**子代理内层**工具调用的过程步骤（2026-10-06 审计加）。
+         *
+         * ## 为什么需要它
+         * 子代理（[com.rokidlab.phone.ai.subagent.ReadOnlySubagent]）最多跑 [MAX_ROUNDS_CAP] 轮，
+         * 每轮内含多个只读工具（联网搜索 / 读网页 / 查知识库），此前**全部只进 logcat** ——
+         * 用户在过程时间线上只看到外层一行 `research_subtask` 在转圈，最长 90 秒。
+         * 这是唯一一条"用户能明确感到它在骗我"的路径：90 秒的阻塞操作，界面只有 1 行。
+         *
+         * @param key **必须带调用方作用域前缀**（主循环用 `sub:<callId>:<round>:<tool>`）：
+         *   [tool] 用的是 `tool:<callId>`，若沿用同一 key 空间会互相覆盖，
+         *   子代理里同名工具调两次会挤掉主循环那一行。
+         */
+        fun subStep(
+            key: String,
+            name: String,
+            state: State,
+            result: String? = null,
+        ): AgentStep = AgentStep(
+            key = key,
+            kind = Kind.TOOL,
+            title = name,
+            detail = compact(result.orEmpty(), MAX_DETAIL_CHARS),
+            state = state,
+        )
+
+        /**
          * 构造/更新一条思考步骤。
          *
          * @param round 第几轮工具循环，用作覆盖键（每轮一条）
@@ -183,15 +288,47 @@ data class AgentStep(
             } else {
                 "${steps.size}/${steps.size}"
             }
+            // ★ 截断后补占位：让"只显示了前8 步"这件事在 UI 上可见，而不是静默丢一半。
+            // 取前 8 步而不是"最后 8 步"：计划是顺序执行的，当前进度在前面的可能性更高。
+            val visible = steps.take(MAX_PLAN_STEPS_VISIBLE)
+            val hidden = steps.size - visible.size
+            val shown = if (hidden > 0) {
+                visible + AgentPlan.PlanStep(
+                    title = "还有 $hidden 步未显示（计划共 ${steps.size} 步）",
+                    status = "pending",
+                )
+            } else {
+                visible
+            }
             return AgentStep(
                 key = "plan:auto",
                 kind = Kind.PLAN,
                 title = "",
                 detail = compact(summary, MAX_DETAIL_CHARS),
                 state = if (done == steps.size) State.OK else State.RUNNING,
-                planSteps = steps.take(8),
+                planSteps = shown,
             )
         }
+
+        /** 计划清单最多显示几步（超出补"还有 N 步"占位，见 [plan]） */
+        const val MAX_PLAN_STEPS_VISIBLE = 8
+
+        /**
+         * 构造一条「压缩了历史」过程步骤（2026-10-06 审计加）。
+         *
+         * ## 为什么单独一个 Kind，而不混进语义
+         * [THINKING] 的含义是"模型在想" —— 压缩不是模型行为，
+         * 是**框架改变了后续回答的基础**（历史被压缩了）。
+         * 用 THINKING 表达会让用户以为"它在思考"，而事实是"我为你的问题省了地方"。
+         * 分开说才如实 —— 用户跟着追问时必须知道自己之前说过的东西被压掉了。
+         */
+        fun compressed(detail: String): AgentStep = AgentStep(
+            key = "compress:auto",
+            kind = Kind.COMPRESS,
+            title = "",
+            detail = compact(detail, MAX_DETAIL_CHARS),
+            state = State.OK,
+        )
 
         /**
          * 构造一条**知识库自动检索**步骤（主循环的 RAG，不是模型调的工具，见 [Kind.KNOWLEDGE]）。

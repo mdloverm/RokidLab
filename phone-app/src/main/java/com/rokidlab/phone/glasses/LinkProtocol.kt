@@ -141,10 +141,12 @@ object LinkProtocol {
         const val OPEN_APP = 1 shl 5
         /** 支持环境音监听（[TOPIC_AMBIENT_CTRL] + 官方字幕链路白嫖，[CXR_CHANNEL_ACCESSIBILITY]） */
         const val AMBIENT_LISTEN = 1 shl 6
-        /** 支持手机端离线 TTS PCM 流播放（[TOPIC_TTS_PCM] / [TOPIC_TTS_PCM_CTRL]） */
+        /** 支持手机端离线 TTS PCM 流播放（[AiChannel.TOPIC_TTS_PCM] / [AiChannel.TOPIC_TTS_PCM_CTRL]） */
         const val TTS_PCM = 1 shl 7
+        /** 支持图表全屏查看器（[AiChannel.TOPIC_CHART_PUSH] / [AiChannel.TOPIC_CHART_RESEND]，滑动切换/单击重发/双击退出） */
+        const val CHART_VIEW = 1 shl 8
         /** 当前版本眼镜端默认能力全集 */
-        const val ALL = TOOL_CONFIRM or LYRIC_OVERLAY or AIUI_HOST or SELF_HEAL_PING or SHOW_IMAGE or OPEN_APP or AMBIENT_LISTEN or TTS_PCM
+        const val ALL = TOOL_CONFIRM or LYRIC_OVERLAY or AIUI_HOST or SELF_HEAL_PING or SHOW_IMAGE or OPEN_APP or AMBIENT_LISTEN or TTS_PCM or CHART_VIEW
     }
 
     /**

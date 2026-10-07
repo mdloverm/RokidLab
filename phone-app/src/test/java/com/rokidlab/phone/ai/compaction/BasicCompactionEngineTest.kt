@@ -46,12 +46,15 @@ class BasicCompactionEngineTest {
 
     @Test
     fun `A2 条数超上限时压最旧轮进置顶摘要并收敛`() {
-        val h = historyOf(7)
+        // ⚠️ 轮数由**上限推导**，不写死。2026-10-06 放宽 DEFAULT_MAX_MESSAGES 12→25 后，
+        // 原来写死的 7 轮（14 条）不再超限，压缩不触发 ⇒ 用例变成"测了个寂寞"还报失败。
+        // 这类"阈值型"测试必须跟着阈值走，否则改配置就等于悄悄废掉它。
+        val h = historyOf(CompactionPolicy.DEFAULT_MAX_MESSAGES / 2 + 3)
         // requireNotNull 而不是 assertNotNull + 「!!」：JUnit 的 assertNotNull 是否能把
         // 可空量智能转换成非空，取决于依赖里有没有 @Contract 注解（这里没有），
         // 用它换来的可读性不值得让测试编译依赖于依赖版本
-        val r = requireNotNull(engine().compactIfNeeded(h)) { "7 轮（14 条）必须触发压缩" }
-        assertTrue("应裁剪到 ≤ 12 条，实际 ${h.size}", h.size <= 12)
+        val r = requireNotNull(engine().compactIfNeeded(h)) { "${CompactionPolicy.DEFAULT_MAX_MESSAGES / 2 + 3} 轮必须触发压缩" }
+        assertTrue("应裁剪到 ≤ DEFAULT_MAX_MESSAGES 条，实际 ${h.size}", h.size <= CompactionPolicy.DEFAULT_MAX_MESSAGES)
         assertEquals("置顶应为滚动摘要", "system", h[0].role)
         assertTrue("摘要应包含被压缩轮的要点", h[0].content.contains("问题0"))
         assertEquals("最新一轮保留在末尾", "答案", h.last().content)
@@ -135,7 +138,7 @@ class BasicCompactionEngineTest {
     fun `B1 compactNow 强制收敛到摘要加最近 keepRecentTurns 轮`() {
         val h = historyOf(6)
         val r = engine().compactIfNeeded(h)
-        assertNull("6 轮没超 12 条 / 6000 字符，压力入口不该动它", r)
+        assertNull("6 轮没超条数/token 上限，压力入口不该动它", r)
 
         val forced = requireNotNull(engine().compactNow(h, CompactionTrigger.MANUAL)) {
             "强制压缩必须生效（用户点了「立即压缩」）"
@@ -226,7 +229,9 @@ class BasicCompactionEngineTest {
     fun `C3 摘要不计入要点行数`() {
         val e = engine()
         assertEquals("没有摘要时 0 行", 0, e.digestLines(historyOf(2)))
-        val h = historyOf(7)
+        // ⚠️ 同 A2：轮数按上限推导。写死 7 轮在 DEFAULT_MAX_MESSAGES 放宽到 25 后
+        // 不再触发压缩，用例会静默退化成"什么都没压"而失败。
+        val h = historyOf(CompactionPolicy.DEFAULT_MAX_MESSAGES / 2 + 3)
         e.compactIfNeeded(h)
         assertTrue("压过之后应有要点行", e.digestLines(h) >= 1)
         assertEquals(

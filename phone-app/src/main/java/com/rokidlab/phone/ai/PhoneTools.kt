@@ -61,8 +61,14 @@ object PhoneTools {
     private fun has(context: Context, perm: String): Boolean =
         ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
 
-    private fun missingPermTip(what: String): String =
-        "需要$what 权限：请打开手机「设置 → 应用 → RokidLab / 乐奇实验室 → 权限」，开启「$what」后重新试一次"
+    // ⚠️ 原`missingPermTip`（自写「请去设置里开」文案）已于 2026-10-07 删除。
+    // 它**违反项目硬规则**（禁止自写"请去设置开"文案，必须走统一桥接层`PermissionBridge`），
+    // 且它的4 个使用点全是 `PermissionBridge.ensure(...) ?: missingPermTip(...)` 这种 elvis 形式——
+    // 而 `ensure` 返回 null 的**唯一**条件是「权限已就绪」（PermissionBridge.kt:91），
+    // 这些点又都在 `if (!has(...))` 里 ⇒ **elvis 分支恒不可达**。
+    //
+    // 📌 危害不是多占几行：留着它会让下一个人以为"这条路径是活的"而照抄，
+    // 于是品牌名两种写法的旧问题又被复制一遍。恒不可达的分支比没有分支更危险。
 
     // ═══════════════════════════ 权限 / 可拉起性前置 ═══════════════════════════
 
@@ -141,7 +147,7 @@ object PhoneTools {
                 context,
                 context.getString(R.string.permission_reason_contacts),
                 AppPermission.CONTACTS,
-            ) ?: "${missingPermTip("通讯录")}，或直接告诉我手机号码"
+            ) ?: "通讯录权限已在等待系统授权确认；若系统未弹窗，请稍后重试，或直接告诉我手机号码"
         }
         val hits = searchContacts(context, input)
         return when {
@@ -740,7 +746,7 @@ object PhoneTools {
                 context,
                 context.getString(R.string.permission_reason_calendar),
                 AppPermission.CALENDAR_READ,
-            ) ?: missingPermTip("日历")
+            ) ?: "日历读取权限已在等待系统授权确认；若系统未弹窗，请稍后重试"
         }
         val dayStart = parseDayStart(date) ?: return "日期格式不正确，请用 today/tomorrow 或 YYYY-MM-DD"
         val dayEnd = dayStart.clone() as Calendar
@@ -802,7 +808,7 @@ object PhoneTools {
                 context,
                 context.getString(R.string.permission_reason_calendar),
                 AppPermission.CALENDAR_WRITE,
-            ) ?: missingPermTip("日历")
+            ) ?: "日历写入权限已在等待系统授权确认；若系统未弹窗，请稍后重试"
         }
         val dayStart = parseDayStart(date) ?: return "日期格式不正确，请用 today/tomorrow 或 YYYY-MM-DD"
         val m = Regex("^(\\d{1,2}):(\\d{1,2})$").find(startTime.trim())
@@ -876,7 +882,7 @@ object PhoneTools {
             context,
             context.getString(R.string.permission_reason_calendar),
             AppPermission.CALENDAR_WRITE,
-        ) ?: missingPermTip("日历")
+        ) ?: "日历写入权限已在等待系统授权确认；若系统未弹窗，请稍后重试"
 
     /**
      * 查某天（或全日历范围）的事件原行，供删改前定位。

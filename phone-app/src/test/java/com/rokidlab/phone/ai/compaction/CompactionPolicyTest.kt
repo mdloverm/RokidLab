@@ -29,8 +29,9 @@ class CompactionPolicyTest {
     @Test
     fun `A1 默认策略与改造前同一历史规模`() {
         val p = CompactionPolicy.DEFAULT
-        assertEquals(12, p.maxMessages)
-        assertEquals(4000, p.maxTokens)
+        // 2026-10-06 放宽：4000/12 → 8000/25（约 6 轮 → 约 12 轮）
+        assertEquals(25, p.maxMessages)
+        assertEquals(8000, p.maxTokens)
         assertEquals(800, p.digestMaxChars)
         assertEquals(2, p.keepRecentTurns)
         assertFalse("默认策略不算被窗口调整过", p.windowAdjusted)
@@ -54,11 +55,12 @@ class CompactionPolicyTest {
     fun `A3 大窗口按份额放宽，且三条一起放`() {
         val p = CompactionPolicy.forWindow(131072)
         // 131072 × 0.15 = 19660 token（≈ 3 万字中文的历史）
-        assertEquals(19660, p.maxTokens)
+        // 131072 × 0.30 = 39321 → 被 MAX_TOKENS_CEIL 38000 截断
+        assertEquals(38000, p.maxTokens)
         assertTrue("大窗口应放宽，实际 maxTokens=${p.maxTokens}", p.widenedFromDefault)
         assertTrue(
-            "条数必须一起放 —— 只放 token 数会被 12 条卡死，症状与没改一样：maxMessages=${p.maxMessages}",
-            p.maxMessages > 12,
+            "条数必须一起放 —— 只放 token 数会被条数卡死，症状与没改一样：maxMessages=${p.maxMessages}",
+            p.maxMessages > CompactionPolicy.DEFAULT_MAX_MESSAGES,
         )
         assertTrue("摘要上限也要跟着涨，否则大窗口下摘要是脱节的：${p.digestMaxChars}", p.digestMaxChars > 800)
         assertFalse("放宽不是收紧", p.tightenedFromDefault)
@@ -71,7 +73,8 @@ class CompactionPolicyTest {
         // 整轮请求必然超出窗口被服务端拒绝 —— 这条就是那个 bug 的回归锁
         val p4096 = CompactionPolicy.forWindow(4096)
         // 4096 × 0.15 = 614
-        assertEquals(614, p4096.maxTokens)
+        // 4096 × 0.30 = 1228
+        assertEquals(1228, p4096.maxTokens)
         assertTrue("4096 窗口必须收紧", p4096.tightenedFromDefault)
         assertTrue("摘要上限也要跟着缩，实际 ${p4096.digestMaxChars}", p4096.digestMaxChars < 400)
         assertTrue(
@@ -82,9 +85,10 @@ class CompactionPolicyTest {
         // 8K 窗口（llama3 / mistral 常见档）同样收紧
         val p8192 = CompactionPolicy.forWindow(8192)
         assertTrue(p8192.tightenedFromDefault)
-        assertTrue("8K 窗口收紧后应小于默认档，实际 ${p8192.maxTokens}", p8192.maxTokens < 4000)
-        // 收紧档下条数上限不参与（真正的约束是 token 数；12 条在 1228 token 下早被压到更少）
-        assertEquals(12, p8192.maxMessages)
+        // 8192 × 0.30 = 2457 < 默认档 8000 ⇒ 走收紧分支
+        assertTrue("8K 窗口收紧后应小于默认档，实际 ${p8192.maxTokens}", p8192.maxTokens < 8000)
+        // 收紧档下条数上限不参与（真正的约束是 token 数；25 条在 2457 token 下早被压到更少）
+        assertEquals(CompactionPolicy.DEFAULT_MAX_MESSAGES, p8192.maxMessages)
     }
 
     @Test
@@ -114,6 +118,7 @@ class CompactionPolicyTest {
     @Test
     fun `A6 恰好等于默认额度时原样返回默认（不留下"被调整过"的痕迹）`() {
         // raw = window × 0.15，取 4000 需要 window = 26667
+        // 8000 / 0.30 = 26666.7 ⇒ 26667 是"推导额度恰好等于默认档"的临界窗口
         assertEquals(CompactionPolicy.DEFAULT, CompactionPolicy.forWindow(26667))
         assertFalse(CompactionPolicy.forWindow(26667).windowAdjusted)
     }
@@ -128,5 +133,52 @@ class CompactionPolicyTest {
         assertTrue(widened.widenedFromDefault && !widened.tightenedFromDefault)
         // windowAdjusted 是"改过"，两个方向都为真（UI 的解释文案靠它）
         assertTrue(tightened.windowAdjusted && widened.windowAdjusted)
+    }
+
+    /**
+     * 🔴 2026-10-06 新增：锁住「token 额度与条数上限必须**自洽**」这条不变式。
+     *
+     * ## 它防的是哪个真实 bug
+     * 这次把 [CompactionPolicy.DEFAULT_MAX_TOKENS] 从 4000 提到 8000 时，
+     * **差点只改 token 没改条数** —— 那样窗口未知档会变成
+     * 「token 翻倍、条数仍卡在 12」，用户体感完全没改善（"还是几句话就满"）。
+     * 症状极具迷惑性：看 token 数字是涨了的，看代码也只改了一行。
+     *
+     * 判据：默认档必须满足 `maxTokens / maxMessages` 落在 [TOKENS_PER_MESSAGE] 的
+     * 合理邻域内 —— 偏离说明两个数**不是一起改的**，条数或 token 有一个在拖后腿。
+     */
+    @Test
+    fun `默认档 - token与条数必须自洽 - 不允许只改一个导致另一个拖后腿`() {
+        val p = CompactionPolicy.DEFAULT
+
+        // 25 条 × 320 token/条 = 8000，与 maxTokens 恰好自洽
+        assertEquals(
+            CompactionPolicy.DEFAULT_MAX_MESSAGES,
+            p.maxTokens / 320,
+        )
+        // 换句话说：条数上限绝不能是"按旧 token 预算算出来"的遗留值
+        assertTrue(
+            "条数上限 ${p.maxMessages} 与 token 预算 ${p.maxTokens} 不自洽 —— " +
+                "很可能只改了其中一个（2026-10-06 差点踩这个坑）",
+            p.maxMessages >= 20,
+        )
+    }
+
+    /**
+     * 用户 2026-10-06 反馈「随便几句就满」。这条锁住**放宽后的最低档位**，
+     * 避免将来有人为了"省成本"把它调回去而没有测试拦住。
+     *
+     * 判据取自当次核算：窗口未知（大量国产端点不报 `contextWindow`）这一档
+     * 必须至少给到约 12 轮，否则等于没有多轮对话能力。
+     */
+    @Test
+    fun `窗口未知档 - 至少约12轮 - 这是用户实测反馈的底线`() {
+        val p = CompactionPolicy.forWindow(0)
+
+        assertTrue(
+            "窗口未知档只给 ${p.maxMessages} 条（${p.maxMessages / 2} 轮），" +
+                "少于用户反馈的底线（2026-10-06 要求 ≥12 轮）",
+            p.maxMessages / 2 >= 12,
+        )
     }
 }

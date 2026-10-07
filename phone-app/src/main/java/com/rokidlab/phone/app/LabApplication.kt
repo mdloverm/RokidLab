@@ -511,6 +511,29 @@ class LabApplication : Application() {
     fun hasCxrL(): Boolean = ::cxrL.isInitialized
 
     /**
+     * 内存压力回调：把**等待中的手机端工具确认**全部取消掉。
+     *
+     * ⚠️ 接线原因（2026-10-07 审计）：`PhoneToolConfirmChannel.abortAll()` 此前
+     * **定义了但零调用方** —— 它的 KDoc 承诺「App 被切到后台且拉不起界面时避免对话线程
+     * 白挂满 40s」，但没人调它，于是这个承诺是空的。眼镜通道同一场景有 cleanup 兜底
+     * （`CxrLHiRokidSession` 调 `GlassToolConfirmChannel.abortAll`），
+     * **两个通道的对称性是假的**：只有手机端会白挂满超时。
+     *
+     * 📌 判据：「有个abortAll 方法」不等于「有清理路径」—— 必须反查调用方计数。
+     * 只看定义就以为"已处理"是这类缺陷最常见的漏法。
+     *
+     * 语义说明：`abortAll` 把等待者标记为「未获授权」（cancelled=false + countDown），
+     * 于是闸门按 `BLOCK` 判定 ⇒ **被取消的副作用动作一律不执行**，这正是内存吃紧时想要的。
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_RUNNING_LOW) {
+            com.rokidlab.phone.ai.PhoneToolConfirmChannel.abortAll()
+            Log.i(TAG, "trim memory level=$level: aborted pending phone confirmations")
+        }
+    }
+
+    /**
      * 无界面会话自愈：保活服务被 START_STICKY 重建 / 开机自启时，进程内没有 Activity，
      * 此方法用 Application Context 重建 CXR-L 会话并启动 ASR 双通道（RFCOMM 推送 + ADB 兜底轮询）。
      *

@@ -78,7 +78,7 @@ Rokid 眼镜配套手机应用，提供应用商店、乐奇 AI 聊天、乐奇�
 - **本地 OCR**：完全离线识别（PP-OCRv4 模型 + ONNX Runtime 推理），无网络、无 GMS 依赖，16KB 页面设备兼容
 - **本地知识库**：支持导入 txt 文档，自动分块入库（SQLite）并关键词检索，为 AI 提供参考资料（RAG）
 - **按键答题开关**：开启后短按镜腿按键直接触发拍照问 AI，覆盖原自定义按键短按，长按不受影响
-- **AI 工具（语音 + 手机能力，34 个）**：v3.5 新增 12 个手机域工具，一句话直达能力（另有独立 `manage_memory` 长期记忆通道，不计入工具表）：
+- **AI 工具（语音 + 手机能力，103 个）**：覆盖 17 个工具域（info / knowledge / glasses / timer / media / display / web / files / aiui / phone / research / vision / hearing / shell / mcp / browser / screen），v3.5 起的手机域只是其中一部分（另有独立 `manage_memory` 长期记忆通道，不计入工具表）：
   - **打开应用**：`launch_glasses_app`（自动名称匹配已装应用）
   - **定时任务**：`set_timer` / `list_timers` / `cancel_timer` ——「5分钟后提醒我喝水」「明早8点叫我」「17点打开小智」（到点眼镜语音播报，可同时打开应用）
   - **查询类**：眼镜电量、系统信息、存储空间、已装应用、当前时间、知识库检索、**天气（Open-Meteo，免 API Key）**、**手机状态**、**日历查询**
@@ -119,8 +119,8 @@ v3.4 全新功能 / v3.5 大幅增强 —— 与乐奇对话，直接在眼镜�
 - **退出 AIUI**：支持主动退出正在运行的 AIUI 程序（stop_aiui_app 工具），而非仅能退出已启动的程序
 - **内容指纹版本控制**：VERSION 字段使用内容指纹，代码有变化时眼镜端自动重新解压渲染，无需手动清缓存
 
-#### v3.5 新增：Lab 工具桥（AIUI 页面可调手机端 34 个工具）
-AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能渲染不能调用外部能力。v3.5 新增 Lab 工具桥，让页面通过 `await globalThis.Lab.callTool(name, args)` 调用手机端工具（ToolRegistry 全量 39 个中除 `open_aiui_app`（防自指递归）、会话查询三件套（防批量导出历史）与 `research_subtask`（会触发多次模型调用且无取消通道）外全部开放，即 34 个），涵盖音乐 / 天气 / 搜索 / 提醒 / 设备信息 / 电话 / 日历 等，与外部世界交互：
+#### v3.5 新增：Lab 工具桥（AIUI 页面可调手机端 97 个工具）
+AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能渲染不能调用外部能力。v3.5 新增 Lab 工具桥，让页面通过 `await globalThis.Lab.callTool(name, args)` 调用手机端工具。当前口径是**全域白名单 + 6 项黑名单**：`ToolRegistry` 全量 103 个工具、17 个域全部开放，仅排除 6 个（`open_aiui_app` 防自指递归 / 会话查询三件套 `list_sessions`·`read_session`·`session_trace` 防批量导出历史 / 子代理二件套 `research_subtask`·`execute_subtask` 因一次调用会触发多次模型调用且页面侧无取消通道），即 97 个，涵盖音乐 / 天气 / 搜索 / 提醒 / 设备信息 / 电话 / 日历 / 屏幕操作 / 本机执行 等，与外部世界交互：
 
 - **页面侧 API**：
   ```js
@@ -134,8 +134,9 @@ AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能
 - **双桥冗余**：`host.js` 主 realm 提供 `window.Lab`（适配可访问 window 的页面），`lab-page-bridge.js` 自动注入到 `app.js` 前置（解决 ink 沙箱页面 realm 隔离看不到主 realm `window.Lab` 的问题，靠 fetch 拦截同步阻塞）
 - **启动参数下发**：用户说「用 AIUI 播放西厢」时，`open_aiui_app` 工具的 `params` 字段携带 `{"songName":"西厢"}` 经 CXR 下发到眼镜端，页面 boot 完成后作为首条 `hostMessage` (`type=launch`) 投递，页面在 `onMessage` 里接收
 - **安全约束**（⚠️ 下面第 1、2 条已随后续版本收窄，括号内为当前状态）：
-  - `DENY_TOOLS`（v3.5 时仅 `open_aiui_app`）现为 5 项：`open_aiui_app`（防自指递归启动）+ 会话查询三件套（`list_sessions` / `read_session` / `session_trace`，防批量导出历史）+ `research_subtask`（一次 `callTool` 会触发多次模型调用且无取消通道）
-  - `ALLOWED_DOMAINS` 基线全开（用户 2026-09-09 拍板），**2026-09-22 起摘除 `shell` 域**（本机执行＝任意命令执行原语，不开放给第三方页面）
+  - `DENY_TOOLS`（v3.5 时仅 `open_aiui_app`）现为 6 项：`open_aiui_app`（防自指递归启动）+ 会话查询三件套（`list_sessions` / `read_session` / `session_trace`，防批量导出历史）+ 子代理二件套（`research_subtask` / `execute_subtask`，防不可取消的多轮模型调用；后者还能写本机状态）。⚠️ 判据是「一次调用 → 多次模型调用」的不可取消性，**不是**"危险所以禁"——因此不能因为"某工具危险"就往这张表里加名字
+  - `ALLOWED_DOMAINS` **已从"摘除 shell 域"改为全域白名单**（2026-10-01「带闸门开放」政策）：域回到 `DOMAIN_ALL`，页面工具清单可见可调，但页面路径的每次 `shell` / `screen` 调用都被 `PageElevatedDomainGuard` 拦下要用户确认（**fail-closed：问不到就拒**）。对话路径（用户本人在场）不受影响，维持原有静默/确认语义
+    - 判据是「能力形态」边界：`run_shell` 是任意命令执行原语、`tap_screen` 是整机触摸注入原语，都不该交第三方页面静默使用；而摘域的代价是 AIUI 页面路径整体断链（眼镜上"能说不能做"），故改用知情同意而非禁入
   - `isEnabled` 总开关作为唯一安全兜底（默认开启）
 - **生成方模型须知**：lab-runtime.md 第 8 章约束生成的 AIUI 代码——必须 try/catch、必须有 loading 态、结果按字符串解析、一次只调一个工具（蓝牙通道串行）
 
@@ -209,12 +210,16 @@ AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能
   - 蓝牙隧道（RFCOMM 转发）与 WiFi 直连双线路，`ConnectionRouteManager` 统一路由管理；同设备同 SCN 单通道约束由 `ChannelArbiter` 按优先级租约仲裁
 - **AI**:
   - OpenAI 兼容协议客户端（`OpenAiService`，可切换任意服务商；SSE 重连指数退避 + 远程重试 3 次）
-  - 工具注册与执行（`ToolRegistry` 39 个工具，执行分支按域拆到 `ai/tools/`：12 个 `ToolProvider` + `ToolProvider` 接口 + `ToolEntry` 声明结构体）
-  - 工具审批闸门（`ai/approval/`：`ApprovalGate` 唯一入口 + 5 个 `ToolGuard` 策略源；READ_ONLY / LOCAL_SIDE_EFFECT / EXTERNAL_SIDE_EFFECT 三档风险 + per-source 限流 + 眼镜端确认通道 `GlassToolConfirmChannel` + 审计日志）
+  - 工具注册与执行（`ToolRegistry` **103 个工具 / 17 个域**，执行分支按域拆到 `ai/tools/`：**20 个 `ToolProvider`** + `ToolProvider` 接口 + `ToolEntry` 声明结构体；新增工具只需在对应 provider 的 `tools()` 与 `execute()` 各加一条，名单全部派生、无需手工同步）
+  - 工具审批闸门（`ai/approval/`：`ApprovalGate` 唯一入口 + **8 个 `ToolGuard`** 策略源，按序合成：页面准入 → 未知工具 → 工具开关 → 无人值守范围 → 来源限流 → 页面高权限域 → 眼镜依赖 → 风险确认；语义为 **Deny 短路 / 首个 Ask 胜出 / null ≠ 表态**。READ_ONLY / LOCAL_SIDE_EFFECT / EXTERNAL_SIDE_EFFECT 三档风险 + per-source 限流 + 双确认通道（眼镜端 `GlassToolConfirmChannel` 优先 / 手机端 `PhoneToolConfirmChannel` 兜底）+ 审计日志）
   - 模型能力接缝（`ai/llm/`：`LlmRegistry` 能力解析 + 客户端构造）与上下文压缩接缝（`ai/compaction/`：`CompactionEngine` + `BasicCompactionEngine`）
-  - Agent 会话层（`AgentSessionManager`：滚动摘要 ≤800 字 pinned system message；`LongTermMemoryManager`：SQLite + FIFO 200 条 + 90 天过期 + bigram 评分 top-12 检索；`KnowledgeBase`：BM25 IDF + 命中 provenance）
+  - Agent 会话层（`AgentSessionManager`：滚动摘要 ≤800 字 pinned system message；`LongTermMemoryManager`：SQLite + 评分淘汰 + 词法/向量混合检索（RRF k=60）；`KnowledgeBase`：BM25 + 向量语义双路召回 + 命中 provenance）
   - 本地 OCR（RapidOCR / PP-OCRv4 + ONNX Runtime，完全离线）
-  - 本地知识库 RAG（txt 导入，SQLite 分块检索）
+  - 本地知识库 RAG（txt 导入按 `TextEncoding` 编码链解码，SQLite 分块检索）
+  - **本机执行层（proot 自持）**：app 内自持 proot 容器跑完整 Ubuntu（`ProotInstaller` + `run_shell` + `LocalExecScreen`），AI 直接执行 shell / 跑 Python / apt 装包，不依赖外部终端应用；容器出网不过 `NetGuard`、写文件不过 MediaProvider，落盘后需 `LabMediaScan` 补扫
+  - **屏幕操作域（无障碍自持）**：`access/LabAccessibilityService` 提供零弹窗截屏 + 读屏 + 代点击/输入（`read_screen` / `tap_screen` / `swipe_screen` / `press_key` / `type_text`），系统限流约 333ms/张；MediaProjection 仅作退兜底
+  - **Token 计量**：`TokenMeter`（jtokenkit）压缩记账，为上下文压缩阈值提供依据
+  - **MCP 客户端**：外部 stdio / HTTP server + OAuth（PKCE + DCR）授权，动态工具统一进风险档与审批闸门
   - AIUI 开发 Skill 体系（内置官方组件规范 + API 参考 + 设计指南，`SkillRegistry` 自动加载/按章节读取）
   - 本地模型支持（`LocalOllamaManager`，Ollama 协议直连）
   - 内置计算器（`Calculator`：递归下降表达式解析器，纯 Kotlin 无依赖，供 `calculate` 工具调用）
@@ -225,7 +230,7 @@ AIUI 页面（`.ink` 智能体）运行在眼镜端 ink 沙箱里，原本只能
 ### 国际化（i18n）
 
 - **完整中英文支持**: 所有用户可见文本均使用 `values/strings.xml`（中文）和 `values-en/strings.xml`（英文）管理，无硬编码字符串
-- **当前规模**: 中文 1100 条 / 英文 1100 条，**双语 key 完全对齐**（此前英文侧缺 5 条，已于 2026-09-12 补齐）
+- **当前规模**: phone-app 中文 1754 条 / 英文 1754 条、RokidLink 22 条，**双语 key 完全对齐**（`checkI18nKeysSynced` 构建期强制）
 - **构建期门禁**: `checkI18nKeysSynced` 任务（挂 `preBuild`）强制 phone-app / RokidLink 两模块的 zh↔en key 集合相等，不一致直接构建失败
 - **运行时语言切换**: 通过 `LocalizationManager` + `AppCompatDelegate.setApplicationLocales()` 实现无需重启的语言切换
 - **首次启动自动检测**: 自动检测系统语言并应用对应翻译
@@ -342,20 +347,35 @@ RokidLab/
 │   │   │   │   └── ScreenMirrorStateHolder.kt 屏幕镜像状态
 │   │   │   ├── ai/          AI 能力（L4 agent）
 │   │   │   │   ├── OpenAiService.kt        OpenAI 兼容服务（可切换任意服务商；SSE 重连指数退避 + 远程重试 3 次）
-│   │   │   │   ├── ToolRegistry.kt         AI 工具注册表（39 个工具 / 11 个域：info / knowledge / glasses / timer / media / display / web / files / aiui / phone / research；execute 按 toolNames 路由到 tools/ 的 Provider）
-│   │   │   │   ├── tools/                  工具域提供者（Phase 4 拆分巨型 when）
+│   │   │   │   ├── ToolRegistry.kt         AI 工具注册表（103 个工具 / 17 个域：info / knowledge / glasses / timer / media / display / web / files / aiui / phone / research / vision / hearing / shell / mcp / browser / screen；execute 按 toolNames 路由到 tools/ 的 20 个 Provider；工具清单由各 Provider 的 tools() 聚合派生，新增工具无需改本文件）
+│   │   │   │   ├── tools/                  工具域提供者（20 个 Provider，Phase 4 拆分巨型 when）
 │   │   │   │   │   ├── ToolProvider.kt             提供者接口（toolNames + execute）
+│   │   │   │   │   ├── ToolEntry.kt                工具声明结构体（元数据 + schema + 风险档 + 文案）
 │   │   │   │   │   ├── ToolSchemas.kt              工具 JSON Schema 声明
 │   │   │   │   │   ├── InfoToolProvider.kt         基础信息 / KnowledgeToolProvider.kt 知识库 / GlassesToolProvider.kt 眼镜设备
 │   │   │   │   │   ├── TimerToolProvider.kt        定时 / MediaToolProvider.kt 音乐 / DisplayToolProvider.kt 屏幕展示
-│   │   │   │   │   ├── WebToolProvider.kt          联网 / FilesToolProvider.kt 文件产出 / AiuiToolProvider.kt AIUI 应用
-│   │   │   │   │   └── PhoneToolProvider.kt        手机域
-│   │   │   │   ├── approval/               工具审批接缝（ApprovalGate 唯一入口 + ToolGuards 策略源 + PseudoTools + PageScope）
+│   │   │   │   │   ├── WebToolProvider.kt          联网 / BrowserToolProvider.kt 浏览器 / FilesToolProvider.kt 文件产出 / AiuiToolProvider.kt AIUI 应用
+│   │   │   │   │   ├── PhoneToolProvider.kt        手机域 / StatusToolProvider.kt 状态汇总 / ScriptToolProvider.kt 脚本
+│   │   │   │   │   ├── ShellToolProvider.kt        本机执行（proot）/ ShellWorkspace.kt 工作区
+│   │   │   │   │   ├── ScreenOpToolProvider.kt     屏幕操作（无障碍）/ VisionToolProvider.kt 视觉 / HearingToolProvider.kt 聆听
+│   │   │   │   │   ├── MotionToolProvider.kt       头动规则 / RunToolProvider.kt 运行编排
+│   │   │   │   │   ├── SubagentToolProvider.kt     子代理双型 / McpToolProvider.kt MCP 动态工具 / WebPreviewToolProvider.kt 本机网页预览
+│   │   │   │   ├── approval/               工具审批接缝（ApprovalGate 唯一入口 + 8 个 ToolGuard 策略源 + PageScope 页面准入 + PageElevatedDomainGuard）
 │   │   │   │   ├── llm/                    模型能力接缝（LlmRegistry + 能力探测/缓存 + ModelPresets）
 │   │   │   │   ├── compaction/             上下文压缩接缝（CompactionEngine + BasicCompactionEngine + CompactionPolicy）
+│   │   │   │   ├── session/                会话事件流（AgentSessionStore + SessionGraph / SessionTrace）
+│   │   │   │   ├── subagent/               子代理（只读 ReadOnlySubagent + 可写执行子代理 + 槽位管理）
+│   │   │   │   ├── mcp/                    MCP 客户端（McpRegistry + stdio/HTTP 传输 + OAuth PKCE/DCR + 动态工具索引）
+│   │   │   │   ├── embedding/              向量化（EmbeddingClient + EmbeddingSettings，知识库与长期记忆的语义路）
+│   │   │   │   ├── ChatFastPath.kt         闲聊快路（纯闲聊轮零工具装配 + [NEED_TOOLS] 逃生舱）
+│   │   │   │   ├── ToolIntentRouter.kt     工具意图路由（任务轮按名白名单装配 + 菜单探测兜底）
 │   │   │   │   ├── ToolRisk.kt             工具风险分级（READ_ONLY / LOCAL_SIDE_EFFECT / EXTERNAL_SIDE_EFFECT）
+│   │   │   │   ├── MemoryScoring.kt        长期记忆评分淘汰（mem0 式打分 + RRF 融合）
+│   │   │   │   ├── TextEncoding.kt         文本编码链（BOM → UTF-16 → UTF-8 → GB18030，修中文 txt 乱码）
+│   │   │   │   ├── NetGuard.kt             容器出网守卫 / LabMediaScan.kt 落盘补扫 / FileWorkspace.kt 文件工作区
 │   │   │   │   ├── GlassToolConfirmChannel.kt 副作用工具眼镜端确认通道（下行 TOPIC_TOOL_CONFIRM / 上行 TOPIC_TOOL_CONFIRM_RESULT）
-│   │   │   │   ├── ToolGateway.kt          AIUI 页面工具网关（15s 超时 + 8000 字截断 + DENY open_aiui_app 防自指递归）
+│   │   │   │   ├── PhoneToolConfirmChannel.kt 副作用工具手机端确认通道（本机模式兜底）
+│   │   │   │   ├── ToolGateway.kt          AIUI 页面工具网关（15s 超时 + 8000 字截断 + 6 项 DENY_TOOLS + 全域白名单）
 │   │   │   │   ├── Calculator.kt           递归下降表达式解析器（v3.5 新增，供 calculate 工具调用，纯 Kotlin 无依赖）
 │   │   │   │   ├── WeatherTools.kt         天气工具（v3.5 新增，Open-Meteo，免 API Key）
 │   │   │   │   ├── PhoneTools.kt           手机域工具（v3.5 新增，电话/日历/闹钟/音量/打开应用/联系人搜索）
@@ -514,35 +534,42 @@ RokidLab/
 
 - **多语种规则**: 所有用户可见文本必须使用 `R.string.xxx` 引用语言包，禁止硬编码（例外：品牌名、技术术语、作者信息）
 - **弹窗样式规范**: 所有弹窗统一使用 `BrewDialog`，传入模块色 `color` 参数，自动应用彩色标题栏 + 装饰线 + 彩色边框
-- **Gradle 配置**: 仓库根 `d:\rokidapp\settings.gradle.kts` 中模块路径为 `include(":cxrl:RokidLab:phone-app")` 和 `include(":cxrl:RokidLab:RokidLink")`
+- **Gradle 配置**: 本目录自带独立 `settings.gradle.kts`（root = RokidLab，模块为 `:phone-app` / `:RokidLink`）；作为外层壳工程子模块时路径为 `:cxrl:RokidLab:phone-app`。详见「构建」开头的布局说明
 - **资源管理**: 定期清理未使用的资源文件，避免打包冗余
 
 ## 构建
 
+> ℹ️ **两种构建布局**：本目录（`D:\rokidapp\cxrl\RokidLab`）**自带 `settings.gradle.kts`**，以它为根时模块路径是 `:phone-app` / `:RokidLink`；若把本项目当作外层壳工程 `D:\rokidapp`（`RenewCXRLSample`）的子模块，则用 `:cxrl:RokidLab:` 前缀。**在 RokidLab 目录下请直接用短路径**（下文命令均如此），用旧前缀会报 `project 'cxrl' not found`。
+
 ```powershell
-# 全部命令在仓库根 d:\rokidapp 执行
+# 全部命令在 D:\rokidapp\cxrl\RokidLab 执行
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
 
+# 编译校验（改完代码的日常验证，不产出 APK）
+.\gradlew.bat :phone-app:compileDebugKotlin
+
 # 构建手机应用（自动同步最新 RokidLink APK 到 assets）
-D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:assembleDebug
+.\gradlew.bat :phone-app:assembleDebug
 
 # 仅构建眼镜端服务
-D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:RokidLink:assembleDebug
+.\gradlew.bat :RokidLink:assembleDebug
 
 # 仅同步 RokidLink APK 到 phone-app assets（不重新构建手机端）
-D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:buildRokidLinkDebug
+.\gradlew.bat :phone-app:buildRokidLinkDebug
 ```
+
+> ⚠️ 改过 `RokidLink` 源码后打 phone-app 包**不要**加 `-x buildRokidLinkDebug`——那会让内嵌的 `assets/RokidLink.apk` 停留在旧版本。`-x` 仅适用于「确认 Link 源码未改」的场景。
 
 ### 单元测试
 
 ```powershell
-# 双端 JVM 单测（当前 14 个测试类 / 155 个用例）
-D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:testDebugUnitTest :cxrl:RokidLab:RokidLink:testDebugUnitTest --offline
+# 双端 JVM 单测（当前 60 个测试类 / 666 个用例）
+.\gradlew.bat :phone-app:testDebugUnitTest :RokidLink:testDebugUnitTest
 ```
 
-覆盖 ADB sync 协议帧、`pullFile` FAIL 分支、HID 描述符字节与 `normalize`、`AiChannel` 跨端载荷矩阵、`ToolRiskMap` 完整性、聊天历史落盘格式（JSONL / 旧格式迁移）。
+覆盖 ADB sync 协议帧、`pullFile` FAIL 分支、HID 描述符字节与 `normalize`、`AiChannel` 跨端载荷矩阵、工具风险档完整性、审批闸门 8 个 guard 的判定合成、上下文压缩策略、会话事件流落盘、长期记忆评分淘汰与 RRF 融合、知识库分块与向量编解码、屏幕操作域确认策略、子代理槽位、MCP OAuth 核心、主动陪伴闸门策略、头动规则等。
 
-> ℹ️ 仓库根是 `d:\rokidapp`（`RenewCXRLSample`），`cxrl\RokidLab` 只是模块目录、**不再是独立 Gradle 根**；所有任务名都带 `:cxrl:RokidLab:` 前缀。
+> ℹ️ 门禁与签名闸门写在 `gradle/local-gates.gradle.kts`（两模块各自 `apply`）与各模块 `build.gradle.kts`，对上述**两种布局等价生效**。
 
 ### 构建期门禁与发布闸门
 
@@ -551,9 +578,9 @@ D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:testDebugUnitTest :cxrl:Ro
 | 任务 | 位置 | 拦住什么 |
 |---|---|---|
 | `checkProtocolSynced` | `phone-app/build.gradle.kts` | 双端 `AiChannel.kt` / `LinkProtocol.kt` 不同源；裸协议字面量（CXR 频道名 / `__LAB_*`） |
-| `checkI18nKeysSynced` | `phone-app/build.gradle.kts` | 两模块 zh↔en key 集合不一致（phone-app 1100 / RokidLink 22） |
+| `checkI18nKeysSynced` | `phone-app/build.gradle.kts` | 两模块 zh↔en key 集合不一致（phone-app 1754 / RokidLink 22） |
 | `checkKeyPathEmptyCatch` | `phone-app/build.gradle.kts` | 6 个关键链路文件出现未标注的空 `catch` |
-| `checkNoBareCatch` | `phone-app/build.gradle.kts` | 全仓未标注空 `catch` 超出棘轮预算（基线 47，只降不升） |
+| `checkNoBareCatch` | `phone-app/build.gradle.kts` | 全仓未标注空 `catch` 超出棘轮预算（基线 42，只降不升；2026-09-18 由 47 收敛） |
 
 出 release 包另有**两道发布闸门**（`gradle/local-gates.gradle.kts`，双端各自 `apply`，挂在 `packageRelease`）：
 
@@ -562,15 +589,18 @@ D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:testDebugUnitTest :cxrl:Ro
 
 ```powershell
 # 出 release 包（工作区必须已全部提交）
-D:\gradle-8.7\bin\gradle.bat :cxrl:RokidLab:phone-app:assembleRelease
+.\gradlew.bat :phone-app:assembleRelease
 ```
 
 ## 安装
 
 ### 手机应用
 ```powershell
-adb install phone-app/build/outputs/apk/debug/RokidLab-v4.0-debug.apk
+# 产物名带版本号：RokidLab-v<versionName>-<buildType>.apk
+adb install phone-app/build/outputs/apk/debug/RokidLab-v4.4-debug.apk
 ```
+
+> ⚠️ `adb install -r` 会先 force-stop 旧进程；装完是否拉起、何时拉起由你决定。
 
 ### 眼镜端服务
 通过手机应用中的设置页 → "重装眼镜端" 自动推送到眼镜。也可手动安装：
@@ -624,7 +654,7 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
   - `ChatSettingsDialog` 本地模型 LaunchedEffect 不再误覆盖在线选择
   - `saveAiConfig` 切在线时清掉残留 `ai_local_model`
   - `sendKeyQuizConfig` 链路就绪时复用现有连接直接 `sendCustomCmd`，不再走 `cleanup()` 全链路重建
-- **新测试**：共 **14 个测试类 / 155 个 `@Test`**（v3.5 新增 `GoldenAgentEvalTest` 20 个 golden case 覆盖 SSE 重放语义 / 工具声明完整性 / prompt 路由；2026-09-12 补两批回归测试：`AdbSyncProtocolTest` / `AdbFileManagerSyncTest` / `HidReportTest` / `ToolRiskMapTest` / `ChatHistoryStoreTest`，并扩 `AiChannelTest` / `RokidLink/AiChannelProtocolTest`，详见「构建 → 单元测试」）
+- **新测试**：v3.5 当时为 14 个测试类 / 155 个 `@Test`，**现已增长到 60 个测试类 / 666 个用例**（v3.5 新增 `GoldenAgentEvalTest` 20 个 golden case 覆盖 SSE 重放语义 / 工具声明完整性 / prompt 路由；2026-09-12 补两批回归测试：`AdbSyncProtocolTest` / `AdbFileManagerSyncTest` / `HidReportTest` / `ToolRiskMapTest` / `ChatHistoryStoreTest`，并扩 `AiChannelTest` / `RokidLink/AiChannelProtocolTest`，详见「构建 → 单元测试」）
 
 ## v3.9 更新总览
 
@@ -701,6 +731,42 @@ adb install RokidLink/build/outputs/apk/debug/RokidLink-debug.apk
   - Moonshot kimi-k2.6 只接受 `temperature=1`，改按「模型@端点」探测受限并跳过该字段，切换模型不再报 400
   - 眼镜端下行观测（downlink watch）改在 `init()` 无条件武装，不再依赖 `onConnected`，修复 flora 连接失败后链路静默失效
 - **版本**：手机端 4.2（versionCode 27）/ 眼镜端 RokidLink 4.2（versionCode 20），内嵌眼镜端为 R8 混淆 release 包
+
+## v4.3 更新总览
+
+- **结构性省 token 两刀**（工具 Schema 全价下发是长会话最大成本项，此轮从结构上砍）：
+  - **闲聊快路（`ChatFastPath`）**：高置信度纯闲聊轮**不装配任何工具**、换用精简人设，只在模型明确要工具时才走 `[NEED_TOOLS]` 逃生舱
+  - **工具意图路由（`ToolIntentRouter`）**：高置信度任务轮按工具名白名单装配（从全量降到个位数），并用结构排除防误放
+  - ⚠️ 路由子集**不会自动扩全量**（第七轮 42.4k token 账单教训）：多步任务靠并集，清单外的能力靠 `[NEED_TOOLS]`，另有「菜单探测」一轮发≈2k 轻量工具菜单、模型点名后按名装配。探测轮不流式
+  - 效果：全量 103 个工具 Schema ≈ 2 万 input token/轮，降到个位数
+- **聆听模式持续对话重构**：
+  - **句子聚合**：官方远场 ASR 常把一句话切成多个 final，改为 2s 尾窗内合并为一条消息整体分发；60s 聚合上限防喋喋不休饿死 AI
+  - **回答期真闭麦**：新增 `ambient_ctrl` 的 pause/resume，AI 生成 + 播报期间真关麦，播完（tts-done 标记）自动重开进入下一轮
+  - **空闲常开**：移除 10s 静默自动停，不手动关就一直听；眼镜端 15min 失联看门狗改为手机 60s ping 保活续期
+  - 修复：闭麦复用 stop 会清 `sessionActive` 导致播完标记不上行、150s 内听不到第二轮；pause/resume 严格区分「会话关停」与「临时闭麦」
+- **版本**：手机端 4.3（versionCode 28）/ 眼镜端 RokidLink 4.3（versionCode 21），内嵌眼镜端为 R8 混淆 release 包
+
+## v4.4 更新总览
+
+- **长期记忆 mem0 式评分淘汰**：`LongTermMemoryManager` 由固定 FIFO 改为**按评分淘汰**（相关度 / 新鲜度 / 重要度综合打分，低分先出），并保留词法 2-gram + 向量余弦的 RRF 混合检索（k=60）
+- **Token 计量（`TokenMeter`）**：接入 jtokenkit 做**压缩记账**，为上下文压缩阈值提供真实依据（此前只能按字符数估算）
+- **子代理双型 + 槽位**：只读子代理（`research_subtask`）与可写本机状态的执行子代理（`execute_subtask`）分离，各自占独立槽位，避免递归委派失控
+- **MCP OAuth 授权**：PKCE + 动态客户端注册（DCR）完整流程；新增动态工具注入（`McpRegistry.rebuildIndex()` → `setDynamicProviders()`）；401 静默续期只重试一层
+- **四个新工具**：`open_navigation`（打开导航）、`uninstall_phone_app`（卸载手机应用）、`set_flashlight`（手电筒）、`get_step_count`（步数，`ACTIVITY_RECOGNITION` 已登记总表）
+- **`pull_official_aiui`**：从眼镜拉取官方智能体到手机（logcat 清单 ∪ 本地持久化清单，`downloadFile` 拉包，`origin=official` 不降级）
+- **remi 本地执行环境**：可在聊天里跑带窗口的 Python 图形程序，预览条直接打开；容器补齐交互进程与 Node 组件
+- **Web 预览链路增强**：网页应用启动提示、GUI 容器不支持提示、文件运行卡片、`CodeBlockCard` 预览增强
+- **云萌云端 TTS 接入对话播报 + 音色管理**：
+  - 音色管理页（会话记忆上方入口）：19 音色单选 + 语速 1–9 + 固定文本试听，双端持久化
+  - 播报链路：云萌音色**先备声后显示**（文字与声音同步出现）；默认音色仍走眼镜端离线 TTS，零改动
+  - 净化进 API 的文本：云萌引擎遇 em dash / 省略号等符号会提前截断合成（curl + 真机实测），白名单替换为停顿
+  - AI 气泡右下角喇叭：单次点播 / 停止（云萌 = 手机出声，默认 = 眼镜 TTS）
+- **质量与工程**：
+  - 侧Effect / 风险档一致性护栏 + 对应单测；会话文件上限 50
+  - 思考预览修复：`optString` 对 JSON `null` 返回 `"null"` 字面量拼进思考行
+  - 移除无引用的 sherpa aar；内置商店列表 brewVersion 同步 29（v4.4）
+- **眼镜端（RokidLink 4.4）**：`AiuiLinkActivity` / `AsrPushServer` / `CxrBridgeCoordinator` 配套增强，ink `host.js` 调整，新增 `PhoneMirrorActivity` 与 `ToolConfirmController`
+- **版本**：手机端 4.4（versionCode 29）/ 眼镜端 RokidLink 4.4（versionCode 22），内嵌眼镜端为 R8 混淆 release 包
 
 ## 使用指南
 

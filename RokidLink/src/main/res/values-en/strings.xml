@@ -24,4 +24,7 @@
     <string name="log_command_failed">Command failed: %s</string>
     <string name="log_setprop_failed">setprop failed: %s</string>
     <string name="log_get_ip_failed">Failed to get IP address</string>
+    <!-- Chart fullscreen viewer -->
+    <string name="chart_viewer_hint">Swipe to switch · Tap to resend · Double-tap to exit</string>
+    <string name="chart_viewer_index">%1$d/%2$d</string>
 </resources>

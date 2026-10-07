@@ -107,8 +107,55 @@ object ApprovalGate {
         fun confirm(toolName: String, prompt: String, maxWaitMs: Long): Boolean =
             confirm(toolName, prompt)
 
-        /** 上一次确认是否被用户**显式取消**（true=取消 → 拒绝；false=超时/未响应 → 按声明分流） */
+        /**
+         * ★ 确认结果的一次性快照（**闸门唯一应该使用的入口**）。
+         *
+         * ## 为什么要有这个方法
+         * 「用户拒绝」与「超时」在通道层**都是** `allowed=false`，只能靠额外信息区分。
+         * 早期把这个信息放在通道的**实例字段**（`wasCancelled()`）上，于是产生了一个
+         * 真实的并发缺陷：主循环会**并发**发射多个工具（见 `AiConversationService` 的
+         * 两级泳道），A 工具被用户取消后 B 工具进入 `confirm()` 会把那个标志**复位**，
+         * A 于是读到 `false` → 被当成"没问到" → 按 `PROCEED` **静默放行**；
+         * 反向则会把无关工具误判成"用户已取消"。
+         * `abortAll()` 批量 `countDown()` 时同样会把残留值泄漏到下一次判定。
+         *
+         * ⇒ 返回**值对象**而不是"结果 + 再去读全局状态"，从签名上消灭竞态：
+         * 标志与这一次 `confirm` 的 requestId 绑定，读不到别的调用的状态。
+         */
+        fun confirmOutcome(toolName: String, prompt: String, maxWaitMs: Long): ConfirmOutcome =
+            ConfirmOutcome(confirm(toolName, prompt, maxWaitMs), wasCancelled())
+
+        /**
+         * 上一次确认是否被用户**显式取消**。
+         *
+         * ⚠️ **生产通道不应再覆写它** —— 实例级状态无法区分"哪一次调用被取消"，
+         * 并发多个确认时会互相串味（见 [confirmOutcome] 的说明）。
+         * 仅保留给未迁移的测试假实现兜底；闸门**只调[confirmOutcome]**。
+         */
         fun wasCancelled(): Boolean = false
+    }
+
+    /**
+     * 一次确认的**结果 + 取消标志**（不可变值对象）。
+     *
+     * @param allowed    用户点了「允许」
+     * @param cancelled 用户**显式取消**（=拒绝）。false = 没问到/超时/通道不可用 ⇒ 由闸门
+     *   按工具自己的 `ToolConfirmPolicy` 分流（PROCEED 放行 / BLOCK 拒绝）。
+     */
+    data class ConfirmOutcome(
+        val allowed: Boolean,
+        val cancelled: Boolean,
+    ) {
+        companion object {
+            /** 「没问到」—— 两条通道都不可用、或拉起界面失败 */
+            val NOT_ANSWERED = ConfirmOutcome(allowed = false, cancelled = false)
+
+            /** 「用户明确允许」 */
+            val ALLOWED = ConfirmOutcome(allowed = true, cancelled = false)
+
+            /** 「用户明确取消」 */
+            val CANCELLED = ConfirmOutcome(allowed = false, cancelled = true)
+        }
     }
 
     /** 眼镜端通道（`CxrLHiRokidSession.init` 注入；链路在线时可用） */
@@ -143,6 +190,14 @@ object ApprovalGate {
      * @param unattended 定时自主任务（无人值守）：只放行 [ToolRegistry.unattendedToolNames]；
      *   仅 [ToolSource.CONVERSATION] 有意义
      * @param context   读工具开关（[ToolRegistry.isEnabled]）用；为 null 则开关闸门不表态
+     * @param onAwaitConfirm **即将阻塞等用户确认**时回调一次（参数 = 展示用的操作摘要）。
+     *   默认 null（不回调）—— 闸门不反向依赖 UI，要不要把"正在等你点头"呈现出来由调用方决定。
+     *
+     *   ★ 为什么需要它（2026-10-06 审计修）：确认等待是 18~40s 的**同步阻塞**，
+     *   而调用方（对话主循环）在此之前已经发出过一条 `RUNNING` 的工具步骤 ——
+     *   于是过程卡片上是一个无任何说明的转圈点。用户分不出"正在拨号"和"正在等我点头"，
+     *   会以为卡死，然后去点别的工具 ⇒ 可能触发第二个审批弹窗。
+     *   它等的恰恰是最危险的副作用动作，让用户知道"现在轮到你"比让他知道"我在忙"重要。
      * @return 只会是 [ToolDecision.Allow] 或 [ToolDecision.Deny]（Ask 已在内部解析）
      */
     fun preExecute(
@@ -152,6 +207,7 @@ object ApprovalGate {
         localOnly: Boolean = false,
         unattended: Boolean = false,
         context: android.content.Context? = null,
+        onAwaitConfirm: ((String) -> Unit)? = null,
     ): ToolDecision {
         val ctx = ToolCallContext(
             source = source,
@@ -164,7 +220,16 @@ object ApprovalGate {
             enabled = context?.let { ToolRegistry.isEnabled(it, name) },
         )
         val composed = compose(ctx)
-        val resolved = if (composed is ToolDecision.Ask) resolveAsk(composed, name, source) else composed
+        val resolved = if (composed is ToolDecision.Ask) {
+            // ★ 只在**真的要阻塞**时才回调（Ask 已解析成 Allow/Deny、或通道根本问不到 ⇒ 不打扰用户）
+            if (onAwaitConfirm != null) {
+                runCatching { onAwaitConfirm(composed.prompt) }
+                    .onFailure { Log.w(TAG, "onAwaitConfirm callback failed for $name", it) }
+            }
+            resolveAsk(composed, name, source)
+        } else {
+            composed
+        }
         audit(ctx, resolved)
         return resolved
     }
@@ -185,6 +250,13 @@ object ApprovalGate {
      * 3. 其余情况 → [ToolDecision.Allow]。
      *
      * `null` = 该 guard 不表态（不是拒绝，也不是放行），继续往下走。
+     *
+     * ⚠️ 显式 [ToolDecision.Allow] 与 `null` **不再同等对待**（2026-10-07 更正）：
+     * `Allow` 显式返回即「到此为止，后面别问了」，因此**立即终止**求值。
+     * 旧实现把它当 `null` 忽略，于是后续 guard 的 Deny 能推翻一个显式放行 ——
+     * 语义上"放行"被降级成了"没意见"。当前 8 道 guard 无一返回 Allow（故无实害），
+     * 但未来若有一道"该工具不走闸门"的短路 guard，会静默失效。
+     * 与 [ToolDecision.Allow] 的定义对齐后，这类 guard 才有可预期的行为。
      */
     internal fun compose(
         ctx: ToolCallContext,
@@ -196,7 +268,8 @@ object ApprovalGate {
             when (val decision = guard.evaluate(ctx) ?: continue) {
                 is ToolDecision.Deny -> return decision
                 is ToolDecision.Ask -> if (pendingAsk == null) pendingAsk = decision
-                ToolDecision.Allow -> Unit
+                // 显式放行 = 终止，不再问后面的 guard（"别问了"必须真的做到）
+                ToolDecision.Allow -> return decision
             }
         }
         return pendingAsk ?: ToolDecision.Allow
@@ -216,10 +289,13 @@ object ApprovalGate {
      * | 问不到 / 超时 / 通道抛异常，且工具声明 `PROCEED` | **放行** | 影响不出本机、可重做；硬拒会变成「被安全策略挡住」 |
      * | 问不到 / 超时，且工具声明 `BLOCK` | 拒绝 | 越出本机边界、不可撤销，没有"先照做、错了再改"的余地 |
      *
-     * ⚠️ "用户拒绝"与"超时"的区分依据是 [ConfirmResolver.wasCancelled] ——
-     * 通道在两种情况下都返回 `allowed=false`，**只能靠这个标志区分**。
+     * ⚠️ "用户拒绝"与"超时"的区分依据是 [ConfirmResolver.confirmOutcome] 返回的
+     * [ConfirmOutcome.cancelled] —— 通道在两种情况下 `allowed` 都是 `false`，**只能靠它区分**。
      * 早期实现不区分，导致"用户点错一次 / 眼镜没响应"被当成拒绝，
      * 用户侧看到「你已在眼镜上取消」但自己根本没操作。
+     *
+     * ★ 这里**必须读返回值**，不要再调 [ConfirmResolver.wasCancelled]：
+     * 那是通道实例级状态，并发多个确认时会互相串味（详见 [ConfirmResolver.confirmOutcome]）。
      */
     internal fun resolveAsk(ask: ToolDecision.Ask, toolName: String): ToolDecision =
         resolveAsk(ask, toolName, ToolSource.CONVERSATION)
@@ -241,12 +317,14 @@ object ApprovalGate {
             return if (ask.failClosed) denyUnconfirmed(toolName, "当前无法向你确认") else ToolDecision.Allow
         }
         val maxWait = if (source == ToolSource.AIUI_PAGE) PAGE_CONFIRM_TIMEOUT_MS else Long.MAX_VALUE
-        val confirmed = runCatching { channel.confirm(toolName, ask.prompt, maxWait) }.getOrDefault(false)
-        if (confirmed) {
+        // ★ 只读这一次调用的返回值；不再回读通道的实例状态（并发时会串味）
+        val outcome = runCatching { channel.confirmOutcome(toolName, ask.prompt, maxWait) }
+            .getOrElse { ConfirmOutcome.NOT_ANSWERED }
+        if (outcome.allowed) {
             Log.i(TAG, "confirmed via ${channel.channelId} (tool=$toolName)")
             return ToolDecision.Allow
         }
-        if (channel.wasCancelled()) {
+        if (outcome.cancelled) {
             // 文案不带"在眼镜上"这类通道限定 —— 现在两条通道都可能问到（手机弹窗取消同样走这里）
             return ToolDecision.Deny(
                 DecisionOrigin.RISK_CONFIRMATION,
@@ -315,7 +393,8 @@ object ApprovalGate {
     // ════════════════════════════════════════════════════════════════════
 
     /**
-     * 工具是否「只读」—— 用于对话路径的**轮次预算分账**（只读轮 8 / 动作轮 6）。
+     * 工具是否「只读」—— 用于对话路径的**轮次预算分账**（只读 10 / 动作 12，见
+     * `AiConversationService.MAX_READONLY_ROUNDS` / `MAX_ACTION_ROUNDS`）。
      *
      * 与审批闸门共用同一张风险表（含 [PseudoTools]），因此
      * "算不算只读"与"要不要确认"不会出现两套互相矛盾的结论。

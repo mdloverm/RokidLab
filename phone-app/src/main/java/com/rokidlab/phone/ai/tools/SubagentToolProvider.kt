@@ -106,7 +106,21 @@ internal object SubagentToolProvider : ToolProvider {
 
     override fun execute(context: Context, name: String, args: JSONObject): String = when (name) {
         ReadOnlySubagent.TOOL_NAME ->
-            ReadOnlySubagent.run(context, args.optString("question"), args.optInt("rounds", 0))
+            // ⚠️ 把**最后一条用户消息**一并传下去（2026-10-06）：子代理看不到对话历史，
+            // 少了它就无法做指代消解（"这个/刚才那个"指什么），只能按字面泛泛地查。
+            // 走 ThreadLocal 而不是改 ToolProvider 接口 —— 后者要动全部 21 个 provider，
+            // 与 vision 的 takePendingImage() 是同一套手法（主循环同线程 runTool 后取出）。
+            //
+            // ★ 内层进度上报（2026-10-06 审计修）：子代理最多 6 轮 × 每轮多个工具、
+            // 最长 90 秒，此前**全部只进 logcat** ⇒ 过程时间线上只有这一行在转圈。
+            // sink 由主循环在 runTool 之前写入（[ReadOnlySubagent.setSubStepSink]），
+            // 这里只需把它传进 run —— run() 内部会**取走即清**，不让它泄漏到下一次子代理。
+            ReadOnlySubagent.run(
+                context,
+                args.optString("question"),
+                args.optInt("rounds", 0),
+                ReadOnlySubagent.takeSubStepSink(),
+            )
 
         WriteSubagent.TOOL_NAME ->
             WriteSubagent.run(context, args.optString("task"), args.optInt("rounds", 0))

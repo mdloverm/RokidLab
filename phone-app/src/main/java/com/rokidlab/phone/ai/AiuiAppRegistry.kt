@@ -187,7 +187,14 @@ object AiuiAppRegistry {
                     put("updatedAt", r.updatedAt)
                 })
             }
-            File(context.filesDir, STORE_FILE).writeText(JSONObject().put("apps", arr).toString(), Charsets.UTF_8)
+            // 🚨 必须走原子写（2026-10-07 安全修复）：4 个写入点全是 load() → 改 → persist()
+            // 的**读改写**序列，进程被杀/磁盘满会留下半截 JSON；而 `load` 解析失败是
+            // `getOrElse { emptyList() }` ⇒ **整个 AIUI 应用注册表归零**，
+            // 用户侧症状是「所有 AIUI 应用凭空消失」，且没有任何报错可查。
+            com.rokidlab.phone.ai.writeTextFileAtomically(
+                File(context.filesDir, STORE_FILE),
+                JSONObject().put("apps", arr).toString(),
+            )
             cache = records
         }.onFailure { Log.e(TAG, "persist failed", it) }
     }

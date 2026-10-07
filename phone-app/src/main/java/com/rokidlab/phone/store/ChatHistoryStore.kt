@@ -1,6 +1,7 @@
 package com.rokidlab.phone.store
 
 import com.rokidlab.phone.ai.AgentStep
+import com.rokidlab.phone.ai.writeTextFileAtomically
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -174,7 +175,8 @@ internal object ChatHistoryStore {
     }
 
     /**
-     * 落盘里残留的 [AgentStep.State.RUNNING] 一律按「上一轮没来得及收尾」处理。
+     * 落盘里残留的 [AgentStep.State.RUNNING] / [AgentStep.State.AWAITING_CONFIRM]
+     * 一律按「上一轮没来得及收尾」处理。
      *
      * ⚠️ 这里修的是**损坏数据**，不是某个 bug 的解法 —— 别拿"反正读的时候会兜住"当理由省掉收尾。
      * 正常收尾（`ChatStateHolder.finishTrace` / `finalizeTraceReply`）一定会把本轮锚点那条消息里
@@ -183,12 +185,20 @@ internal object ChatHistoryStore {
      * ⇒ **盘上最终仍留着 RUNNING，只可能是那一轮被杀进程 / 强退**。不清掉的话重启后
      * 「过程」卡片会永远转圈（"那一轮没结束"这件事不会自己变好）。
      * 归为 OK 而非 FAILED：我们并不知道那一步到底失败没有，标 FAILED 等于凭空编一个错误。
+     *
+     * ★ AWAITING_CONFIRM 一并处理（2026-10-06）：它同样表示"等一个外部回应"，
+     * 同样会在强退后卡住（"等你确认…"永远停在那里 ⇒ 比 RUNNING 更迷惑，
+     * 因为那条永远不会有后续回应来改写它）。
      */
     private fun ChatMsg.settleStaleTrace(): ChatMsg {
-        if (trace.none { it.state == AgentStep.State.RUNNING }) return this
+        // 与 [settleRunning] 同一口径：这两个状态都表示"没等到收尾"
+        fun isStale(state: AgentStep.State) =
+            state == AgentStep.State.RUNNING || state == AgentStep.State.AWAITING_CONFIRM
+
+        if (trace.none { isStale(it.state) }) return this
         return copy(
             trace = trace.map {
-                if (it.state == AgentStep.State.RUNNING) it.copy(state = AgentStep.State.OK) else it
+                if (isStale(it.state)) it.copy(state = AgentStep.State.OK) else it
             },
         )
     }
@@ -205,14 +215,21 @@ internal object ChatHistoryStore {
         file.appendText(line + "\n")
     }
 
-    /** 用给定行整体重写文件（迁移旧格式 / 压实重复行 / 清空）。[lines] 为空时删除文件 */
+    /**
+     * 用给定行整体重写文件（迁移旧格式 / 压实重复行 / 清空）。[lines] 为空时删除文件。
+     *
+     * ⚠️ 走**原子写**（2026-10-06 审计修）：这是典型的「读旧 + 拼新 + 写回」序列，
+     * 提交后台线程后被 LMK 杀掉 / 磁盘满⇒ 中途留下**半截或 0 字节**文件。
+     * 而 `readHistory` 对空文件 `parse` 得空 ⇒ **整个会话历史消失**，且没有任何报错。
+     * 函数已存在（`writeTextFileAtomically`），不用它才需要理由。
+     */
     fun rewrite(file: File, lines: List<String>) {
         if (lines.isEmpty()) {
             file.delete()
             return
         }
         file.parentFile?.mkdirs()
-        file.writeText(lines.joinToString(separator = "\n", postfix = "\n"))
+        writeTextFileAtomically(file, lines.joinToString(separator = "\n", postfix = "\n"))
     }
 
     private fun parseLegacyArray(text: String): List<ChatMsg> {

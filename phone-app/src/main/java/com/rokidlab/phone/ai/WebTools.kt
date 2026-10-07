@@ -546,7 +546,7 @@ object WebTools {
         // API < 29：写入应用专属下载目录（无需存储权限）
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
         val file = File(dir, fileName)
-        file.writeText(text, Charsets.UTF_8)
+        writeTextFileAtomically(file, text)
         return file.absolutePath
     }
 
@@ -593,7 +593,7 @@ object WebTools {
         // 私有目录镜像：build_aiui_app 打包 .aix 时从 filesDir/aiui_projects/<project>/ 读取全部生成文件
         runCatching {
             val mirror = File(context.filesDir, "aiui_projects/$proj/$rel").apply { parentFile?.mkdirs() }
-            mirror.writeText(content, Charsets.UTF_8)
+            writeTextFileAtomically(mirror, content)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val relPath = (listOf(Environment.DIRECTORY_DOWNLOADS, proj) + subDir).joinToString("/")
@@ -625,7 +625,7 @@ object WebTools {
         // API < 29：写入应用专属目录兜底（内容完整，路径对用户不可见）
         val base = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
         val file = File(base, "$proj/$rel").apply { parentFile?.mkdirs() }
-        file.writeText(content, Charsets.UTF_8)
+        writeTextFileAtomically(file, content)
         return "已生成 $proj/$rel（${content.length} 字符）。项目目录：$file"
     }
 

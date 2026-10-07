@@ -32,7 +32,7 @@ enum class CapabilitySource {
  *     拍照失败一轮才知道（服务端拒绝 → 回退 OCR，用户白等十几秒）；
  *  2. `OpenAiService.supportsThinkingDisabled()`：按模型名硬编码判断能否下发
  *     关思考字段（当时只认 `deepseek`，是**模型名硬编码在传输层**里）；
- *  3. 会话压缩阈值写死 6000 字符，跟模型真实的上下文窗口毫无关系。
+ *  3. 会话压缩阈值写死（初版 6000 字符 / 12 条），跟模型真实的上下文窗口毫无关系。
  * 于是「换一个模型」实际上要在三个地方各改一点，加一个本地模型（Ollama）更是只能靠默认值瞎蒙。
  *
  * 现在这三件事都读同一个 [ModelCapabilities]：图像开关看 [supportsImage]、

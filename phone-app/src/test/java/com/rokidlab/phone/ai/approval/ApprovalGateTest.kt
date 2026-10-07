@@ -441,6 +441,113 @@ class ApprovalGateTest {
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // G. confirmOutcome —— 「取消」标志必须与本次调用绑定（2026-10-06 修复）
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * 模拟**修复前**那种通道形态：取消标志是**通道实例上的共享字段**，
+     * 由「用户回执」写入，而 [confirmOutcome] 在返回前会把它清掉。
+     *
+     * ★ 与修复后的唯一差别就是那一处，而那一处就是全部：
+     * 修复前 `resolveAsk` 在拿到 `allowed=false` 之后还要**再问一次** `wasCancelled()`，
+     * 而那一次问到的可能是**别的调用**（甚至已被复位）的状态 ⇒ 串味。
+     * 修复后闸门只读返回值，字段怎么变都不可见。
+     */
+    private class CallbackFlagResolver : ApprovalGate.ConfirmResolver {
+        override val channelId: String = "callback-flag"
+
+        /** 模拟"用户回执把取消标志落在了通道上" */
+        @Volatile var userCancelledFlag = false
+
+        var outcomeCalls = 0
+        var wasCancelledCalls = 0
+
+        override fun isAvailable(): Boolean = true
+
+        @Suppress("UNUSED_PARAMETER")
+        override fun confirm(toolName: String, prompt: String): Boolean = false
+
+        override fun wasCancelled(): Boolean {
+            wasCancelledCalls++
+            return userCancelledFlag
+        }
+
+        @Suppress("UNUSED_PARAMETER")
+        override fun confirmOutcome(
+            toolName: String,
+            prompt: String,
+            maxWaitMs: Long,
+        ): ApprovalGate.ConfirmOutcome {
+            outcomeCalls++
+            // 结果与取消标志**一起**返回 —— 闸门据此就能判「用户取消了」，无需回读字段。
+            val o = if (userCancelledFlag) ApprovalGate.ConfirmOutcome.CANCELLED
+            else ApprovalGate.ConfirmOutcome.NOT_ANSWERED
+            // ⚠️ 故意清掉共享字段：模拟兄弟调用/收尾把标志复位。
+            // 闸门若回头读 wasCancelled()，这个清零就会让它把「取消」误判成「没问到」。
+            userCancelledFlag = false
+            return o
+        }
+    }
+
+    @Test
+    fun `G1 用户取消时拒绝 且依据是返回值里的 cancelled`() {
+        val fake = CallbackFlagResolver()
+        ApprovalGate.confirmationResolver = fake
+        ApprovalGate.phoneConfirmationResolver = null
+        fake.userCancelledFlag = true
+
+        val r = ApprovalGate.resolveAsk(ask, "send_sms")
+
+        assertTrue(
+            "用户已显式取消 ⇒ 必须拒绝。若这里 Allow，说明闸门只看到 allowed=false 就当「没问到」放行了",
+            r is ToolDecision.Deny,
+        )
+        assertTrue(
+            "拒绝原因必须来自返回值的 cancelled=true",
+            (r as ToolDecision.Deny).reason.contains("取消"),
+        )
+    }
+
+    @Test
+    fun `G2 闸门不回读通道实例状态 - 串味的根因被消除`() {
+        // ★ 这条是本次修复的核心护栏：闸门**绝不能再调 wasCancelled()**。
+        // 那是通道级共享状态 —— 并发多个确认时（主循环两级泳道会同时弹确认），
+        // 兄弟调用的复位会把「用户已取消」读成 false ⇒ 按 PROCEED 静默放行。
+        // 本用例用"confirmOutcome 里把共享字段清零"模拟那次复位：
+        // 若闸门回头读字段，它就会把 CANCELLED 误判成「没问到」。
+        val fake = CallbackFlagResolver()
+        ApprovalGate.confirmationResolver = fake
+        ApprovalGate.phoneConfirmationResolver = null
+        fake.userCancelledFlag = true
+
+        val r = ApprovalGate.resolveAsk(ask, "send_sms")
+
+        assertEquals("闸门必须只走 confirmOutcome 这一个入口", 1, fake.outcomeCalls)
+        assertEquals(
+            "★ 闸门绝不能调 wasCancelled()（通道级共享状态，并发时会读到别的调用的结论）",
+            0,
+            fake.wasCancelledCalls,
+        )
+        assertTrue(
+            "即使共享字段已被清零，结论仍必须是「取消」—— 依据只来自返回值",
+            r is ToolDecision.Deny && (r as ToolDecision.Deny).reason.contains("取消"),
+        )
+    }
+
+    @Test
+    fun `G3 ConfirmOutcome 三态互不混淆`() {
+        assertTrue(ApprovalGate.ConfirmOutcome.ALLOWED.allowed)
+        assertFalse("ALLOWED 不能同时是CANCELLED", ApprovalGate.ConfirmOutcome.ALLOWED.cancelled)
+        assertFalse(ApprovalGate.ConfirmOutcome.CANCELLED.allowed)
+        assertTrue(ApprovalGate.ConfirmOutcome.CANCELLED.cancelled)
+        assertFalse(ApprovalGate.ConfirmOutcome.NOT_ANSWERED.allowed)
+        assertFalse(
+            "「没问到」绝不能被读成「用户取消了」—— 那会让可重做的动作被无谓拒绝",
+            ApprovalGate.ConfirmOutcome.NOT_ANSWERED.cancelled,
+        )
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // F. resolveAsk —— 通道选择 + fail-open 三态 + 声明分流（安全关键）
     // ════════════════════════════════════════════════════════════════════
 
