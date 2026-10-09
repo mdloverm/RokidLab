@@ -1744,6 +1744,24 @@
     <string name="voice_pick_auditioning">Previewing…</string>
     <string name="chat_speaker_play">Play</string>
     <string name="export_compat_diag_desc">Export device, ROM and Bluetooth info for reports</string>
+    <!-- Dual recording (Leqi Tools page) -->
+    <string name="demo_record_title">Dual Recording</string>
+    <string name="demo_btn_stop">Stop Recording</string>
+    <string name="demo_btn_save">Save Video</string>
+    <string name="demo_state_preparing">Preparing…</string>
+    <string name="demo_state_stopping">Finalizing…</string>
+    <string name="demo_state_pulling">Pulling glasses video %1$d%%</string>
+    <string name="demo_state_composing">Composing %1$d%%</string>
+    <string name="demo_state_saving">Saving…</string>
+    <string name="demo_state_failed">Failed: %1$s</string>
+    <string name="demo_save_ok">Saved to gallery</string>
+    <string name="demo_save_failed">Save failed</string>
+    <string name="demo_err_adb">Glasses not connected</string>
+    <string name="demo_err_screenrecord">Glasses screenrecord unavailable</string>
+    <string name="demo_err_start">Failed to start recording</string>
+    <string name="demo_err_pull">Failed to pull video</string>
+    <string name="demo_err_compose">Failed to compose</string>
+    <string name="demo_notification_text">Recording phone screen and microphone</string>
     <string name="save_compat_done">Compatibility diagnostics exported</string>
     <string name="save_compat_failed">Failed to export compatibility diagnostics</string>
     <!-- On-device execution environment (self-hosted proot + Ubuntu rootfs): settings page -->
@@ -1908,6 +1926,7 @@
     <string name="permission_label_exact_alarm">Exact alarms</string>
     <string name="permission_label_activity_recognition">Physical activity</string>
     <string name="permission_label_accessibility">Accessibility service</string>
+    <string name="permission_label_mic">Microphone</string>
     <string name="permission_dialog_title">Permission required</string>
     <string name="permission_dialog_message">%1$s needs the following permissions:\n%2$s\n\nTap Grant now, then choose Allow in the system dialog.</string>
     <string name="permission_dialog_allow">Grant now</string>

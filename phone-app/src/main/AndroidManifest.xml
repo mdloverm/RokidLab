@@ -51,6 +51,8 @@
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <!-- 本地模型：通过 RUN_COMMAND 在 Termux 中启动/停止 Ollama 服务 -->
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+    <!-- 双端录像：手机端 MediaRecorder 收麦克风（合成演示视频里的手机音轨） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 本机执行环境：proot 容器的 /mnt/lab 直通公共「下载/Lab」目录（分区存储下 File 路径直读写必需） -->
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
@@ -215,6 +217,12 @@
         <!-- 一次性截屏：投屏没开时「看手机屏幕」的取图路径（抓完即 stopSelf，不在状态栏常驻） -->
         <service
             android:name=".mirror.ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- 双端录像手机端：MediaProjection 录屏 + 麦克风收音，产物交 SideBySideCompositor 合成 -->
+        <service
+            android:name=".demo.PhoneScreenRecordService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 

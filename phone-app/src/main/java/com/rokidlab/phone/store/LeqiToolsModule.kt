@@ -1,9 +1,19 @@
 package com.rokidlab.phone.store
 
+import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.media.projection.MediaProjectionManager
+import android.view.WindowManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import com.rokidlab.phone.R
 import com.rokidlab.phone.adb.AdbShellClient
 import com.rokidlab.phone.app.LabApplication
+import com.rokidlab.phone.demo.DemoRecordManager
 import com.rokidlab.phone.design.*
+import com.rokidlab.phone.permission.AppPermission
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -18,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * 乐奇工具模块
@@ -110,6 +121,10 @@ internal fun LeqiToolsModule(
             )
         }
 
+        // 双端录像：眼镜 screenrecord + 手机录屏同录，合成「左眼镜 / 右手机」拼屏视频
+        Spacer(modifier = Modifier.height(8.dp))
+        DemoRecordButton(ctx)
+
         Spacer(modifier = Modifier.height(24.dp))
 
         // ────────── 文件 ──────────
@@ -169,3 +184,116 @@ private fun SectionLabel(text: String, color: Color) {
         modifier = Modifier.padding(bottom = 10.dp),
     )
 }
+
+/**
+ * 双端录像按钮：眼镜 screenrecord + 手机录屏同录，合成「左眼镜 / 右手机」拼屏视频（含手机麦克风音轨）。
+ *
+ * 单按钮贯穿全流程，文案随状态切换：
+ *   空闲「双端录像」→ 录制中「停止录制」→ 完成「保存视频」（存入相册后复位为「双端录像」）。
+ * 录制时长固定 175s（[DemoRecordManager.RECORD_SEC]，单段不拼接的上限），到时自动停，
+ * 也可点「停止录制」提前结束；合成耗时与录制时长相当。
+ * 链路细节见 [DemoRecordManager] / [com.rokidlab.phone.demo.SideBySideCompositor]。
+ */
+@Composable
+private fun DemoRecordButton(ctx: Context) {
+    var state by remember { mutableStateOf(DemoRecordManager.state) }
+    var saving by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    // Manager 状态回调来自后台协程：snapshot state 写入线程安全，重组发生在主线程
+    DisposableEffect(Unit) {
+        val listener: (DemoRecordManager.State) -> Unit = { state = it }
+        DemoRecordManager.addListener(listener)
+        onDispose { DemoRecordManager.removeListener(listener) }
+    }
+
+    // 录制期间保持手机屏幕常亮：熄屏后 MediaProjection 停止出帧，成片会出现长定格空洞
+    val keepScreenOn = state is DemoRecordManager.State.Recording ||
+        state is DemoRecordManager.State.Preparing ||
+        state is DemoRecordManager.State.Stopping
+    DisposableEffect(keepScreenOn) {
+        val window = (ctx as? Activity)?.window
+        if (keepScreenOn) window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose { window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
+
+    // MediaProjection 授权 → 起录（每次录制都要弹一次：targetSdk 34 的系统限制）
+    val projectionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            DemoRecordManager.start(ctx, result.resultCode, result.data!!)
+        }
+    }
+    // 麦克风权限（拼屏视频的手机音轨）
+    val micLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        if (grants.values.all { it }) {
+            val mpm = ctx.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            projectionLauncher.launch(mpm.createScreenCaptureIntent())
+        }
+    }
+
+    fun requestStart() {
+        if (AppPermission.isGranted(ctx, AppPermission.MIC)) {
+            val mpm = ctx.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            projectionLauncher.launch(mpm.createScreenCaptureIntent())
+        } else {
+            micLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+        }
+    }
+
+    // 存入系统相册（拷贝整个 mp4，放 IO 线程）；成功后 Manager 复位，按钮变回「双端录像」
+    fun save(file: File) {
+        saving = true
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) { DemoRecordManager.saveToGallery(ctx, file) }
+            saving = false
+            Toast.makeText(
+                ctx,
+                ctx.getString(if (ok) R.string.demo_save_ok else R.string.demo_save_failed),
+                Toast.LENGTH_SHORT,
+            ).show()
+            if (ok) DemoRecordManager.reset()
+        }
+    }
+
+    // 单一按钮：文案 / 颜色 / 动作随状态切换（表达式 when：sealed 编译期穷尽）
+    val s = state
+    val btn = when (s) {
+        is DemoRecordManager.State.Idle ->
+            DemoButtonUi(ctx.getString(R.string.demo_record_title), BrewMagenta) { requestStart() }
+        is DemoRecordManager.State.Preparing ->
+            DemoButtonUi(ctx.getString(R.string.demo_state_preparing), BrewMagenta)
+        is DemoRecordManager.State.Recording ->
+            DemoButtonUi(ctx.getString(R.string.demo_btn_stop), BrewRed) { DemoRecordManager.stop() }
+        is DemoRecordManager.State.Stopping ->
+            DemoButtonUi(ctx.getString(R.string.demo_state_stopping), BrewMagenta)
+        is DemoRecordManager.State.Pulling ->
+            DemoButtonUi(ctx.getString(R.string.demo_state_pulling, (s.progress * 100).toInt()), BrewMagenta)
+        is DemoRecordManager.State.Composing ->
+            DemoButtonUi(ctx.getString(R.string.demo_state_composing, (s.progress * 100).toInt()), BrewMagenta)
+        is DemoRecordManager.State.Done ->
+            DemoButtonUi(
+                if (saving) ctx.getString(R.string.demo_state_saving) else ctx.getString(R.string.demo_btn_save),
+                BrewSuccess,
+                if (saving) null else ({ save(s.output) }),
+            )
+        is DemoRecordManager.State.Failed ->
+            DemoButtonUi(ctx.getString(R.string.demo_state_failed, s.reason), BrewWarning) { requestStart() }
+    }
+    BrutalButton(
+        label = btn.label,
+        color = btn.color,
+        enabled = btn.action != null,
+        onClick = { btn.action?.invoke() },
+    )
+}
+
+/** 双端录像按钮的瞬时外观：文案 + 颜色 + 点击动作（null = 禁用） */
+private class DemoButtonUi(
+    val label: String,
+    val color: Color,
+    val action: (() -> Unit)? = null,
+)

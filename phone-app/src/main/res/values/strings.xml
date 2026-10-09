@@ -1753,6 +1753,24 @@
     <string name="voice_pick_auditioning">试听中…</string>
     <string name="chat_speaker_play">播放</string>
     <string name="export_compat_diag_desc">导出机型、ROM、蓝牙等信息用于反馈</string>
+    <!-- 双端录像（乐奇工具页） -->
+    <string name="demo_record_title">双端录像</string>
+    <string name="demo_btn_stop">停止录制</string>
+    <string name="demo_btn_save">保存视频</string>
+    <string name="demo_state_preparing">正在准备…</string>
+    <string name="demo_state_stopping">正在收尾…</string>
+    <string name="demo_state_pulling">正在取回眼镜视频 %1$d%%</string>
+    <string name="demo_state_composing">正在合成视频 %1$d%%</string>
+    <string name="demo_state_saving">正在保存…</string>
+    <string name="demo_state_failed">录制失败：%1$s</string>
+    <string name="demo_save_ok">已保存到相册</string>
+    <string name="demo_save_failed">保存失败</string>
+    <string name="demo_err_adb">未连接眼镜</string>
+    <string name="demo_err_screenrecord">眼镜不支持录屏</string>
+    <string name="demo_err_start">起录失败</string>
+    <string name="demo_err_pull">拉取视频失败</string>
+    <string name="demo_err_compose">合成失败</string>
+    <string name="demo_notification_text">正在录制手机画面与麦克风</string>
     <string name="save_compat_done">兼容性诊断已导出</string>
     <string name="save_compat_failed">兼容性诊断导出失败</string>
     <!-- 本机执行环境（自持 proot + Ubuntu rootfs）：正式设置页 -->
@@ -1917,6 +1935,7 @@
     <string name="permission_label_exact_alarm">精确提醒</string>
     <string name="permission_label_activity_recognition">身体活动</string>
     <string name="permission_label_accessibility">无障碍服务</string>
+    <string name="permission_label_mic">麦克风</string>
     <string name="permission_dialog_title">需要开启权限</string>
     <string name="permission_dialog_message">「%1$s」需要以下权限：\n%2$s\n\n点「立即开启」后，在系统弹窗里选「允许」即可。</string>
     <string name="permission_dialog_allow">立即开启</string>

@@ -154,6 +154,14 @@ enum class AppPermission(
     ),
 
     /**
+     * 麦克风（`RECORD_AUDIO`）：双端录像（demo 包）合成视频里的手机收音。
+     *
+     * [onboardingCritical] = false：只有开发者模式的双端录像用它，缺权限时
+     * 在功能页现场弹运行时授权框（Compose launcher），不进首装引导。
+     */
+    MIC(Manifest.permission.RECORD_AUDIO, R.string.permission_label_mic, onboardingCritical = false),
+
+    /**
      * 无障碍服务（`BIND_ACCESSIBILITY_SERVICE`）：屏幕操作域（`read_screen` / `tap_screen` /
      * `swipe_screen` / `press_key` / `type_text`）与**零弹窗截屏**的前提。
      *
