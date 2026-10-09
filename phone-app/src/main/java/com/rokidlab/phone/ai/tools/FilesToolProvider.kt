@@ -83,6 +83,11 @@ internal object FilesToolProvider : ToolProvider {
             displayNameRes = R.string.ai_tool_save_code_file_name,
             descriptionRes = R.string.ai_tool_save_code_file_desc,
             risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            // ⚠️ 2026-10-09 补：写盘是真副作用，**原先漏标** ⇒ 进了并行泳道、
+            //   瞬时失败还会被重放 3 次（maxAttempts 只对 SIDE_EFFECT_TOOLS 收敛到 1）。
+            //   两个写盘工具同时落同一项目是真实竞态（AiConversationService 的串行分账
+            //   注释里点名过 save_code_file，正是为此）。
+            sideEffect = true,
             statusText = "正在生成代码文件…",
             schema = toolSchema(
                 name = "save_code_file",

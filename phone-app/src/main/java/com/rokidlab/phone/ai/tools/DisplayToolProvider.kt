@@ -47,6 +47,9 @@ internal object DisplayToolProvider : ToolProvider {
             descriptionRes = R.string.ai_tool_show_image_desc,
             risk = ToolRisk.LOCAL_SIDE_EFFECT,
             statusText = "正在显示图片…",
+            // ⚠️ 2026-10-09 补：它会往眼镜下发一个**只能显示一个**的浮层（同一次多调互相顶掉）
+            //   并在手机气泡里插消息，原先漏标 ⇒ 并行执行时进度与实际显示错位。
+            sideEffect = true,
             schema = toolSchema(
                 name = "show_image",
                 description = "显示一张图片：默认渲染在手机端对话气泡里；若眼镜已连接，会同时同步到眼镜端悬浮显示（约 12 秒后自动消失）。当用户说“显示图片”“显示封面”“给我看张图”“把刚才那张图发出来”时调用。若用户给了图片链接就传 imageUrl；若用户只说“显示封面”或想看在播歌曲的封面，可以不传 imageUrl，会自动显示当前播放歌曲的封面。",
@@ -66,6 +69,9 @@ internal object DisplayToolProvider : ToolProvider {
             descriptionRes = R.string.ai_tool_push_chart_desc,
             risk = ToolRisk.LOCAL_SIDE_EFFECT,
             statusText = "正在推送图表到眼镜…",
+            // ⚠️ 2026-10-09 补：同 show_image —— 眼镜全屏浮层是单槽位，且附带渲染开销，
+            //   并行执行会导致眼镜端串行错位（同一次多次调用互相顶掉）。
+            sideEffect = true,
             schema = toolSchema(
                 name = "push_chart_to_glasses",
                 description = "把一张 ECharts 图表推到眼镜全屏显示（渲染成图片）。当用户要求在眼镜上看图表/K线/走势图，或说“把刚才的图表推到眼镜”时调用。option 传完整的 ECharts option JSON（与 echarts 代码块相同格式）；若对话里刚生成过图表卡片，直接复用那份 option。",

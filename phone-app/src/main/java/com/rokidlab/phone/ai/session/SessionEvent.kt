@@ -167,6 +167,9 @@ internal data class TurnStart(
  *        与 [promptTokens] 分开记的原因：命中率是「请求前缀逐字节稳定」优化的直接度量，
  *        连续为 0 = 前缀稳定性退化，要看警报而不是翻账单
  * @param modelCalls 本轮的模型调用次数（>1 说明走了工具循环，用量偏高时这是第一解释）
+ * @param partialReply 被打断/失败时**已经产出**的那部分正文（null = 一字未出）。
+ *        存在的理由见 [AssistantMessage.partial]：半截内容此前只推给了 UI，事件流里没有，
+ *        于是模型看不见自己说过什么。空串按 null 处理（"空字符串"不是有效正文）。
  */
 internal data class TurnEnd(
     override val turn: Int,
@@ -178,6 +181,7 @@ internal data class TurnEnd(
     val completionTokens: Int? = null,
     val promptCacheHitTokens: Int? = null,
     val modelCalls: Int? = null,
+    val partialReply: String? = null,
 ) : SessionEvent {
     override val kind: SessionEventKind get() = SessionEventKind.TURN_END
 }
@@ -216,16 +220,29 @@ internal data class AssistantAttempt(
 }
 
 /**
- * AI 最终回复 —— **模型可见**。
+ * AI 回复 —— **模型可见**。
  *
  * 工具轨迹**不在这里存**：它由同一轮的 [ToolCall] 事件派生（见 `SessionProjection`）。
  * 改造前 `ChatMessage.toolTrace` 是一份 `"name(args)"` 字符串列表，与工具调用本身
  * 各存一份，于是"轨迹里有、结构化记录里没有"这种不一致没有东西能发现。
+ *
+ * ⚠️ [partial] = 这条回复是**被打断时的半截输出**，不是完整结论（2026-10-09）。
+ *
+ * ★ 为什么半截也要落盘：改造前被打断轮的回复**只存在于 UI 气泡**（流式 delta 已推给界面），
+ *   事件流里一条 [AssistantMessage] 都没有。症状是"用户看得见 AI 说到一半，说「继续」，
+ *   模型却完全不记得自己说过什么" —— 屏幕上白纸黑字写着，模型上下文里空无一物。
+ *   半截落盘后模型至少知道"我刚才停在哪、已经说了什么"，续做才有起点。
+ *
+ *   刻意**不**因此改变可见性：半截仍然是模型可见的（那正是它的用途）。
+ *   判据上它与完整回复的区别只有"未完成"这一点，靠 [partial] 显式承载 ——
+ *   不靠文本猜测，也不靠"这条 assistant 恰好很短"。
  */
 internal data class AssistantMessage(
     override val turn: Int,
     override val step: Int? = null,
     val text: String,
+    /** true = 被打断/失败时的半截输出，非完整结论（见类注释） */
+    val partial: Boolean = false,
 ) : SessionEvent {
     override val kind: SessionEventKind get() = SessionEventKind.ASSISTANT_MESSAGE
     override val modelVisible: Boolean get() = true

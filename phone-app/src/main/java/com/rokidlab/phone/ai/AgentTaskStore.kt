@@ -206,13 +206,59 @@ object AgentTaskStore {
         }
     }
 
-    /** 标记终态（预算触顶 / 被打断 / 完成），可附带原因 */
-    fun markStatus(context: Context, status: String, reason: String? = null) {
-        val snap = load(context) ?: return
+    /**
+     * 标记终态（预算触顶 / 被打断 / 完成），可附带原因
+     *
+     * @param userText 本轮用户原话。⚠️ **无槽位时用它建快照**（见下），有槽位时只用于
+     *   补全一个空 goal，不覆盖已有 goal（goal 的"首次原话"语义见 [recordPlan]）。
+     *
+     * ★ 2026-10-09 行为变更：改造前 `load(context) ?: return` —— 没有任务槽位就直接不记。
+     *   而槽位只在模型**主动调 update_plan / save_code_file** 时才创建，于是闲聊、问答、
+     *   翻译、查资料这类任务被打断时，[markStatus] 是**空转**的：状态标记没落，
+     *   下一轮 `pendingContext` 自然返回 null。
+     *   症状：用户说「继续」，模型拿不到任何"上次在干什么"的提示（事件流侧的修复能保住
+     *   用户原话，但"这轮是被打断的、可以接着做"这条**状态**只有这里能说）。
+     *
+     *   现在无槽位时建一个**只含中断原因**的快照，让续做能力覆盖全部任务类型。
+     *   代价控制：goal 为空 ⇒ [pendingContext] 走退化措辞（见该方法），不会伪装成
+     *   "有计划可推进"。
+     */
+    fun markStatus(
+        context: Context,
+        status: String,
+        reason: String? = null,
+        userText: String? = null,
+    ) {
+        val existing = load(context)
+        if (existing == null) {
+            // 只为"未完成"状态建槽位：STATUS_DONE 无槽位时本就无处可标，
+            // 建一个 done 快照只会污染 pendingContext 的存在性判断（它见到 done 返回 null，
+            // 但仍多一次磁盘写 + 一次 load）
+            if (status == STATUS_DONE) return
+            val now = System.currentTimeMillis()
+            save(
+                context,
+                Snapshot(
+                    goal = userText?.take(200).orEmpty(),
+                    steps = emptyList(),
+                    artifacts = mutableListOf(),
+                    lastError = reason?.take(200),
+                    status = status,
+                    createdAt = now,
+                    updatedAt = now,
+                ),
+            )
+            Log.i(TAG, "markStatus: $status (新建槽位) ${reason?.take(60).orEmpty()}")
+            return
+        }
+        val snap = existing
         // 已完成的任务不被后续的"空转"标记覆写成未完成
         if (snap.status == STATUS_DONE && status != STATUS_DONE) return
         snap.status = status
         if (!reason.isNullOrBlank()) snap.lastError = reason.take(200)
+        // 槽位存在但 goal 为空（当年由 update_plan 之外的路径建过）⇒ 用本轮原话补上，
+        // 让「继续」至少有"用户当时要什么"可依据。已有 goal 则保持不动（见 recordPlan）
+        if (snap.goal.isBlank() && !userText.isNullOrBlank()) snap.goal = userText.take(200)
         save(context, snap)
         Log.i(TAG, "markStatus: $status ${reason?.take(60).orEmpty()}")
     }
@@ -253,17 +299,54 @@ object AgentTaskStore {
     /**
      * 注入用提示词：TTL 内未完成的任务才返回。
      * 关键信息给全（原话 / 计划与进度 / 已产出文件 / 中断原因），模型据此决定是否续做。
+     *
+     * ★ 2026-10-09：**分两种措辞**，判据是「有没有 plan / 产物」。
+     *
+     * 改造前只有一套措辞，而它通篇假设存在计划（"从「→」那一步接着做"、"调用 clear_agent_task"）。
+     * [markStatus] 改造后无槽位也会建快照，于是**闲聊/问答/翻译类中断**也会走到这里 ——
+     * 而这类任务根本没有 plan，"从第几步接着做"是句无意义的话，模型要么忽略、要么
+     * 反而去找并不存在的步骤。宁可在没有计划时说人话，也不要给一个指向虚构对象的指令。
      */
     fun pendingContext(context: Context): String? {
         val snap = load(context) ?: return null
         if (snap.status == STATUS_DONE) return null
         if (System.currentTimeMillis() - snap.updatedAt > TTL_MS) return null
-        val body = render(snap) ?: return null
+        val hasPlan = snap.steps.isNotEmpty() || snap.artifacts.isNotEmpty()
+        if (!hasPlan) return plainInterruptNote(snap)
+        val body = render(snap)
         return "[未完成的任务（可续做）]\n$body\n" +
             "若用户本轮要求继续/接着做，或明显仍在推进该任务：请从「→」那一步接着做，" +
             "不要重做已完成的步骤（已产出文件可直接用 read_code_file 读取，不必重新生成）；" +
             "若用户要放弃该任务，调用 clear_agent_task。"
     }
+
+    /**
+     * 无计划/无产物时的续做提示（**退化措辞**，见 [pendingContext]）。
+     *
+     * 只给两样东西：用户当时说了什么（若有）+ 上一轮为什么停。
+     * ⚠️ 刻意**不**提"从第几步接着做"（没有计划）、也**不**提 clear_agent_task
+     * （没有任务可清）—— 指向不存在对象的指令比不说更糟。
+     * 指令退化为最朴素的一句：用户说继续就重新回答上面那条请求。
+     *
+     * ★ 参数化而非直接读 [Snapshot]：本类的读写都依赖 `Context.filesDir`，纯 JVM 单测
+     * 碰不到（无 Robolectric）。而**措辞选择是这次修复的关键判据**（有/无 plan 说法
+     * 不同），不能只靠真机肉眼验证 —— 抽成纯函数后由 `AgentTaskStoreTest` 直接钉住。
+     */
+    internal fun plainInterruptNote(goal: String?, lastError: String?): String {
+        val sb = StringBuilder()
+        sb.append("[上一轮被中断]\n")
+        if (!goal.isNullOrBlank()) sb.append("用户当时的问题：").append(goal).append("\n")
+        if (!lastError.isNullOrBlank()) sb.append("中断原因：").append(lastError).append("\n")
+        sb.append(
+            "用户现在说「继续」时，请重新回答上面那条请求（那一轮没有产出回复，" +
+                "模型侧也没有可续接的中间状态）。若用户改主意问别的，直接答新问题即可。",
+        )
+        return sb.toString().trimEnd()
+    }
+
+    /** [plainInterruptNote] 的实例版（读快照的便捷入口） */
+    private fun plainInterruptNote(snap: Snapshot): String =
+        plainInterruptNote(snap.goal, snap.lastError)
 
     /**
      * 计划驱动续做提示（todo 驱动重入，2026-10-02，补评估 C 档 #7）。
@@ -321,6 +404,10 @@ object AgentTaskStore {
             sb.append("\n")
         }
         if (!snap.lastError.isNullOrBlank()) sb.append("上次中断：").append(snap.lastError).append("\n")
+        // ⚠️ 兜底（2026-10-09）：无计划快照理论上总有 goal 或 lastError 之一，
+        // 但两者都空时不能返回空串 —— [render] 的可空返回正是为"没有内容"准备的，
+        // 返回 "" 会让 pendingContext/summary 把空串当成有效内容交给模型。
+        if (sb.isEmpty()) sb.append("（上一轮被中断，未记录到具体内容）")
         return sb.toString().trimEnd()
     }
 }

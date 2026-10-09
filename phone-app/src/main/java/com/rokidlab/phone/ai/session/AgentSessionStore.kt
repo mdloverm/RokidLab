@@ -84,6 +84,22 @@ internal companion object {
          * 最旧的部分本地摘要行已经在兜底了。
          */
         const val REFINE_INPUT_MAX_CHARS = 12000
+
+        /**
+         * 被打断/失败且**一字未出**时补的占位回复（2026-10-09）。
+         *
+         * 它的作用是**占位**而不是传递信息：模型上下文里必须 user/assistant 成对
+         * （见 `CompactionEngine.isTurnBalanced`），而这一轮没有真实回复可落。
+         *
+         * ⚠️ 措辞刻意只说"被中断"、**不解释成失败或错误**：失败轮（网络/服务端）同样走这里。
+         * 若写成"生成失败"，模型下一轮会以为自己上一轮说错了什么而道歉 —— 那是凭空捏造的上下文。
+         * 保持中性，模型只会理解为"那轮没说完"。
+         */
+        const val INTERRUPTED_PLACEHOLDER =
+            "（这一轮被中断了，没有完整回复。用户若要求继续，请基于上面那条请求重新作答。）"
+
+        /** 工具轨迹作废声明的 reason 值（历史值不可改，见 `VisibilityCut`） */
+        private const val TURN_NOISE_CUT = "turn_tool_noise"
     }
 
     /** 压缩后的滚动摘要精炼器（见构造参数 [digestRefiner] 的契约说明） */
@@ -259,13 +275,32 @@ internal companion object {
      * 两条完全不同的收尾路径，**这个分支不能省**：
      *  - 有结论（[TurnEndReason.COMPLETED] / [TurnEndReason.BUDGET_EXHAUSTED]）：落
      *    [AssistantMessage] + [TurnEnd]，然后做压力裁剪（= 改造前 `recordTurn` 里的 trim）。
-     *  - 没结论（被打断 / 失败）：追加 [TurnEnd]，再追加一条 [VisibilityCut] 把本轮事件**声明为
-     *    不算数**。否则"有 user 没有 assistant"的半个轮会留在可见历史里，下一轮请求就会出现
-     *    **两条连续 user 消息** —— 部分服务端直接 400（这正是轮完整性校验要防的形态）。
+     *  - 没结论（被打断 / 失败）：落半截正文（若有）+ [TurnEnd]，并用一条 [VisibilityCut]
+     *    只作废**工具轨迹**，**保留用户原话**（见下方"为什么不再整轮作废"）。
+     *
+     * ## 为什么不再整轮作废（2026-10-09，行为变更）
+     *
+     * 改造前这里 `cutTurn(turn)` 把整轮事件（**含轮次开头就落盘的 [UserMessage]**）全部
+     * 声明为"不算数"。动机是对的：不剪就会在请求里留下"有 user 没有 assistant"的半轮，
+     * 下一轮拼接后变成**两条连续 user** —— 部分服务端直接 400。
+     *
+     * 但代价是**信息真空**：用户说「继续」时，模型上下文里既没有被打断的那句原话，
+     * 也没有任何痕迹表明"刚才那轮发生了什么"。症状是"上下文有点问题" ——
+     * 屏幕上有整段对话，模型却像第一次听说这件事。若那轮没落过 plan/文件
+     * （见 `AgentTaskStore.markStatus` 改造前的早退），连续做提示词也补不回来。
+     *
+     * 现在改为**保留 [UserMessage] + 补一条占位 [AssistantMessage]**：
+     *  - "两条连续 user"的隐患被占位 assistant 消掉（轮完整性不变式仍然成立）；
+     *  - 用户原话回到上下文，「继续」有了指代对象。
+     *
+     * ⚠️ 占位文本刻意**不解释成"我失败了"**而是说"被中断了"：失败的轮同样走这条路径，
+     * 而失败（网络/服务端）不该让模型在下一轮以为自己"上一轮说错了什么"而道歉。
      *
      * 用量参数（可空）落在 [TurnEnd] 上，**两条路径都会记**：被打断的长任务恰恰最烧 token，
      * 把成本挂在"有没有回复"上会让它整轮不计费。
      *
+     * @param partialReply 被打断时**已经产出**的正文（流式推给 UI 的那部分）。
+     *   非空时作为 [AssistantMessage]（`partial = true`）落盘，模型才知道"我刚才说到哪"。
      * @return 压力裁剪的结果（未发生裁剪时为 null）
      */
     fun finishTurn(
@@ -277,6 +312,7 @@ internal companion object {
         completionTokens: Int? = null,
         promptCacheHitTokens: Int? = null,
         modelCalls: Int? = null,
+        partialReply: String? = null,
     ): CompactionResult? {
         val end = TurnEnd(
             turn = turn,
@@ -286,6 +322,7 @@ internal companion object {
             completionTokens = completionTokens,
             promptCacheHitTokens = promptCacheHitTokens,
             modelCalls = modelCalls,
+            partialReply = partialReply?.takeIf { it.isNotEmpty() },
         )
         return when (reason) {
             TurnEndReason.COMPLETED, TurnEndReason.BUDGET_EXHAUSTED -> {
@@ -296,10 +333,41 @@ internal companion object {
 
             TurnEndReason.INTERRUPTED, TurnEndReason.FAILED -> {
                 append(end)
-                cutTurn(turn, reason.wire)
+                // 半截正文先落：它模型可见，是"我刚才说到哪"的唯一载体
+                val partial = partialReply?.takeIf { it.isNotEmpty() }
+                if (partial != null) {
+                    append(AssistantMessage(turn, text = partial, partial = true))
+                } else if (!hasAssistantMessage(turn)) {
+                    // 一字未出也不能留半轮：补占位，保证 user/assistant 仍然成对
+                    append(AssistantMessage(turn, text = INTERRUPTED_PLACEHOLDER, partial = true))
+                }
+                // 只作废工具轨迹（ToolCall/ToolResult/ContextInject/attempt）。
+                // ★ 刻意**不**动 [UserMessage] —— 用户原话必须留在上下文里，
+                //   否则「继续」失去指代对象（见 KDoc"为什么不再整轮作废"）。
+                cutToolNoise(turn)
                 null
             }
         }
+    }
+
+    /** 本轮是否已有模型可见的 assistant 消息（避免占位与真实回复重复） */
+    private fun hasAssistantMessage(turn: Int): Boolean =
+        allRecords().any { it.event.turn == turn && it.event is AssistantMessage }
+
+    /**
+     * 作废某一轮的**工具轨迹类**事件（保留 [UserMessage] 与 [AssistantMessage]）。
+     *
+     * ⚠️ 这类事件本来就不进模型历史（`modelVisible = false`），作废它们不是为了上下文，
+     * 而是为了让「这一轮的工具调用不算数」这件事在事件流里有明确声明 ——
+     * 否则被打断的工具调用会与下一轮的工具调用混在同一条轨迹里，
+     * 回溯"这个调用是哪一轮发起的"会得到错误答案。
+     */
+    private fun cutToolNoise(turn: Int) {
+        val seqs = allRecords().filter { r ->
+            r.event.turn == turn && r.event !is UserMessage && r.event !is AssistantMessage
+        }.map { it.seq }
+        if (seqs.isEmpty()) return
+        append(VisibilityCut(turn = null, seqs = seqs, clearDigest = false, reason = TURN_NOISE_CUT))
     }
 
     // ═══════════════════════ 改变可见性（全部是"追加声明"）═══════════════════════
@@ -316,6 +384,34 @@ internal companion object {
         cutTurn(lastDone, "drop_last_turn")
     }
 
+    /**
+     * 丢弃 **[fromTurn] 及其之后的全部轮**（2026-10-09）。
+     *
+     * ★ 为什么要它：UI 的 [com.rokidlab.phone.store.ChatStateHolder.truncateFrom] 是
+     * "从某条消息起砍掉后面全部"，而 [dropLastTurn] 只能切**最后一轮** —— 两者口径不一致，
+     * 于是「编辑靠前的一条消息」时，界面砍掉了后续好几轮，而事件流里那些轮**仍然可见**：
+     * 用户看到消息没了，模型却还在引用它们（症状＝"删了它还记得"）。
+     *
+     * [fromTurn] 用 1 起算（与事件流的轮号一致）；传 0 或负数 = 无效入参，**不做任何事**
+     * （返回 false 让调用方知道没生效，而不是默默切掉一切）。
+     *
+     * @return 是否真的作废了至少一轮（false = 入参无效或该轮不存在）
+     */
+    fun dropFromTurn(fromTurn: Int): Boolean {
+        if (fromTurn <= 0) return false
+        val hit = allRecords().any { (it.event.turn ?: 0) >= fromTurn }
+        if (!hit) return false
+        cutTurnFrom(fromTurn, "drop_from_turn")
+        return true
+    }
+
+    /** 把 [fromTurn] 及之后所有轮的事件声明为"不算数"（保留摘要） */
+    private fun cutTurnFrom(fromTurn: Int, reason: String) {
+        val seqs = allRecords().filter { (it.event.turn ?: 0) >= fromTurn }.map { it.seq }
+        if (seqs.isEmpty()) return
+        append(VisibilityCut(turn = null, seqs = seqs, clearDigest = false, reason = reason))
+    }
+
     /** 真正删除事件流文件（用户显式清空 / 会话被删除）。调用后 seq 从 1 重新开始 */
     fun wipe() {
         log.clear()
@@ -324,7 +420,14 @@ internal companion object {
         cachedProjection = null
     }
 
-    /** 把某一轮的全部事件声明为"不算数"（保留摘要） */
+    /** 把某一轮的全部事件声明为"不算数"（保留摘要）。
+     *
+     * ⚠️ **只用于 `dropLastTurn`**（用户显式「重新生成 / 编辑重发」—— 那时用户明确要求
+     * 丢掉这一轮的全部痕迹，包括自己说过的话）。
+     *
+     * 被打断/失败**不走这里**（2026-10-09）：那种情况下必须保留 [UserMessage]，
+     * 否则用户说「继续」时模型看不到任何指代对象。分工见 [finishTurn] 的 KDoc。
+     */
     private fun cutTurn(turn: Int, reason: String) {
         val seqs = allRecords().filter { it.event.turn == turn }.map { it.seq }
         if (seqs.isEmpty()) return
@@ -415,7 +518,12 @@ internal companion object {
         // 恰好是事件层预留的"只重建摘要文本"语义）；失败 = 本地摘要原样保留，什么都不追加。
         // 溢出恢复路径（CONTEXT_OVERFLOW）不精炼：那是用户正在等回复的轮中恢复，不该再加一跳网络。
         if (digestRefiner != null && trigger != CompactionTrigger.CONTEXT_OVERFLOW && removed > 0) {
-            refineDigest(bodyBefore.take(removed))
+            // ⚠️ 传**压缩前**的摘要（`before` 的置顶 system 行），不是 `newDigest`：
+            // newDigest 是引擎刚追加过新要点的产物，而 LLM 要重写的是"既有结论 + 新增内容"
+            // 这两者的**并集**。用 newDigest 会把刚追加的本地首句摘要与即将被替换的旧摘要
+            // 混在一起当"旧结论"，而真正的旧结论恰恰在 `before` 里。
+            val priorDigest = before.firstOrNull { it.role == ROLE_SYSTEM }?.content
+            refineDigest(bodyBefore.take(removed), priorDigest)
         }
         return result
     }
@@ -423,10 +531,26 @@ internal companion object {
     /**
      * 用 LLM 重写当前滚动摘要（成功后**追加**一条新的 [CompactionSummary] 声明）。
      *
-     * 输入 = 刚被折进摘要的那批消息原文（尾部截到 [REFINE_INPUT_MAX_CHARS]）；
-     * 任何失败（异常 / 空结果 / 超预算空内容）都静默保留本地摘要 —— 打点留痕即可。
+     * 输入 = [priorDigest]（**旧摘要正文**，无则空）+ 刚被折进摘要的那批消息原文
+     * （尾部截到 [REFINE_INPUT_MAX_CHARS]）；任何失败（异常 / 空结果 / 超预算空内容）
+     * 都静默保留本地摘要 —— 打点留痕即可。
+     *
+     * ★★ 2026-10-09 修复「累积性遗忘」（这个 bug 让模型**越压缩越忘事**）：
+     *
+     * 改造前只喂 `shadowed`（**本次**压掉的原文），却用精炼结果**整体替换**摘要文本。
+     * 于是第 2 次压缩时，第 1 次压掉的内容**既被 shadowedSeqs 隐藏、也不在新摘要里** ——
+     * 永久消失，且摘要行数永远只有一轮。
+     *
+     * 修法是让精炼器**看得到旧的结论**：旧摘要正文与本次新增原文一起进 prompts，
+     * 输出的仍然是**全量摘要**（受 [CompactionPolicy.digestMaxChars] 约束）。
+     * 📌 为什么不是"把新要点追加到旧摘要后面"：摘要有行数/字符上限，追加会让它随压缩
+     * 次数线性增长 —— 而"摘要越来越长"正是压缩要防的事。让模型在**预算内重写全量**
+     * 才能同时满足"不忘事"与"不膨胀"。
+     *
+     * ⚠️ 旧文件/无摘要时 [priorDigest] 为空，退化成改造前行为（只精炼本次）—— 合法，
+     * 因为那时确实没有"旧结论"可丢。
      */
-    private fun refineDigest(shadowed: List<SessionRecord>) {
+    private fun refineDigest(shadowed: List<SessionRecord>, priorDigest: String?) {
         val ref = digestRefiner ?: return
         // 只取对话本体（UserMessage/AssistantMessage），按时间序拼成 (role, text) 对。
         // assistant 附上本轮工具轨迹（与 SessionProjection 的 traceByTurn 同口径）——
@@ -449,16 +573,32 @@ internal companion object {
             }
         }
         if (turns.isEmpty()) return
-        // 输入超限时从尾部截：保留最近语境（截点切在消息边界上，不把一条消息劈成两半）
+        // ★ 旧摘要正文（标题行之后的部分）作为**第一条**材料：它代表"更早那批已被压掉的
+        //   对话结论"，是本次新增原文里没有的信息。缺了它就是那次累积性遗忘的成因。
+        val prior = priorDigest
+            ?.lineSequence()
+            ?.drop(1)
+            ?.filter { it.isNotBlank() }
+            ?.toList()
+            .orEmpty()
+        val items = ArrayList<Pair<String, String>>(turns.size + 1)
+        if (prior.isNotEmpty()) {
+            items.add("system" to "[更早对话的既有摘要，必须保留其要点]\n" + prior.joinToString("\n"))
+        }
+        items.addAll(turns)
+        // 输入超限时从尾部截：保留最近语境（截点切在消息边界上，不把一条消息劈成两半）。
+        // ⚠️ 旧摘要放在**最前**并与尾部截断同权 —— 若它被截掉，就退回改造前的遗忘行为。
+        // 它通常只有几百到一千余字符（受 digestMaxChars 约束），而截断阈值 12000，
+        // 实际几乎不会被截；真被截时保留"较新"的对话正文是合理的取舍。
         var from = 0
         var total = 0
-        for (i in turns.indices.reversed()) {
-            val next = total + turns[i].second.length
-            if (next > REFINE_INPUT_MAX_CHARS && i < turns.indices.last) break
+        for (i in items.indices.reversed()) {
+            val next = total + items[i].second.length
+            if (next > REFINE_INPUT_MAX_CHARS && i < items.indices.last) break
             total = next
             from = i
         }
-        val input = turns.subList(from, turns.size)
+        val input = items.subList(from, items.size)
         val budget = (policy.digestMaxChars - BasicCompactionEngine.DIGEST_HEADER.length - 1).coerceAtLeast(60)
         val refined = runCatching { ref.refine(input, budget) }
             .onFailure { onTrim("digest refine failed: ${it.message}（保留本地摘要）") }

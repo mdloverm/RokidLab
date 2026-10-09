@@ -47,9 +47,24 @@ internal object LlmDigestRefiner {
             append("要求：\n")
             append("1. 只输出要点行：每行以「· 」开头，一行一个要点；不要任何开场白、解释或代码围栏。\n")
             append("2. 保留**结论与承诺**——问出的答案、做出的决定、约定或未完成的事；不要只写\"聊过某某话题\"。\n")
-            append("3. 要点按对话时间排序，总长不超过 ").append(budget).append(" 字。\n\n对话记录：\n")
+            append("3. 要点按对话时间排序，总长不超过 ").append(budget).append(" 字。\n")
+            // ★ 2026-10-09：输入里可能出现 role="system" 的**既有摘要**（累积性遗忘修复）。
+            //   它不是一句"AI 说的话"，标错角色会让模型把它当成对话内容里的一句，
+            //   从而当成"这一句是助手说的"而不是"这是此前对话的结论摘要"。
+            //   明确标成【既有摘要】并要求**保留其要点**：这一段是本次新增记录里没有的信息，
+            //   丢了就等于把更早的结论从摘要里删掉（那正是本次修复的原始 bug）。
+            append("4. 若输入开头有【既有摘要】段落，**必须保留其中的要点**（可精简措辞，但不可丢弃信息），")
+            append("它代表更早那段对话已经得出的结论，后续记录里不会再出现这些内容。\n\n对话记录：\n")
             turns.forEach { (role, text) ->
-                append(if (role == "user") "用户：" else "AI：").append(text).append('\n')
+                append(
+                    when (role) {
+                        "user" -> "用户："
+                        "assistant" -> "AI："
+                        // 其余（含 system）按内容语义标注，不硬套"AI：" ——
+                        // 谎报角色比不标更糟：模型会据此误判这段话是谁说的。
+                        else -> "【既有摘要】\n"
+                    }
+                ).append(text).append('\n')
             }
         }
         val messages = JSONArray().put(

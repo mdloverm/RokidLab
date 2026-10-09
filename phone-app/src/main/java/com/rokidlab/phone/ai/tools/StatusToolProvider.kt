@@ -95,6 +95,10 @@ internal object StatusToolProvider : ToolProvider {
             descriptionRes = R.string.ai_tool_clear_agent_task_desc,
             hidden = true,
             risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            // ⚠️ 2026-10-09 补：它删掉 filesDir/agent_task.json（真删除），原先漏标 ⇒
+            //   并行 + 失败重试 3 次。重试"再删一次"本身无害，但并发下与 recordPlan
+            //   竞争会写出"刚清完又被写回"的错位状态。
+            sideEffect = true,
             statusText = "正在清除任务记录…",
             schema = toolSchema(
                 name = "clear_agent_task",

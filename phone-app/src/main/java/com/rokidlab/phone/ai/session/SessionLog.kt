@@ -111,6 +111,12 @@ internal class SessionLog(
 
         /** 前缀缓存命中的输入 token（可空；2026-09-26 新增，旧文件读不到 = null） */
         private const val KEY_CACHE_HIT = "cacheHitTokens"
+
+        /** 半截正文（2026-10-09 新增；旧文件读不到 = null ⇒ 按"没这字段"处理） */
+        private const val KEY_PARTIAL_REPLY = "partialReply"
+
+        /** 这条 assistant 是不是被打断的半截输出（2026-10-09 新增，默认 false 不落字段） */
+        private const val KEY_PARTIAL = "partial"
     }
 
     /** 已分配的最大 seq 缓存（-1 = 尚未从文件加载）。写操作与读操作都在 [lock] 内访问 */
@@ -208,6 +214,8 @@ internal class SessionLog(
                 e.completionTokens?.let { o.put(KEY_COMPLETION_TOKENS, it) }
                 e.modelCalls?.let { o.put(KEY_MODEL_CALLS, it) }
                 e.promptCacheHitTokens?.let { o.put(KEY_CACHE_HIT, it) }
+                // 空串按"没产出"处理，不落字段 —— 否则文件里会出现"有 partialReply 但是空的"
+                e.partialReply?.takeIf { it.isNotEmpty() }?.let { o.put(KEY_PARTIAL_REPLY, it) }
             }
 
             is UserMessage -> {
@@ -220,7 +228,11 @@ internal class SessionLog(
                 e.detail?.let { o.put(KEY_DETAIL, it) }
             }
 
-            is AssistantMessage -> o.put(KEY_TEXT, e.text)
+            is AssistantMessage -> {
+                o.put(KEY_TEXT, e.text)
+                // 同 truncated：默认值不落字段，文件里出现 partial 一律为 true
+                if (e.partial) o.put(KEY_PARTIAL, true)
+            }
 
             is ToolCall -> {
                 o.put(KEY_CALL_ID, e.callId)
@@ -302,6 +314,8 @@ internal class SessionLog(
                 completionTokens = if (o.has(KEY_COMPLETION_TOKENS)) o.optInt(KEY_COMPLETION_TOKENS) else null,
                 promptCacheHitTokens = if (o.has(KEY_CACHE_HIT)) o.optInt(KEY_CACHE_HIT) else null,
                 modelCalls = if (o.has(KEY_MODEL_CALLS)) o.optInt(KEY_MODEL_CALLS) else null,
+                // 旧文件没有这个字段 ⇒ null（"没这字段"= 当时没有半截正文，不是"半截是空的"）
+                partialReply = o.optString(KEY_PARTIAL_REPLY).ifBlank { null },
             )
 
             SessionEventKind.USER_MESSAGE -> UserMessage(
@@ -322,6 +336,7 @@ internal class SessionLog(
                 turn = turn ?: return null,
                 step = step,
                 text = o.optString(KEY_TEXT),
+                partial = o.optBoolean(KEY_PARTIAL, false),
             )
 
             SessionEventKind.TOOL_CALL -> ToolCall(

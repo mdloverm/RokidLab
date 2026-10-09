@@ -207,6 +207,27 @@ class OpenAiService(
             return body.contains("response_format") || body.contains("json_object")
         }
 
+        /**
+         * 端点是否因为 **`stream_options` / `include_usage` 这个可选字段**而拒了请求（2026-10-09）。
+         *
+         * ★ 存在的理由：没有它，上面那条"撤掉 stream_options 重试"的兜底就是**无条件通配** ——
+         *   任何 4xx 都会被误归因（401 密钥失效/402 余额不足/400 上下文溢出/404 模型名错），
+         *   代价是白等一轮重发 + 把该 host 永久拉黑导致用量统计从此为"未知"。
+         *   真因被埋掉比报错更难排查，所以这里要求**错误正文真的提到了那个字段名**。
+         *
+         * 口径与 [isResponseFormatRejection] 同款：只看 4xx + 正文关键字，不做猜测。
+         * 判据收紧的代价：某些实现回一句泛化的 "invalid request" 而不点名字段 —— 那时
+         * 走常规上抛，用户看到真实错误，**不比误判更差**。
+         */
+        private fun isStreamUsageRejection(e: Exception): Boolean {
+            if (e !is com.rokidlab.phone.util.HttpStatusException || e.code !in 400..499) return false
+            val body = e.body.lowercase()
+            return body.contains("stream_options") ||
+                body.contains("include_usage") ||
+                // 有些实现回的是「未知/不支持的字段」并把可疑字段名一并列出
+                (body.contains("unsupported") && body.contains("usage"))
+        }
+
         /** 端点标识（host 拿不到时退化成去掉尾斜杠的 baseUrl） */
         private fun endpointHost(baseUrl: String): String {
             val base = baseUrl.trimEnd('/')
@@ -229,6 +250,19 @@ class OpenAiService(
          */
         fun aiFailureHint(e: Throwable): String = when (e) {
             is com.rokidlab.phone.util.HttpStatusException -> hintForStatus(e.code, e.body)
+            // ⚠️ 2026-10-09 分流：改造前 `else` 把四类完全不同的故障压成同一句
+            // 「AI 服务暂时不可用」。用户无法分辨是手机没网、超时、证书问题还是服务商挂了，
+            // 而这几类的**用户动作完全不同**（连网 / 等一等 / 换网络或问管理员）。
+            // ⚠️ 判据顺序有讲究：SSLException 不是 UnknownHostException 的子类，
+            //   但仍按"先具体后宽泛"排列，避免宽泛分支吃掉具体分支。
+            is java.net.UnknownHostException ->
+                "连不上服务器，请检查手机网络或接口地址是否正确"
+            is java.net.SocketTimeoutException ->
+                "网络超时了，已自动重试仍未成功，请检查网络后重试"
+            is javax.net.ssl.SSLException ->
+                "证书校验没通过，若你在用代理请检查代理设置"
+            is java.net.ConnectException ->
+                "连接被拒绝，请检查网络是否通畅"
             else -> "抱歉，AI 服务暂时不可用。"
         }
 
@@ -237,6 +271,11 @@ class OpenAiService(
             val b = body.lowercase()
             return when {
                 b.contains("insufficient balance") -> "AI 账户余额不足，请先充值后再试"
+                // ⚠️ 2026-10-09 补：OpenAI 系的配额耗尽用的是 insufficient_quota，
+                //   与 DeepSeek 的 insufficient balance 是**两个不同的词** —— 漏掉它会落到
+                //   下面的 429 分支，让用户"稍等一会儿再试"，而真因是账单（等也没用）。
+                b.contains("insufficient_quota") || b.contains("quota_exceeded") ->
+                    "AI 接口配额已用完，请检查账户余额或提升配额后再试"
                 b.contains("invalid schema") ->
                     "AI 工具声明不合法，属本机异常，请到「开发者模式」导出日志反馈"
                 // 输入侧超长：**与下一支"输出被截断"必须分开**。两者的用户动作完全不同 ——
@@ -1000,7 +1039,22 @@ class OpenAiService(
                 //   （不计入重试次数），并记住这个端点以后不再带。
                 //   没有这条兜底，一个"严格校验未知字段"的兼容实现就会让整轮对话 400 ——
                 //   那正是「AI 突然不说话、日志里啥异常也没有」最典型的成因。
-                if (hopeless && usageOptIn && !accumulator.hasEmittedContent()) {
+                //
+                // ⚠️ 2026-10-09 收窄归因：原先这里是**无条件通配**（只要 hopeless 就归因到
+                //   stream_options），而 hopeless = 4xx 且非 408/429（见 isHopelessStatus）。
+                //   于是 401 密钥失效 / 402 余额不足 / 400 上下文溢出 / 404 模型名错
+                //   **全部**被误判成"端点拒绝 stream_options" ⇒ 整轮白等一次重发（30~120s），
+                //   并把该 host **永久**拉黑 ⇒ 此后整个 App 生命周期不再上报 token，
+                //   用量面板一直显示"未知"，而真因（余额/密钥）被彻底埋掉。
+                //
+                //   收窄口径：**响应正文里真的提到了 stream_options / include_usage**
+                //   才归因（与上面 response_format 的 isResponseFormatRejection 同款判据）。
+                //   精确的 5 条匹配器（temperature/thinking/reasoning/tool_choice/
+                //   response_format）都不匹配时，若错误文本连"流式可选字段"都没提，
+                //   那它多半是别的 4xx ⇒ 交给下面的常规上抛，让用户看到真实错误。
+                if (hopeless && usageOptIn && !accumulator.hasEmittedContent() &&
+                    isStreamUsageRejection(e)
+                ) {
                     streamUsageUnsupported.add(endpointHost(baseUrl))
                     usageOptIn = false
                     Log.w(

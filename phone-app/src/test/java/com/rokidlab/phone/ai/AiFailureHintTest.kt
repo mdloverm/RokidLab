@@ -114,12 +114,65 @@ class AiFailureHintTest {
         assertFalse("5xx 不该误导用户去改配置", server.contains("设置"))
     }
 
+    /**
+     * 网络类异常**分流**（2026-10-09 行为变更）。
+     *
+     * ★ 这条原先名叫「网络类异常仍回落通用文案」，断言 SocketTimeoutException 得到
+     * 「抱歉，AI 服务暂时不可用。」—— 它锁的正是本次要改掉的缺陷：
+     * 用户无法分辨是**手机没网**、**超时**、**证书/代理问题**还是**服务商挂了**，
+     * 而这几类的用户动作完全相反（连网 / 等一等 / 换网络 / 等服务商）。
+     *
+     * 代价：超时文案仍会被重试耗尽后才出现（retryAttempts=3 × 30s），
+     * 但那句话现在能告诉用户"该检查网络"，而不是让人干等。
+     */
     @Test
-    fun `网络类异常仍回落通用文案`() {
+    fun `网络类异常按类型分流且不含换行`() {
+        val timeout = OpenAiService.aiFailureHint(java.net.SocketTimeoutException("timeout"))
+        assertTrue("超时应说清是超时，实际：$timeout", timeout.contains("超时"))
+        assertFalse("超时不该说成通用不可用（用户无法判断该做什么）", timeout.contains("服务暂时不可用"))
+
+        val unknownHost = OpenAiService.aiFailureHint(java.net.UnknownHostException("api.deepseek.com"))
+        assertTrue(
+            "域名解析失败应指向网络或接口地址，实际：$unknownHost",
+            unknownHost.contains("网络") || unknownHost.contains("接口地址"),
+        )
+
+        val ssl = OpenAiService.aiFailureHint(javax.net.ssl.SSLException("handshake failed"))
+        assertTrue("证书问题应指向证书/代理，实际：$ssl", ssl.contains("证书"))
+
+        // 眼镜 TTS 直接朗读：换行会被念成停顿错乱
+        listOf(timeout, unknownHost, ssl).forEach {
+            assertFalse("提示不应含换行：$it", it.contains("\n"))
+            assertTrue("提示过长（${it.length}）：$it", it.length <= 45)
+        }
+    }
+
+    /**
+     * 未知异常仍回落通用文案（分流不能变成"什么都给具体提示"）。
+     *
+     * ⚠️ 这条判据的另一半：**不能过度分流**。给一个根本不是网络问题的异常
+     * 贴上"请检查手机网络"是**误导性提示**，比通用文案更糟 —— 用户会去查一个
+     * 不存在的问题。所以只认已知的几个具体类型，其余老实回落。
+     */
+    @Test
+    fun `未知异常仍回落通用文案`() {
         assertEquals(
             "抱歉，AI 服务暂时不可用。",
-            OpenAiService.aiFailureHint(java.net.SocketTimeoutException("timeout")),
+            OpenAiService.aiFailureHint(IllegalStateException("boom")),
         )
+    }
+
+    /**
+     * 配额耗尽必须说清是账单问题（2026-10-09）。
+     *
+     * OpenAI 系用 `insufficient_quota`，DeepSeek 系用 `insufficient balance` —— **两个不同的词**。
+     * 漏掉前者会落到 429「太频繁了，稍等一会儿」，让用户干等，而真因是配额用完（等也没用）。
+     */
+    @Test
+    fun `insufficient_quota 指向配额而非限流`() {
+        val quota = OpenAiService.aiFailureHint(HttpStatusException(429, "insufficient_quota"))
+        assertTrue("应指出配额/余额，实际：$quota", quota.contains("配额") || quota.contains("余额"))
+        assertFalse("不该说成'太频繁，稍等一会儿'（等也没用），实际：$quota", quota.contains("频繁"))
     }
 
     @Test

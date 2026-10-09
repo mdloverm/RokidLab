@@ -26,7 +26,9 @@ import java.io.File
  *  3. **清空**：只由用户显式触发（`wipe` 真删文件）—— 原先的"10 分钟无活动自动过期"已于
  *     2026-09-20 移除（与"记忆随对话保存"相抵，且静默发生）；
  *  4. **重启重建**：同一个文件重新打开，历史逐条一致（这是整个接线的目的）；
- *  5. 工具调用/结果成对、被打断的轮不留半轮（否则请求会出现连续两条 user → 400）。
+ *  5. 工具调用/结果成对；被打断的轮**留 user 原话 + 补占位 assistant**（2026-10-09 行为变更，
+ *     见"被打断的轮保留用户原话并补占位 assistant"）；
+ *  6. **按轮区间作废**（`dropFromTurn`）：UI 删/改消息要同步事件流，否则"删了它还记得"。
  */
 /**
  * 预算阈值的**单一取值处**。
@@ -246,29 +248,101 @@ class AgentSessionStoreTest {
         assertEquals("save_code_file", orphans[0].name)
     }
 
+    /**
+     * 被打断的轮：**保留用户原话 + 补占位 assistant**（2026-10-09 行为变更）。
+     *
+     * ★ 这条测试是那次修复的判据所在。它原先断言"被打断的那轮必须**完全**退出可见历史"
+     * （`assertFalse(h.any { it.content == "第二轮" })`）—— 那个断言本身在防"连续两条 user"，
+     * 动机对，但手段过头：它把用户原话一起剪掉了，于是用户说「继续」时模型既看不到原话、
+     * 也不知道发生过什么。
+     *
+     * 现在改成"剪工具轨迹、留对话"，而**真正要防的那条形态由下一条测试单独钉住** ——
+     * 不变式是"user/assistant 成对"，不是"这一轮必须消失"。
+     */
     @Test
-    fun `被打断的轮不留半轮（否则请求会出现连续两条 user）`() {
+    fun `被打断的轮保留用户原话并补占位 assistant`() {
         val store = newStore()
         recordTurn(store, "第一轮", "好的")
-        // 第二轮：用户消息已落盘，但生成被打断
+        // 第二轮：用户消息已落盘，但生成被打断（一字未出）
         val t = store.beginTurn(MessageSource.VOICE)
         store.appendUserMessage(t, "第二轮", MessageSource.VOICE)
         store.appendAttempt(t, AttemptOutcome.SUPERSEDED, detail = "被新消息抢占")
         store.finishTurn(t, null, TurnEndReason.INTERRUPTED)
 
         val h = store.history()
-        assertEquals("被打断的那轮必须完全退出可见历史", listOf("第一轮", "好的"), h.map { it.content })
-        assertTrue("历史必须保持 user/assistant 平衡（偶数、以 assistant 结尾）", h.size % 2 == 0)
-        assertFalse("本轮那条 user 消息不能残留", h.any { it.content == "第二轮" })
+        assertEquals(
+            "被打断的轮要留下 user 原话 + 占位 assistant（否则「继续」没有指代对象）",
+            listOf("第一轮", "好的", "第二轮", AgentSessionStore.INTERRUPTED_PLACEHOLDER),
+            h.map { it.content },
+        )
+        assertTrue("本轮那条 user 消息必须保留", h.any { it.content == "第二轮" })
+    }
+
+    /**
+     * 真正的不变式：**任何轮次组合后都不能出现连续两条 user**（部分服务端直接 400）。
+     *
+     * 为什么要单列：修复前它被"整轮剪掉"这个手段顺带保证了，而手段本身代价过大
+     * （连带剪掉用户原话）。改成"留 user + 补 assistant"后，必须有一条测试**直接**盯住
+     * 这个形态，否则将来有人为了别的理由调整占位逻辑，400 会静默回来。
+     */
+    @Test
+    fun `打断与失败都不得留下连续两条 user`() {
+        val store = newStore()
+        recordTurn(store, "第一轮", "好的")
+        // 连续三轮被不同方式打断：抢占 / 一字未出的失败 / 有半截正文的打断
+        val t2 = store.beginTurn(MessageSource.TEXT)
+        store.appendUserMessage(t2, "问二", MessageSource.TEXT)
+        store.finishTurn(t2, null, TurnEndReason.INTERRUPTED)
+
+        val t3 = store.beginTurn(MessageSource.TEXT)
+        store.appendUserMessage(t3, "问三", MessageSource.TEXT)
+        store.finishTurn(t3, null, TurnEndReason.FAILED, detail = "连接超时")
+
+        val t4 = store.beginTurn(MessageSource.TEXT)
+        store.appendUserMessage(t4, "问四", MessageSource.TEXT)
+        store.finishTurn(t4, null, TurnEndReason.INTERRUPTED, partialReply = "说到一半")
+
+        val h = store.history().dropWhile { it.role == "system" }
+        h.zipWithNext().forEach { (a, b) ->
+            assertFalse(
+                "出现连续两条 user（会让部分服务端 400）：'${a.content.take(20)}' → '${b.content.take(20)}'",
+                a.role == "user" && b.role == "user",
+            )
+        }
+        assertTrue("整体仍须成对（偶数条）", h.size % 2 == 0)
+        assertTrue("须以 assistant 结尾", h.last().role == "assistant")
+    }
+
+    /** 半截正文落盘且标记 partial（方案 C）：模型得知道自己"刚才说到哪" */
+    @Test
+    fun `打断时的半截正文落盘并标记 partial`() {
+        val store = newStore()
+        val t = store.beginTurn(MessageSource.TEXT)
+        store.appendUserMessage(t, "讲个长故事", MessageSource.TEXT)
+        store.finishTurn(
+            t,
+            null,
+            TurnEndReason.INTERRUPTED,
+            partialReply = "从前有一座山，山里有座庙",
+        )
+
+        val h = store.history()
+        assertEquals(
+            "用户原话 + 半截正文都要在上下文里",
+            listOf("讲个长故事", "从前有一座山，山里有座庙"),
+            h.map { it.content },
+        )
     }
 
     @Test
-    fun `失败的轮同样不留半轮`() {
+    fun `失败的轮同样保留用户原话`() {
         val store = newStore()
         val t = store.beginTurn(MessageSource.TEXT)
         store.appendUserMessage(t, "会失败的提问", MessageSource.TEXT)
         store.finishTurn(t, null, TurnEndReason.FAILED, detail = "连接超时")
-        assertTrue(store.history().isEmpty())
+        val h = store.history()
+        assertEquals("失败轮的 user 原话也要留（用户可能重试或说继续）", "会失败的提问", h.first().content)
+        assertEquals(2, h.size)
     }
 
     @Test
@@ -326,6 +400,53 @@ class AgentSessionStoreTest {
         val store = newStore()
         store.dropLastTurn()
         assertTrue(store.history().isEmpty())
+    }
+
+    // ═══════════════════ 4b. 按轮区间作废（dropFromTurn）═══════════════════
+
+    /**
+     * 作废**该轮及其之后**的全部轮 —— 这是 [dropFromTurn] 存在的理由：
+     * UI 的 `truncateFrom` 砍掉"从这条起全部"，而 `dropLastTurn` 只切最后一轮，
+     * 口径不一致 ⇒ 用户删掉一条中间的消息，模型仍引用它（"删了它还记得"）。
+     */
+    @Test
+    fun `dropFromTurn 作废该轮及其之后的全部轮`() {
+        val store = newStore()
+        recordTurn(store, "第一轮", "答一")
+        recordTurn(store, "第二轮", "答二")
+        recordTurn(store, "第三轮", "答三")
+
+        assertTrue(store.dropFromTurn(2))
+
+        val h = store.history()
+        assertEquals(
+            "只应保留第一轮（第二轮起全部作废）",
+            listOf("第一轮", "答一"),
+            h.map { it.content },
+        )
+    }
+
+    /** 传 0/负数必须**什么都不做**并返回 false —— 悄悄切掉一切是最坏的失败方式 */
+    @Test
+    fun `dropFromTurn 对无效入参是空操作`() {
+        val store = newStore()
+        recordTurn(store, "第一轮", "答一")
+        assertFalse("入参为 0 不得作废任何轮", store.dropFromTurn(0))
+        assertFalse("负数入参不得作废任何轮", store.dropFromTurn(-1))
+        assertFalse("超出最大轮号时返回 false（而不是静默全清）", store.dropFromTurn(999))
+        assertEquals(2, store.history().size)
+    }
+
+    /** 作废到当前末尾时保留更早轮次的完整性（不能把 user/assistant 配对切坏） */
+    @Test
+    fun `dropFromTurn 之后历史仍保持成对`() {
+        val store = newStore()
+        recordTurn(store, "第一轮", "答一")
+        recordTurn(store, "第二轮", "答二")
+        store.dropFromTurn(2)
+        val h = store.history()
+        assertTrue("必须仍以 assistant 结尾", h.last().role == "assistant")
+        assertEquals("必须是偶数条（user/assistant 成对）", 0, h.size % 2)
     }
 
     // ═══════════════════ 5. 投影契约与压缩入口 ═══════════════════
@@ -434,7 +555,7 @@ class AgentSessionStoreTest {
         turn.recordModelCall(TokenUsage(999, 99))
         turn.finish(TurnEndReason.INTERRUPTED)
 
-        assertTrue("被抢占的轮不进可见历史", store.history().isEmpty())
+        assertTrue("被抢占的轮仍留占位（保证 user/assistant 成对）", store.history().size == 2)
         val stat = store.lastTurnStat()!!
         assertEquals("成本必须留下 —— 被打断的长任务恰恰最烧 token", 999, stat.promptTokens)
         assertEquals(TurnEndReason.INTERRUPTED, stat.reason)

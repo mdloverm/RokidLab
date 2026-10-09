@@ -76,6 +76,10 @@ internal object KnowledgeToolProvider : ToolProvider {
             descriptionRes = R.string.ai_tool_manage_knowledge_base_desc,
             risk = ToolRisk.LOCAL_SIDE_EFFECT,
             contentTrust = ToolContentTrust.TRUSTED,
+            // ⚠️ 2026-10-09 补：action=add 是**入库**（真副作用），原先漏标 ⇒ 并行执行 +
+            //   失败被重放 3 次 ⇒ 一次入库失败会多出 2~3 条重复文档。list 分支是只读，
+            //   但按工具粒度标注是保守方向（宁可串行一点，不可重复写入）。
+            sideEffect = true,
             statusText = "正在整理知识库…",
             schema = toolSchema(
                 name = "manage_knowledge_base",

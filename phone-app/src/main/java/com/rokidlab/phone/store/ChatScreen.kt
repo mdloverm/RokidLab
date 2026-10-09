@@ -704,8 +704,10 @@ internal fun ChatModule(app: LabApplication) {
         if (text.isBlank()) return
         // 轮号同样要在做任何改动**之前**取（它必须反映"派发前的状态"）
         val turnBefore = AgentSessionManager.currentTurn()
+        // ⚠️ 2026-10-09：事件流的同步作废已并入 `truncateFrom`（按被截断那条的轮号
+        //  作废该轮及其之后）。原先这里额外调 `dropLastTurn()`，但它只切**最后一轮**，
+        //  与 truncateFrom 砍掉"全部后续轮"的口径不一致 —— 切少了，模型仍引用旧上下文。
         ChatStateHolder.truncateFrom(target.id)
-        AgentSessionManager.dropLastTurn()
         appendMsg(true, text, turn = turnBefore + 1)
         dispatchAi(text, turnBefore)
     }

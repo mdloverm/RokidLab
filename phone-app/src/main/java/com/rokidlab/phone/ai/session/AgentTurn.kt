@@ -89,8 +89,16 @@ internal class AgentTurn internal constructor(
      *
      * @param reply 最终回复；被打断 / 失败时传 null（本轮会被声明为"不算数"，见
      *   [AgentSessionStore.finishTurn]）
+     * @param partialReply 被打断时**已经产出**的那部分正文（流式推给 UI 的内容）。
+     *   非空时会作为 `partial = true` 的 [AssistantMessage] 落盘，模型才知道"我刚才说到哪"——
+     *   否则屏幕上看得见半截回复，模型上下文里却空无一物。
      */
-    fun finish(reason: TurnEndReason, reply: String? = null, detail: String? = null): CompactionResult? =
+    fun finish(
+        reason: TurnEndReason,
+        reply: String? = null,
+        detail: String? = null,
+        partialReply: String? = null,
+    ): CompactionResult? =
         store.finishTurn(
             turn = turn,
             reply = reply,
@@ -101,5 +109,6 @@ internal class AgentTurn internal constructor(
             promptCacheHitTokens = if (cacheHitSeen) cacheHitTotal else null,
             // 调用次数是**我们自己的事实**（不依赖服务端），所以哪怕拿不到 usage 也报
             modelCalls = if (modelCalls > 0) modelCalls else null,
+            partialReply = partialReply,
         )
 }

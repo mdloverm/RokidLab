@@ -436,7 +436,15 @@ internal object ChatStateHolder {
     fun deleteMessage(id: Long) = runOnMain {
         val idx = messages.indexOfFirst { it.id == id }
         if (idx < 0) return@runOnMain
+        // ★ 2026-10-09：删消息要**同步作废事件流里对应的那一轮**，否则"删了它还记得" ——
+        //   界面少了这条，模型上下文里还留着，下一轮照着它回答。
+        //   判据取被删消息自己的轮号（ChatMsg.turn 就是事件流的轮号，写入时一一对应），
+        //   并作废该轮及其之后（删中间一条 ⇒ 后续轮次建立在这个上下文上，一并失效）。
+        val deadTurn = messages[idx].turn
         messages.removeAt(idx)
+        if (deadTurn != null && deadTurn > 0) {
+            com.rokidlab.phone.ai.AgentSessionManager.dropFromTurn(deadTurn)
+        }
         persistAll()
         touchSession()
     }
@@ -450,7 +458,14 @@ internal object ChatStateHolder {
     fun truncateFrom(id: Long) = runOnMain {
         val idx = messages.indexOfFirst { it.id == id }
         if (idx < 0) return@runOnMain
+        // ⚠️ 2026-10-09：与 [deleteMessage] 同款同步。这里砍掉的是"从该条起**全部**"，
+        //   而事件流侧的 `dropLastTurn` 只切**最后一轮** —— 口径不一致会让被砍掉的那些轮
+        //   仍然进模型上下文（编辑靠前的一条消息时，后面若干轮模型照旧引用）。
+        val deadTurn = messages[idx].turn
         while (messages.size > idx) messages.removeAt(messages.size - 1)
+        if (deadTurn != null && deadTurn > 0) {
+            com.rokidlab.phone.ai.AgentSessionManager.dropFromTurn(deadTurn)
+        }
         persistAll()
         touchSession()
     }
@@ -866,13 +881,23 @@ internal object ChatStateHolder {
      * 锚点优先（提问/回复/过程必须落在同一条）；锚点缺失时退回"从末尾找第一条非用户非状态
      * 消息" —— 该判据会跳过末尾的状态气泡，所以仍是安全的。
      * 一条 AI 消息都没有时直接新增（兜底路径，如流式未触发直接 onReply）。
+     *
+     * ⚠️ 2026-10-09：**已有正文时不整段覆盖**（[preserveOnReplace]）。
+     * 失败兜底会把一句"服务不可用"当 fullContent 传进来，而此时屏幕上可能已经有
+     * 模型流式打出的半截（"好的，我在帮你查…"）—— 整段覆盖等于**把用户正在读的字抹掉**，
+     * 且事件流侧同时补了 partial 半截，两边对不上。
+     * 改为追加在原文之后，失败原因仍然可见，但不销毁已有内容。
      */
     fun finalizeLastAi(fullContent: String, usage: MsgUsage? = null, turn: Int? = null) {
         val anchorAt = traceAnchorIndex()
         if (anchorAt >= 0) {
             val m = messages[anchorAt]
             // 已经有了的就别抹掉：新值缺失只说明"这次没拿到"，不代表之前那条是错的
-            val updated = m.copy(content = fullContent, usage = usage ?: m.usage, turn = turn ?: m.turn)
+            val updated = m.copy(
+                content = preserveOnReplace(m.content, fullContent),
+                usage = usage ?: m.usage,
+                turn = turn ?: m.turn,
+            )
             messages[anchorAt] = updated
             persist(updated)
             touchSession()
@@ -882,7 +907,11 @@ internal object ChatStateHolder {
             val m = messages[i]
             if (!m.isUser && !m.isStatus) {
                 // 已经有了的就别抹掉：新值缺失只说明"这次没拿到"，不代表之前那条是错的
-                val updated = m.copy(content = fullContent, usage = usage ?: m.usage, turn = turn ?: m.turn)
+                val updated = m.copy(
+                    content = preserveOnReplace(m.content, fullContent),
+                    usage = usage ?: m.usage,
+                    turn = turn ?: m.turn,
+                )
                 messages[i] = updated
                 persist(updated)
                 touchSession()
@@ -890,6 +919,22 @@ internal object ChatStateHolder {
             }
         }
         add(false, fullContent, usage = usage, turn = turn)
+    }
+
+    /**
+     * 收尾时的内容取值：已有正文就**追加**，否则直接用新值（见 [finalizeLastAi]）。
+     *
+     * @param existing 屏幕上已有的正文（可能是模型流式打出的半截）
+     * @param incoming 本次收尾拿到的内容（完整回复，或失败兜底的一句提示）
+     */
+    private fun preserveOnReplace(existing: String, incoming: String): String {
+        val old = existing.trim()
+        if (old.isEmpty()) return incoming
+        val newText = incoming.trim()
+        if (newText.isEmpty()) return existing
+        // 同一段（正常收尾把已显示的内容又下发一次）⇒ 不重复追加
+        if (newText == old || old.contains(newText)) return incoming
+        return "$existing\n\n$newText"
     }
 
     /**

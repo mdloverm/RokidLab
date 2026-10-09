@@ -1149,6 +1149,13 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             // 会话尚未绑定）。提到 try 外是为了让 catch 分支也能收尾本轮 —— 否则被打断/失败的轮
             // 会永远停在只有 TurnStart 的半轮状态。
             var agentTurn: com.rokidlab.phone.ai.session.AgentTurn? = null
+            // ★ 本轮**已推给 UI 的增量正文**（2026-10-09，被打断时落盘用）。
+            // 改造前这半截内容只存在于屏幕气泡里，事件流中一条 assistant 都没有 ——
+            // 用户看得见 AI 说到一半，说「继续」时模型却不知道自己说过什么。
+            //
+            // ⚠️ 声明必须与 [agentTurn] 同级（在 try **之外**）：catch 分支里也要读它
+            // （异常导致的打断同样要落半截），放在 try 内则 catch 处不可见。
+            val streamedBuf = StringBuilder()
             try {
                 val cfg = session.getAiConfig()
                 // 是否本机 Ollama 端点：判断口径统一走 LlmRegistry（改造前这里另有一份完全相同的
@@ -1615,6 +1622,8 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 )
 
                 var reply = ""
+                // 每轮开头会 `streamedBuf.setLength(0)`（见工具循环首行）——
+                // 跨轮累积会把多段不相干的话拼成一段假正文（工具轮 content 通常为空）。
                 // 本轮是否出现过工具调用（含快路升级）：收尾时写入 lastTurnHadToolCalls
                 // 观测位（2026-09-29 第六轮起它不再拦截三层装配，仅作日志观测）
                 var turnUsedTools = false
@@ -1663,23 +1672,31 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 var overflowRecovered = false
                 // 工具循环：支持多步任务（先查时间再设定时等），同时防止模型反复请求工具导致死循环
                 for (round in 0 until MAX_TOTAL_ROUNDS) {
+                    // 每轮清空增量缓冲：本轮推给 UI 的正文就是"这一轮说到哪"，
+                    // 跨轮累积会把多段不相干的话拼成一段假正文（工具轮 content 通常为空）
+                    streamedBuf.setLength(0)
                     // 用户打断（有更新代际的请求进入）或链路已被替换：放弃后续生成，尽快让出 aiSendLock
                     if (isSuperseded()) {
                         Log.i(TAG, "AI generation superseded at round=$round (gen=$generation, latest=$aiGenSeq), abort")
-                        // 事件流：本轮被抢占 —— 记一次"被抢占的尝试"，并声明本轮**不算数**
-                        // （本轮用户消息在轮次开始时就落盘了，不收尾的话会留下"有 user 没有
-                        //  assistant"的半轮，下一轮请求就会出现两条连续 user → 部分服务端 400）
+                        // 事件流：本轮被抢占 —— 记一次"被抢占的尝试"，并落下半截正文
+                        //（⚠️ 2026-10-09 行为变更：本轮**不再整轮作废**。整轮剪掉会连用户原话
+                        //  一起剪掉，用户说「继续」时模型既看不到原话、也不知道发生过什么。
+                        //  现在保留 user 消息 + 落半截 assistant，占位保证不出现连续两条 user。）
                         agentTurn?.attempt(
                             com.rokidlab.phone.ai.session.AttemptOutcome.SUPERSEDED,
                             "round=$round",
                         )
-                        agentTurn?.finish(com.rokidlab.phone.ai.session.TurnEndReason.INTERRUPTED)
+                        agentTurn?.finish(
+                            com.rokidlab.phone.ai.session.TurnEndReason.INTERRUPTED,
+                            partialReply = streamedBuf.toString(),
+                        )
                         // 被打断的长任务标为可续做：下轮用户说「继续」即可接着做
                         if (!localLight) {
                             com.rokidlab.phone.ai.AgentTaskStore.markStatus(
                                 session.appContext,
                                 com.rokidlab.phone.ai.AgentTaskStore.STATUS_INTERRUPTED,
                                 "被新消息打断（可续做）",
+                                userText = text,
                             )
                         }
                         return@launchAiGeneration
@@ -1706,7 +1723,22 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             tools = activeTools,
                             // 闲聊快路/菜单探测轮不流式：模型可能按约定回复 [NEED_TOOLS]/[TOOLS] 标记，
                             // 流出去会闪现在聊天气泡里（探测回复都很短，损失可忽略）
-                            onDelta = if (fastPathActive || menuProbeActive) null else onDelta,
+                            onDelta = if (fastPathActive || menuProbeActive) {
+                            null
+                        } else {
+                            // ★ 2026-10-09：旁路一份到 streamedBuf —— 打断时用它把半截正文
+                            // 落进事件流（见 finishTurn 的 partialReply）。改造前这半截只到 UI，
+                            // 模型侧完全失忆。**必须与推给 UI 的是同一份增量**，否则落盘内容
+                            // 与用户看到的对不上，续做时模型会以为自己说过别的话。
+                            if (onDelta == null) {
+                                null
+                            } else {
+                                { delta ->
+                                    streamedBuf.append(delta)
+                                    onDelta.invoke(delta)
+                                }
+                            }
+                        },
                             isCancelled = isSuperseded,
                             // 计划续做轮强制出手（P1 协议现代化 tool_choice）：防止模型又出一轮
                             // "总结性空谈"。探测/菜单轮绝不带（会破坏 [TOOLS] 标记协议）；
@@ -2338,8 +2370,30 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         //   delete_calendar_event、research_subtask）
                         // ⇒ 每轮白耗一次 unknown tool。
                         // 与上方"聊天探测升级"（:1832 无条件重建）是同一件事，本处只是漏了。
-                        messages = buildMessages()
-                        Log.i(TAG, "aiuiMode on: tools switched to SESSION_AIUI_DOMAINS subset (${activeTools.size} schemas), messages rebuilt")
+                        // ⚠️ 2026-10-09 修正（此处原先是无条件重建，是个**漏点**）：
+                        // 重建会把本轮**已经 put 进 messages 的工具结果与图片一起冲掉** ——
+                        // 而触发条件恰恰是"本轮刚调过 save_code_file"（isCodeGenCall 命中）。
+                        // 症状：AIUI 生成时进度显示文件已落盘，下一轮却不认、重复生成；
+                        // 多模态轮刚拍的照片模型自己看不见（图片只在 messages 里，事件流不存 base64）。
+                        //
+                        // 📌 判据：**只有本轮没有任何工具调用/结果时才能重建**（与上方探测轮
+                        // 的 probeRound 闸门同款）。工具表闸门不刷新会导致"模型去调已摘掉的工具"，
+                        // 那个代价是每轮白耗一次 unknown tool；而在这里丢的是**已执行动作的结果**，
+                        // 代价更大 —— 两者不可比，不能为了闸门正确性牺牲 in-flight 的工具配对。
+                        //
+                        // 代价：首次切入 aiuiMode 那一轮，人设里的工具闸门仍按切换前的全量算，
+                        // 可能多引导一次调已摘掉的工具（下一个 tool-call 轮会自然纠正）。
+                        if (turn.toolCalls.isEmpty()) {
+                            messages = buildMessages()
+                            Log.i(TAG, "aiuiMode on: tools switched to SESSION_AIUI_DOMAINS subset (${activeTools.size} schemas), messages rebuilt")
+                        } else {
+                            // ⚠️ 本轮有工具调用 ⇒ **不重建**。只换工具表、不重建 messages：
+                            // 下一轮请求带的是"切换前"的人设闸门，可能多引导一次调已摘掉的工具
+                            //（代价：一次 unknown tool）；反过来重建则要丢掉本轮刚 put 的工具结果
+                            //（代价：已执行动作的结果丢失 + 模型不认刚生成的文件）。
+                            // 两者不可比，选代价小的那个。
+                            Log.i(TAG, "aiuiMode on: tools switched to SESSION_AIUI_DOMAINS subset (${activeTools.size} schemas), messages NOT rebuilt (in-flight tool results)")
+                        }
                     }
                     // ★ token 记账（2026-10-06）：在**分账结算之前**，因为两者任一触顶都要收尾，
                     //   而收尾分支的文案要能区分是"轮次用完"还是"预算用完"。
@@ -2375,6 +2429,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                                 session.appContext,
                                 com.rokidlab.phone.ai.AgentTaskStore.STATUS_BUDGET_EXHAUSTED,
                                 "token 预算用尽（可续做）",
+                                userText = text,
                             )
                         }
                         break
@@ -2428,6 +2483,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                                 session.appContext,
                                 com.rokidlab.phone.ai.AgentTaskStore.STATUS_BUDGET_EXHAUSTED,
                                 "工具轮次预算用尽（可续做）",
+                                userText = text,
                             )
                         }
                         break
@@ -2445,12 +2501,16 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             com.rokidlab.phone.ai.session.AttemptOutcome.SUPERSEDED,
                             "summary",
                         )
-                        agentTurn?.finish(com.rokidlab.phone.ai.session.TurnEndReason.INTERRUPTED)
+                        agentTurn?.finish(
+                            com.rokidlab.phone.ai.session.TurnEndReason.INTERRUPTED,
+                            partialReply = streamedBuf.toString(),
+                        )
                         if (!localLight) {
                             com.rokidlab.phone.ai.AgentTaskStore.markStatus(
                                 session.appContext,
                                 com.rokidlab.phone.ai.AgentTaskStore.STATUS_INTERRUPTED,
                                 "收尾阶段被新消息打断（可续做）",
+                                userText = text,
                             )
                         }
                         return@launchAiGeneration
@@ -2581,10 +2641,19 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                             assembledToolNames = ToolRegistry.namesOf(activeTools)
                             // 同主循环 :2244 —— 只换工具表不重建 messages，下一轮的 system
                             // 仍带切换前的全量 has() 闸门，引导模型去调已摘域的工具。
-                            // buildMessages 从 agentTurn.historyForRequest() 重建、不自引用，
-                            // 所以在这里重建不会丢掉本轮刚注入的图片消息。
-                            messages = buildMessages()
-                            Log.i(TAG, "aiuiMode on (final chat): tools switched to SESSION_AIUI_DOMAINS (${activeTools.size}), messages rebuilt")
+                            //
+                            // ⚠️ 2026-10-09 修正：此处原先是无条件重建，且原注释写着
+                            // 「buildMessages 从 agentTurn.historyForRequest() 重建、不自引用，
+                            //  所以在这里重建不会丢掉本轮刚注入的图片消息」—— **与事实相反**：
+                            // 多模态图片只存在于 messages（事件流只存文本，不存 base64），
+                            // 而上面几行刚把工具结果 put 进 messages，重建会把它们一并冲掉。
+                            // 闸门与主循环一致：仅在本轮无工具调用时重建。
+                            if (finalTurn.toolCalls.isEmpty()) {
+                                messages = buildMessages()
+                                Log.i(TAG, "aiuiMode on (final chat): tools switched to SESSION_AIUI_DOMAINS (${activeTools.size}), messages rebuilt")
+                            } else {
+                                Log.i(TAG, "aiuiMode on (final chat): tools switched to SESSION_AIUI_DOMAINS (${activeTools.size}), messages NOT rebuilt (in-flight tool results)")
+                            }
                         }
                     }
                     // 全程没有正文时先留空，交给下方 finalizeCodeGenReply / 最终兜底决定。
@@ -2673,15 +2742,18 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                         com.rokidlab.phone.ai.session.AttemptOutcome.SUPERSEDED,
                         e.message,
                     )
+                    // ⚠️ 与上面两处同款：半截正文必须一起落，否则用户看得见、模型看不见
                     agentTurn?.finish(
                         com.rokidlab.phone.ai.session.TurnEndReason.INTERRUPTED,
                         detail = e.message,
+                        partialReply = streamedBuf.toString(),
                     )
                     if (!localLightMode) {
                         com.rokidlab.phone.ai.AgentTaskStore.markStatus(
                             session.appContext,
                             com.rokidlab.phone.ai.AgentTaskStore.STATUS_INTERRUPTED,
                             "被新消息打断（可续做）",
+                            userText = text,
                         )
                     }
                     return@launchAiGeneration
@@ -2696,6 +2768,10 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
                 agentTurn?.finish(
                     com.rokidlab.phone.ai.session.TurnEndReason.FAILED,
                     detail = e.message,
+                    // ⚠️ 2026-10-09 补漏：这一分支原先**只**传 detail，与上面两处 superseded
+                    // 分支不一致 ⇒ 网络异常时已经流式显示的半截正文既没落事件流、
+                    // 又会被下面的失败提示整段覆盖（用户看到"正在读的字被抹掉"）。
+                    partialReply = streamedBuf.toString(),
                 )
                 // 如实上报 + 记进 App 内日志面板：此前流式 HTTP 报错被静默吞成空轮，
                 // 用户只看到「我无法处理这个问题」，在「日志」里也找不到任何原因

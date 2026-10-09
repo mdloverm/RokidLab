@@ -279,6 +279,21 @@ private val boundSessionId: String get() = binding.id
     }
 
     /**
+     * 丢弃 [fromTurn] 及之后的全部轮（2026-10-09，编辑/删除消息接线用）。
+     *
+     * 与 [dropLastTurn] 的分工：后者只切**最后一轮**（"重新生成"语义），
+     * 而 UI 的 `truncateFrom` 会砍掉从目标消息起的**若干轮** —— 用后者会出现
+     * 「界面删了、模型还记着」。详见 [AgentSessionStore.dropFromTurn]。
+     *
+     * @return 是否真的作废了（false = 无会话绑定或入参无效）
+     */
+    fun dropFromTurn(fromTurn: Int): Boolean {
+        val ok = storeOrNull()?.dropFromTurn(fromTurn) ?: false
+        Log.i(TAG, "dropFromTurn($fromTurn) -> $ok")
+        return ok
+    }
+
+    /**
      * 按当前模型的能力**修正压缩预算**（每轮对话开始前调用一次）。
      *
      * 这是 `llm` 接缝给 `compaction` 接缝的直接输入：`ModelCapabilities.contextWindow` 是
