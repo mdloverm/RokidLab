@@ -8,6 +8,7 @@ import com.rokidlab.phone.ai.compaction.CompactionTrigger
 import com.rokidlab.phone.ai.llm.ModelCapabilities
 import com.rokidlab.phone.ai.session.AgentSessionStore
 import com.rokidlab.phone.ai.session.AgentTurn
+import com.rokidlab.phone.ai.session.AuthorizationSource
 import com.rokidlab.phone.ai.session.MessageSource
 import com.rokidlab.phone.ai.session.SessionLog
 import com.rokidlab.phone.ai.session.SessionRecord
@@ -190,6 +191,39 @@ private val boundSessionId: String get() = binding.id
      * 用法：派发前记下轮号，收尾时轮号没涨 ⇒ 显示"用量未知"（别编数字）。
      */
     fun currentTurn(): Int = runCatching { storeOrNull()?.maxTurn() ?: 0 }.getOrDefault(0)
+
+    /**
+     * 记录一次**已授权的副作用**（写前日志，见 [SideEffectIntent]）。
+     *
+     * ★ 由 `ApprovalGate.authorizationSink` 在**放行前**调用，不是事后补记 ——
+     *   顺序就是这条不变式的全部内容（授权先于效果落盘）。
+     *
+     * ⚠️ **拒绝路径不要调它**：未授权的副作用不产生记录（反向不变式），
+     *   日志里查不到"差点发生什么" —— "不存在"本身就是证据。
+     *
+     * 存储不可用（开关关闭 / 未绑定会话）时静默跳过：留痕失败**不能**阻断用户功能。
+     *
+     * @return 落盘 seq；未落盘返回 null
+     */
+    fun appendSideEffectIntent(
+        turn: Int?,
+        name: String,
+        source: AuthorizationSource,
+        callId: String? = null,
+        summary: String? = null,
+        stageEvidence: List<String> = emptyList(),
+    ): Long? = runCatching {
+        storeOrNull()?.appendSideEffectIntent(
+            turn = turn,
+            name = name,
+            source = source,
+            callId = callId,
+            summary = summary,
+            stageEvidence = stageEvidence,
+        )
+    }.onFailure {
+        Log.w(TAG, "appendSideEffectIntent failed for $name", it)
+    }.getOrNull()
 
     /** 手动清空**当前会话**记忆（聊天页「清空对话」→ 真删；清全部对话见 [clearAll]） */
     fun clear() {

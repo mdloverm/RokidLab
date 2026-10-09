@@ -71,6 +71,16 @@ internal object SubagentToolProvider : ToolProvider {
             // 子代理可执行本机副作用工具（写文件/设定时器等），按其中最高风险登记；
             // 外部副作用工具在 WriteSubagent 装配层已摘除，执行层另有双保险
             risk = ToolRisk.LOCAL_SIDE_EFFECT,
+            // ⚠️ 2026-10-09 补：原先**漏标** ⇒ 进了并行泳道 + maxAttempts 仍是 3。
+            //   两个后果都是真机上能观察到的：
+            //   ① 主代理可同时派 2 个 write 子代理（SubagentSlots 上限 2）⇒ 两个子代理
+            //      并发写同一个项目目录（这正是"写盘竞态"的形状）；
+            //   ② 瞬时失败重放 3 次 ⇒ 子代理里的 `set_phone_alarm` / `manage_timer` 会
+            //      **设出 3 个重复提醒**（写文件重放相对无害，设提醒不是）。
+            //   📌 判据：LOCAL 档**允许**幂等工具不标（`stop_tts`/`show_image` 重放无害），
+            //      所以这里逐个判断"重放会不会产生用户可见的重复"。本工具**会** ——
+            //      它把一整个多步任务派出去做，而任务里含设定时器这类累积性动作。
+            sideEffect = true,
             // 子助手的结论整理自网页/知识库等外部内容，同样按不可信数据隔离
             contentTrust = ToolContentTrust.UNTRUSTED_EXTERNAL,
             statusText = "正在派子任务执行…",

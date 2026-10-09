@@ -14,7 +14,8 @@ import com.rokidlab.phone.ai.ToolRisk
  * 5. [SourceRateLimitGuard] —— 限流（**有状态**，放在纯判定之后）
  * 6. [PageElevatedDomainGuard] —— 页面调 shell/screen 域的强制确认（fail-closed）
  * 7. [GlassesDependencyGuard] —— 本机模式下的眼镜依赖
- * 8. [RiskApprovalGuard] —— 外部副作用 → 用户确认
+ * 8. [ShellStageGuard] —— run_shell 的分阶段审批（命令碰到真实用户数据才问）
+ * 9. [RiskApprovalGuard] —— 外部副作用 → 用户确认
  *
  * ⚠️ 顺序是有意的，不要随意重排：限流排在 guard 1–4 这些"纯判定"之后，被它们拒掉的
  * 调用不占配额。⚠️ 但**不是所有被拒都不扣**（2026-09-30 审计更正，原文「统一为不扣」
@@ -22,6 +23,12 @@ import com.rokidlab.phone.ai.ToolRisk
  * 被取消/超时的调用，配额在 guard 5 已经扣了。影响可忽略（对话 120/min 的量级
  * 远先碰不到上限），且把限流挪到确认**之后**反而更糟：确认等待是秒级阻塞，
  * 等待期间同 source 的新调用会绕过限流直奔确认通道。
+ *
+ * 📌 [ShellStageGuard] 排在 [RiskApprovalGuard] 之前是"**更具体的判定优先**"：
+ *   两者的判定粒度不同（前者看"这条命令的哪几段危险"，后者看"这个工具整体是否危险"），
+ *   且当前不重叠（run_shell 是 LOCAL 档，不进 RiskApproval）。放前面让"首个 Ask 胜出"
+ *   的语义落在更精确的那个结论上 —— 将来若 run_shell 上调风险档，也不会出现
+ *   "先被笼统判为外部副作用、用户看不到具体是哪个阶段危险"的降级。
  */
 internal object ToolGuards {
 
@@ -33,6 +40,7 @@ internal object ToolGuards {
         SourceRateLimitGuard(),
         PageElevatedDomainGuard(),
         GlassesDependencyGuard(),
+        ShellStageGuard(),
         RiskApprovalGuard(),
     )
 }
@@ -268,8 +276,79 @@ internal class PageElevatedDomainGuard : ToolGuard {
  * [ToolDecision.Ask.prompt] 用 `ToolEntry.summarize` 生成 —— 摘要与工具定义同源，
  * 改参数名时会顺手改到摘要，不会出现"摘要里读的 key 早就改名了，于是永远显示空"。
  */
-internal class RiskApprovalGuard : ToolGuard {
+/**
+ * `run_shell` 的**分阶段审批**（2026-10-09，对齐 Muse Code 的 staged approvals）。
+ *
+ * ## 存在的理由
+ *
+ * `run_shell` 定档 `LOCAL_SIDE_EFFECT`（对话路径静默执行）的原判据是「容器可丢弃」。
+ * 这条判据在容器范围内成立，但有一个盲区：容器里 `/mnt/lab` 是**内核直连到手机
+ * 「下载/Lab」真实文件夹**的绑定挂载（见 `FileWorkspace`）。于是 `rm -rf /mnt/lab/…`
+ * 删的是用户真实文件，却与 `rm -rf /tmp/x` 同档 ⇒ 都不问用户。
+ *
+ * 本 guard 在闸门里补上这一环：**按"命令碰到了谁的数据"分档**，
+ * 判定逻辑全部在 [ShellStageAnalyzer]（纯函数，有独立单测）。
+ *
+ * ## 与 [RiskApprovalGuard] 的分工（不要合并）
+ *
+ * | | 判定粒度 | 依据 |
+ * |---|---|---|
+ * | [RiskApprovalGuard] | **整个工具** | `ToolEntry.risk == EXTERNAL_SIDE_EFFECT` |
+ * | 本 guard | **同一条命令内的每个阶段** | 阶段的目标路径是否落在真实文件系统 |
+ *
+ * 同一个 `run_shell`：`rm -rf /tmp/x` 不问、`rm -rf /mnt/lab/…` 问 ——
+ * 这正是"按工具问"做不到的那件事。
+ *
+ * ## failClosed 为什么取 true（而不读工具的 confirmPolicy）
+ *
+ * 工具的 `confirmPolicy` 表达的是"**这个工具**问不到用户时怎么办"，
+ * 而本 guard 只在**已经判定为不可逆且作用于真实用户数据**时才产生 Ask ——
+ * 那个时点上"猜错了就照做"的代价是用户数据永久消失，与发短信同级。
+ * 所以这里显式 fail-closed，**不**复用工具的 LOCAL 档 `PROCEED` 声明：
+ * 那条声明是为"容器内的可重做操作"给的，不适用于它没预见到的情况。
+ * 出路与 `denyUnconfirmed` 的既有文案一致（打开 App 后重试 / 连眼镜确认）。
+ */
+internal class ShellStageGuard(
+    private val toolName: String = com.rokidlab.phone.ai.tools.ShellToolProvider.TOOL_RUN,
+) : ToolGuard {
 
+    override val id: String = "shell-stage"
+
+    override fun evaluate(ctx: ToolCallContext): ToolDecision? {
+        if (ctx.name != toolName) return null
+        val command = ctx.args.optString("command")
+        if (command.isBlank()) return null
+        val stages = ShellStageAnalyzer.analyze(command)
+        if (!ShellStageAnalyzer.needsReview(stages)) return null
+        return ToolDecision.Ask(
+            origin = DecisionOrigin.SHELL_STAGE,
+            prompt = buildPrompt(stages),
+            // 不可逆 + 真实用户数据 ⇒ 问不到就不做（理由见类 KDoc）
+            failClosed = true,
+            // 审批文案只列要点头的那一步；但审计要能回答"其余阶段各自为什么放行"
+            stageEvidence = stages.map { "${it.raw} → ${it.resolution.wire}" },
+        )
+    }
+
+    /**
+     * 给用户看的文案。
+     *
+     * ⚠️ 刻意说清"这是删除**手机上的真实文件**"而不是"这条命令有风险"：
+     *   用户是唯一能判断"这个文件该不该删"的人，给他准确的靶子比给他一个危险等级有用。
+     */
+    private fun buildPrompt(stages: List<ShellStageAnalyzer.Stage>): String {
+        val dangerous = stages.filter { it.resolution.needsReview }
+        val head = if (dangerous.any { it.resolution == ShellStageAnalyzer.StageResolution.REVIEW_DANGEROUS }) {
+            "这条命令会删除或覆盖你手机上的真实文件（不是容器里的临时文件）"
+        } else {
+            "这条命令可能删除手机上的真实文件（其中有无法静态判断的部分）"
+        }
+        val detail = ShellStageAnalyzer.reviewSummary(stages)
+        return if (detail.isBlank()) head else "$head：$detail"
+    }
+}
+
+internal class RiskApprovalGuard : ToolGuard {
     override val id: String = "risk-confirmation"
 
     override fun evaluate(ctx: ToolCallContext): ToolDecision? {

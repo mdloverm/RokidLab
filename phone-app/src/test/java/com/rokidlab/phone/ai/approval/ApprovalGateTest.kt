@@ -3,6 +3,7 @@ package com.rokidlab.phone.ai.approval
 import com.rokidlab.phone.ai.ToolGateway
 import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.ai.ToolRisk
+import com.rokidlab.phone.ai.session.AuthorizationSource
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -1003,5 +1004,196 @@ class ApprovalGateTest {
             ToolRegistry.namesOf(listOf(ToolRegistry.buildSchema(meta))),
         )
         assertEquals("畸形 schema 不得让装配投影抛异常", emptySet<String>(), ToolRegistry.namesOf(listOf(JSONObject())))
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // M. 授权留痕（写前日志，2026-10-09）
+    //
+    // 📌 钉的是**来源正确性**，不是"有没有通知 sink"——
+    //   把 fail-open 放行记成"用户已点头"比不记更坏：授权日志会说谎，
+    //   而"没问成就执行了"恰恰是事后最需要能查出来的情形。
+    //   另：拒绝路径**不得**通知 sink（反向不变式「不存在即证据」）。
+    // ════════════════════════════════════════════════════════════════════
+
+    private data class Traced(val name: String, val source: AuthorizationSource, val prompt: String?)
+
+    /** 假确认通道：返回固定的 [ApprovalGate.ConfirmOutcome]，不建模时间 */
+    private class FakeChannel(
+        private val outcome: ApprovalGate.ConfirmOutcome,
+    ) : ApprovalGate.ConfirmResolver {
+        override val channelId = "test"
+        override fun isAvailable() = true
+        override fun confirm(toolName: String, prompt: String): Boolean = outcome.allowed
+        override fun confirmOutcome(
+            toolName: String,
+            prompt: String,
+            maxWaitMs: Long,
+        ): ApprovalGate.ConfirmOutcome = outcome
+    }
+
+    private fun captureTrace(
+        ask: ToolDecision.Ask,
+        toolName: String = "install_packages",
+        channel: ApprovalGate.ConfirmResolver? = null,
+        source: ToolSource = ToolSource.CONVERSATION,
+    ): List<Traced> {
+        val out = mutableListOf<Traced>()
+        ApprovalGate.confirmationResolver = channel
+        ApprovalGate.authorizationSink = ApprovalGate.AuthorizationTrace { n, s, p, _ -> out += Traced(n, s, p) }
+        ApprovalGate.resolveAsk(ask, toolName, source)
+        return out
+    }
+
+    @Test
+    fun `M1 用户点头记为 USER_APPROVED`() {
+        val traced = captureTrace(
+            ToolDecision.Ask(DecisionOrigin.RISK_CONFIRMATION, "安装 APK"),
+            channel = FakeChannel(ApprovalGate.ConfirmOutcome.ALLOWED),
+        )
+        assertEquals(1, traced.size)
+        assertEquals("install_packages", traced[0].name)
+        assertEquals(AuthorizationSource.USER_APPROVED, traced[0].source)
+    }
+
+    @Test
+    fun `M2 用户取消记不下任何授权`() {
+        val traced = captureTrace(
+            ToolDecision.Ask(DecisionOrigin.RISK_CONFIRMATION, "安装 APK"),
+            channel = FakeChannel(ApprovalGate.ConfirmOutcome.CANCELLED),
+        )
+        assertTrue(
+            "用户拒绝时不得通知 sink —— 未授权的副作用在日志里应当「不存在」",
+            traced.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `M3 无通道 fail-open 记为 POLICY 而非 USER_APPROVED`() {
+        val traced = captureTrace(
+            ToolDecision.Ask(DecisionOrigin.RISK_CONFIRMATION, "安装 APK"),
+            channel = null,
+        )
+        assertEquals(1, traced.size)
+        assertEquals(
+            "问不到用户就执行 ⇒ 没有任何人点过头，必须记 POLICY；记成 USER_APPROVED 就是谎报",
+            AuthorizationSource.POLICY,
+            traced[0].source,
+        )
+        assertTrue(
+            "留痕必须说明它是 fail-open 而不是用户批准：${traced[0].prompt}",
+            traced[0].prompt?.contains("PROCEED") == true,
+        )
+    }
+
+    @Test
+    fun `M4 fail-closed 拒绝时不留痕`() {
+        val traced = captureTrace(
+            ToolDecision.Ask(DecisionOrigin.RISK_CONFIRMATION, "发短信", failClosed = true),
+            toolName = "send_sms",
+            channel = null,
+        )
+        assertTrue("fail-closed 拒了 ⇒ 没有副作用 ⇒ 不该有授权记录", traced.isEmpty())
+    }
+
+    @Test
+    fun `M5 sink 抛异常不得影响放行结论`() {
+        ApprovalGate.authorizationSink = ApprovalGate.AuthorizationTrace { _, _, _, _ ->
+            throw RuntimeException("存储坏了")
+        }
+        ApprovalGate.confirmationResolver = FakeChannel(ApprovalGate.ConfirmOutcome.ALLOWED)
+        val decision = ApprovalGate.resolveAsk(
+            ToolDecision.Ask(DecisionOrigin.RISK_CONFIRMATION, "安装 APK"),
+            "install_packages",
+            ToolSource.CONVERSATION,
+        )
+        assertTrue(
+            "留痕设施故障不得阻断用户功能（否则审计故障 = 功能不可用）",
+            decision is ToolDecision.Allow,
+        )
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // N. ShellStageGuard（run_shell 分阶段审批，2026-10-09）
+    //
+    // 📌 这组的重点是**不误伤**：run_shell 是日常高频工具（编译/构建/临时文件），
+    //   新 guard 只在"命令真的碰到手机上的真实文件"时才表态。
+    //   一个"安全但啰嗦"的 guard 会被用户整体关掉，那等于没有保护。
+    // ════════════════════════════════════════════════════════════════════
+
+    private val shellGuard = ShellStageGuard()
+
+    private fun shellCtx(command: String): ToolCallContext = ToolCallContext(
+        ToolSource.CONVERSATION,
+        "run_shell",
+        JSONObject().put("command", command),
+    )
+
+    @Test
+    fun `N1 删真实文件要问 且 fail-closed`() {
+        val d = shellGuard.evaluate(shellCtx("rm -rf /mnt/lab/报告.docx"))
+        assertTrue("必须产生 Ask", d is ToolDecision.Ask)
+        val ask = d as ToolDecision.Ask
+        assertEquals("来源要能区分于笼统的 RISK_CONFIRMATION", DecisionOrigin.SHELL_STAGE, ask.origin)
+        assertTrue(
+            "不可逆 + 真实用户数据 ⇒ 问不到就不能做",
+            ask.failClosed,
+        )
+        assertTrue("文案要点明是手机上的真实文件：${ask.prompt}", ask.prompt.contains("真实文件"))
+    }
+
+    @Test
+    fun `N2 容器内命令不表态`() {
+        assertNull("容器内删临时文件不该打扰用户", shellGuard.evaluate(shellCtx("rm -rf /tmp/build")))
+        assertNull("普通构建命令", shellGuard.evaluate(shellCtx("python3 -m http.server 8080")))
+        assertNull("只读查询真实目录", shellGuard.evaluate(shellCtx("ls -la /mnt/lab")))
+        assertNull("写真实目录是主力用法，不该拦", shellGuard.evaluate(shellCtx("mkdir -p /mnt/lab/proj")))
+    }
+
+    @Test
+    fun `N3 只对 run_shell 生效`() {
+        val other = ToolCallContext(
+            ToolSource.CONVERSATION,
+            "install_packages",
+            JSONObject().put("command", "rm -rf /mnt/lab/x"),
+        )
+        assertNull("别的工具不该被这条策略管到（它各自有自己的风险档）", shellGuard.evaluate(other))
+    }
+
+    @Test
+    fun `N4 阶段证据含全部阶段 而文案只含需点头的`() {
+        val d = shellGuard.evaluate(
+            shellCtx("wc -l /mnt/lab/r.log && echo ok && rm -rf /mnt/lab/r.log"),
+        ) as ToolDecision.Ask
+        assertEquals("三个阶段都要进审计", 3, d.stageEvidence.size)
+        assertTrue(
+            "审计要能回答'其余阶段为何放行'：${d.stageEvidence}",
+            d.stageEvidence.any { it.contains("known_safe") },
+        )
+        assertTrue(
+            "审计要标出被拦的那个：${d.stageEvidence}",
+            d.stageEvidence.any { it.contains("dangerous") },
+        )
+        assertFalse(
+            "文案不该列自动放行的阶段（对用户是噪音）：${d.prompt}",
+            d.prompt.contains("wc -l"),
+        )
+    }
+
+    @Test
+    fun `N5 空命令与缺参数不表态`() {
+        assertNull(shellGuard.evaluate(shellCtx("")))
+        assertNull(shellGuard.evaluate(ToolCallContext(ToolSource.CONVERSATION, "run_shell", JSONObject())))
+    }
+
+    @Test
+    fun `N6 经 compose 后仍能给出 Ask 且不会被后续 guard 覆盖`() {
+        // 与真实策略集一起跑：确认新 guard 在既有 9 道里能正常胜出
+        val r = ApprovalGate.compose(shellCtx("rm -rf /mnt/lab/data"))
+        assertTrue("在完整策略集里也要产生 Ask", r is ToolDecision.Ask)
+        assertEquals(
+            "Ask 应来自分阶段判定而不是别的 guard",
+            DecisionOrigin.SHELL_STAGE,
+            (r as ToolDecision.Ask).origin,
+        )
     }
 }

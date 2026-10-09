@@ -1,0 +1,54 @@
+{"v":1,"seq":1,"ts":1759900000000,"type":"turn_start","turn":1,"source":"text"}
+{"v":1,"seq":2,"ts":1759900000100,"type":"user","turn":1,"text":"帮我看看今天北京的天气","source":"text"}
+{"v":1,"seq":3,"ts":1759900000300,"type":"tool_call","turn":1,"callId":"call_w1","name":"get_weather","args":"{\"city\":\"北京\"}"}
+{"v":1,"seq":4,"ts":1759900000900,"type":"tool_result","turn":1,"callId":"call_w1","name":"get_weather","content":"北京 晴 18~26℃，东南风 2 级"}
+{"v":1,"seq":5,"ts":1759900001500,"type":"assistant","turn":1,"text":"北京今天晴，18 到 26 度，东南风 2 级，挺适合出门。"}
+{"v":1,"seq":6,"ts":1759900001600,"type":"turn_end","turn":1,"reason":"completed","promptTokens":14200,"completionTokens":38,"modelCalls":2,"cacheHitTokens":13800}
+{"v":1,"seq":7,"ts":1759900010000,"type":"turn_start","turn":2,"source":"text"}
+{"v":1,"seq":8,"ts":1759900010100,"type":"user","turn":2,"text":"那明天呢","source":"text"}
+{"v":1,"seq":9,"ts":1759900010300,"type":"tool_call","turn":2,"callId":"call_w2","name":"get_weather","args":"{\"city\":\"北京\",\"date\":\"明天\"}"}
+{"v":1,"seq":10,"ts":1759900010900,"type":"tool_result","turn":2,"callId":"call_w2","name":"get_weather","content":"北京 多云转小雨 16~23℃"}
+{"v":1,"seq":11,"ts":1759900011500,"type":"assistant","turn":2,"text":"明天多云转小雨，16 到 23 度，记得带伞。"}
+{"v":1,"seq":12,"ts":1759900011600,"type":"turn_end","turn":2,"reason":"completed","promptTokens":14500,"completionTokens":31,"modelCalls":2,"cacheHitTokens":14100}
+{"v":1,"seq":13,"ts":1759900020000,"type":"turn_start","turn":3,"source":"text"}
+{"v":1,"seq":14,"ts":1759900020100,"type":"user","turn":3,"text":"把下载目录里那个旧报告删了吧","source":"text"}
+{"v":1,"seq":15,"ts":1759900020300,"type":"tool_call","turn":3,"callId":"call_d1","name":"delete_file","args":"{\"scope\":\"downloads\",\"path\":\"旧报告.docx\"}"}
+{"v":1,"seq":16,"ts":1759900020400,"type":"effect_intent","turn":3,"name":"delete_file","callId":"call_d1","authSource":"allow:approved","summary":"从下载目录删除「旧报告.docx」"}
+{"v":1,"seq":17,"ts":1759900020900,"type":"tool_result","turn":3,"callId":"call_d1","name":"delete_file","content":"已从下载目录删除「旧报告.docx」（1 个文件），不可恢复"}
+{"v":1,"seq":18,"ts":1759900021500,"type":"assistant","turn":3,"text":"已经把「旧报告.docx」从下载目录删掉了，这个操作不可恢复。"}
+{"v":1,"seq":19,"ts":1759900021600,"type":"turn_end","turn":3,"reason":"completed","promptTokens":15100,"completionTokens":42,"modelCalls":2,"cacheHitTokens":14600}
+{"v":1,"seq":20,"ts":1759900030000,"type":"turn_start","turn":4,"source":"text"}
+{"v":1,"seq":21,"ts":1759900030100,"type":"user","turn":4,"text":"把我刚才发的那篇长文整理成一个 markdown 文件存到下载目录","source":"text"}
+{"v":1,"seq":22,"ts":1759900030300,"type":"tool_call","turn":4,"callId":"call_s1","name":"save_code_file","args":"{\"project\":\"文章整理\",\"file\":\"README.md\",\"content\":\"# 文章整理\\n\\n第一段…\"}"}
+{"v":1,"seq":23,"ts":1759900032000,"type":"attempt","turn":4,"outcome":"superseded"}
+{"v":1,"seq":24,"ts":1759900032100,"type":"turn_end","turn":4,"reason":"interrupted","partialReply":"我正在把文章写入文件，前两段已经整理好了"}
+{"v":1,"seq":25,"ts":1759900032200,"type":"assistant","turn":4,"text":"我正在把文章写入文件，前两段已经整理好了","partial":true}
+{"v":1,"seq":26,"ts":1759900032300,"type":"cut","seqs":[22,23],"reason":"turn_tool_noise"}
+{"v":1,"seq":27,"ts":1759900040000,"type":"turn_start","turn":5,"source":"text"}
+{"v":1,"seq":28,"ts":1759900040100,"type":"user","turn":5,"text":"算了先不管了，帮我查下明天的日程","source":"text"}
+{"v":1,"seq":29,"ts":1759900044000,"type":"attempt","turn":5,"outcome":"timeout","detail":"读超时 30s"}
+{"v":1,"seq":30,"ts":1759900044100,"type":"turn_end","turn":5,"reason":"failed","detail":"SocketTimeoutException"}
+{"v":1,"seq":31,"ts":1759900044200,"type":"assistant","turn":5,"text":"（这一轮被中断了，没有完整回复。用户若要求继续，请基于上面那条请求重新作答。）","partial":true}
+{"v":1,"seq":32,"ts":1759900044300,"type":"cut","seqs":[29],"reason":"turn_tool_noise"}
+{"v":1,"seq":33,"ts":1759900050000,"type":"turn_start","turn":6,"source":"text"}
+{"v":1,"seq":34,"ts":1759900050100,"type":"user","turn":6,"text":"你刚才说错了，重来","source":"text"}
+{"v":1,"seq":35,"ts":1759900051500,"type":"assistant","turn":6,"text":"抱歉，我重新说一下。"}
+{"v":1,"seq":36,"ts":1759900051600,"type":"turn_end","turn":6,"reason":"completed","promptTokens":15800,"completionTokens":12,"modelCalls":1}
+{"v":1,"seq":37,"ts":1759900054000,"type":"cut","seqs":[34,35],"reason":"drop_last_turn"}
+{"v":1,"seq":38,"ts":1759900060000,"type":"turn_start","turn":7,"source":"text"}
+{"v":1,"seq":39,"ts":1759900060100,"type":"user","turn":7,"text":"我们刚才聊到哪了","source":"text"}
+{"v":1,"seq":40,"ts":1759900061500,"type":"assistant","turn":7,"text":"刚聊过北京今明两天的天气，还帮你删了下载目录里那份旧报告。"}
+{"v":1,"seq":41,"ts":1759900061600,"type":"turn_end","turn":7,"reason":"completed","promptTokens":16200,"completionTokens":35,"modelCalls":1,"cacheHitTokens":15700}
+{"v":1,"seq":42,"ts":1759900070000,"type":"turn_start","turn":8,"source":"text"}
+{"v":1,"seq":43,"ts":1759900070100,"type":"user","turn":8,"text":"对了，我平时喜欢听周杰伦","source":"text"}
+{"v":1,"seq":44,"ts":1759900071500,"type":"assistant","turn":8,"text":"记住了，以后你说想听歌我就知道先给你找周杰伦的。"}
+{"v":1,"seq":45,"ts":1759900071600,"type":"turn_end","turn":8,"reason":"completed","promptTokens":16600,"completionTokens":34,"modelCalls":1,"cacheHitTokens":16100}
+{"v":1,"seq":46,"ts":1759900080000,"type":"compaction_start","trigger":"token"}
+{"v":1,"seq":47,"ts":1759900082000,"type":"compaction_summary","seqs":[2,5,8,11,14,18],"text":"[更早对话摘要]\n- 用户查过北京天气：今天晴 18~26℃，明天多云转小雨 16~23℃，提醒了带伞\n- 已按用户要求删除下载目录里的「旧报告.docx」（不可恢复）\n- 用户表示喜欢听周杰伦","turns":3}
+{"v":1,"seq":48,"ts":1759900082100,"type":"compaction_end"}
+{"v":1,"seq":49,"ts":1759900090000,"type":"turn_start","turn":9,"source":"text"}
+{"v":1,"seq":50,"ts":1759900090100,"type":"user","turn":9,"text":"那后天呢","source":"text"}
+{"v":1,"seq":51,"ts":1759900090300,"type":"tool_call","turn":9,"callId":"call_w3","name":"get_weather","args":"{\"city\":\"北京\",\"date\":\"后天\"}"}
+{"v":1,"seq":52,"ts":1759900090900,"type":"tool_result","turn":9,"callId":"call_w3","name":"get_weather","content":"北京 小雨 15~20℃"}
+{"v":1,"seq":53,"ts":1759900091500,"type":"assistant","turn":9,"text":"后天小雨，15 到 20 度。连着两天有雨，出门都带着伞吧。"}
+{"v":1,"seq":54,"ts":1759900091600,"type":"turn_end","turn":9,"reason":"completed","promptTokens":15800,"completionTokens":44,"modelCalls":2,"cacheHitTokens":15200}

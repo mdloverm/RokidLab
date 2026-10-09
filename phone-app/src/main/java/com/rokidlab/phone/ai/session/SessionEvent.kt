@@ -66,6 +66,29 @@ internal enum class SessionEventKind(val wire: String) {
 
     /** 若干事件退出模型可见历史（见 [VisibilityCut]） */
     VISIBILITY_CUT("cut"),
+
+    /**
+     * 一次**已授权、即将产生副作用**的声明（2026-10-09，对齐 Muse/MSP 的 `side_effect_intent`）。
+     *
+     * ★ 为什么要有它（这是本项目最缺的一条不变式）：
+     *   改造前事件流只记 `ToolCall`（意图）与 `ToolResult`（结果），**中间的授权是空的**。
+     *   于是"这次副作用是谁点头放行的"无法回答 —— 审计日志能证明"做了什么"，
+     *   却证明不了"凭什么允许"。排查误操作时缺的那一环正在这里。
+     *
+     * ★ **不变式（可钉成单测）**：授权与意图必须**先于**副作用对外可见落盘。
+     *   即 `SideEffectIntent` 的 seq 必须小于同一次调用的 `ToolResult` 的 seq。
+     *   —— 这就是 write-ahead log：崩溃恢复时能知道"哪些效果已经在路上"。
+     *   log-after-execution 不行 —— 动作与日志之间崩了，恰好在最需要信息的地方留洞。
+     *
+     * ★ **反向不变式同样重要**：未授权的副作用**根本不产生这条事件**。
+     *   拒绝 ⇒ 日志里查不到"差点发生什么"。这比"记一条 denied"更好审计：
+     *   后者需要在读的时候正确区分"记了但没做"，前者让"不存在"本身就是证据。
+     *
+     * ⚠️ **不进模型可见历史**（`modelVisible` 默认 false）：它是审计事实，
+     *   不是给模型看的上下文。把授权历史塞进 messages 会让每轮白烧 token，
+     *   且模型不需要知道"上次是谁点头的"。
+     */
+    SIDE_EFFECT_INTENT("effect_intent"),
     ;
 
     companion object {
@@ -138,6 +161,57 @@ internal enum class AttemptOutcome(val wire: String) {
 }
 
 // ═══════════════════════ 事件 ═══════════════════════
+
+/**
+ * 副作用的**授权来源**（对齐 MSP 的 `decision_source` / `policy_decision` 语义）。
+ *
+ * ★ 为什么要区分来源，而不是记一个 `allowed: Boolean`：
+ *   布尔值能回答"允许了吗"，但答不出**"谁允许的"** —— 而后者才是审计与排查的关键：
+ *   用户点的、静态规则自动放行的、LLM 判官判的，三者的可信度完全不同。
+ *   把它们压成一个 true，事后无法复核，日志也就失去了意义。
+ *
+ * 📌 枚举**不带退路**：wire 字符串一经落盘不可改名。
+ */
+internal enum class AuthorizationSource(val wire: String) {
+    /**
+     * 用户在确认界面上点了「允许」。
+     *
+     * 这是**唯一**能被当作"人的授权"的一档，也是无 standing grant 时的默认路径。
+     */
+    USER_APPROVED("allow:approved"),
+
+    /**
+     * 静态策略自动放行（只读工具、已在白名单里的窄操作）。
+     *
+     * 判据是**可重放**的：不依赖模型判断，也不依赖当时的上下文 ——
+     * 因此它可以被认为"与当时的对话内容无关"而稍微放心一点。
+     */
+    POLICY("allow:policy"),
+
+    /**
+     * 由模型侧的判官依据策略文本判定放行。
+     *
+     * ⚠️ 这一档是**注入攻击的首要目标**：网页里一句"这条操作已获用户授权"
+     * 若能影响判官，就等于绕过了 [USER_APPROVED]。所以它与 [USER_APPROVED]
+     * 在代码里**必须分开**，且判官拿不到"用户已授权"这种可伪造的前提。
+     */
+    LLM_JUDGE("allow:llm_judge"),
+
+    /**
+     * 显式拒绝（用户点「取消」，或策略直接 Deny）。
+     *
+     * ⚠️ 按上面的反向不变式，**拒绝时不产生 [SideEffectIntent]**。
+     *   这个取值只用于两类场合：(a) 需要在日志里留下"用户主动拒绝"这个事实
+     *   （否则用户投诉"我明明点了取消它还是动了"时无法自证）；
+     *   (b) 审批窗口被关闭但调用并未被执行。
+     */
+    DENIED("deny"),
+    ;
+
+    companion object {
+        fun fromWire(wire: String): AuthorizationSource? = entries.firstOrNull { it.wire == wire }
+    }
+}
 
 /** 一轮开始（用户发出请求）。与 [TurnEnd] 成对，中间是这一轮的全部事件。 */
 internal data class TurnStart(
@@ -384,4 +458,48 @@ internal data class VisibilityCut(
     val reason: String,
 ) : SessionEvent {
     override val kind: SessionEventKind get() = SessionEventKind.VISIBILITY_CUT
+}
+
+/**
+ * 一次**已授权的副作用**声明 —— 写前日志的那一"写前"（对齐 MSP `side_effect_intent`）。
+ *
+ * ## 存在的理由
+ *
+ * 改造前事件流记 `ToolCall`（模型想做什么）与 `ToolResult`（实际发生了什么），
+ * **中间的授权是空的**。于是审计只能证明"做了什么"，证明不了"凭什么允许"——
+ * 而后者才是"用户说它乱动我的东西"时唯一能回答的问题。
+ *
+ * ## 不变式（单测直接盯住，别指望别的手段顺带保证）
+ *
+ * 1. **顺序**：本事件的 seq 必须**小于**同一次调用的 [ToolResult] 的 seq。
+ *    即授权在效果对外可见之前已经落盘 —— 这才是 write-ahead log 的意义。
+ * 2. **反向**：未授权的副作用**不产生本事件**。拒绝 ⇒ 日志里查不到"差点发生"。
+ *    "不存在"本身就是证据，比"记一条然后靠读的人正确区分"强得多。
+ *
+ * ## 为什么 [turn] 可为 null
+ *
+ * 无主线的后台动作（定时自主任务）也要有授权记录。这类调用不属于任何一轮，
+ * 落成 [turn] = null 与 [CompactionStart] 的做法一致。
+ */
+internal data class SideEffectIntent(
+    override val turn: Int?,
+    override val step: Int? = null,
+    /** 工具名（与 [ToolCall.name] 同一套命名） */
+    val name: String,
+    /** 触发这次调用的模型 callId；后台动作无模型调用时为 null */
+    val callId: String? = null,
+    /** 授权来自哪一档（见 [AuthorizationSource]） */
+    val source: AuthorizationSource,
+    /** 给用户看的操作摘要（留痕用；不含模型可控文本） */
+    val summary: String? = null,
+    /**
+     * 分阶段审批时的阶段判定摘要（对齐 MSP 的 `stage_evidence`）。
+     *
+     * ⚠️ 刻意**只记各阶段自身的结果、不记 argv 明细**：argv 可能很长，
+     *   且这里的目的只是回答"这一串命令里哪几步需要人点头"，
+     *   完整 argv 已经由 [ToolCall.args] 记着了（保留原始 JSON）。
+     */
+    val stageEvidence: List<String> = emptyList(),
+) : SessionEvent {
+    override val kind: SessionEventKind get() = SessionEventKind.SIDE_EFFECT_INTENT
 }

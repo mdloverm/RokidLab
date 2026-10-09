@@ -156,6 +156,9 @@ internal class SessionProjection(private val records: List<SessionRecord>) {
                 is CompactionSummary,
                 is CompactionEnd,
                 is VisibilityCut,
+                // 授权留痕是**审计事实**，不是给模型看的上下文：
+                // 塞进 messages 会让每轮白烧 token，且模型不需要知道"上次是谁点头的"。
+                is SideEffectIntent,
                 -> Unit
             }
         }

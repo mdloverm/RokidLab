@@ -207,6 +207,16 @@ internal companion object {
      */
     internal fun loadedRecordCount(): Int = allRecords().size
 
+    /**
+     * 全部记录（含**非**模型可见的那些）——测试可见入口。
+     *
+     * ⚠️ 存在的理由：审计类事件（如 [SideEffectIntent]）刻意 `modelVisible = false`，
+     *   所以 [visibleRecords] / [history] 里**必然找不到它们**。
+     *   写这类事件的测试时误用 visible 入口会得到"记录丢了"的假象 ——
+     *   本轮就踩过一次（两条测试先红，原因是查询口径错而不是实现错）。
+     */
+    internal fun allRecordsForTest(): List<SessionRecord> = allRecords().toList()
+
     // ═══════════════════════ 写 ═══════════════════════
 
     /** 追加一个事件（唯一写入口径；分配 seq/ts 由 [SessionLog] 负责） */
@@ -263,6 +273,39 @@ internal companion object {
         val (clipped, truncated) = SessionLog.clip(content)
         append(ToolResult(turn, callId = callId, name = name, content = clipped, truncated = truncated))
     }
+
+    /**
+     * 记录一次**已授权的副作用**（写前日志，见 [SideEffectIntent]）。
+     *
+     * ★ **调用点必须在副作用真正发生之前**。这不是建议而是这条不变式存在的全部意义：
+     *   授权与意图在效果对外可见之前落盘，崩溃恢复才可能知道"哪些已经在路上"。
+     *   若在事后调用，它退化成一条普通日志，比不写更糟 —— 因为它看起来像有审计，
+     *   实际恰好在最需要它的那段空白里为空。
+     *
+     * ★ **拒绝路径不要调它**。未授权的副作用**不产生这条事件**（反向不变式）：
+     *   日志里查不到"差点发生什么"，"不存在"本身就是证据。
+     *
+     * @param stageEvidence 分阶段审批的阶段判定（见 [SideEffectIntent.stageEvidence]）
+     * @return 落盘记录的 seq（供上层断言"授权 seq < 结果 seq"）
+     */
+    fun appendSideEffectIntent(
+        turn: Int?,
+        name: String,
+        source: AuthorizationSource,
+        callId: String? = null,
+        summary: String? = null,
+        stageEvidence: List<String> = emptyList(),
+    ): Long = append(
+        SideEffectIntent(
+            turn = turn,
+            name = name,
+            callId = callId,
+            source = source,
+            // 摘要同样走 clip：事件流只追加，超长文本会永久留在文件里
+            summary = summary?.let { SessionLog.clip(it).first }?.takeIf { it.isNotBlank() },
+            stageEvidence = stageEvidence,
+        )
+    ).seq
 
     /** 记录一次**失败/被打断的尝试**（不进模型历史，只让"这轮为什么慢/为什么报错"可归因） */
     fun appendAttempt(turn: Int, outcome: AttemptOutcome, detail: String? = null) {

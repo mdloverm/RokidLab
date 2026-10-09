@@ -160,8 +160,12 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
          * 代码/项目类任务装配工具时注入 system（见 [buildMessages] → buildSystemMessage）。
          * 用户用任意文本编辑器写一份「框架约定/命名风格/禁用项」，生成一致性长期受益。
          * 文件不存在 = 无规则，零开销（每个任务只读一次）。
+         *
+         * ⚠️ 2026-10-09：常量值改由 [com.rokidlab.phone.ai.PromptGuardrails.PROJECT_RULES_FILE]
+         *   提供 —— 同一个文件名有两处用途（这里读、`FileWorkspace` 那里防删），
+         *   各写一份字面量会让"改了读取路径忘了改防护"变成静默失效的缺口。
          */
-        const val PROJECT_RULES_RELPATH = "RokidLab规则.md"
+        const val PROJECT_RULES_RELPATH = com.rokidlab.phone.ai.PromptGuardrails.PROJECT_RULES_FILE
 
         /** 项目规则注入上限（字符）：规则是用户手写约定，超长多半混入了无关内容 */
         const val PROJECT_RULES_MAX_CHARS = 6000
@@ -802,7 +806,45 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
      * 2026-10-05：从局部 `fun executeTool` 原样提为成员方法，隐式捕获全部转显式入参。
      * **行为零变更**（逐字搬迁）。
      */
-    private fun executeToolInTurn(
+private fun executeToolInTurn(
+        tc: com.rokidlab.phone.ai.ToolCallInfo,
+        ctx: TurnExecContext,
+    ): String {
+        // ★ 授权留痕（写前日志，2026-10-09）：把闸门的放行结论落进事件流。
+        //
+        // 装在这里而不是每个调用点各注册一次的理由：闸门是**纯判定层**（不依赖事件流），
+        // 接线只有这一处；`try/finally` 保证即便抛异常也不会留下一个污染全局的 sink
+        // —— 那个污染会让后续**别的**会话把授权记到错的流里，比不记还糟。
+        //
+        // ⚠️ 写入**时机**由闸门保证（放行前），这里只负责"往哪写"（当前轮 + 当前 callId）。
+        // 拒绝路径不会通知 sink ——「未授权的副作用不产生记录」是反向不变式。
+        val previousSink = com.rokidlab.phone.ai.approval.ApprovalGate.authorizationSink
+        com.rokidlab.phone.ai.approval.ApprovalGate.authorizationSink =
+            com.rokidlab.phone.ai.approval.ApprovalGate.AuthorizationTrace { name, source, prompt, stages ->
+                com.rokidlab.phone.ai.AgentSessionManager.appendSideEffectIntent(
+                    turn = com.rokidlab.phone.ai.AgentSessionManager.currentTurn().takeIf { it > 0 },
+                    name = name,
+                    source = source,
+                    callId = tc.id,
+                    summary = prompt,
+                    stageEvidence = stages,
+                )
+            }
+        try {
+            return executeToolWithApproval(tc, ctx)
+        } finally {
+            com.rokidlab.phone.ai.approval.ApprovalGate.authorizationSink = previousSink
+        }
+    }
+
+    /**
+     * 参数解析 + 审批 + 执行的真正主体（原 `executeToolInTurn` 的全部逻辑，逐字搬迁）。
+     *
+     * ★ 为什么要拆出这一层：授权留痕需要在**整个调用前后**挂上 sink（`try/finally`），
+     * 而原有逻辑是一个数百行的大方法，无法在它内部"前后"包一层而不动它的结构。
+     * 拆分保持**行为零变更** —— 调用方仍只经过 [executeToolInTurn] 一个入口。
+     */
+    private fun executeToolWithApproval(
         tc: com.rokidlab.phone.ai.ToolCallInfo,
         ctx: TurnExecContext,
     ): String {

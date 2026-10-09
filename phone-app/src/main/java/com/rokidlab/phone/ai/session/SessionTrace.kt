@@ -161,7 +161,29 @@ internal object SessionTrace {
                 "作废 ${e.seqs.size} 条（${e.reason}）—— 不再进模型上下文，原文仍在",
                 null,
             )
+
+            // 授权行放在 ToolCall 之前是**时间顺序的自然结果**（授权先于效果落盘），
+            // 不为了好看而调换 —— 轨迹的顺序本身就是审计的一部分。
+            is SideEffectIntent -> Item(
+                r.seq, e.turn, r.ts, Category.TOOL,
+                "已授权 ${e.name}（${authLabel(e.source)}）",
+                buildString {
+                    e.summary?.takeIf { it.isNotBlank() }?.let { append(it) }
+                    if (e.stageEvidence.isNotEmpty()) {
+                        if (isNotEmpty()) append('\n')
+                        append("分阶段判定：").append(e.stageEvidence.joinToString(" / "))
+                    }
+                }.takeIf { it.isNotBlank() },
+            )
         }
+    }
+
+    /** 授权来源的中文标签（诊断面板要人看懂，不能把 wire 串直接甩给人） */
+    private fun authLabel(s: AuthorizationSource): String = when (s) {
+        AuthorizationSource.USER_APPROVED -> "用户已点头"
+        AuthorizationSource.POLICY -> "静态规则放行"
+        AuthorizationSource.LLM_JUDGE -> "模型判官放行"
+        AuthorizationSource.DENIED -> "已拒绝"
     }
 
     /** 结束行的详情：把这一轮的代价摊开（与上下文面板同源，都是事件流的派生量） */

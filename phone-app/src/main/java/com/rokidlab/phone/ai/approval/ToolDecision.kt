@@ -70,6 +70,18 @@ enum class DecisionOrigin {
      * 问不到用户（眼镜/手机确认通道都不可用）就拒绝，页面永远拿不到静默的命令执行。
      */
     PAGE_ELEVATED,
+
+    /**
+     * `run_shell` 的**分阶段审批**（[ShellStageGuard]，2026-10-09）。
+     *
+     * 与 [RISK_CONFIRMATION] 分开的理由：那一档判的是**工具**的风险档
+     * （`EXTERNAL_SIDE_EFFECT` ⇒ 每次调用都要点头），而这一档判的是
+     * **同一条命令内部的哪几个阶段**碰到了真实用户数据 —— 同一个 `run_shell`
+     * 工具，`rm -rf /tmp/x` 不需要问、`rm -rf /mnt/lab/…` 需要问。
+     * 压成一个 origin 会让排查时无法区分"这个工具本来就危险"与
+     * "这次命令恰好危险"。
+     */
+    SHELL_STAGE,
 }
 
 /**
@@ -115,10 +127,15 @@ sealed interface ToolDecision {
      *   超时/无通道降级放行）。只给「第三方远端工具」用 —— 理由见该字段的产地
      *   [ToolCallContext.failClosedConfirmation]：fail-open 的前提是工具侧自己有
      *   "未获确认时降级为无副作用动作"的保证，MCP 工具没有这个保证。
+     * @param stageEvidence 分阶段审批的各阶段判定摘要（对齐 Muse Code 的 `stage_evidence`）。
+     *   空 = 这次询问不是分阶段产生的。存在的理由：审批文案只列**需要点头的那一步**
+     *   （自动放行的阶段对用户是噪音），但审计要能回答"这条命令里还有哪几步、
+     *   它们各自为什么被自动放行" —— 否则事后复核只能看到被拦的那一段。
      */
     data class Ask(
         val origin: DecisionOrigin,
         val prompt: String,
         val failClosed: Boolean = false,
+        val stageEvidence: List<String> = emptyList(),
     ) : ToolDecision
 }

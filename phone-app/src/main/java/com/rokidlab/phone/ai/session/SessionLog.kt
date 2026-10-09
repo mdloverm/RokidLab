@@ -117,6 +117,20 @@ internal class SessionLog(
 
         /** 这条 assistant 是不是被打断的半截输出（2026-10-09 新增，默认 false 不落字段） */
         private const val KEY_PARTIAL = "partial"
+
+        /**
+         * 授权来源（2026-10-09 新增，见 [SideEffectIntent]）。
+         *
+         * ⚠️ 键名**不能复用 [KEY_SOURCE]**：那个键已经被 [MessageSource] / [TurnStart.source]
+         *   占用了（都是 `source`），同键承载两种语义会让"读的人按哪种理解"变成隐式约定。
+         */
+        private const val KEY_SOURCE_AUTH = "authSource"
+
+        /** 副作用声明的给人看的操作摘要（可空 ⇒ 不落字段） */
+        private const val KEY_SUMMARY = "summary"
+
+        /** 分阶段审批的阶段判定摘要（空 ⇒ 不落字段） */
+        private const val KEY_STAGES = "stages"
     }
 
     /** 已分配的最大 seq 缓存（-1 = 尚未从文件加载）。写操作与读操作都在 [lock] 内访问 */
@@ -272,6 +286,15 @@ internal class SessionLog(
                 if (e.clearDigest) o.put(KEY_CLEAR_DIGEST, true)
                 o.put(KEY_REASON, e.reason)
             }
+
+            is SideEffectIntent -> {
+                o.put(KEY_NAME, e.name)
+                e.callId?.let { o.put(KEY_CALL_ID, it) }
+                o.put(KEY_SOURCE_AUTH, e.source.wire)
+                // summary/stageEvidence 为空不落字段：文件里出现它们一律非空
+                e.summary?.takeIf { it.isNotBlank() }?.let { o.put(KEY_SUMMARY, it) }
+                if (e.stageEvidence.isNotEmpty()) o.put(KEY_STAGES, JSONArray(e.stageEvidence))
+            }
         }
         return o.toString()
     }
@@ -391,6 +414,19 @@ internal class SessionLog(
                 clearDigest = o.optBoolean(KEY_CLEAR_DIGEST, false),
                 reason = o.optString(KEY_REASON),
             )
+
+            // ⚠️ source 解析失败 ⇒ return null（整条作废），与 TurnEnd.reason 同口径：
+            //   一条记录了副作用授权、却说不清谁授权的记录，比没有更危险 ——
+            //   它会让人以为"知道是谁点头的"。宁可丢这条，不留半可信的审计事实。
+            SessionEventKind.SIDE_EFFECT_INTENT -> SideEffectIntent(
+                turn = turn,
+                step = step,
+                name = o.optString(KEY_NAME),
+                callId = o.optString(KEY_CALL_ID).ifBlank { null },
+                source = AuthorizationSource.fromWire(o.optString(KEY_SOURCE_AUTH)) ?: return null,
+                summary = o.optString(KEY_SUMMARY).ifBlank { null },
+                stageEvidence = readStringList(o.optJSONArray(KEY_STAGES)),
+            )
         }
         return SessionRecord(seq, o.optLong(KEY_TS, 0L), event)
     }
@@ -402,6 +438,21 @@ internal class SessionLog(
         for (i in 0 until arr.length()) {
             val v = arr.optLong(i, 0L)
             if (v > 0L) out.add(v)
+        }
+        return out
+    }
+
+    /**
+     * JSON 数组 → 字符串列表（[SideEffectIntent.stageEvidence] 用）。
+     *
+     * 空元素跳过而不是整条作废：阶段判定是辅助信息，
+     * 一个空字符串不该让整条审计记录作废（那正是审计记录最不该有的脆弱性）。
+     */
+    private fun readStringList(arr: JSONArray?): List<String> {
+        if (arr == null || arr.length() == 0) return emptyList()
+        val out = ArrayList<String>(arr.length())
+        for (i in 0 until arr.length()) {
+            arr.optString(i).takeIf { it.isNotBlank() }?.let { out.add(it) }
         }
         return out
     }

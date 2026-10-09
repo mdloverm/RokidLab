@@ -1,6 +1,7 @@
 package com.rokidlab.phone.ai
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -76,6 +77,49 @@ class ToolRiskMapTest {
             "副作用标记与风险档矛盾（漏标 sideEffect 会静默进入并行泳道引发竞态）",
             emptyList<String>(),
             broken,
+        )
+    }
+
+    /**
+     * 子代理工具的泳道判据（2026-10-09 补）。
+     *
+     * ## 为什么必须单独一条 —— 上面那条护栏**按设计抓不到**它
+     *
+     * 上面那条只强约束 `EXTERNAL_SIDE_EFFECT ⇒ sideEffect`，LOCAL 档是**有意放开**的
+     * （幂等工具如 `stop_tts` / `show_image` 重放无害，不该白占串行泳道）。
+     * 因此 LOCAL 档"该不该标 sideEffect"**只能逐个判断**，护栏帮不上忙 ——
+     * 而这正是 `execute_subtask` 漏标两个多月没被发现的原因。
+     *
+     * ## 判据：这个工具重放会不会产生**用户可见的重复**
+     *
+     * `execute_subtask` 把一整个多步本机任务派给子代理做，而任务里含
+     * `set_phone_alarm` / `manage_timer` 这类**累积性**动作 ⇒ 重放会设出多个重复提醒。
+     * 它因此必须与 `save_code_file` / `manage_knowledge_base` 同档处理。
+     *
+     * ⚠️ 漏标的两个后果都是真机上能观察到的（不是理论风险）：
+     *  - 进并行泳道 ⇒ 主代理可同时派 2 个 write 子代理（`SubagentSlots` 上限 2）
+     *    ⇒ 两个子代理并发写同一个项目目录；
+     *  - `maxAttempts` 仍是 3 ⇒ 瞬时失败时子代理里的设定时器被执行 3 次。
+     *
+     * 📌 这条测试锁的**不是**"子代理必须串行"这个结论，而是
+     *   "**能做累积性本机动作的工具不得只按 LOCAL 档放行并行**"这条判据 ——
+     *   将来若给子代理加了新的累积性动作（如批量改设置），这条仍会替它把关。
+     */
+    @Test
+    fun `写型子代理必须标 sideEffect（LOCAL 档护栏覆盖不到）`() {
+        val write = com.rokidlab.phone.ai.subagent.WriteSubagent.TOOL_NAME
+        assertTrue(
+            "$write 会派子代理执行设定时器/写文件这类不可幂等的动作，" +
+                "必须标 sideEffect ⇒ 走串行泳道 + 失败不重放；" +
+                "漏标会静默进并行泳道并重放 3 次",
+            write in ToolRegistry.SIDE_EFFECT_TOOLS,
+        )
+        // 反向：只读子代理**不该**被标 —— 它确实无副作用，
+        // 标了会白占串行泳道，把"两路并发调研"的能力砍掉一半
+        val read = com.rokidlab.phone.ai.subagent.ReadOnlySubagent.TOOL_NAME
+        assertFalse(
+            "$read 是纯只读调研，标 sideEffect 会白占串行泳道（并发收益减半）",
+            read in ToolRegistry.SIDE_EFFECT_TOOLS,
         )
     }
 

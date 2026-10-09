@@ -722,6 +722,13 @@ object FileWorkspace {
         val rel = path.trim().replace('\\', '/').trim('/')
         if (rel.isEmpty()) return "删除失败：path 不能为空（不允许清空下载目录）"
         val segs = splitRel(rel) ?: return "删除失败：路径不合法（$rel）"
+        // ★ 护栏文件保护（2026-10-09）：`下载/RokidLab规则.md` 的内容会被逐轮注入 system
+        //   prompt，是模型自己遵守的约定 —— 允许它删/改等于允许它修改自己的行为准则
+        //   （对应 Muse 的「agent 不能改写自己运行的规则」）。其余几条写入路径经核查不可达，
+        //   只有 delete 这一条真的能碰到它，理由与核查表见 [PromptGuardrails] 的类注释。
+        if (PromptGuardrails.isGuardedDownloadPath(rel)) {
+            return PromptGuardrails.refuseDeleteMessage(rel)
+        }
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val relDir = "${Environment.DIRECTORY_DOWNLOADS}/" + segs.dropLast(1).joinToString("/") +
                 if (segs.size > 1) "/" else "/"

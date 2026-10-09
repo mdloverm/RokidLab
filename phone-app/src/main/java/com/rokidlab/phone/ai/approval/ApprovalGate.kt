@@ -4,6 +4,7 @@ import android.util.Log
 import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.ai.ToolRisk
 import com.rokidlab.phone.ai.ToolRiskMap
+import com.rokidlab.phone.ai.session.AuthorizationSource
 import org.json.JSONObject
 
 /**
@@ -44,7 +45,7 @@ import org.json.JSONObject
  * 风险档早就是工具的自声明字段，确认策略却还是域的特例 —— 同一个思路只做了一半。
  * 现在两者都读工具自己的声明，与 [com.rokidlab.phone.ai.tools.ToolEntry] 同源。
  */
-object ApprovalGate {
+internal object ApprovalGate {
 
     private const val TAG = "ApprovalGate"
 
@@ -172,6 +173,43 @@ object ApprovalGate {
      */
     @Volatile
     var phoneConfirmationResolver: ConfirmResolver? = null
+
+    /**
+     * 授权留痕出口（写前日志，见 [com.rokidlab.phone.ai.session.SideEffectIntent]）。
+     *
+     * ★ 为什么是注入而不是直接在闸门里写事件流：闸门是**纯判定层**，
+     *   `compose` / `resolveAsk` 都不该知道事件流的存在（那是会话层的持久化职责）。
+     *   两者耦合会让"闸门能不能单测"取决于"事件流的存储能不能构造"。
+     *
+     * ★ **留痕只发生在放行时**。拒绝路径**不通知** sink ——
+     *   「未授权的副作用不产生记录」是写前日志的反向不变式（见 `SideEffectIntent`）：
+     *   日志里查不到"差点发生什么"，"不存在"本身就是证据。
+     *   所以**不要**为拒绝补一条 DENIED 通知，否则那条不变式就废了。
+     *
+     * ⚠️ sink 抛异常必须吞掉：留痕失败**不能**变成"拒绝执行"，
+     *   那会让审计设施的故障直接阻断用户功能。logcat 记一行即可。
+     */
+    /**
+     * 授权留痕回调（`name` = 工具名，[AuthorizationSource] = 谁点头的，`prompt` = 操作摘要+原因）。
+     *
+     * ⚠️ 刻意用**内部别名**而不是直接写函数类型：事件层的 [AuthorizationSource] 是
+     *   `internal`（与 `MessageSource` / `TurnEndReason` 同级），而本 object 是 public ——
+     *   直接暴露 `AuthorizationSource` 会让 public 属性泄出 internal 类型（编译器会拦）。
+     *   提为 internal 别名是把"枚举在事件流内部"这件事留在类型上，
+     *   而不是为了省一个别名去破坏整个可见性体系。
+     */
+    internal fun interface AuthorizationTrace {
+        /**
+         * @param stages 分阶段审批的各阶段判定（空 = 这次询问不分阶段）。
+         *   存在的理由：审批**文案**只列需要点头的那一步（其余对用户是噪音），
+         *   但**审计**要能回答"这条命令里还有哪几步、各自为什么被自动放行"——
+         *   否则事后复核只看得到被拦的一段，看不见当时已经放过什么。
+         */
+        fun record(name: String, source: AuthorizationSource, prompt: String?, stages: List<String>)
+    }
+
+    @Volatile
+    var authorizationSink: AuthorizationTrace? = null
 
     // ════════════════════════════════════════════════════════════════════
     // 门面：唯一对外入口
@@ -314,7 +352,12 @@ object ApprovalGate {
         val channel = activeChannel()
         if (channel == null) {
             // 两条通道都问不到：按工具自己的声明分流（见类注释）
-            return if (ask.failClosed) denyUnconfirmed(toolName, "当前无法向你确认") else ToolDecision.Allow
+            if (ask.failClosed) return denyUnconfirmed(toolName, "当前无法向你确认")
+            // ★ fail-open 放行**必须留痕**，而且必须标成 POLICY 而不是 USER_APPROVED：
+            //   这条路径**没有任何人点过头**，记成"用户已点头"会让授权日志说谎 ——
+            //   而"没问成就执行了"恰恰是事后最需要能查出来的情形。
+            trace(ask, toolName, AuthorizationSource.POLICY, note = "问不到用户，按 PROCEED 放行")
+            return ToolDecision.Allow
         }
         val maxWait = if (source == ToolSource.AIUI_PAGE) PAGE_CONFIRM_TIMEOUT_MS else Long.MAX_VALUE
         // ★ 只读这一次调用的返回值；不再回读通道的实例状态（并发时会串味）
@@ -322,6 +365,9 @@ object ApprovalGate {
             .getOrElse { ConfirmOutcome.NOT_ANSWERED }
         if (outcome.allowed) {
             Log.i(TAG, "confirmed via ${channel.channelId} (tool=$toolName)")
+            // ★ 写前日志：授权在效果执行前落盘（见 authorizationSink 的 KDoc）。
+            //   用户点头是唯一能被当作"人的授权"的一档，所以记 USER_APPROVED 而非 POLICY。
+            trace(ask, toolName, AuthorizationSource.USER_APPROVED)
             return ToolDecision.Allow
         }
         if (outcome.cancelled) {
@@ -340,7 +386,37 @@ object ApprovalGate {
             )
         }
         // 超时/未响应/通道抛异常：同样按声明分流
-        return if (ask.failClosed) denyUnconfirmed(toolName, "你没有确认") else ToolDecision.Allow
+        if (ask.failClosed) return denyUnconfirmed(toolName, "你没有确认")
+        trace(ask, toolName, AuthorizationSource.POLICY, note = "确认超时，按 PROCEED 放行")
+        return ToolDecision.Allow
+    }
+
+    /**
+     * 通知授权留痕出口（写前日志）。
+     *
+     * @param note 追加在摘要后的原因说明（如"问不到用户，按 PROCEED 放行"）。
+     *   fail-open 放行**必须**带它 —— 那条路径没有任何人点过头，
+     *   留痕若与用户点头长得一样，授权日志就成了谎报。
+     *
+     * ⚠️ **拒绝路径不调它**（反向不变式，见 [authorizationSink]）。
+     */
+    private fun trace(
+        ask: ToolDecision.Ask,
+        toolName: String,
+        source: AuthorizationSource,
+        note: String? = null,
+    ) {
+        val sink = authorizationSink ?: return
+        // ⚠️ 刻意**不用** `runCatching { sink(...) }` 的 SAM 形式：在泛型推断位置里
+        //   Kotlin 无法把 lambda 收敛到 fun interface（报 "Cannot infer type"），
+        //   而这里恰好需要完整推导。改成显式 try/catch 反而更直白。
+        val detail = listOfNotNull(ask.prompt.takeIf { it.isNotBlank() }, note).joinToString("；")
+        try {
+            sink.record(toolName, source, detail, ask.stageEvidence)
+        } catch (t: Throwable) {
+            // 留痕失败**不能**变成"拒绝执行"（见 authorizationSink 的 KDoc）
+            Log.w(TAG, "authorization trace failed for $toolName", t)
+        }
     }
 
     /**
@@ -439,10 +515,13 @@ object ApprovalGate {
     // 测试支撑
     // ════════════════════════════════════════════════════════════════════
 
-    /** 复位注入状态（两条确认通道 + 策略集）。仅测试调用。 */
+    /** 复位注入状态（两条确认通道 + 授权留痕出口 + 策略集）。仅测试调用。 */
     internal fun resetForTest() {
         guardsOverride = null
         confirmationResolver = null
         phoneConfirmationResolver = null
+        // ⚠️ sink 必须一起复位：它是个全局挂载点，不复位会让上一个用例的 sink
+        // 在下一个用例里继续接授权记录 —— 而那种失败会伪装成"留痕逻辑有 bug"。
+        authorizationSink = null
     }
 }

@@ -123,8 +123,11 @@ internal object SessionDump {
             is CompactionSummary -> "#${r.seq} 压缩：把 ${e.shadowedSeqs.size} 条早期事件折成摘要 → " +
                 clip(e.text, DIGEST_CLIP)
             is CompactionEnd -> "#${r.seq} 压缩结束" + (e.error?.let { "（失败：$it）" } ?: "")
-            is VisibilityCut -> "#${r.seq} 作废 ${e.seqs.size} 条（${e.reason}）" +
-                "—— 这些不再进模型上下文，但原文仍在"
+is VisibilityCut -> "#${r.seq} 作废 ${e.seqs.size} 条（${e.reason}）" +
+       "—— 这些不再进模型上下文，但原文仍在"
+       is SideEffectIntent -> "#${r.seq} ${who}**已授权** ${e.name}（${e.source.wire}）" +
+      (e.summary?.takeIf { it.isNotBlank() }?.let { "：$it" } ?: "") +
+      (if (e.stageEvidence.isNotEmpty()) "\n${who}   分阶段：" + e.stageEvidence.joinToString(" / ") else "")
         }
     }
 

@@ -746,4 +746,121 @@ class AgentSessionStoreTest {
             reopened.loadedRecordCount() <= cap,
         )
     }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // 写前日志：授权声明（2026-10-09，对齐 MSP 的 side_effect_intent）
+    //
+    // 📌 这组测试的全部意义在**两条不变式**，而不在"能不能写进去"：
+    //  1. 授权的 seq **小于**结果的 seq —— 否则崩溃恢复时不知道哪些效果已经在路上，
+    //     write-ahead log 就退化成 log-after-execution（动作与日志之间崩了，
+    // 恰好在最需要信息的地方留洞）。
+    //  2. 未授权的副作用**不产生记录** —— "不存在"本身就是证据，
+    //     比"记一条 denied 再指望读的人正确区分"强得多。
+    // ══════════════════════════════════════════════════════════════════════
+
+    @Test
+    fun `side effect intent is logged before the tool result`() {
+        val store = newStore()
+        now += 1
+        val t = store.beginTurn(MessageSource.TEXT)
+        store.appendUserMessage(t, "给我妈打个电话", MessageSource.TEXT)
+        store.appendToolCall(t, "call-1", "call_phone", "{}")
+
+        // 闸门放行时写意图，随后才执行并落结果 —— 顺序是这条不变式的全部内容
+        val intentSeq = store.appendSideEffectIntent(
+            turn = t,
+            name = "call_phone",
+            source = AuthorizationSource.USER_APPROVED,
+            callId = "call-1",
+            summary = "打电话给妈妈",
+        )
+        store.appendToolResult(t, "call-1", "call_phone", "已拨出")
+
+        // ⚠️ 用 allRecords 而**不是** visibleRecords：授权留痕刻意 modelVisible=false
+        // （它是审计事实不是模型上下文），走 visible 过滤必然找不到 —— 而那个"找不到"
+        // 正是第五组测试要钉住的行为，别在写第一条测试时误用它当证据。
+        val resultSeq = store.allRecordsForTest().first { it.event is ToolResult }.seq
+        assertTrue(
+            "授权声明必须早于工具结果落盘（write-ahead）；" +
+                "实际 intent=$intentSeq result=$resultSeq",
+            intentSeq < resultSeq,
+        )
+    }
+
+    @Test
+    fun `denied action leaves no side effect record at all`() {
+        val store = newStore()
+        now += 1
+        val t = store.beginTurn(MessageSource.TEXT)
+        store.appendUserMessage(t, "发条短信给张三", MessageSource.TEXT)
+        store.appendToolCall(t, "call-1", "send_sms", "{}")
+        // 用户点了取消 ⇒ 闸门**不**通知 sink ⇒ 这里什么都不记
+        store.appendAttempt(t, AttemptOutcome.FAILED, "用户取消")
+
+        val intents = store.allRecordsForTest().filter { it.event is SideEffectIntent }
+        assertEquals(
+            "用户明确拒绝时，日志里不能出现副作用声明 —— " +
+                "『不存在』本身就是证据，记一条 denied 反而要靠读的人正确区分",
+            0,
+            intents.size,
+        )
+    }
+
+    @Test
+    fun `side effect intent survives restart with its authorization source`() {
+        val store = newStore()
+        now += 1
+        val t = store.beginTurn(MessageSource.TEXT)
+        store.appendUserMessage(t, "装个包", MessageSource.TEXT)
+        store.appendSideEffectIntent(
+            turn = t,
+            name = "install_packages",
+            // fail-open 放行必须标 POLICY 而不是 USER_APPROVED ——
+            // 那条路径没有任何人点过头，记成"用户已点头"会让授权日志说谎
+            source = AuthorizationSource.POLICY,
+            callId = "c1",
+            summary = "安装 APK；问不到用户，按 PROCEED 放行",
+            stageEvidence = listOf("pm install: unresolved", "echo: known_safe"),
+        )
+
+        val reopened = newStore()
+        val intent = reopened.allRecordsForTest().firstOrNull { it.event is SideEffectIntent }
+        assertNotNull("授权声明必须落盘", intent)
+        val e = intent!!.event as SideEffectIntent
+        assertEquals("install_packages", e.name)
+        assertEquals(AuthorizationSource.POLICY, e.source)
+        assertEquals("c1", e.callId)
+        assertEquals(listOf("pm install: unresolved", "echo: known_safe"), e.stageEvidence)
+    }
+
+    @Test
+    fun `authorization source wire values are stable`() {
+        // ⚠️ wire 字符串一经落盘不可改名（改了 = 读不懂旧文件 = 用户历史丢失）。
+        // 这里钉住它们，升级时改枚举会立刻红，而不是静默让旧授权记录读不出来。
+        assertEquals("allow:approved", AuthorizationSource.USER_APPROVED.wire)
+        assertEquals("allow:policy", AuthorizationSource.POLICY.wire)
+        assertEquals("allow:llm_judge", AuthorizationSource.LLM_JUDGE.wire)
+        assertEquals("deny", AuthorizationSource.DENIED.wire)
+        // 未知标签返回 null 而不是抛异常（旧文件 / 未来版本）
+        assertEquals(null, AuthorizationSource.fromWire("allow:something_new"))
+    }
+
+    @Test
+    fun `side effect intent is not model visible`() {
+        // 授权留痕是审计事实，不是给模型看的上下文。
+        // 塞进 messages 会让每轮白烧 token，且模型不需要知道"上次是谁点头的"。
+        val store = newStore()
+        now += 1
+        val t = store.beginTurn(MessageSource.TEXT)
+        store.appendUserMessage(t, "打个电话", MessageSource.TEXT)
+        store.appendSideEffectIntent(t, "call_phone", AuthorizationSource.USER_APPROVED, "c1")
+        store.finishTurn(t, "已经打给妈妈了", TurnEndReason.COMPLETED)
+
+        val roles = store.history().map { it.role }
+        assertFalse(
+            "授权声明不得进入模型可见历史（role=${roles.joinToString()}）",
+            store.history().any { it.content?.contains("call_phone") == true },
+        )
+        assertEquals("user", roles.first())
+    }
 }

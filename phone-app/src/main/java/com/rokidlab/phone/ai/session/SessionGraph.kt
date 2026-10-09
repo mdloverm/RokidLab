@@ -247,6 +247,21 @@ internal object SessionGraph {
                 title = "作废 ${e.seqs.size} 条（${cutReasonLabel(e.reason)}）"
                 detail = if (e.clearDigest) "含滚动摘要一起清空" else "滚动摘要保留"
             }
+
+            // 复用 TOOL_RESULT 这一档而不是新增 Kind：授权行在图上表达的是
+            // "这个工具动作已被允许"，与"它的结果"是同一类事实的延续。
+            // 新增 Kind 会让图例、筛选与配色都要跟着改，收益却只多一个视觉区分。
+            is SideEffectIntent -> {
+                kind = Kind.TOOL_RESULT
+                title = "已授权 ${e.name}（${authLabel(e.source)}）"
+                detail = buildString {
+                    e.summary?.takeIf { it.isNotBlank() }?.let { append(it) }
+                    if (e.stageEvidence.isNotEmpty()) {
+                        if (isNotEmpty()) append('\n')
+                        append("分阶段判定：").append(e.stageEvidence.joinToString(" / "))
+                    }
+                }
+            }
         }
         return Node(
             seq = r.seq,
@@ -382,6 +397,14 @@ internal object SessionGraph {
         "drop_last_turn" -> "重新生成 / 编辑重发"
         "manual_clear" -> "手动清空"
         else -> raw
+    }
+
+    /** 授权来源标签。与 `SessionTrace.authLabel` 刻意同措辞 —— 同一件事两处渲染不能各说一套 */
+    private fun authLabel(s: AuthorizationSource): String = when (s) {
+        AuthorizationSource.USER_APPROVED -> "用户已点头"
+        AuthorizationSource.POLICY -> "静态规则放行"
+        AuthorizationSource.LLM_JUDGE -> "模型判官放行"
+        AuthorizationSource.DENIED -> "已拒绝"
     }
 
     /** 压平空白 + 截断（图里一行放得下） */

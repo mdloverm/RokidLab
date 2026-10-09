@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicLong
  * ★ 本类只负责**传输**：给用户看的操作摘要在调用时由闸门传入（[confirm] 的 `prompt` 参数），
  *   不再自己从 args 拼 —— 摘要的唯一产地是工具自己的 `ToolEntry.summarize`。
  */
-class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
+internal class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
 
     companion object {
         private const val TAG = "ToolConfirm"

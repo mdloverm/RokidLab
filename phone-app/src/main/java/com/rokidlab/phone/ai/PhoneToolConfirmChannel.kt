@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicLong
  * ⚠️ 与眼镜通道一样，[confirm] 是**阻塞**调用（等用户点按钮），
  * 调用方必须是非主线程 —— 对话的工具循环满足。
  */
-object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
+internal object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
 
     private const val TAG = "ToolConfirm"
 
