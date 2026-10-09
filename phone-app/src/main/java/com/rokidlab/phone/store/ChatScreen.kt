@@ -65,6 +65,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -334,23 +335,50 @@ internal fun ChatModule(app: LabApplication) {
     // ── 贴底跟随 ─────────────────────────────────────────────────────
     // 流式回复只把内容追加进最后一条气泡（ChatStateHolder.appendAiDelta，不新增 item），
     // 而 appendMsg 的滚动只在「新增消息」时触发 —— 气泡长出屏幕后视图停在原地，
-    // 用户得手动往下翻。这里监听「会话 id + 消息数 + 末条内容长度」：
+    // 用户得手动往下翻。这里监听「会话 id + 消息数 + 跟随修订号」：
     //   · 进入/切换会话：无条件定位到最底部（最新消息）；
     //   · 之后内容再增长：仅当**已经贴底**才跟随（用户上翻读历史时不打扰，滚回底部即恢复）。
     // 偏移量取一个远超任何气泡高度的值：scrollToItem 的越界偏移会被夹在列表末尾，
     // 因此无论末条气泡多高都能落到它的**底部**（最新内容），而不是把它的顶部对齐视口。
     var positionedSession by remember { mutableStateOf<String?>(null) }
-    val lastMsgLen = messages.lastOrNull()?.content?.length ?: 0
-    LaunchedEffect(ChatStateHolder.currentSessionId, messages.size, lastMsgLen) {
+    // 跟随修订号 = 正文长度 + 过程步骤量。⚠️ 过程（思考/工具步骤）存在 msg.trace 里
+    // 而**不在 content 里**：Agent 轮次中「过程」卡是最后一条消息，每个步骤都让它长高
+    // 但 content 不变 —— 只盯 content 会漏掉过程增长，表现为"过程在跑、视图停在原地"。
+    val followRevision = messages.sumOf { m ->
+        m.content.length + m.trace.sumOf { s -> s.title.length + s.detail.length + s.fullText.length }
+    }
+
+    // 「是否贴底」只由**用户的滚动手势**改写：手势结束（拖拽/惯性停下）时看当前位置，
+    // 在底部 = 保持跟随，不在 = 解除跟随（用户上翻读历史）。
+    // ⚠️ 不能拿 canScrollForward 当"是否贴底"的实时判据：跟随把视图钉在列表末尾后，
+    // 下一次内容增长立刻让 canScrollForward 变 true —— 那会把"内容又长高了"误判成
+    // "用户上翻了"，跟随在第一次溢出后就永久失效（上一版修不掉的根因）。
+    // 我们自己的贴底滚动也会走"手势结束"回调，但它停下时就在底部 ⇒ 结果仍是跟随，无需特判。
+    var pinnedToBottom by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        var gestureActive = false
+        snapshotFlow { listState.isScrollInProgress }.collect { now ->
+            if (now) {
+                gestureActive = true
+            } else if (gestureActive) {
+                gestureActive = false
+                pinnedToBottom = !listState.canScrollForward
+            }
+        }
+    }
+
+    LaunchedEffect(ChatStateHolder.currentSessionId, messages.size, followRevision) {
         if (messages.isEmpty()) return@LaunchedEffect
         val toListEnd: suspend () -> Unit = {
             listState.scrollToItem(messages.size - 1, 1_000_000)
         }
         val sessionId = ChatStateHolder.currentSessionId
         if (positionedSession != sessionId) {
-            toListEnd()
+            runCatching { toListEnd() }
             positionedSession = sessionId
-        } else if (!listState.canScrollForward) {
+        } else if (pinnedToBottom && !listState.isScrollInProgress) {
+            // 用户手势进行中不抢滚动（拖拽/惯性时贴底会打架）；手势结束由上面的监听
+            // 按最终位置重新裁定是否继续跟随
             runCatching { toListEnd() }
         }
     }
