@@ -331,6 +331,30 @@ internal fun ChatModule(app: LabApplication) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
+    // ── 贴底跟随 ─────────────────────────────────────────────────────
+    // 流式回复只把内容追加进最后一条气泡（ChatStateHolder.appendAiDelta，不新增 item），
+    // 而 appendMsg 的滚动只在「新增消息」时触发 —— 气泡长出屏幕后视图停在原地，
+    // 用户得手动往下翻。这里监听「会话 id + 消息数 + 末条内容长度」：
+    //   · 进入/切换会话：无条件定位到最底部（最新消息）；
+    //   · 之后内容再增长：仅当**已经贴底**才跟随（用户上翻读历史时不打扰，滚回底部即恢复）。
+    // 偏移量取一个远超任何气泡高度的值：scrollToItem 的越界偏移会被夹在列表末尾，
+    // 因此无论末条气泡多高都能落到它的**底部**（最新内容），而不是把它的顶部对齐视口。
+    var positionedSession by remember { mutableStateOf<String?>(null) }
+    val lastMsgLen = messages.lastOrNull()?.content?.length ?: 0
+    LaunchedEffect(ChatStateHolder.currentSessionId, messages.size, lastMsgLen) {
+        if (messages.isEmpty()) return@LaunchedEffect
+        val toListEnd: suspend () -> Unit = {
+            listState.scrollToItem(messages.size - 1, 1_000_000)
+        }
+        val sessionId = ChatStateHolder.currentSessionId
+        if (positionedSession != sessionId) {
+            toListEnd()
+            positionedSession = sessionId
+        } else if (!listState.canScrollForward) {
+            runCatching { toListEnd() }
+        }
+    }
+
     // ── AI 产出文件 → 聊天里的文件卡 ─────────────────────────────────
     // 容器写完盘由 ShellToolProvider 做「执行前后目录 diff」并推过来（见 LabFileOutputs）。
     // 注册在聊天页：没人看聊天时 sink 为空、静默丢弃 —— 这不是"丢数据"，
