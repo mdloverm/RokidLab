@@ -173,6 +173,24 @@ class FileBackupTest {
     }
 
     @Test
+    fun `同毫秒连续覆盖 - 备份名不撞车`() {
+        // 真实场景：writeTextFileWithBackup 的读写都在毫秒内完成，AI 快速试错时
+        // 两次覆盖会落在**同一毫秒**。撞名的备份互相覆盖 = 「改了三次只剩一份备份」，
+        // 而这是「改错了能退回去」唯一的后路。这里用固定时间戳 + 显式占用表把该行为钉死，
+        // 不依赖真实时钟（原先那两条依赖机器快慢，在快机器上必失败）。
+        val taken = mutableSetOf<String>()
+        val names = (1..3).map {
+            FileBackupNaming.backupName("v.txt", 1_760_000_000_000L) { taken.contains(it) }
+                .also { n -> taken.add(n) }
+        }
+        assertEquals("同毫秒三次覆盖必须产生三个不同的备份名", 3, names.toSet().size)
+        assertEquals("首个备份用原始时间戳", ".v.txt.1760000000000.bak", names[0])
+        assertEquals("撞车时按 +1ms 递增，仍保持名字排序=时间排序", ".v.txt.1760000000002.bak", names[2])
+        // 递增后的名字仍能被解析回原名与时间戳
+        names.forEach { assertEquals("v.txt", FileBackupNaming.originalNameOf(it)) }
+    }
+
+    @Test
     fun `文件名含点 - 往返仍能正确切出原名与时间戳`() {
         // ⚠️ 真实文件名大量带点（index.ink / app.config.json）；lastIndexOf 切错就会把
         // "index" 当原名，清理时连备份带真文件一起判断错

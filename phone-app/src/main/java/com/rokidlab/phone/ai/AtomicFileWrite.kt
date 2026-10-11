@@ -110,6 +110,27 @@ internal object FileBackupNaming {
     fun backupName(originalName: String, timestampMillis: Long): String =
         ".$originalName.$timestampMillis$SUFFIX"
 
+    /**
+     * 同毫秒内连续覆盖时的**去重命名**：从 [timestampMillis] 起逐 +1ms，直到 [isTaken] 不再命中。
+     *
+     * ⚠️ 为什么必须有这一步（2026-10-11 修）：`writeTextFileWithBackup` 读写都在毫秒级完成，
+     * AI 快速试错时**两次覆盖常落在同一毫秒** —— 撞车的备份名会互相覆盖，结果是
+     * 「改了三次只留下一份备份」，既违背「每次覆盖都留一份」的契约，也让
+     * `pruneBackups` 的上限恒达不到（`FileBackupTest` 在快机器上必现）。
+     * +1ms 递增仍保持「名字排序 = 时间排序」，清理逻辑不变。
+     *
+     * @param isTaken 该备份名是否已被占用（调用方查目录）；重载无参版不查占用，单测直接调时行为不变
+     */
+    fun backupName(originalName: String, timestampMillis: Long, isTaken: (String) -> Boolean): String {
+        var ts = timestampMillis
+        var name = backupName(originalName, ts)
+        while (isTaken(name)) {
+            ts += 1
+            name = backupName(originalName, ts)
+        }
+        return name
+    }
+
     /** 从备份名还原被备份的文件名；不是备份名返回 null */
     fun originalNameOf(backupName: String): String? {
         // ⚠️ 长度校验必须在 substring **之前**：像 ".bak"（正好 4 字符）这种输入，
@@ -169,7 +190,8 @@ internal fun writeTextFileWithBackup(target: File, content: String): String? {
         val dir = target.absoluteFile.parentFile
             ?: throw IOException("无法确定目标文件所在目录：${target.path}")
         val stamp = System.currentTimeMillis()
-        val name = FileBackupNaming.backupName(target.name, stamp)
+        // 加 isTaken 查重：同毫秒内的连续覆盖不会撞名互相覆盖（见 backupName 重载的 KDoc）
+        val name = FileBackupNaming.backupName(target.name, stamp) { File(dir, it).exists() }
         val backup = File(dir, name)
         // 备份本身也走原子写：一次「备份到一半」的备份文件比没有备份更坏 ——
         // restore 会拿它当真相源，把损坏内容"恢复"成正常样子。
