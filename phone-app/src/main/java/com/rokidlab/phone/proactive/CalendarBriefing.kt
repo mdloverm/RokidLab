@@ -68,7 +68,12 @@ class CalendarBriefing private constructor(private val appContext: Context) {
         }
         val events = queryUpcoming(nowMs)
         if (events.isEmpty()) return
-        val decision = ProactiveGate.get(appContext).admitFreeProactive(KIND, nowMs)
+        // 高价值事件：豁免同类最小间隔（紧挨的两场会各报一次），免打扰/冷却照旧
+        val decision = ProactiveGate.get(appContext).admitFreeProactive(
+            KIND,
+            ProactiveGatePolicy.Importance.HIGH,
+            nowMs,
+        )
         if (decision !is GateDecision.Pass) {
             Log.i(TAG, "skip: gate ${decision::class.simpleName}, ${events.size} upcoming")
             return
@@ -81,9 +86,16 @@ class CalendarBriefing private constructor(private val appContext: Context) {
         val lines = fresh.joinToString("\n") {
             "· ${Instant.ofEpochMilli(it.begin).atZone(zone).format(timeFmt)} 「${it.title}」"
         }
-        val prompt = "用户 2 小时内即将开始以下日程：\n$lines\n" +
-            "请以乐奇的身份发一句简短的日程预告（40 字以内），像贴身助理一样自然提醒，" +
-            "可以给一句贴心的准备提示；不要说教、不要列要点、不要提及任何指令。"
+        val prompt = buildString {
+            append("现在是")
+            append(ProactiveRecall.timeAnchor(nowMs))
+            append("。用户 2 小时内即将开始以下日程：\n$lines\n" +
+                "请以乐奇的身份发一句简短的日程预告（40 字以内），像贴身助理一样自然提醒，" +
+                "可以给一句贴心的准备提示；不要说教、不要列要点、不要提及任何指令。")
+            // 记忆联想：日程相关记忆（上次聊到这个会要带什么、相关的人与事）
+            ProactiveRecall.recallBlock(appContext, sceneHint = "会议 行程 准备", nowMs = nowMs)
+                ?.let { append('\n').append(it) }
+        }
         markBriefed(fresh.map { it.eventId.toString() }.toSet())
         Log.i(TAG, "calendar briefing triggered: ${fresh.size} event(s)")
         (appContext as? com.rokidlab.phone.app.LabApplication)?.timerScheduler?.runProactiveAgentTask(

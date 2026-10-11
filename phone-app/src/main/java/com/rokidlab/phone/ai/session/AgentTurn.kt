@@ -56,6 +56,17 @@ internal class AgentTurn internal constructor(
         store.appendAttempt(turn, outcome, detail)
 
     /**
+     * 记一次**框架驱动的自我纠偏**（2026-10-09，P0-7）。
+     *
+     * 三处调用点对应三种"假成功"：① 标记泄漏（升级额度用完仍在回标记）
+     * ② 原地打转（同指纹重复）③ 诉求—动作不一致（要改却零动作调用）。
+     * 它们**都不是"工具报错"**，所以老的异常驱动自省一个都覆盖不到 ——
+     * 这也正是"反思必须落盘"的理由：不落盘就永远查不到"它哪一轮意识到自己错了"。
+     */
+    fun reflect(trigger: ReflectTrigger, detail: String, action: String) =
+        store.appendReflect(turn, trigger, detail, action)
+
+    /**
      * 记一次模型调用（**每次成功的 `chatTurn*` 之后都调**，含工具循环里的中间轮）。
      *
      * ★ 为什么要累加而不是取最后一次：一轮带工具循环 = **多次请求**，而输入 token 每轮都要重发

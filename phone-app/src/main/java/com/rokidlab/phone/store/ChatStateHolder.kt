@@ -127,6 +127,98 @@ internal object ChatStateHolder {
     }
 
     /**
+     * 是否是「本轮**正文**气泡」——纯 AI 文本，不带过程 / 文件 / 图片。
+     *
+     * ## 为什么需要它（2026-10-10 用户反馈）
+     * 期望的渲染顺序是「过程 → 文件气泡 → 正文」：正文必须排在**文件气泡之后**。
+     * 而过程消息（带 trace）在文件气泡之前，正文若继续长在过程消息里，就会渲染在文件
+     * 上方 —— 更糟的是正文还在流式增长，每长一行都把下面的文件气泡往下推，
+     * 表现为**文件气泡上下跳动**（用户反馈的第二个问题）。
+     * ⇒ 正文单独成一条，且恒为列表末条；AI 产出的文件气泡插在它之前（见 [addFile]）。
+     */
+    private fun ChatMsg.isReplyText(): Boolean =
+        !isUser && !isStatus && filePath == null && imageUrl == null && trace.isEmpty()
+
+    /**
+     * 把本轮正文放到它该在的位置（用户 2026-10-10：「过程 → 文件气泡 → 正文」）。
+     *
+     * 三种落点，按序判定：
+     *  ① 过程消息之后已有本轮流式正文气泡 ⇒ **就地更新**（它本来就落在文件之后）；
+     *  ② 过程消息之后有**文件 / 图片气泡** ⇒ **末尾另起一条** —— 直接写进过程消息会让
+     *     正文渲染在文件上方（顺序错），且正文继续增长会把文件气泡往下推（跳动）；
+     *  ③ 其余情况 ⇒ 并进过程消息（历史形态：过程在上、正文在下同一个气泡）。
+     *
+     * ⚠️ ② 只认**文件 / 图片**气泡，不认状态气泡（`isStatus`）：状态气泡是过程性的、
+     * 会随轮次消失，为它把正文另起一条只会多出一个空气泡（既有回归测试锁住了这一点）。
+     *
+     * @param anchorAt 本轮过程消息下标；&lt;0 表示本轮没有过程消息（兜底另起一条）
+     */
+    private fun placeReply(reply: String, usage: MsgUsage?, turn: Int?, anchorAt: Int) {
+        val anchorId = messages.getOrNull(anchorAt)?.id
+        // ① 本轮已有的流式正文气泡（必须在过程消息之后，否则会撞到上一轮的回复）
+        val replyIdx = if (anchorAt >= 0) {
+            messages.indices.lastOrNull { i -> i > anchorAt && messages[i].isReplyText() } ?: -1
+        } else {
+            val li = messages.size - 1
+            if (li >= 0 && messages[li].isReplyText()) li else -1
+        }
+        if (replyIdx >= 0) {
+            // 成本行挂「过程」而不是正文（2026-10-10 用户反馈："token 显示跑到输出气泡里了"）：
+            // 流式正文气泡是**先**出现的，收尾补 usage 时若直接写它，过程卡就永远拿不到成本行
+            // —— 而 ChatBubble 的气泡内成本行只是"没有过程卡的纯闲聊"的兜底出口，
+            // 一写就变成正文气泡里凭空多出一行 token。⇒ 与分支②同一口径：成本留过程消息。
+            if (anchorAt >= 0 && usage != null) {
+                val anchorOld = messages[anchorAt]
+                val costed = anchorOld.copy(usage = usage, turn = turn ?: anchorOld.turn)
+                if (costed != anchorOld) {
+                    messages[anchorAt] = costed
+                    persist(costed)
+                }
+            }
+            val old = messages[replyIdx]
+            val merged = old.copy(
+                content = preserveOnReplace(old.content, reply),
+                usage = if (anchorAt >= 0) null else (usage ?: old.usage),
+                turn = turn ?: old.turn,
+            )
+            messages[replyIdx] = merged
+            persist(merged)
+            touchSession()
+            return
+        }
+        // ② 过程消息之后已有文件 / 图片气泡 ⇒ 正文排在它们后面
+        val durableAfter = anchorId != null && messages.indices.any { i ->
+            i > anchorAt && (messages[i].filePath != null || messages[i].imageUrl != null)
+        }
+        if (durableAfter) {
+            val old = messages[anchorAt]
+            // 成本行属于「过程」（见 ChatBubble.TraceCostLine 注释），留在过程消息上；
+            // 正文消息只拿内容 + 轮号（轮号是会话记录图里编辑/删除的定位依据）
+            val costed = old.copy(usage = usage ?: old.usage, turn = turn ?: old.turn)
+            if (costed != old) {
+                messages[anchorAt] = costed
+                persist(costed)
+            }
+            add(false, reply, usage = null, turn = turn)
+            return
+        }
+        // ③ 无文件：正文并进过程气泡（历史形态不变）
+        if (anchorId != null) {
+            val old = messages[anchorAt]
+            val merged = old.copy(
+                content = preserveOnReplace(old.content, reply),
+                usage = usage ?: old.usage,
+                turn = turn ?: old.turn,
+            )
+            messages[anchorAt] = merged
+            persist(merged)
+            touchSession()
+            return
+        }
+        add(false, reply, usage = usage, turn = turn)
+    }
+
+    /**
      * 作废本轮的过程锚点（换会话 / 清空 / 删除会话时调用）。
      *
      * 为什么只清锚点、不做"结清残留"：这三个调用点后面**紧跟** `messages.clear()`，
@@ -589,7 +681,17 @@ internal object ChatStateHolder {
             fileChars = chars,
             turn = turn,
         )
-        messages.add(msg)
+        // ★ 顺序（2026-10-10 用户要求「过程 → 文件气泡 → 正文」）：AI 产出的文件排在
+        //   **末尾那条正文气泡之前** —— 正文恒为末条，文件插到它前面才能保证文件在正文之上。
+        //   用户上传的文件（isUser）没有这个约束，直接追加（它就是用户这一问的一部分）。
+        val lastIdx = messages.size - 1
+        val last = messages.getOrNull(lastIdx)
+        val insertAt = if (!isUser && last != null && last.isReplyText() && last.content.isNotEmpty()) {
+            lastIdx
+        } else {
+            messages.size
+        }
+        messages.add(insertAt, msg)
         trimIfNeeded()
         persist(msg)
         touchSession()
@@ -644,6 +746,39 @@ internal object ChatStateHolder {
         return true
     }
 
+    // ═══════════ 状态行 → 过程面板（2026-10-10） ═══════════
+
+    /**
+     * 流程状态（拍照答题的"正在识别文字…"／OCR 下载百分比）**进过程面板**，不再是对话气泡。
+     *
+     * ## 为什么归位
+     * 改造前它们是 `isStatus = true` 的独立消息（居中灰字）。这有两处不对：
+     * 1. **分流错了**：它回答的是"App 正在做什么"（= 过程），却占了对话流的位置；
+     * 2. **位置靠不住**：`clearStatusLines` 只挂在拍照答题的两个 `onReply` 上
+     *    （打字路径与眼镜语音路径都没有对等调用），所以它靠"必须排在 finalizeTraceReply 之前"
+     *    这个**调用顺序**才能被清掉 —— 顺序一变就留下永久残留。
+     *    既然现在只落在过程面板（而过程面板**每轮必被收尾**），这条脆弱的配套就不需要了。
+     *
+     * 📌 高频进度的代价照旧由 `upsertTrace` 承担（不落盘、由 `finishTrace` 统一收尾）。
+     */
+    fun updateStatusTrace(text: String) = upsertTrace(
+        AgentStep.statusProgress(text),
+    )
+
+    /**
+     * 流程状态的**终态**（失败 / 没识别出文字）。
+     *
+     * 为什么要单独一个入口：进行中的那颗转圈点必须被**显式结清**，
+     * 否则它会一直转到本轮 `finishTrace` 才消失 —— 而失败轮往往不经过 finishTrace，
+     * 界面上就留着一颗永远转的点，看起来像"还在识别"。
+     *
+     * @param ok false ⇒ 画成 FAILED。**不能一律画成功**：拍照失败显示绿勾会让用户
+     *   以为照片已处理完（这是**撒谎**，比不显示更糟）。
+     */
+    fun finishStatusTrace(text: String, ok: Boolean = true) = upsertTrace(
+        AgentStep.statusDone(text, ok),
+    )
+
     // ═══════════ 运行卡片（本地交互式程序，见 InteractiveRunManager） ═══════════
 
     /**
@@ -666,6 +801,17 @@ internal object ChatStateHolder {
             isStatus = false,
             runId = runId,
         )
+        // ★ 过程面板也记一笔（2026-10-10）：运行卡本身**留在对话区**
+        //   （它是用户主动触发的产物，输出要占地方看），但"启动了它"这个动作属于过程。
+        //   没有它，程序跑 30 秒期间过程面板是空的 —— 用户点了"运行"然后界面毫无反应。
+        //
+        // ⚠️ 必须用 [upsertDetachedTrace]（**不占本轮锚点**），不能用 [upsertTrace]：
+        //   手动运行程序**不属于任何一轮**，若它占了 traceAnchorId，紧接着的那一轮 AI
+        //   的思考/工具步骤会全部合并进这张运行过程卡（用户看到"我手动跑的程序"里
+        //   混着"AI 刚才想了什么"）。
+        // ⚠️ 也必须在 messages.add 之前发：落在末尾那条运行卡上会被
+        //   ChatBubble 的 `runId != null` 早退分支吃掉（运行卡与过程卡互斥）。
+        upsertDetachedTrace(AgentStep.runStarted(label, runId))
         messages.add(msg)
         runMeta[runId] = label
         return msg
@@ -691,6 +837,34 @@ internal object ChatStateHolder {
             val body = listOf(output.trim(), tail).filter { it.isNotBlank() }.joinToString("\n")
             messages[idx] = messages[idx].copy(content = body)
         }
+        // 结清过程面板里那条「正在运行」（同 key 覆盖）。⚠️ 无论卡片是否还在
+        // （idx < 0）都要结清 —— 那颗转圈点转下去比"过程里多一行"糟糕得多。
+        upsertDetachedTrace(AgentStep.runFinished(runId, tail))
+    }
+
+    /**
+     * 写入一条**不属于本轮**的过程步骤（按 [AgentStep.key] 定位它自己那条消息）。
+     *
+     * ## 为什么不能复用 [upsertTrace]
+     * [upsertTrace] 是**锚点制**的：第一个步骤会认领本轮的过程消息
+     * （`traceAnchorId`），后续步骤全部并进那一条。这对"一轮对话"是对的，
+     * 但手动运行程序、拍照答题这类**跨轮**动作会把它占住 ——
+     * 于是**下一轮** AI 的思考/工具步骤被合并进上一张卡里
+     * （表现：用户手动跑的程序，过程里混着 AI 后面想了什么）。
+     *
+     * 这里改用"key 自认领"：同一个 key（如 `run:<runId>`）永远落在同一条消息，
+     * 与轮次锚点完全解耦。
+     */
+    private fun upsertDetachedTrace(step: AgentStep) = runOnMain {
+        val at = messages.indexOfFirst { m -> m.trace.any { it.key == step.key } }
+        if (at >= 0) {
+            messages[at] = mergeStep(messages[at], step)
+            return@runOnMain
+        }
+        val id = msgIdCounter.incrementAndGet()
+        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        messages.add(ChatMsg(id, false, "", time, false, trace = listOf(step)))
+        trimIfNeeded()
     }
 
     /**
@@ -758,7 +932,10 @@ internal object ChatStateHolder {
 
     /**
      * Agent 过程步骤合并（思考 / 工具调用），按 [AgentStep.key] 覆盖。
-     * **不落盘**：过程事件频率高，统一由 [finishTrace] 或 [finalizeTraceReply] 收尾时持久化。
+     *
+     * 落盘策略：**新建过程消息时立刻落盘一次**（保证它早于本轮文件气泡入库，顺序见
+     * [addFile] 的注释），后续步骤的合并**不落盘**（频率高），统一由 [finishTrace] /
+     * [finalizeTraceReply] 收尾时持久化。
      * 可在任意线程调用（内部自动切主线程，见 [runOnMain]）。
      */
     fun upsertTrace(step: AgentStep) = runOnMain { upsertTraceOnMain(step) }
@@ -783,14 +960,21 @@ internal object ChatStateHolder {
         }
         val id = msgIdCounter.incrementAndGet()
         val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-        messages.add(ChatMsg(id, false, "", time, false, trace = listOf(step)))
+        val msg = ChatMsg(id, false, "", time, false, trace = listOf(step))
+        messages.add(msg)
         traceAnchorId = id
         trimIfNeeded()
+        // ★ 立刻落盘（2026-10-10）：过程消息是**本轮第一条** AI 消息，必须早于本轮的
+        //   文件气泡入库。否则文件气泡（[addFile] 是即时落盘）会先写进 JSONL，
+        //   重启后按文件顺序恢复就变成「文件气泡 → 过程」——用户看到的顺序错乱
+        //   （用户反馈：产出的文件气泡跑到了过程前面）。
+        persist(msg)
     }
 
     /**
-     * 眼镜语音 / 拍照答题一轮的回复落地：**合并进本轮那条带「过程」的 AI 消息**，
-     * 而不是另起一条。落点认 [traceAnchorId] 锚点；锚点缺失时退回旧判据
+     * 眼镜语音 / 拍照答题一轮的回复落地：**先结清本轮过程**，再按 [placeReply] 决定正文落点
+     * （没有文件时仍是「过程 + 正文」同一个气泡，历史形态不变）。
+     * 过程消息认 [traceAnchorId] 锚点；锚点缺失时退回旧判据
      * （末尾那条非用户、非状态、trace 非空的）。
      */
     fun finalizeTraceReply(reply: String, usage: MsgUsage? = null, turn: Int? = null) =
@@ -809,21 +993,20 @@ internal object ChatStateHolder {
         } else {
             -1
         }
+        // ① 先结清过程残留（正常收尾：残留的 RUNNING 视为已完成 —— 不知道那步失败没，
+        //    标 FAILED 等于编造错误）。正文落点与过程分离后，这一步只动 trace。
+        //    ★ 无论有没有残留都必须落盘（2026-10-10 用户反馈：重启后过程只剩 1 步）：
+        //    [upsertTraceOnMain] 只在"新建过程消息"那一刻落盘，后续步骤全攒在内存里等收尾；
+        //    若这里沿用 `settledSteps(...)?.let{...}`，则**没有 RUNNING 残留时那次 persist 被跳过**
+        //    —— 而工具都正常拿到结果时正是这种情况，于是盘上永远只有第一条步骤。
         if (at >= 0) {
             val old = messages[at]
-            val merged = old.copy(
-                content = reply,
-                usage = usage ?: old.usage,
-                turn = turn ?: old.turn,
-                // 正常收尾：残留的 RUNNING 视为已完成（不知道那步失败没，标 FAILED 等于编造错误）
-                trace = settledSteps(old.trace, failed = false) ?: old.trace,
-            )
-            messages[at] = merged
-            persist(merged)
-            touchSession()
-            return
+            val settled = settledSteps(old.trace, failed = false)?.let { old.copy(trace = it) } ?: old
+            messages[at] = settled
+            persist(settled)
         }
-        add(false, reply, usage = usage, turn = turn)
+        // ② 正文落点（2026-10-10）：见 [placeReply] —— 「过程 → 文件气泡 → 正文」
+        placeReply(reply, usage, turn, at)
     }
 
     /**
@@ -850,24 +1033,28 @@ internal object ChatStateHolder {
         val at = traceAnchorIndex()
         if (at >= 0) {
             val old = messages[at]
-            settledSteps(old.trace, failed)?.let {
-                val updated = old.copy(trace = it)
-                messages[at] = updated
-                persist(updated)
-            }
+            // ★ 同 [finalizeTraceReplyOnMain]：没有 RUNNING 残留也要落盘，否则这一轮攒下的
+            //    步骤（[upsertTraceOnMain] 合并不落盘）会随进程一起丢掉。
+            val updated = settledSteps(old.trace, failed)?.let { old.copy(trace = it) } ?: old
+            messages[at] = updated
+            persist(updated)
         }
         // 本轮到此结束：锚点失效，下一轮的过程必须落到它自己那条消息上
         traceAnchorId = 0L
     }
 
     /**
-     * 流式增量累积：AI 回复边生成边显示。若尚无 AI 消息则先创建一条。
+     * 流式增量累积：AI 回复边生成边显示。若尚无正文气泡则先创建一条。
      * 不落盘（高频调用），由 [finalizeLastAi] 完成后统一持久化。
+     *
+     * ⚠️ 只认**正文气泡**（[isReplyText]），不认过程消息 / 文件气泡：
+     * 过程消息带 trace、文件气泡带 filePath，正文若流进去就会解析错位置 ——
+     * 前者让正文渲染在文件上方（顺序错 + 文件跳动），后者把正文塞进文件卡的 caption。
      */
     fun appendAiDelta(delta: String) {
         if (delta.isEmpty()) return
         val last = messages.lastOrNull()
-        if (last != null && !last.isUser && !last.isStatus) {
+        if (last != null && last.isReplyText()) {
             messages[messages.size - 1] = last.copy(content = last.content + delta)
         } else {
             val id = msgIdCounter.incrementAndGet()
@@ -891,16 +1078,9 @@ internal object ChatStateHolder {
     fun finalizeLastAi(fullContent: String, usage: MsgUsage? = null, turn: Int? = null) {
         val anchorAt = traceAnchorIndex()
         if (anchorAt >= 0) {
-            val m = messages[anchorAt]
-            // 已经有了的就别抹掉：新值缺失只说明"这次没拿到"，不代表之前那条是错的
-            val updated = m.copy(
-                content = preserveOnReplace(m.content, fullContent),
-                usage = usage ?: m.usage,
-                turn = turn ?: m.turn,
-            )
-            messages[anchorAt] = updated
-            persist(updated)
-            touchSession()
+            // 正文落点统一走 placeReply（2026-10-10）：本轮有文件气泡时正文排到它们之后，
+            // 否则仍并进过程气泡 —— 这里不再直接写锚点。
+            placeReply(fullContent, usage, turn, anchorAt)
             return
         }
         for (i in messages.size - 1 downTo 0) {
@@ -932,6 +1112,12 @@ internal object ChatStateHolder {
         if (old.isEmpty()) return incoming
         val newText = incoming.trim()
         if (newText.isEmpty()) return existing
+        // 代码生成回合的收尾状态句（"已生成 N 个文件，保存在手机下载目录的"xxx"项目。"）
+        // 是框架/模型产出的**机器口吻状态复述** —— 过程卡片的产物芯片 + 文件卡已经讲清楚了。
+        // 正文气泡已有内容（模型流式打出的自然表述）时不再追加，否则气泡尾部就多出一句
+        // 系统状态（2026-10-10 用户反馈："最后生成的气泡里有部分内容不该在回复的气泡里"）。
+        // 无正文时仍原样采用它（见上方 `old.isEmpty()` 分支）—— 它是"模型没给结论"时的兜底。
+        if (com.rokidlab.phone.ai.isCodeGenStatusLine(newText)) return existing
         // 同一段（正常收尾把已显示的内容又下发一次）⇒ 不重复追加
         if (newText == old || old.contains(newText)) return incoming
         return "$existing\n\n$newText"

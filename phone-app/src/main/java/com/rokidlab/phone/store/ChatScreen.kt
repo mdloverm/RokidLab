@@ -332,6 +332,15 @@ internal fun ChatModule(app: LabApplication) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
+    // 「贴底」目标的**唯一产地**：列表末项（AIUI 演示卡片在场时就是卡片）。
+    // ⚠️ 所有贴底滚动（appendMsg / 跟随效应 / 演示卡片出现）必须统一用
+    // 「本索引 + 超大偏移（夹到真正的底部）」；只要有一条用"顶对齐到视口顶部"，
+    // 当卡片高于剩余空间时两种目标位置不同，流式更新期间视图会在两处来回切换
+    // ⇒ 上下跳动（2026-10-10 用户反馈：演示卡片出现时列表跳动）。
+    fun bottomIndex(): Int =
+        (ChatStateHolder.messages.size - 1 + if (AiuiDemoController.current != null) 1 else 0)
+            .coerceAtLeast(0)
+
     // ── 贴底跟随 ─────────────────────────────────────────────────────
     // 流式回复只把内容追加进最后一条气泡（ChatStateHolder.appendAiDelta，不新增 item），
     // 而 appendMsg 的滚动只在「新增消息」时触发 —— 气泡长出屏幕后视图停在原地，
@@ -370,7 +379,8 @@ internal fun ChatModule(app: LabApplication) {
     LaunchedEffect(ChatStateHolder.currentSessionId, messages.size, followRevision) {
         if (messages.isEmpty()) return@LaunchedEffect
         val toListEnd: suspend () -> Unit = {
-            listState.scrollToItem(messages.size - 1, 1_000_000)
+            // 走 bottomIndex()：卡片在场时末项是卡片而不是消息，目标必须一致
+            listState.scrollToItem(bottomIndex(), 1_000_000)
         }
         val sessionId = ChatStateHolder.currentSessionId
         if (positionedSession != sessionId) {
@@ -380,6 +390,10 @@ internal fun ChatModule(app: LabApplication) {
             // 用户手势进行中不抢滚动（拖拽/惯性时贴底会打架）；手势结束由上面的监听
             // 按最终位置重新裁定是否继续跟随
             runCatching { toListEnd() }
+            // 我们是主动贴底：若结算瞬间恰好有新内容落地（canScrollForward 被 flip 成
+            // true），手势监听会把 pinned 误判成"用户上翻了"导致跟随悄悄失效 ——
+            // 这里显式保持跟随（用户真的上翻时走的不是这条路径，监听仍会正常关闭）
+            pinnedToBottom = true
         }
     }
 
@@ -602,18 +616,17 @@ internal fun ChatModule(app: LabApplication) {
         ChatStateHolder.add(isUser, content, isStatus, turn = turn)
         scope.launch {
             try {
-                listState.animateScrollToItem((ChatStateHolder.messages.size - 1).coerceAtLeast(0))
+                // 统一走 bottomIndex() + 超大偏移（见其注释）：原先顶对齐到末项，
+                // 与跟随效应的"夹到列表底"是两个位置，卡片在场时来回切就上下跳。
+                listState.animateScrollToItem(bottomIndex(), 1_000_000)
             } catch (_: Exception) {
             }
         }
     }
 
-    /** 原地更新末尾状态气泡（OCR 模型下载百分比等进度），不新增消息 */
-    fun updateStatus(content: String) {
-        ChatStateHolder.updateLastStatus(content)
-    }
-
-    /** 切思考深度：mode 串 + 旧布尔两键同步写，isThinkingEnabled() 的消费方零改动 */
+/**
+     * 切思考深度：mode 串 + 旧布尔两键同步写，isThinkingEnabled() 的消费方零改动
+     */
     fun setThinkMode(mode: String) {
         thinkMode = mode
         prefs.edit()
@@ -1010,10 +1023,17 @@ internal fun ChatModule(app: LabApplication) {
         photoAsking = true
         session.startPhotoAsk(
             onStage = { resId ->
-                appendMsg(false, ctx.getString(resId), isStatus = true)
-                // 失败 / 未识别出文字等终态时复位
-                if (resId == R.string.chat_photo_failed || resId == R.string.chat_ocr_empty) {
+                // ★ 流程状态进「过程」面板（2026-10-10），不再是对话气泡 ——
+                //   它回答的是"App 正在做什么"，不该占对话流的位置。
+                val text = ctx.getString(resId)
+                val terminal = resId == R.string.chat_photo_failed || resId == R.string.chat_ocr_empty
+                if (terminal) {
+                    // 终态显式结清那颗转圈点，否则它会留到本轮收尾才消失。
+                    // ⚠️ 失败要画成 FAILED：绿勾会让用户以为照片处理好了（撒谎比不显示更糟）
+                    ChatStateHolder.finishStatusTrace(text, ok = false)
                     photoAsking = false
+                } else {
+                    ChatStateHolder.updateStatusTrace(text)
                 }
             },
             onText = { text -> appendMsg(true, text) },
@@ -1021,16 +1041,15 @@ internal fun ChatModule(app: LabApplication) {
                 // startPhotoAsk 内部在后台线程回调，需切回主线程更新 Compose 状态
                 scope.launch {
                     photoAsking = false
-                    // ★ 先清剩余状态行（2026-10-06 审计修）：“正在识别文字…”
-                    //   是进行中的话，一轮结束就过期了。不清的话强退后会在历史里
-                    //   留下一条永远转不完的进度文案。
-                    //   必须在 finalizeTraceReply **之前**：新消息会把状态行推到不再是末尾的位置。
-                    ChatStateHolder.clearStatusLines()
-                    // 与眼镜语音同理：本轮若产生了「过程」就合并到同一条消息，否则新起一条
+                    // ★ 状态行已归位到过程面板（2026-10-10）：这里**不再**需要
+                    //   clearStatusLines —— 它原先是"必须排在 finalizeTraceReply 之前"
+                    //   的顺序依赖（靠调用顺序才能被清掉），现在流程状态由
+                    //   finishTrace/finalizeTraceReply 统一结清，不再有那条脆弱配套。
+                    //   与眼镜语音同理：本轮若产生了「过程」就合并到同一条消息，否则新起一条
                     ChatStateHolder.finalizeTraceReply(reply)
                 }
             },
-            onStageText = { text -> updateStatus(text) },
+            onStageText = { text -> ChatStateHolder.updateStatusTrace(text) },
         )
     }
 
@@ -1040,21 +1059,25 @@ internal fun ChatModule(app: LabApplication) {
         try {
             app.cxrL.setPhotoAskUiCallbacks(
                 onStage = { resId ->
-                    appendMsg(false, ctx.getString(resId), isStatus = true)
-                    if (resId == R.string.chat_photo_failed || resId == R.string.chat_ocr_empty) {
+                    // 同手机按钮入口：流程状态进过程面板（见上）
+                    val text = ctx.getString(resId)
+                    val terminal = resId == R.string.chat_photo_failed || resId == R.string.chat_ocr_empty
+                    if (terminal) {
+                        ChatStateHolder.finishStatusTrace(text, ok = false)
                         photoAsking = false
+                    } else {
+                        ChatStateHolder.updateStatusTrace(text)
                     }
                 },
                 onText = { text -> appendMsg(true, text) },
                 onReply = { reply ->
                     scope.launch {
                         photoAsking = false
-                        // ★ 同上：先清剩余状态行，再合并本轮过程
-                        ChatStateHolder.clearStatusLines()
+                        // 状态行已归位到过程面板，不再需要 clearStatusLines 的顺序配套
                         ChatStateHolder.finalizeTraceReply(reply)
                     }
                 },
-                onStageText = { text -> updateStatus(text) },
+                onStageText = { text -> ChatStateHolder.updateStatusTrace(text) },
             )
         } catch (e: Exception) {
             Log.e(TAG, "cxrL not ready", e)
@@ -1166,9 +1189,12 @@ internal fun ChatModule(app: LabApplication) {
 
         // 卡片排在最后一条消息下方，出现时很可能落在屏幕外 —— 滚到底把它露出来，
         // 否则用户的观感是"说了演示，屏幕上什么都没有"。
+        // ⚠️ 目标必须与贴底跟随一致（bottomIndex + 超大偏移 = 夹到列表真底）：
+        //   原先滚到 messages.size 是"卡片顶对齐视口顶"，卡片高于剩余空间时与跟随
+        //   效应的位置不同，流式更新期间两处来回切 ⇒ 上下跳动（2026-10-10 用户报）。
         LaunchedEffect(aiuiDemoShowing) {
             if (aiuiDemoShowing) {
-                runCatching { listState.animateScrollToItem(messages.size) }
+                runCatching { listState.animateScrollToItem(bottomIndex(), 1_000_000) }
             }
         }
 

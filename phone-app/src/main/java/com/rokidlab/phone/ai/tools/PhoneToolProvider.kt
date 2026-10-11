@@ -207,7 +207,9 @@ internal object PhoneToolProvider : ToolProvider {
                     "当用户说「看看我屏幕上写的什么」「屏幕上这个你看一下」「帮我看看这条消息/这个报错」" +
                     "「把屏幕上的内容读一下」时调用。" +
                     "⚠️ 与 look_at_view 的区别：那个是眼镜摄像头看到的**现实世界**，这个是**手机屏幕**；" +
-                    "用户没说清是哪一个时先问一句。" +
+                    "先按措辞自己判断：「屏幕上/这个页面/界面/这条消息/这个报错」→ 用本工具；" +
+                    "「我面前/我手上/手里拿的/这个实物/这个东西是什么牌子」→ 用 look_at_view；" +
+                    "**真的判不出来时才问一句**（不要一律问，这类请求多数自带端线索）。" +
                     "⚠️ 取图有三条路，代价从低到高：开过无障碍服务时**直接读、不弹任何框**" +
                     "（推荐先让用户开一次，之后连截图都变快）；投屏正在跑时复用投屏画面（零弹窗但分辨率低）；" +
                     "两者都不行才会弹一次系统「开始截屏」授权框，用户点了同意才拿得到画面。" +
@@ -226,7 +228,7 @@ internal object PhoneToolProvider : ToolProvider {
             summarize = { args -> "设置手机闹钟" },
             schema = toolSchema(
                 name = "set_phone_alarm",
-                description = "在手机上设置闹钟或倒计时（区别于眼镜端的定时提醒，本工具响铃在手机上）。当用户说「明早 7 点叫我起床」「30 分钟后手机闹我」「设个手机闹钟」时调用。「X分钟后提醒」若未强调手机，优先用眼镜定时任务（manage_timer 的 create，即 set_timer）。",
+                description = "在手机上设置闹钟或倒计时（**响铃在手机上**，区别于眼镜端的定时提醒 manage_timer）。当用户说「明早 7 点叫我起床」「30 分钟后手机闹我」「设个手机闹钟」时调用。⚠️ 用户没说是**手机响**还是**眼镜提醒**时，**先问一句**「让手机响还是眼镜提醒你？」，**不要默认任何一端** —— 两者体验不同（手机闹钟响在手机上、眼镜提醒在眼镜上），替他选经常不是他要的。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -249,7 +251,7 @@ internal object PhoneToolProvider : ToolProvider {
             summarize = { args -> "打开手机应用 ${args.optString("app_name").takeIf { it.isNotBlank() } ?: ""}".trim() },
             schema = toolSchema(
                 name = "open_phone_app",
-                description = "打开手机上安装的应用（微信/支付宝/相机等）。当用户说「打开手机上的微信」「帮我打开支付宝」且对象是手机应用时调用；打开眼镜上的应用请用 launch_glasses_app。",
+                description = "打开**手机上**安装的应用（微信/支付宝/相机等）。当用户说「打开手机上的微信」「帮我打开支付宝」且对象是手机应用时调用；打开**眼镜上**的应用请用 launch_glasses_app。⚠️「打开 XX」手机与眼镜都有对应工具，用户**没说哪一端时先问一句**「是在手机上打开还是眼镜上打开？」，不要自行选一端。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -268,9 +270,10 @@ internal object PhoneToolProvider : ToolProvider {
             statusText = "正在读取应用清单…",
             schema = toolSchema(
                 name = "list_phone_apps",
-                description = "列出手机上安装的应用（名称/包名/版本），默认只列用户自己装的应用。" +
+                description = "列出**手机上**安装的应用（名称/包名/版本），默认只列用户自己装的应用。" +
                     "当用户问「我手机装了哪些应用」「有没有装 XX 这个 App」时调用；" +
-                    "当 open_phone_app 反馈没找到应用、需要先确认到底装没装时也调用（传 query 精确查更快）。",
+                    "当 open_phone_app 反馈没找到应用、需要先确认到底装没装时也调用（传 query 精确查更快）。" +
+                    "⚠️ 列出**眼镜上**的应用请用 list_glasses_apps。用户**没说哪一端时先问一句**「要看哪一边的应用列表？」。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -289,7 +292,7 @@ internal object PhoneToolProvider : ToolProvider {
             statusText = "正在查询手机状态…",
             schema = toolSchema(
                 name = "get_phone_status",
-                description = "查询手机当前状态：电量百分比、是否在充电、媒体音量、屏幕亮度。当用户问「手机还有多少电」「在充电吗」「音量多大」「手机什么状态」时调用。",
+                description = "查询**手机**当前状态：电量百分比、是否在充电、媒体音量、屏幕亮度。当用户问「手机还有多少电」「在充电吗」「音量多大」「手机什么状态」时调用。⚠️ 查**眼镜**的电量/存储/系统信息用 get_glasses_status。用户**没说哪一端时先问一句**「你是问手机还是眼镜？」（注意：手机与眼镜是两台独立设备，电量不通用）。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf<String, Any>(),

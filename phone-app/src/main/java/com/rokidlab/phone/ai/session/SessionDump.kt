@@ -128,6 +128,10 @@ is VisibilityCut -> "#${r.seq} 作废 ${e.seqs.size} 条（${e.reason}）" +
        is SideEffectIntent -> "#${r.seq} ${who}**已授权** ${e.name}（${e.source.wire}）" +
       (e.summary?.takeIf { it.isNotBlank() }?.let { "：$it" } ?: "") +
       (if (e.stageEvidence.isNotEmpty()) "\n${who}   分阶段：" + e.stageEvidence.joinToString(" / ") else "")
+            // 自我纠偏对"读日志的人"是关键一行：它解释了为什么这一轮多了一次请求，
+            // 也解释了模型为什么突然换了做法（没有它，日志看起来只是"多发了一次"）。
+            is Reflect -> "#${r.seq} ${who}**自我纠偏**[${e.trigger}] ${clip(e.detail, TEXT_CLIP)}\n" +
+                "${who}   → 要求：${clip(e.action, TEXT_CLIP)}"
         }
     }
 

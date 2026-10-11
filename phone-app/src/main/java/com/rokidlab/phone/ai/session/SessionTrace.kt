@@ -175,7 +175,25 @@ internal object SessionTrace {
                     }
                 }.takeIf { it.isNotBlank() },
             )
+
+            // 自我纠偏归 LIFECYCLE 而不是新增 Category：
+            // 它就是"框架在这一轮做的决定"，与"开始/结束/失败尝试"同一类；
+            // 新增枚举会牵动 UI 的分组渲染（而这里没有新语义需要新分组）。
+            is Reflect -> Item(
+                r.seq, e.turn, r.ts, Category.LIFECYCLE,
+                "自我纠偏（${reflectLabel(e.trigger)}）",
+                "${e.detail}\n→ ${e.action}",
+            )
         }
+    }
+
+    /** 纠偏原因的中文标签（诊断面板给人看，不甩 wire 串） */
+    private fun reflectLabel(trigger: String): String = when (trigger) {
+        ReflectTrigger.MARKER_LEAK.wire -> "未产出（只剩内部标记）"
+        ReflectTrigger.REPEATED_CALL.wire -> "原地打转（同一调用反复）"
+        ReflectTrigger.INTENT_ACTION_MISMATCH.wire -> "要改却没动手"
+        ReflectTrigger.UNVERIFIED_ASSUMPTION.wire -> "假设未验证"
+        else -> trigger
     }
 
     /** 授权来源的中文标签（诊断面板要人看懂，不能把 wire 串直接甩给人） */

@@ -141,7 +141,15 @@ object ProactiveGatePolicy {
         IDLE_CHAT("idle_chat"),
 
         /** 走走拍拍：行走中偶尔看一眼前方并解说 */
-        VISION("vision");
+        VISION("vision"),
+
+        /**
+         * 消息摘要：手机收到值得看的通知时主动提一句（事件源：[LabNotificationListenerService]）。
+         *
+         * 默认关（见 [NotificationDigest.setEnabled]）：读全部通知是高信任授权。
+         * 走 `admitFreeProactive`（与 [BRIEFING] 同口径，不占闲聊额度）。
+         */
+        NOTIFY("notify");
 
         companion object {
             fun of(id: String?): ProactiveFeature? = entries.firstOrNull { it.id == id }
@@ -232,6 +240,38 @@ object ProactiveGatePolicy {
 
     /** 同类主动消息最小间隔（毫秒，防同一功能连发） */
     const val MIN_INTERVAL_MS = 2 * 60 * 60 * 1000L
+
+    /**
+     * 主动消息重要性分级（Muse 式「判断什么时候值得打扰」的正向面）：
+     * 门控的防打扰规则（冷却/免打扰/场景静默）对任何重要性一视同仁，
+     * 分级只调节「同类最小间隔」与「免打扰内的事件处置」两处。
+     */
+    enum class Importance {
+        /**
+         * 低价值事件（关怀提醒）：最保守 —— 同类间隔 ×2，且免打扰内**直接丢弃**
+         * （「你坐太久了」顺延到早上 8 点已毫无意义，不像日程到早上还有用）。
+         */
+        LOW,
+
+        /** 常规主动消息（闲聊/消息摘要/回访）：现有门控行为，不增不减 */
+        NORMAL,
+
+        /**
+         * 高价值事件（日程简报）：豁免同类最小间隔 —— 「11 点的会」值得在
+         * 「10 点刚发过简报」之后再报一次；但免打扰/冷却照旧，底线不破。
+         */
+        HIGH,
+    }
+
+    /** 同类最小间隔按重要性缩放：HIGH 豁免（0），LOW ×2，NORMAL 原样 */
+    fun minIntervalFor(importance: Importance, baseMs: Long = MIN_INTERVAL_MS): Long = when (importance) {
+        Importance.HIGH -> 0L
+        Importance.LOW -> baseMs * 2
+        Importance.NORMAL -> baseMs
+    }
+
+    /** 免打扰内的事件处置：HIGH/NORMAL 顺延（内容到早上还有效），LOW 直接丢弃 */
+    fun deferQuietEvents(importance: Importance): Boolean = importance != Importance.LOW
 
     /** 走走拍拍节奏（毫秒）：行走中每 15 分钟看一眼 */
     const val VISION_INTERVAL_MS = 15 * 60 * 1000L
@@ -503,6 +543,7 @@ class ProactiveGate private constructor(context: Context) {
         ProactiveGatePolicy.ProactiveFeature.FOLLOWUP -> isFollowupEnabled()
         ProactiveGatePolicy.ProactiveFeature.IDLE_CHAT -> IdleGreeter.get(appContext).isEnabled()
         ProactiveGatePolicy.ProactiveFeature.VISION -> AmbientVisionController.get(appContext).isEnabled()
+        ProactiveGatePolicy.ProactiveFeature.NOTIFY -> NotificationDigest.get(appContext).isEnabled()
     }
 
     /** 一个能力 → 它的宿主开关 */
@@ -514,6 +555,7 @@ class ProactiveGate private constructor(context: Context) {
             ProactiveGatePolicy.ProactiveFeature.FOLLOWUP -> setFollowupEnabled(on)
             ProactiveGatePolicy.ProactiveFeature.IDLE_CHAT -> IdleGreeter.get(appContext).setEnabled(on)
             ProactiveGatePolicy.ProactiveFeature.VISION -> AmbientVisionController.get(appContext).setEnabled(on)
+            ProactiveGatePolicy.ProactiveFeature.NOTIFY -> NotificationDigest.get(appContext).setEnabled(on)
         }
     }
 
@@ -648,23 +690,35 @@ class ProactiveGate private constructor(context: Context) {
     }
 
     /**
-     * **不计入闲聊额度**的主动消息准入（日程简报等）：只查冷却/响应收敛/免打扰/同类最小间隔，
-     * 通过后只刷新该类别的发送时刻，不占每日额度、不进响应率窗口。
+     * **不计入闲聊额度**的主动消息准入（日程简报/消息摘要/关怀提醒等）：只查冷却/响应收敛/
+     * 免打扰/同类最小间隔，通过后只刷新该类别的发送时刻，不占每日额度、不进响应率窗口。
+     *
+     * 防打扰底线（场景静默/「别烦我」冷却/响应惩罚/免打扰）对任何重要性一视同仁；
+     * [importance] 只调节同类最小间隔与免打扰内的处置（见 [ProactiveGatePolicy.Importance]）。
      */
-    fun admitFreeProactive(kind: String, nowMs: Long = System.currentTimeMillis()): GateDecision {
+    fun admitFreeProactive(
+        kind: String,
+        importance: ProactiveGatePolicy.Importance = ProactiveGatePolicy.Importance.NORMAL,
+        nowMs: Long = System.currentTimeMillis(),
+    ): GateDecision {
         if (isMuted()) return GateDecision.Suppress("scene-mute")
         if (prefs.getLong(K_COOLDOWN, 0L) > nowMs) return GateDecision.Suppress("cooldown")
         if (prefs.getLong(K_RESP_PENALTY, 0L) > nowMs) return GateDecision.Suppress("response-penalty")
         val t = ZonedDateTime.ofInstant(Instant.ofEpochMilli(nowMs), zone)
         if (ProactiveGatePolicy.inQuietHours(t.hour, t.minute, quietStartMin(), quietEndMin())) {
-            return GateDecision.Defer(ProactiveGatePolicy.nextQuietEnd(nowMs, zone, quietEndMin()))
+            return if (ProactiveGatePolicy.deferQuietEvents(importance)) {
+                GateDecision.Defer(ProactiveGatePolicy.nextQuietEnd(nowMs, zone, quietEndMin()))
+            } else {
+                GateDecision.Suppress("quiet-low")
+            }
         }
+        val minInterval = ProactiveGatePolicy.minIntervalFor(importance)
         val last = prefs.getLong(K_LAST_SENT + kind, 0L)
-        if (last > 0L && nowMs - last < ProactiveGatePolicy.MIN_INTERVAL_MS) {
+        if (last > 0L && nowMs - last < minInterval) {
             return GateDecision.Suppress("min-interval")
         }
         prefs.edit().putLong(K_LAST_SENT + kind, nowMs).apply()
-        Log.i(TAG, "admitFreeProactive kind=$kind -> Pass")
+        Log.i(TAG, "admitFreeProactive kind=$kind importance=$importance -> Pass")
         return GateDecision.Pass
     }
 

@@ -560,10 +560,19 @@ object WebTools {
      * @return 给模型的结果文本：成功以「已生成」开头（含项目路径），失败以「保存失败」开头
      */
     fun writeProjectFile(context: Context, project: String, filePath: String, content: String): String {
-        val proj = project.trim()
-        if (proj.isBlank()) return "保存失败：项目名不能为空"
-        if (!proj.matches(Regex("[\\w\\-\\u4e00-\\u9fa5]{1,40}"))) {
-            return "保存失败：项目名不合法（仅限中英文、数字、下划线、连字符，最长 40 个字符）"
+        val rawProj = project.trim()
+        if (rawProj.isBlank()) return "保存失败：项目名不能为空"
+        // 名字解析（2026-10-10 用户反馈："让它改 AIUI 项目总说找不到"）：
+        //  · 名字本身就合法（`aiui-demo`）⇒ 一律当成**新项目的文件夹名**，绝不做模糊匹配 ——
+        //    否则新建 "html" 会被匹配到已有的 "html-test"，写到别人的项目里；
+        //  · 名字不合法（带空格/括号，如「AIUI 自检 (aiui-selftest)」）⇒ 模型显然是在用**应用名**
+        //    指代已有项目，解析成真实文件夹名，避免"改已有项目"变成"新建一个怪名字的项目"。
+        val proj = if (rawProj.matches(Regex("[\\w\\-\\u4e00-\\u9fa5]{1,40}"))) {
+            rawProj
+        } else {
+            AiuiProject.resolveProjectName(context, rawProj)
+                ?: return "保存失败：项目名不合法（仅限中英文、数字、下划线、连字符，最长 40 个字符）。" +
+                    FileWorkspace.availableProjectsHint(context)
         }
         val rel = filePath.trim().replace('\\', '/').trim('/')
         if (rel.isBlank()) return "保存失败：文件路径不能为空"
@@ -710,11 +719,14 @@ object WebTools {
      * @return 给模型的结果文本：成功以「项目」描述开头，失败以「读取失败」开头
      */
     fun readProjectFile(context: Context, project: String, filePath: String): String {
-        val proj = project.trim()
-        if (proj.isBlank()) return "读取失败：项目名不能为空"
-        if (!proj.matches(Regex("[\\w\\-\\u4e00-\\u9fa5]{1,40}"))) {
-            return "读取失败：项目名不合法（仅限中英文、数字、下划线、连字符，最长 40 个字符）"
-        }
+        val asked = project.trim()
+        if (asked.isBlank()) return "读取失败：项目名不能为空"
+        // 名字归一（2026-10-10 用户反馈："让它改 AIUI 项目总说找不到"）：
+        // 用户/模型可能用**应用名/显示名**（如「AIUI 自检 (aiui-selftest)」）指代项目，
+        // 而目录名是**文件夹名**（`aiui-selftest`）—— 不解析就一律"项目不存在"。
+        val proj = AiuiProject.resolveProjectName(context, asked)
+            ?: return "项目“$asked”不存在。${FileWorkspace.availableProjectsHint(context)}" +
+                "它也可能只是本地上传的 .aix（那种没有可编辑的工程源码）。"
         val dir = AiuiProject.projectDir(context, proj)
         if (!dir.isDirectory) {
             return "项目“$proj”还没有可读取的源码：若它是之前对话生成的，请先确认项目名（可让我查“我的 AI 应用”），或先用“保存代码文件”工具生成；若它只是本地上传的 .aix，则没有可编辑的工程源码。"
@@ -732,7 +744,14 @@ object WebTools {
                 "- $p（${f.readText(Charsets.UTF_8).length} 字符）"
             }
             return "项目“$proj”现有 ${sources.size} 个源码文件：\n" + lines.joinToString("\n") +
-                "\n需要读取某个文件的完整内容时，把 file 参数设为上面的相对路径即可"
+                "\n需要读取某个文件的完整内容时，把 file 参数设为上面的相对路径即可。" +
+                // ★ 2026-10-09（P2-13）：本工具"只传 project 也列清单"原是有意设计（改代码前先看有哪些
+                // 文件），但真机上模型因此形成了**错误语义**——以为「read_code_file 就是列目录的」，
+                // 于是反复用它列清单（gps-live 案 3 次），甚至去 read 一个根本不存在的 index.html。
+                // 修法**不是删掉这个能力**（那会破坏"改代码前先勘察"的正常流程），
+                // 而是在返回里**明确指路**：列目录/找文件有专门的工具，本工具的职责是"读源码"。
+                "\n⚠️ 只是**浏览/查找**文件（不读内容）时，请改用 list_files / search_files，" +
+                "本工具只负责读取你已确定要看的那个文件的源码。"
         }
         // 相对路径合法性校验（与写文件同规则），防止逃出项目目录
         val segments = rel.split('/')

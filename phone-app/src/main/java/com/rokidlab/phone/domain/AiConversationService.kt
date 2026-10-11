@@ -156,6 +156,22 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         const val MAX_PLAN_CONTINUES = 2
 
         /**
+         * 内部标记（`[NEED_TOOLS]` / `[TOOLS]`）的**本轮升级上限**（2026-10-09，P0-1 终态护栏）。
+         *
+         * 背景（gps-live 真机事故）：三层降载的逃生舱**只升级一次** —— 升级后
+         * `fastPathActive`/`routedToolNames`/`menuModeActive` 全被清空，第二个标记再没人接，
+         * 于是 `[NEED_TOOLS]` 那 11 个字符被当成正文播进聊天气泡（还记成 `completed`）。
+         *
+         * 为什么是 2 而不是 1：模型喊第二次有两类原因 ——
+         *  ① 第一次升级的时机它"看不见"（非探测轮升级不重建 messages，尾部的旧指令还在，
+         *     见 [InternalMarkerGuard] 的说明）⇒ 它只是**重复了一遍**，第二次给全量就正常了；
+         *  ② 它确实缺一个清单外能力。
+         * 给到 2 次能消化第 ① 类（本轮事故就是这一类），第 ② 类由"仍喊标记 ⇒ 要求它
+         * 如实说明缺什么"收尾，不再继续烧轮次。
+         */
+        const val MAX_MARKER_UPGRADES = 2
+
+        /**
          * 项目规则文件（差距⑥，2026-10-01）：下载目录下用户自维护的约定文件，
          * 代码/项目类任务装配工具时注入 system（见 [buildMessages] → buildSystemMessage）。
          * 用户用任意文本编辑器写一份「框架约定/命名风格/禁用项」，生成一致性长期受益。
@@ -829,6 +845,26 @@ private fun executeToolInTurn(
                     summary = prompt,
                     stageEvidence = stages,
                 )
+                // ★ 授权结果也进「过程」（2026-10-10）。此前 trace 只有
+                //   AWAITING_CONFIRM 这个**瞬时**状态，"最后是谁放行的"完全看不到：
+                //   - USER_APPROVED = 用户点了确认（用户记得）；
+                //   - POLICY = 问不到用户 / 超时，按 PROCEED 静默放行（用户**不记得**，
+                //     却有一个高危动作真的发生了 —— 这是最需要被看见的一条）。
+                // ⚠️ 只在这条 sink 里发（放行前）：拒绝路径不调 sink，
+                //   所以「被拒绝」不会在这里出现 —— 那由工具结果里的
+                //   「被安全策略拦截」表达（见 AgentStep.isFailureResult）。
+                ctx.onTrace?.invoke(
+                    AgentStep.framework(
+                        when (source) {
+                            com.rokidlab.phone.ai.session.AuthorizationSource.USER_APPROVED ->
+                                "已获你确认：$name"
+                            com.rokidlab.phone.ai.session.AuthorizationSource.POLICY ->
+                                "未能征求你确认，按策略放行：$name"
+                            else -> "已授权：$name"
+                        },
+                        id = "authz_${tc.id}",
+                    )
+                )
             }
         try {
             return executeToolWithApproval(tc, ctx)
@@ -975,7 +1011,9 @@ private fun executeToolInTurn(
             //   此前全部只进 logcat ⇒ 过程时间线上只有外层一行 research_subtask 在转圈，
             //   是唯一一条"用户能明确感到它在骗我"的路径。
             // key 用 `sub:` 前缀，与主循环的 `tool:<id>` 天然不撞（覆盖键相同=同一行）。
-            com.rokidlab.phone.ai.subagent.ReadOnlySubagent.setSubStepSink { round, toolName, stateName ->
+            // ★ result 也带上（2026-10-10）：原先终态回调不带结果，每条内层步骤
+            //   detail 恒空 —— 用户看到一串工具名却不知道查到了什么、哪一步失败。
+            com.rokidlab.phone.ai.subagent.ReadOnlySubagent.setSubStepSink { round, toolName, stateName, result ->
                 val state = runCatching { AgentStep.State.valueOf(stateName) }
                     .getOrDefault(AgentStep.State.RUNNING)
                 ctx.onTrace?.invoke(
@@ -983,6 +1021,7 @@ private fun executeToolInTurn(
                         key = "sub:${tc.id}:$round:$toolName",
                         name = toolName,
                         state = state,
+                        result = result,
                     ),
                 )
             }
@@ -1000,6 +1039,16 @@ private fun executeToolInTurn(
                     Thread.currentThread().interrupt()
                 }
                 Log.w(TAG, "tool ${tc.name} retry #$attempt after ${backoffMs}ms: ${lastError?.message}")
+                // ★ 进「过程」（2026-10-10）：重试之间有指数退避的 sleep（最长 2s），
+                //   此前界面上是"一个转圈点卡住了"，用户不知道它在重试还是死了。
+                //   用 FRAMEWORK 而不是重复工具行：重试是**框架**的决定，不是模型的决定。
+                ctx.onTrace?.invoke(
+                    AgentStep.framework(
+                        "${tc.name} 失败，正在第 $attempt 次重试（${lastError?.message ?: "未知原因"}）",
+                        id = "retry_${tc.id}_$attempt",
+                        state = AgentStep.State.RUNNING,
+                    )
+                )
             }
             try {
                 return when (tc.name) {
@@ -1401,6 +1450,32 @@ private fun executeToolInTurn(
                 agentTurn?.contextInject("skills", skillsContext)
                 agentTurn?.contextInject("task", taskNote)
                 agentTurn?.contextInject("budget", budgetNote)
+                // ★ 注入也进「过程」（2026-10-10）。此前 6 个 origin 里只有 `knowledge`
+                //   有对应 Kind（KNOWLEDGE），另外 5 类对用户完全隐形 ——
+                //   于是"它凭什么知道我的偏好/上次教训/这个技能/还有哪些没做完"全都没有答案。
+                //
+                // ⚠️ 只显示**来源摘要，不显示注入内容**：注入体可能含外部文档正文，
+                //   原样回显既刷屏，又把外部内容重新摆到用户面前（注入隔离的意义就在这里）。
+                //   因此这里给的是"注入了什么来源"，不是"注入了什么字"。
+                onTrace?.let { tr ->
+                    // 记忆：只报条数，不报内容（内容是用户自己说过的，但没必要在过程里复述）
+                    longTermContext?.takeIf { it.isNotBlank() }?.let {
+                        tr(AgentStep.contextInjected("memory", "已注入长期记忆"))
+                    }
+                    lessonsContext?.takeIf { it.isNotBlank() }?.let {
+                        tr(AgentStep.contextInjected("lesson", "已注入历史教训"))
+                    }
+                    // knowledge 走 [AgentStep.knowledge]，它带命中来源（用户核对答案出处要用）
+                    skillsContext?.takeIf { it.isNotBlank() }?.let {
+                        tr(AgentStep.contextInjected("skills", "已注入技能说明"))
+                    }
+                    taskNote?.takeIf { it.isNotBlank() }?.let {
+                        tr(AgentStep.contextInjected("task", "已接上未完成的任务进度"))
+                    }
+                    budgetNote?.takeIf { it.isNotBlank() }?.let {
+                        tr(AgentStep.contextInjected("budget", "已告知本轮预算限制"))
+                    }
+                }
                 // 当前提问那条 user 消息（多模态时 content 是 text + image_url 分片数组）。
                 // 独立构造一次：溢出恢复要整体重建 messages，重建时复用同一条提问。
                 val userMsg = JSONObject()
@@ -1469,8 +1544,20 @@ private fun executeToolInTurn(
                 // 两种窄兜底。护栏与快路/路由同款；粘滞位已撤（同快路，2026-09-29 第六轮）——
                 // 「那上海呢」「再来一首」这类工具对话衔接句现在走菜单点名（多一次探测 RTT，
                 // 换每轮 ~1.8 万 input token 的节省，方舟无缓存端点下净赚）。
+                // ★ 续说词豁免（2026-10-09，P1-10）：**接着上一轮继续做**的短句（继续/重写/还是不行）
+                // 关键词路由天然无命中，原先会掉进菜单探测轮 —— 而探测轮**没有写文件能力**，
+                // 模型想改也改不了，只能再读一遍文件（gps-live 案 T5/T6/T7 三轮都是这样空转的）。
+                // 判据两段：① 句子指代上一轮产物（`isContinuation`）② 上一轮确实动过手
+                // （`lastTurnHadToolCalls`）—— 少了 ② 会把"继续聊天"也误判成续做任务。
+                // ⚠️ 这不违反「路由子集不自动扩全量」那条教训：那是"别为省事无脑扩全量"，
+                // 这里是"续做轮本就需要动手能力，而探测轮把它削没了" —— 修的是能力缺失。
+                val continuationTurn = com.rokidlab.phone.ai.ToolIntentRouter.isContinuation(text) &&
+                    lastTurnHadToolCalls
+                if (continuationTurn) {
+                    Log.i(TAG, "continuation turn: skip menu probe, give full toolset (text=${text.take(20)})")
+                }
                 var menuModeActive = !fastPathActive && routedToolNames == null && !localLight &&
-                    !readOnlyTools && imageBase64 == null && instruction == null
+                    !readOnlyTools && imageBase64 == null && instruction == null && !continuationTurn
                 // 探测轮 = 菜单模式的第一轮（不流式；响应后菜单收束，后续轮转常规处理）
                 var menuProbeActive = menuModeActive
                 // 可用工具随会话推进可变：主 Agent 全量域起步；命中 AIUI 生成场景后切到精简
@@ -1637,6 +1724,29 @@ private fun executeToolInTurn(
                 // var（不是 val）：溢出恢复时整体替换，见下方 callModel 的 catch
                 var messages = buildMessages()
 
+                /**
+                 * 撤掉 tail 里"不够用时回复 [NEED_TOOLS]"那条旧指令（2026-10-09，P0-2）。
+                 *
+                 * 只在**菜单模式的后续轮升级到全量**时调用 —— 那条路径不重建 messages
+                 * （重建会劈散 in-flight 的 tool 配对 → 400），于是菜单段连同它的约定残留在上下文里，
+                 * 模型会照着"已经失效的指令"再喊一次标记。
+                 * 详见 [com.rokidlab.phone.ai.InternalMarkerGuard.neutralizeMenuInstruction]。
+                 * 幂等：已撤过则不改（可安全重复调用）。
+                 */
+                fun neutralizeMenuTail() {
+                    for (i in 0 until messages.length()) {
+                        val m = messages.optJSONObject(i) ?: continue
+                        if (m.optString("role") != "system") continue
+                        val c = m.optString("content")
+                        val fixed = com.rokidlab.phone.ai.InternalMarkerGuard
+                            .neutralizeMenuInstruction(c, activeTools.size)
+                        if (fixed != null && fixed != c) {
+                            m.put("content", fixed)
+                            Log.i(TAG, "menu instruction revoked at msg[$i] (tools=${activeTools.size})")
+                        }
+                    }
+                }
+
                 // 命中该调用的回合视为进入 AIUI/代码生成会话 → 下轮起切精简工具子集（仅切一次）
                 val isCodeGenCall: (String, String) -> Boolean = { name, args ->
                     name == ToolRegistry.TOOL_CODE_FILE ||
@@ -1687,6 +1797,54 @@ private fun executeToolInTurn(
                 // 实现已抽到 AiToolParamRepair.codeFileTarget（纯函数 + 有单测）。
                 fun codeFileTargetOf(tc: com.rokidlab.phone.ai.ToolCallInfo): Pair<String, String>? =
                     com.rokidlab.phone.ai.AiToolParamRepair.codeFileTarget(tc.arguments)
+
+                // ★ 过程面板的**文件产物**解析基准（2026-10-10）：文件类工具的
+                //   `path`/`file` 参数都是**相对路径**，基准是该项目的私有镜像根
+                //   （`AiuiProject.projectDir`，与 save_code_file 的落盘镜像同一棵树）。
+                //   解析不出来时返回 null —— `AgentStep.artifactOf` 会只认绝对路径，
+                //   **宁可少显示一个芯片，也不给一个打不开的路径**（用户会以为文件丢了）。
+                fun artifactBaseDirOf(argsRaw: String): String? = runCatching {
+                    val proj = org.json.JSONObject(argsRaw).optString("project").trim()
+                    if (proj.isEmpty()) return@runCatching null
+                    // 名字归一（应用名 → 项目文件夹名）：与文件工具走**同一套**解析，
+                    // 否则用户用应用名指代项目时，芯片路径会指向一个不存在的目录（点开必失败）。
+                    // 解析不出时退回原名 —— 至多让"点开预览"如实报文件不存在，不会指错项目。
+                    val real = com.rokidlab.phone.ai.AiuiProject
+                        .resolveProjectName(session.appContext, proj) ?: proj
+                    com.rokidlab.phone.ai.AiuiProject.projectDir(session.appContext, real).absolutePath
+                }.getOrNull()
+
+                // save_code_file 的产物形态特殊：参数是 project + **file**（不是 path），
+                // 且它写的是私有镜像 ⇒ 必须在**结束后**才知道文件是否真落盘。
+                // 这类产物由 saveCodeArtifact 单独算，不走通用 artifactOf。
+                fun saveCodeArtifact(
+                    argsRaw: String,
+                    succeeded: Boolean,
+                ): List<com.rokidlab.phone.ai.AgentStep.Artifact> {
+                    val target = com.rokidlab.phone.ai.AiToolParamRepair.codeFileTarget(argsRaw)
+                        ?: return emptyList()
+                    val (p, f) = target
+                    // 与落盘同一套名字解析：解析出的**真实文件夹名**才是芯片该显示的归属
+                    val real = com.rokidlab.phone.ai.AiuiProject
+                        .resolveProjectName(session.appContext, p) ?: p
+                    val abs = runCatching {
+                        com.rokidlab.phone.ai.AiuiProject.projectDir(session.appContext, real)
+                            .resolve(f).absolutePath
+                    }.getOrNull() ?: return emptyList()
+                    return listOf(
+                        com.rokidlab.phone.ai.AgentStep.Artifact(
+                            path = abs,
+                            // 带项目名前缀（`aiui-test/app.json`）：用户核对"生成到了哪个项目"，
+                            // 只给文件名时多项目并行会看不出归属。
+                            label = "$real/$f",
+                            action = if (succeeded) {
+                                com.rokidlab.phone.ai.AgentStep.Action.CREATE
+                            } else {
+                                com.rokidlab.phone.ai.AgentStep.Action.WRITE
+                            },
+                        )
+                    )
+                }
                 // 轮次预算分账（详见 MAX_READONLY_ROUNDS 注释）：只读轮（查资料）与动作轮（落盘/装机等）
                 // 各自独立计数，避免 AIUI 任务的勘察把落盘额度吃光。混合轮按动作轮计费。
                 var readOnlyRounds = 0
@@ -1705,6 +1863,19 @@ private fun executeToolInTurn(
                 // 计划驱动续做次数（todo 驱动重入，见 MAX_PLAN_CONTINUES）：模型给出"收尾"回复
                 // 但活跃计划仍有未完成步骤时，注入剩余步骤清单拉回来继续干
                 var planContinues = 0
+                // ★ 内部标记（[NEED_TOOLS]/[TOOLS]）的**本轮升级次数**（2026-10-09，P0-1）。
+                // 为什么必须显式计数：升级分支原先只靠 `probeMode` 这个**瞬时布尔**判定
+                // （升级后 fastPath/routed/menu 全被清空 ⇒ probeMode=false ⇒ 第二个标记无人接管 ⇒
+                // 直接当正文播给用户）。布尔表达不了"已经升级过几次"，计数才可以。
+                var markerUpgrades = 0
+                // 本轮是否出现过"标记未产出"（供终态判定 TurnEndReason 用，见下方收尾）
+                var markerLeakSeen = false
+                // ★「诉求—动作」对齐检查（2026-10-09，P0-6）：本轮是否调用过**有副作用**的工具
+                // （落盘/装机/拨号/建日程…）。用来发现"用户要改，agent 却只读了一圈"这种假成功
+                // —— gps-live 案 T2~T7 共 37 次工具调用、**0 次写操作**，用户说的却是"修"和"重写"。
+                var actionToolUsed = false
+                // 该检查是否已触发过（只自问一次，防死循环）
+                var intentAlignChecked = false
                 // 下一轮是否强制工具调用（tool_choice=required）：计划续做轮置位，
                 // 模型真的出手调工具后复位 —— 防止续做轮又出一轮"总结性空谈"
                 var forceToolChoice = false
@@ -1895,14 +2066,30 @@ private fun executeToolInTurn(
                             menuProbeActive = false
                             turnUsedTools = true
                             routedToolNames = null
+                            // 与 probeMode 分支共用同一个升级计数（P0-1）：菜单模式的"要全量"
+                            // 也是标记驱动的升级，必须一起计数，否则"菜单→全量"之后的第二个
+                            // 标记会被算作第一次、白多升一轮。
+                            markerUpgrades++
                             activeTools = buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
                             assembledToolNames = ToolRegistry.namesOf(activeTools)
                             // 探测轮：整体重建（摘菜单文本）；后续轮只换表（in-flight 消息不可重建）
-                            if (probeRound) messages = buildMessages()
+                            if (probeRound) {
+                                messages = buildMessages()
+                            } else {
+                                // ★ P0-2 的真实落点：**后续轮升级不重建** ⇒ `<tool_menu>` 那段
+                                // "不够用时回复 [NEED_TOOLS]" 的约定**留在 messages 里到本轮结束**。
+                                // 于是模型既拿到全量工具、又仍读到那条旧指令，还会再喊一次标记
+                                // —— 这就是 gps-live 案每轮多烧 2 次模型调用的来源。
+                                // 不重建是因为 in-flight 的 assistant(tool_calls)/tool 配对在 messages 里，
+                                // 劈散会被服务端 400；所以改用**追加显式覆盖**（幂等、位置更靠后＝优先级更高）。
+                                neutralizeMenuTail()
+                            }
                             Log.i(
                                 TAG,
                                 "tool menu -> full toolset (${activeTools.size} schemas, " +
-                                    "content=${menuTrimmed.take(40)}, finish=${turn.finishReason})",
+                                    "content=${menuTrimmed.take(40)}, finish=${turn.finishReason}), " +
+                                    "upgrade#$markerUpgrades/$MAX_MARKER_UPGRADES" +
+                                    if (probeRound) " (rebuilt)" else " (menu instruction revoked)",
                             )
                             continue
                         }
@@ -1952,6 +2139,7 @@ private fun executeToolInTurn(
                         fastPathActive = false
                         routedToolNames = null
                         turnUsedTools = true
+                        markerUpgrades++
                         activeTools = buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
                         assembledToolNames = ToolRegistry.namesOf(activeTools)
                         messages = buildMessages()
@@ -1959,7 +2147,73 @@ private fun executeToolInTurn(
                             TAG,
                             "chat probe upgraded: model requested tools " +
                                 "(content=${turn.content?.take(40)}, finish=${turn.finishReason}), " +
-                                "full toolset attached (${activeTools.size} schemas)",
+                                "full toolset attached (${activeTools.size} schemas), " +
+                                "upgrade#$markerUpgrades/$MAX_MARKER_UPGRADES",
+                        )
+                        continue
+                    }
+                    // ★ 终态护栏（2026-10-09，P0-1）：**升级额度已用完，它还在回内部标记**。
+                    // 上面的 probeMode 分支靠 `fastPathActive || routedToolNames != null` 判定，
+                    // 升级后这两个都被清空 ⇒ 第二个标记原本无人接管、直接被当正文播给用户
+                    // （gps-live 事故：气泡里就是一行 `[NEED_TOOLS]`，还记成 completed）。
+                    // 这里补上那个缺失的分支：额度没用完就再升一次（消化"重复喊"），
+                    // 用完则注入硬引导要求给出可读结论 —— 绝不把标记留给用户。
+                    // ⚠️ 与 probeMode 分支的**判据不同**：那里还管"空响应/变形标记"，
+                    // 这里只认 `isMarkerOnly`（严格整段匹配）—— 因为此处已无法重建 messages，
+                    // 误判的代价是白注一轮引导，所以要保守。
+                    if (turn.toolCalls.isEmpty() &&
+                        com.rokidlab.phone.ai.InternalMarkerGuard.isMarkerOnly(turn.content)
+                    ) {
+                        markerLeakSeen = true
+                        if (markerUpgrades < MAX_MARKER_UPGRADES) {
+                            // 还有额度：再升一次（此时 activeTools 可能已是全量，重建无害）
+                            fastPathActive = false
+                            routedToolNames = null
+                            turnUsedTools = true
+                            markerUpgrades++
+                            activeTools = buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
+                            assembledToolNames = ToolRegistry.namesOf(activeTools)
+                            messages = buildMessages()
+                            Log.w(
+                                TAG,
+                                "marker re-upgrade #$markerUpgrades/$MAX_MARKER_UPGRADES " +
+                                    "(content=${turn.content?.take(40)}, finish=${turn.finishReason})",
+                            )
+                            continue
+                        }
+                        // 额度用完：**不许再回标记**，注入硬引导让它给可读结论
+                        // （不重建 messages —— 直接覆盖尾部，避免劈散 in-flight 配对）
+                        val tailMsg = messages.optJSONObject(messages.length() - 1)
+                        val nudgeText = "你刚才只回复了内部标记，用户什么也没看到。" +
+                            "现在**不要再输出任何方括号标记**：请直接用一两句中文告诉用户结论 —— " +
+                            "如果你已经完成了任务就说完成了什么；" +
+                            "如果缺少某个能力而做不了，就如实说明缺什么、用户能怎么办。"
+                        if (tailMsg != null && tailMsg.optString("role") == "user") {
+                            tailMsg.put("content", nudgeText)
+                        } else {
+                            messages.put(JSONObject().apply {
+                                put("role", "user")
+                                put("content", nudgeText)
+                            })
+                        }
+                        Log.w(
+                            TAG,
+                            "marker leaked with no upgrade left ($markerUpgrades/$MAX_MARKER_UPGRADES): " +
+                                "injecting nudge to force a readable conclusion",
+                        )
+                        // P0-7：反思落盘 —— 这是"它哪一轮意识到自己错了"的唯一证据来源
+                        agentTurn?.reflect(
+                            com.rokidlab.phone.ai.session.ReflectTrigger.MARKER_LEAK,
+                            detail = "模型回了内部标记 ${turn.content?.take(40)}，升级额度已用尽（$markerUpgrades/$MAX_MARKER_UPGRADES）",
+                            action = "注入硬引导：禁止再输出方括号标记，要求给出可读结论或说明缺什么能力",
+                        )
+                        // ★ 进「过程」（2026-10-10）：这轮会被静默重试，用户看到的是
+                        //   "回答突然又从头开始"。不说明就会以为 App 卡了或重复发送。
+                        onTrace?.invoke(
+                            AgentStep.reflect(
+                                "marker_leak",
+                                "模型输出的是内部标记而非回答，正在重试（$markerUpgrades/$MAX_MARKER_UPGRADES）",
+                            )
                         )
                         continue
                     }
@@ -2017,6 +2271,52 @@ private fun executeToolInTurn(
                                     TAG,
                                     "plan continuation #$planContinues/$MAX_PLAN_CONTINUES at round=$round: " +
                                         "model tried to wrap up with pending plan steps, re-entering loop",
+                                )
+                                continue
+                            }
+                            // ★「诉求—动作」对齐检查（2026-10-09，P0-6）：模型准备收尾了，
+                            // 但**用户要的是"改"，本轮却一个动作类工具都没调** —— 这是真机上
+                            // 最典型的"假成功"：它读了一圈、说了几句话，任务一步没推进。
+                            // （gps-live：用户说"修"和"重写"，T2~T7 共 37 次工具调用、0 次写操作。）
+                            // 只自问一次，且**必须有明确的动作意图**才触发 —— 否则用户只是问个问题
+                            // 也会被无端打断（防误伤，见报告 §8 的判据）。
+                            val wantsAction = com.rokidlab.phone.ai.ActionIntent.looksLikeActionRequest(text)
+                            if (!intentAlignChecked && wantsAction && turnUsedTools && !actionToolUsed &&
+                                !readOnlyTools && !localLight
+                            ) {
+                                intentAlignChecked = true
+                                val alignPrompt = "你刚才只做了查询、**没有产生任何改动**，但用户要的是" +
+                                    "「${text.take(60)}」这类需要动手的请求。" +
+                                    "请现在动手：如果确实需要改，就直接调用写类工具（写文件/改文件/装应用等）；" +
+                                    "如果已经不需要改（比如问题不在那儿），就用一两句中文说清你的判断依据；" +
+                                    "如果你缺少完成它所需的能力，就如实说明缺什么、用户能怎么办。"
+                                messages.put(JSONObject().apply {
+                                    put("role", "assistant")
+                                    if (turn.reasoning != null) put("reasoning_content", turn.reasoning)
+                                    put("content", turn.content)
+                                })
+                                messages.put(JSONObject().apply {
+                                    put("role", "user")
+                                    put("content", alignPrompt)
+                                })
+                                onTrace?.invoke(
+                                    AgentStep.thinking(
+                                        round = round,
+                                        detail = "用户要的是修改，但还没动手…",
+                                        state = AgentStep.State.RUNNING,
+                                    ),
+                                )
+                                Log.w(
+                                    TAG,
+                                    "intent-action mismatch at round=$round: user asked to change " +
+                                        "(\"${text.take(40)}\") but no side-effect tool ran in $turnUsedTools; " +
+                                        "re-entering loop once",
+                                )
+                                // P0-7：反思落盘（第三种"假成功"：诉求与动作不一致）
+                                agentTurn?.reflect(
+                                    com.rokidlab.phone.ai.session.ReflectTrigger.INTENT_ACTION_MISMATCH,
+                                    detail = "用户诉求「${text.take(60)}」属动手类，但本轮只有查询、零动作类调用",
+                                    action = "注入对齐提示：要求动手改 / 说明为何不需改 / 说清缺什么能力",
                                 )
                                 continue
                             }
@@ -2116,6 +2416,9 @@ private fun executeToolInTurn(
                     turn.toolCalls.forEachIndexed { idx, tc ->
                         if (tc.name in sideEffecting) serialIdx.add(idx) else parallelIdx.add(idx)
                     }
+                    // ★ P0-6：本轮出现过动作类调用 ⇒ 记下来（供收尾时做「诉求—动作」对齐检查）。
+                    // 用装配侧同一个 `sideEffecting` 集合，判据只有一份，不会与串行泳道漂移。
+                    if (serialIdx.isNotEmpty()) actionToolUsed = true
                     // 并行批为空（一轮全是副作用工具）时 CountDownLatch(0) 合法：await 立即返回
                     val latch = java.util.concurrent.CountDownLatch(parallelIdx.size)
 
@@ -2163,9 +2466,25 @@ private fun executeToolInTurn(
                             val traceVisible = tc.name != LongTermMemoryManager.TOOL_NAME &&
                                 tc.name != com.rokidlab.phone.ai.AgentPlan.TOOL_NAME
                             if (traceVisible) {
+                                // ★ 文件产物（2026-10-10）：让「过程」行里的文件名可点开预览。
+                                //   save_code_file 特殊 —— 参数是 project+file（不是 path），
+                                //   等结果才知道是真新建还是失败，RUNNING 阶段一律按 WRITE 呈现
+                                //   （终态那次会以同 key 覆盖掉这条）。
+                                val isCodeFileStep = tc.name == ToolRegistry.TOOL_CODE_FILE
+                                val runningArtifacts = if (isCodeFileStep) {
+                                    saveCodeArtifact(tc.arguments, succeeded = false)
+                                } else {
+                                    AgentStep.artifactOf(tc.name, tc.arguments, artifactBaseDirOf(tc.arguments))
+                                }
                                 onTrace?.invoke(
                                     AgentStep.tool(
-                                        tc.id, tc.name, AgentStep.State.RUNNING, argsRaw = tc.arguments,
+                                        tc.id,
+                                        tc.name,
+                                        AgentStep.State.RUNNING,
+                                        argsRaw = tc.arguments,
+                                        // 产物走参数传入（而不是事后 copy）：tool() 据此决定 detail
+                                        // 要不要收原始参数 —— 有芯片就不再漏参数正文。
+                                        artifacts = runningArtifacts,
                                     ),
                                 )
                             }
@@ -2178,16 +2497,30 @@ private fun executeToolInTurn(
                                 lookImages[idx] = com.rokidlab.phone.ai.tools.VisionToolProvider.takePendingImage()
                             }
                             if (traceVisible) {
-                                onTrace?.invoke(
+                                val okStep = !AgentStep.isFailureResult(results[idx])
+                                val endState =
+                                    if (okStep) AgentStep.State.OK else AgentStep.State.FAILED
+                                val step = if (tc.name == ToolRegistry.TOOL_CODE_FILE) {
+                                    // save_code_file 特殊：参数是 project+file（不是 path），
+                                    // 且要等结果才知道是否真落盘。只有真落盘（"已生成"开头）
+                                    // 才算 CREATE；失败时保留路径但动作降为 WRITE ——
+                                    // 文件**不存在**，标"新建"等于骗用户点一个打不开的芯片。
                                     AgentStep.tool(
-                                        tc.id,
-                                        tc.name,
-                                        if (AgentStep.isFailureResult(results[idx])) AgentStep.State.FAILED
-                                        else AgentStep.State.OK,
-                                        argsRaw = tc.arguments,
-                                        result = results[idx],
-                                    ),
-                                )
+                                        tc.id, tc.name, endState,
+                                        argsRaw = tc.arguments, result = results[idx],
+                                        artifacts = saveCodeArtifact(
+                                            tc.arguments,
+                                            results[idx]?.startsWith("已生成") == true,
+                                        ),
+                                    )
+                                } else {
+                                    AgentStep.tool(
+                                        tc.id, tc.name, endState,
+                                        argsRaw = tc.arguments, result = results[idx],
+                                        artifactBaseDir = artifactBaseDirOf(tc.arguments),
+                                    )
+                                }
+                                onTrace?.invoke(step)
                             }
                             // 计划更新（update_plan 伪工具）：
                             //  - 手机端：结构化计划清单（勾选式，同 key 覆盖，只显示最新一版）；
@@ -2345,12 +2678,56 @@ private fun executeToolInTurn(
                         if (result !== raw) {
                             Log.w(TAG, "tool ${tc.name} output truncated: ${raw.length} chars")
                         }
-                        Log.i(TAG, "tool ${tc.name}(${tc.arguments}) -> ${result.take(100)}")
+                        // ⚠️ 只记**工具名与长度**，绝不记参数正文（2026-10-10 用户反馈：生成的源码 /
+                        //    shell 脚本正文经这一行原样漏进了系统日志 logcat）。参数与结果全文另有
+                        //    去向：App 内「过程」卡片（用户可见）、agent_sessions 事件流（应用私有）。
+                        Log.i(
+                            TAG,
+                            "tool ${tc.name} args=${tc.arguments.length}chars -> ${result.length}chars",
+                        )
+                        // ★ 原地打转检测（2026-10-09，P0-6）：同指纹在滑动窗口内第 2 次出现就提醒。
+                        // 现有自省只认"工具抛异常"，而真机的失效模式是**工具全部成功却毫无进展**
+                        // （gps-live：37 次调用 0 写、同一文件读 5 遍、同一个不存在的文件读 2 遍），
+                        // 全程无异常 ⇒ 所有守卫看不见。这里用"调用指纹重复"作为"没进展"的可靠代理。
+                        // ⚠️ 只提示、不拦截：拦截会在"重读一个可能已变的文件"这类正当场景下造成能力缺失。
+                        val repeatCount = com.rokidlab.phone.ai.ToolRepetitionTracker.noteAndCount(
+                            // ⚠️ 会话隔离的 key 用**聊天会话 id**（`ChatStateHolder.currentSessionId`），
+                            // 不是 `session`（那是眼镜连接会话 CxrLHiRokidSession，与聊天会话无关）。
+                            // 跨会话隔离是硬要求：否则"新对话"会被别的对话的重复计数误伤。
+                            com.rokidlab.phone.store.ChatStateHolder.currentSessionId,
+                            com.rokidlab.phone.ai.ToolRepetitionTracker.fingerprint(tc.name, tc.arguments),
+                        )
+                        val repeatNote = if (repeatCount >=
+                            com.rokidlab.phone.ai.ToolRepetitionTracker.WARN_FROM_OCCURRENCE
+                        ) {
+                            Log.w(TAG, "repeated call #$repeatCount: ${tc.name} (args unchanged)")
+                            // P0-7：反思落盘（第二种"假成功"：原地打转）
+                            agentTurn?.reflect(
+                                com.rokidlab.phone.ai.session.ReflectTrigger.REPEATED_CALL,
+                                detail = "同一调用第 $repeatCount 次出现：${tc.name}（参数一致）",
+                                action = "提醒模型换动作（写/改/换参数）或说明卡在哪一步",
+                            )
+                            // ★ 同时进「过程」（2026-10-10）：用户有权知道它在自己打转。
+                            //   "同一个文件读了 5 遍"比"它回答了"更能解释这次为什么慢/这么差，
+                            //   而此前这件事只存在于 logcat 与事件流里（要导出来才看得见）。
+                            onTrace?.invoke(
+                                AgentStep.reflect(
+                                    "repeat_call",
+                                    "同一调用第 $repeatCount 次出现（${tc.name}，参数一致）",
+                                )
+                            )
+                            "\n\n" + com.rokidlab.phone.ai.ToolRepetitionTracker.reminder(tc.name, repeatCount)
+                        } else {
+                            ""
+                        }
                         // 注入隔离：外部作者内容（网页/MCP/文档/OCR/子助手）包进 <untrusted_source>，
                         // 本地确定性工具结果原样回填。信任级别在 ToolEntry 声明、这里单一出口包装。
+                        // ⚠️ 提醒语拼在**包装之外**：它是框架自产的控制信号，
+                        // 若拼进 <untrusted_source> 里，模型会把它当成"外部资料里的文字"而不敢照做
+                        // —— 注入隔离的语义会反过来伤到自己。
                         val safeResult = com.rokidlab.phone.ai.UntrustedContent.wrap(
                             ToolRegistry.contentTrustOf(tc.name), tc.name, result,
-                        )
+                        ) + repeatNote
                         messages.put(JSONObject().apply {
                             put("role", "tool")
                             put("tool_call_id", tc.id)
@@ -2474,6 +2851,16 @@ private fun executeToolInTurn(
                                 userText = text,
                             )
                         }
+                        // ★ 进「过程」（2026-10-10）：token 触顶是**框架替用户做的决定**
+                        //   （"我不再让它继续花钱"），此前只落任务快照与 logcat ——
+                        //   用户只看到回答突然变短，没有任何解释。
+                        //   用 FRAMEWORK 而不是 THINKING：不是模型在想，是框架叫停。
+                        onTrace?.invoke(
+                            AgentStep.framework(
+                                "token 预算用尽，就此收尾（${tokenBudget.summary()}）",
+                                id = "token_exhausted",
+                            )
+                        )
                         break
                     }
                     if (actionRounds >= MAX_ACTION_ROUNDS || readOnlyRounds >= MAX_READONLY_ROUNDS) {
@@ -2494,6 +2881,14 @@ private fun executeToolInTurn(
                             autoContinues++
                             readOnlyRounds = 0
                             actionRounds = 0
+                            // ★ 进「过程」（2026-10-10）：自动续做是**框架追加了预算**，
+                            //   用户看到的现象是"它怎么还在跑"—— 不说就会以为死循环。
+                            onTrace?.invoke(
+                                AgentStep.framework(
+                                    "工具轮次额度已自动追加，继续执行剩余步骤",
+                                    id = "auto_continue_$autoContinues",
+                                )
+                            )
                             messages.put(JSONObject().apply {
                                 put("role", "user")
                                 put(
@@ -2561,6 +2956,8 @@ private fun executeToolInTurn(
                     // 总结轮里模型给出的正文。不能用「最后一轮的 content」代替 —— 末轮若只调了工具，
                     // content 为空，而前一轮的结论句其实是有效的（旧实现会连它一起丢掉）。
                     var summaryText: String? = null
+                    // 收尾占位是否真的发出去过（决定要不要补一条 summaryDone 结清它）
+                    var summaryStepShown = false
                     // 收尾阶段摘掉出图工具（look_at_view / capture_screen）：总结轮没有
                     // takePendingImage 的带图注入链，模型调了只会得到「图片会随本条消息一起交给你」
                     // 的空头承诺 —— 图片永不投递，模型极易幻觉描述画面。收尾唯一必要动作是
@@ -2618,6 +3015,17 @@ private fun executeToolInTurn(
                         agentTurn?.recordModelCall(finalTurn?.usage)
                         // 先留下正文（模型可能一边调工具一边给结论），再判断是否继续
                         finalTurn?.content?.takeIf { it.isNotBlank() }?.let { summaryText = it }
+                        // ★ 收尾阶段也要进「过程」（2026-10-10）。此前这段跑工具完全静默：
+                        //   过程卡片停在主循环最后一个 THINKING:OK 上，用户以为已经答完了，
+                        //   而模型实际上还在最多 [SUMMARY_MAX_ROUNDS] 轮里写着文件
+                        //   （每轮最长 [CODE_GEN_READ_TIMEOUT_MS]）—— 界面看着空转。
+                        // 用 [AgentStep.Kind.SUMMARY] 而非 THINKING：这次等待的语义是
+                        //   「框架在补跑落盘」，不是「模型在想」—— 用 THINKING 会让用户
+                        //   以为它还在推理，而实际它在写文件。
+                        if (!finalTurn?.toolCalls.isNullOrEmpty()) {
+                            onTrace?.invoke(AgentStep.summaryRunning())
+                            summaryStepShown = true
+                        }
                         // 收尾轮逐轮打点：这一阶段此前没有任何日志，出问题时只能从"没有输出"反推
                         Log.i(
                             TAG,
@@ -2646,7 +3054,42 @@ private fun executeToolInTurn(
                         messages.put(assistantMsg)
                         // 同步执行本轮工具调用并回填结果（总结轮工具极少，无需并发）
                         finalTurn.toolCalls.forEach { tc ->
+                            // ★ 收尾轮的工具也进「过程」（与主循环同一条通道，见上方说明）。
+                            //   这是目前**唯一**能看到"文件还在陆续落盘"的地方 ——
+                            //   收尾最多跑 3 轮、每轮可达 120s，此前这段时间界面完全无反馈。
+                            val isSumCodeFile = tc.name == ToolRegistry.TOOL_CODE_FILE
+                            val sumBase = if (isSumCodeFile) null else artifactBaseDirOf(tc.arguments)
+                            // save_code_file 的产物走专用提取（参数是 project+file，不在通用表里）；
+                            // 不传的话 tool() 会把含源码正文的原始参数漏进过程行。
+                            val sumArtifacts = if (isSumCodeFile) {
+                                saveCodeArtifact(tc.arguments, succeeded = false)
+                            } else {
+                                null
+                            }
+                            onTrace?.invoke(
+                                AgentStep.tool(
+                                    tc.id, tc.name, AgentStep.State.RUNNING,
+                                    argsRaw = tc.arguments, artifactBaseDir = sumBase,
+                                    artifacts = sumArtifacts,
+                                )
+                            )
                             val out = runToolInTurn(tc, agentTurn, execCtx)
+                            onTrace?.invoke(
+                                AgentStep.tool(
+                                    tc.id,
+                                    tc.name,
+                                    if (AgentStep.isFailureResult(out)) AgentStep.State.FAILED
+                                    else AgentStep.State.OK,
+                                    argsRaw = tc.arguments,
+                                    result = out,
+                                    artifactBaseDir = sumBase,
+                                    artifacts = if (isSumCodeFile) {
+                                        saveCodeArtifact(tc.arguments, out.startsWith("已生成"))
+                                    } else {
+                                        null
+                                    },
+                                )
+                            )
                             // 兜底排水：schema 已摘但模型凭记忆复述出图工具名时仍会真执行 ——
                             // ThreadLocal 里的图必须取走（否则滞留到同线程后续轮），并把空头承诺
                             // 纠正成明确的事实，防止模型幻觉描述画面
@@ -2698,6 +3141,15 @@ private fun executeToolInTurn(
                             }
                         }
                     }
+                    // 收尾结束：结清那条「收尾中」占位（同 key 覆盖，不需要单独的收尾调用）。
+                    // ⚠️ **无论有没有产物都要结清** —— 收尾轮 break 有多条出口
+                    // （无工具调用 / 用完 SUMMARY_MAX_ROUNDS / 请求失败），
+                    // 漏一条就留下一颗永远转圈的点。
+                    if (summaryStepShown) {
+                        onTrace?.invoke(
+                            AgentStep.summaryDone(genFilesByProject.values.sumOf { it.size })
+                        )
+                    }
                     // 全程没有正文时先留空，交给下方 finalizeCodeGenReply / 最终兜底决定。
                     // 不能在这里就填固定兜底文案：那串文案只有 23 字符、也不像代码，
                     // finalizeCodeGenReply 会把它当「模型给出的正常结论句」原样保留，
@@ -2746,10 +3198,28 @@ private fun executeToolInTurn(
                         }
                     }.onFailure { Log.w(TAG, "codegen file cards failed: ${it.message}") }
                 }
+                // ★ 终态护栏（2026-10-09，P0-1）：**内部标记永不进入用户可见文本**。
+                // 这是唯一的出口 —— 显示、眼镜 TTS、会话记忆三处都从这里取（看下一行的 replyRef）。
+                // 为什么放在终态而不是只在升级分支拦：标记的变形无穷（下划线/空格/连字符/大小写），
+                // 只有"它最后变成了要播给用户的那段文本"这个位置能穷尽所有情形。
+                // 循环内已尽力消化（升级 / 硬引导）；走到这里说明都没成功 —— 那就如实兜底，
+                // 而不是把 `[NEED_TOOLS]` 播给用户（gps-live 事故正是漏在这一步）。
+                val leakedBeforeStrip = com.rokidlab.phone.ai.InternalMarkerGuard.isMarkerOnly(reply)
+                if (leakedBeforeStrip) {
+                    markerLeakSeen = true
+                    Log.w(TAG, "internal marker reached final reply, stripping: ${reply.take(40)}")
+                }
+                // 宽清洗：连"我看看…\n[NEED_TOOLS]"这种带前缀的形态也剥掉（防漏）
+                reply = com.rokidlab.phone.ai.InternalMarkerGuard.stripMarkers(reply)
                 // 走到这里仍无正文 = 模型既没给结论、也没落盘过文件（codeGenUsed=false 时
                 // finalizeCodeGenReply 不会兜底）：只有这种情况才用固定兜底文案。
                 if (reply.isBlank()) {
-                    reply = "抱歉，我暂时无法处理这个问题，请换个说法再试一次。"
+                    reply = if (markerLeakSeen) {
+                        // 标记轮如实告知"没做成"，而不是"请换个说法" —— 后者会误导用户以为是提问方式的问题
+                        "抱歉，这次我没能完成。我已经拿到了需要的工具但仍没给出结论，请再说一次，或把要求拆小一点。"
+                    } else {
+                        "抱歉，我暂时无法处理这个问题，请换个说法再试一次。"
+                    }
                 }
                 // 剥离模型偶发输出的包裹标签（如 `<answer>…</answer>`）。
                 // 放在「落 replyRef 之前」＝显示、语音播报、会话记忆三处统一拿到干净文本。
@@ -2761,9 +3231,15 @@ private fun executeToolInTurn(
                 // 收尾本轮事件流：落 [AssistantMessage] + [TurnEnd]，并做压力裁剪
                 // （= 改造前 recordTurn 里那一步 trim）。工具轨迹不再单独存一份字符串列表 ——
                 // 它由本轮的 ToolCall 事件派生（同一条事实只留一个出处）。
+                // ⚠️ P0-1：本轮出现过标记泄漏 ⇒ **不得记 COMPLETED** ——
+                // 记"已完成"等于对用户和后续排查都说谎（gps-live 案 5 轮全是 completed，
+                // 单看事件流完全看不出"它其实什么也没产出"）。
                 agentTurn?.finish(
-                    if (budgetExhausted) com.rokidlab.phone.ai.session.TurnEndReason.BUDGET_EXHAUSTED
-                    else com.rokidlab.phone.ai.session.TurnEndReason.COMPLETED,
+                    when {
+                        budgetExhausted -> com.rokidlab.phone.ai.session.TurnEndReason.BUDGET_EXHAUSTED
+                        markerLeakSeen -> com.rokidlab.phone.ai.session.TurnEndReason.FAILED
+                        else -> com.rokidlab.phone.ai.session.TurnEndReason.COMPLETED
+                    },
                     reply,
                 )
                 // 任务终态结算（缺口「长任务可恢复」）：计划步骤全 done 或没有计划 → 完成；

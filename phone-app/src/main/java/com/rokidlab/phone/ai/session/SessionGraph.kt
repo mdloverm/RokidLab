@@ -262,6 +262,15 @@ internal object SessionGraph {
                     }
                 }
             }
+
+            // 自我纠偏：归 LIFECYCLE（框架在这一轮做的决定，与开始/结束同类）。
+            // ⚠️ 不新增 Kind：Kind 只被 UI 用来选颜色/图标，这里没有新语义需要新分类，
+            //   而新增取值会牵动所有 when(Kind) 的消费点。
+            is Reflect -> {
+                kind = Kind.LIFECYCLE
+                title = "自我纠偏（${e.trigger}）"
+                detail = "${e.detail}\n→ ${e.action}"
+            }
         }
         return Node(
             seq = r.seq,

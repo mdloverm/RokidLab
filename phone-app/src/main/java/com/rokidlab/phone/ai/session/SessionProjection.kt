@@ -159,6 +159,9 @@ internal class SessionProjection(private val records: List<SessionRecord>) {
                 // 授权留痕是**审计事实**，不是给模型看的上下文：
                 // 塞进 messages 会让每轮白烧 token，且模型不需要知道"上次是谁点头的"。
                 is SideEffectIntent,
+                // 自我纠偏同理：干预话术**已经作为 user 消息**在 messages 里了，
+                // 这里再投影一次会让模型在同一次请求里读到两遍同一句话。
+                is Reflect,
                 -> Unit
             }
         }

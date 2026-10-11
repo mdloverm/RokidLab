@@ -249,6 +249,24 @@
                 android:resource="@xml/lab_accessibility_service" />
         </service>
 
+        <!-- 通知使用权服务：「消息摘要」主动能力的**事件源**。用户在系统「设置 → 通知使用权」
+             里手动开一次（走 PermissionRequestActivity 的直达页），之后一直有效。
+             与无障碍同形状，两条不可改的声明细节：
+             ① `android:permission=BIND_NOTIFICATION_LISTENER_SERVICE`：只有系统能 bind 我们。
+                漏了它，任何 App 都能 bind → 等于把"读全部通知内容"公开出去。
+             ② `exported=true` + intent-filter：通知使用权是**系统主动绑定**的，必须能被系统发现。
+             ⚠️ 未授权时系统根本不会 bind 本服务 —— 即"没授权 = 完全不采集"，
+                不存在先采集后判断的窗口。 -->
+        <service
+            android:name=".proactive.LabNotificationListenerService"
+            android:exported="true"
+            android:label="@string/notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- 后台保活前台服务：通知栏常驻，保证 Lab 全部后台能力（语音助手/蓝牙 HID/ADB 工具/定时任务）不被系统回收 -->
         <service
             android:name=".keepalive.LabKeepAliveService"

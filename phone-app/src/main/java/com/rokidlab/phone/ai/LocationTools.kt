@@ -53,12 +53,82 @@ object LocationTools {
      * 获取当前位置的人话描述。永不在权限缺失时静默失败 —— 返回带引导的说明，
      * 由模型如实转告用户去授权（与 PhoneTools 的权限处理保持一致）。
      */
-    fun getLocation(context: Context): String {
+    fun getLocation(context: Context): String = getLocationText(context)
+
+    /**
+     * 取位置，按 [format] 分流（2026-10-09，P0-4）：
+     *  - `"text"`（默认）= 一句中文，给模型转述用（**逐字保持改造前的文案**，不改行为）；
+     *  - `"json"` = 结构化对象，给 **AIUI 页面**直接消费。
+     *
+     * 为什么需要 json：改造前只返回一句话（`当前位置：地址（纬度 x，经度 y，精度 ±n 米，来源 gps）`），
+     * 而页面要画经纬度/精度/速度/里程就得**正则去抠那句中文** —— 天然不可靠，且文案一改就崩。
+     * gps-live 事故里页面正是因为抠不出数值，主界面全空而用户只看到"拿不到位置"。
+     */
+    fun getLocation(context: Context, format: String): String =
+        if (format.equals("json", ignoreCase = true)) getLocationJson(context) else getLocationText(context)
+
+    private fun getLocationText(context: Context): String {
+        val fix = resolveFix(context)
+        fix.error?.let { return it }
+        val loc = fix.loc ?: return "定位服务没有返回坐标，按网络出口推断大致位置：${fix.ipText.orEmpty()}"
+        val coord = formatCoordinate(loc)
+        val addr = reverseGeocode(context, loc.latitude, loc.longitude)
+        return if (addr.isNullOrBlank()) "当前位置：$coord" else "当前位置：$addr（$coord）"
+    }
+
+    /**
+     * 结构化输出。**字段口径与 AIUI 页面约定一致**（页面直接 `JSON.parse` 取字段即可）。
+     *
+     * 成功：`{"ok":true,"latitude":…,"longitude":…,"accuracy":…,"altitude":…,"speed":…,
+     *        "bearing":…,"provider":"gps","timestamp":…,"address":"…"}`
+     * 失败：`{"ok":false,"error":"<人话原因>"}` —— 原因与 text 版**逐字一致**，
+     * 页面可原样显示，也可据此分支（如提示开定位开关）。
+     *
+     * ⚠️ 可选字段（altitude/speed/bearing/accuracy/address）**不保证存在**，页面必须按可空处理；
+     * 且**不放 NaN/Infinity**（会产出非法 JSON，`JSON.parse` 直接抛错）。
+     */
+    private fun getLocationJson(context: Context): String {
+        val o = JSONObject()
+        val fix = resolveFix(context)
+        fix.error?.let {
+            o.put("ok", false)
+            o.put("error", it)
+            return o.toString()
+        }
+        val loc = fix.loc
+        if (loc == null) {
+            o.put("ok", false)
+            o.put("error", "定位服务没有返回坐标（网络出口推断：${fix.ipText.orEmpty()}）")
+            return o.toString()
+        }
+        o.put("ok", true)
+        o.put("latitude", loc.latitude)
+        o.put("longitude", loc.longitude)
+        o.put("timestamp", loc.time)
+        if (loc.hasAccuracy()) o.put("accuracy", loc.accuracy.toDouble())
+        if (loc.hasAltitude()) o.put("altitude", loc.altitude)
+        if (loc.hasSpeed() && loc.speed.isFinite()) o.put("speed", loc.speed.toDouble())
+        if (loc.hasBearing() && loc.bearing.isFinite()) o.put("bearing", loc.bearing.toDouble())
+        loc.provider?.takeIf { it.isNotBlank() }?.let { o.put("provider", it) }
+        // 逆地理编码可能耗时（网络兜底最长 6s）：页面若只要坐标可用 format=json 且忽略 address
+        reverseGeocode(context, loc.latitude, loc.longitude)?.let { o.put("address", it) }
+        return o.toString()
+    }
+
+    /**
+     * 取位置结果的**唯一产地**：把"权限 → 服务 → 缓存/实时 → IP 兜底"这一串收敛成一次调用。
+     *
+     * 抽出来的动机：text 与 json 两条输出**必须共用同一套取数逻辑**，
+     * 否则两条路的降级行为会漂（一个说"没权限"另一个给 IP 结果）。
+     *
+     * @return [Fix]：三选一 —— `loc` 有坐标 / `ipText` 有兜底城市 / `error` 有人话原因（前两者皆无）
+     */
+    private fun resolveFix(context: Context): Fix {
         if (!hasLocationPermission(context)) {
             // 缺权限时**自动拉起系统授权框**（旧实现只回一句"请去设置里开"）。
             // 注意 Android 12+ 请求 FINE 必须同时请求 COARSE，否则系统直接判拒绝且不弹窗 ——
             // 这对伴随权限由 AppPermission.LOCATION 统一声明。
-            return PermissionBridge.ensure(
+            val reason = PermissionBridge.ensure(
                 context,
                 context.getString(R.string.permission_reason_location),
                 AppPermission.LOCATION,
@@ -66,26 +136,33 @@ object LocationTools {
                 R.string.permission_need_manual_open,
                 context.getString(R.string.permission_label_location),
             )
+            return Fix(null, null, reason)
         }
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-            ?: return "本机不支持定位服务"
+            ?: return Fix(null, null, "本机不支持定位服务")
 
-        val loc = bestLocation(lm)
-        if (loc != null) {
-            val coord = formatCoordinate(loc)
-            val addr = reverseGeocode(context, loc.latitude, loc.longitude)
-            return if (addr.isNullOrBlank()) "当前位置：$coord" else "当前位置：$addr（$coord）"
-        }
+        bestLocation(lm)?.let { return Fix(it, null, null) }
 
         // 系统定位无可用结果（未开定位开关 / 无缓存 / 无卫星信号）→ IP 定位兜底，至少给出城市
         val ipText = ipBasedLocation()
-        if (!ipText.isNullOrBlank()) {
-            return "定位服务没有返回坐标，按网络出口推断大致位置：$ipText"
+        return if (!ipText.isNullOrBlank()) {
+            Fix(null, ipText, null)
+        } else {
+            Fix(
+                null,
+                null,
+                "暂时无法获取位置：系统定位无可用结果，网络定位也失败。" +
+                    "请确认手机已打开定位开关（下拉通知栏的「位置信息」）后重试",
+            )
         }
-
-        return "暂时无法获取位置：系统定位无可用结果，网络定位也失败。" +
-            "请确认手机已打开定位开关（下拉通知栏的「位置信息」）后重试"
     }
+
+    /** [resolveFix] 的三态结果：坐标 / IP 兜底文本 / 人话错误原因（互斥，见各分支） */
+    private data class Fix(
+        val loc: Location?,
+        val ipText: String?,
+        val error: String?,
+    )
 
     /**
      * 供天气等工具「自动定位兜底」用：返回系统定位坐标（缓存→实时定位），

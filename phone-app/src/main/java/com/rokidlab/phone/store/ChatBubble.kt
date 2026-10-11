@@ -28,8 +28,13 @@ import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Compress
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Report
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -44,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -268,6 +274,8 @@ private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, ex
     // null = 用户没单独动过这张卡 ⇒ 跟随设置页默认值；非 null = 用户点过 ⇒ 以他为准
     var manual by remember(msgId) { mutableStateOf<Boolean?>(null) }
     val expanded = manual ?: expandByDefault
+    // 是否已点开"看全部步骤"（默认只显示"最近若干步 + 文件操作"，见 [visibleTraceSteps]）
+    var showAll by remember(msgId) { mutableStateOf(false) }
     // AWAITING_CONFIRM 也算"进行中" —— 它同样在等一个外部回应（用户点头），
     // 若不算，卡片会提前收起那颗转圈点，用户反而看不到"正在等你确认"。
     val running = steps.any {
@@ -325,22 +333,63 @@ private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, ex
             }
         }
         if (expanded) {
-            val hidden = steps.size - MAX_VISIBLE_STEPS
-            if (hidden > 0) {
+            val shown = visibleTraceSteps(steps, showAll)
+            val folded = steps.size - shown.size
+            // ★ 被折叠的步骤必须有**出口**（2026-10-10 用户反馈："折叠的过程现在不能再展开"）：
+            //   只写一行"另有 N 步已折叠"却不给点击入口，等于把过程的一部分永久藏起来 ——
+            //   而用户想查"它到底做了什么"时，缺的往往正是那几步。
+            if (folded > 0 || (showAll && steps.size > MAX_VISIBLE_STEPS)) {
+                // 缩进到与步骤正文同列、且**不再加第二个箭头**：卡片标题已经有一枚箭头，
+                // 同一列里并排两枚箭头（一枚管整卡、一枚管折叠步骤）用户分不清谁管谁。
+                // 可点性改用颜色表达 —— 与产物芯片的链接色同一套（BrewChat）。
                 Text(
-                    text = stringResource(R.string.chat_trace_more, hidden),
-                    color = BrewDim,
+                    text = if (folded > 0) {
+                        stringResource(R.string.chat_trace_more, folded)
+                    } else {
+                        stringResource(R.string.chat_trace_less)
+                    },
+                    color = BrewChat,
                     fontSize = 11.sp,
-                    modifier = Modifier.padding(top = 6.dp),
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .clip(RoundedCornerShape(BrewRadiusSmall))
+                        .clickable { showAll = !showAll }
+                        .padding(start = 22.dp, top = 2.dp, bottom = 2.dp),
                 )
             }
-            steps.takeLast(MAX_VISIBLE_STEPS).forEach { step ->
+            shown.forEach { step ->
                 // update_plan 渲染成勾选清单，不进工具时间线（「执行 update_plan…」是黑话）
-                if (step.kind == AgentStep.Kind.PLAN) PlanStepCard(step) else TraceStepRow(step)
+                when {
+                    step.kind == AgentStep.Kind.PLAN -> PlanStepCard(step)
+                    // ★ 命令类工具走专用命令卡（shell 图标 + monospace 命令 + 状态徽标 + 可展开输出），
+                    //   判据是 command 非空 —— 旧历史（本字段落地前）为 null ⇒ 自动退回通用行。
+                    step.command != null -> CommandStepCard(step)
+                    else -> TraceStepRow(step)
+                }
             }
             TraceCostLine(usage)
         }
     }
+}
+
+/**
+ * 过程卡片展开时渲染哪些步骤。
+ *
+ * ## 为什么不是简单取「最近 N 步」（2026-10-10 用户反馈）
+ * 文件操作（新建 / 修改 / 删除，即带 [AgentStep.artifacts] 的步骤）是用户最关心的
+ * "它到底动了什么"，但它们通常集中在一轮的**前段**；收尾阶段的命令 / 思考会把它们挤出
+ * `takeLast(N)` 的窗口 —— 用户看到的最后 6 步全在跑命令，文件操作凭空消失
+ *（用户原话："文件操作的过程看不到了"）。
+ * ⇒ **文件操作步骤恒可见**，其余步骤只保留最近 [MAX_VISIBLE_STEPS] 条，
+ *   合并后仍按原始时间顺序（不重排，过程必须读得出先后）。
+ *
+ * @return 可见步骤（保持发生顺序）；被略过的条数由调用方按「总步数 − 可见数」如实显示
+ * @param showAll 用户已点开"看全部"⇒ 原样返回，交给对面那行折叠入口去收起
+ */
+internal fun visibleTraceSteps(steps: List<AgentStep>, showAll: Boolean = false): List<AgentStep> {
+    if (showAll || steps.size <= MAX_VISIBLE_STEPS) return steps
+    val keepFrom = steps.size - MAX_VISIBLE_STEPS
+    return steps.filterIndexed { i, step -> i >= keepFrom || step.artifacts.isNotEmpty() }
 }
 
 /**
@@ -484,6 +533,14 @@ private fun TraceStepRow(step: AgentStep) {
                         // 用户需要区分"它在想" vs"框架改了我的上下文"）
                         AgentStep.Kind.COMPRESS -> Icons.Outlined.Compress
                         AgentStep.Kind.PLAN -> Icons.Outlined.Checklist
+                        // 收尾：旗子 —— "框架在补跑落盘"，不是模型在思考
+                        AgentStep.Kind.SUMMARY -> Icons.Outlined.Flag
+                        // 框架行为：设置齿轮 —— 是**框架**在重试/降载，不是模型决定的
+                        AgentStep.Kind.FRAMEWORK -> Icons.Outlined.Settings
+                        // 上下文注入：数据库 —— 回答"它凭什么知道这些"
+                        AgentStep.Kind.MEMORY -> Icons.Outlined.Storage
+                        // 自省：报表图标 —— "框架发现它自己有问题"，必须显眼
+                        AgentStep.Kind.REFLECT -> Icons.Outlined.Report
                     },
                     contentDescription = null,
                     tint = color,
@@ -533,8 +590,173 @@ private fun TraceStepRow(step: AgentStep) {
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
+            // ★ 文件产物（2026-10-10）：可点开预览的文件芯片。
+            //   放在 detail **之后**而不是之前：detail 是"这一步发生了什么"，
+            //   芯片是"它动了哪些文件" —— 后者是对前者的展开，不该抢主位。
+            //   非 TOOL 类步骤（思考/计划/压缩）不会有 artifacts，这里天然短路。
+            ArtifactChips(step.artifacts)
         }
     }
+}
+
+/**
+ * 命令类工具（[AgentStep.command] 非空）的**专用命令卡**。
+ *
+ * ## 为什么单独一张卡（对齐 Claude Code / Cursor / Warp 的「命令块」）
+ * 通用工具行把「命令」和「退出码」拍平进一句 [AgentStep.detail]：没有 monospace 区分、
+ * 没有独立状态位 —— 跟"读取文件"长得一模一样，用户读不出"它在跑一条命令"。
+ * 这张卡把三者分开：shell 图标 + 命令（monospace 内嵌块）+ 状态徽标 + 可展开的输出。
+ *
+ * ## 输出默认收起（2026-10-10 用户拍板）
+ * 命令回显可能是长日志（落盘已按 [AgentStep.MAX_OUTPUT_CHARS] 截断），直接铺开会把对话
+ * 撑成瀑布。收起时只留**首行**（通常是「退出码 0」），点"展开输出"看其余行。
+ *
+ * ⚠️ [AgentStep.output] 是**展示副本**，只在本机渲染 —— 不进模型上下文，不消耗 token。
+ */
+@Composable
+private fun CommandStepCard(step: AgentStep) {
+    val color = when (step.state) {
+        AgentStep.State.RUNNING -> BrewAmber
+        // 与 RUNNING 同色，但文案是"等你确认"（见 AgentStep.State.AWAITING_CONFIRM）
+        AgentStep.State.AWAITING_CONFIRM -> BrewAmber
+        AgentStep.State.OK -> BrewSuccess
+        AgentStep.State.FAILED -> BrewRed
+        // 中性：用户自己点的取消不是错误，不该显示成红色失败
+        AgentStep.State.CANCELLED -> BrewMuted
+    }
+    var expanded by remember(step.key) { mutableStateOf(false) }
+    // 首行 = 摘要（「退出码 0」这类，收起时也显示）；其余行 = 点开才看的部分
+    val lines = step.output.orEmpty().lines()
+    val headIdx = lines.indexOfFirst { it.isNotBlank() }
+    val summary = if (headIdx >= 0) lines[headIdx].trim() else ""
+    val rest = if (headIdx >= 0) lines.drop(headIdx + 1).joinToString("\n").trim() else ""
+    val expandable = rest.isNotBlank()
+    // 是否被落盘截断：与 AgentStep.clipKeepLines 的阈值同源（见 MAX_OUTPUT_CHARS）
+    val truncated = (step.output?.length ?: 0) >= AgentStep.MAX_OUTPUT_CHARS
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 7.dp)
+            .clip(RoundedCornerShape(BrewRadiusSmall))
+            .background(BrewPanelAlt)
+            .border(1.dp, BrewBorder, RoundedCornerShape(BrewRadiusSmall))
+            .padding(horizontal = 9.dp, vertical = 7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Outlined.Terminal,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(13.dp),
+            )
+            Spacer(Modifier.width(5.dp))
+            Text(
+                text = stepText(step),
+                color = BrewText,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = cmdStateLabel(step.state),
+                color = color,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+        }
+        // 命令本体：monospace + 内嵌底色块 —— "这是一条命令"的形状语言
+        step.command?.takeIf { it.isNotBlank() }?.let { cmd ->
+            Spacer(Modifier.height(5.dp))
+            Text(
+                text = cmd,
+                color = BrewTextBright,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(BrewRadiusSmall))
+                    .background(BrewBg)
+                    .padding(horizontal = 7.dp, vertical = 5.dp),
+            )
+        }
+        // 「等你确认」这类说明（[AgentStep.awaitingConfirm] 的 detail）照实显示
+        if (step.detail.isNotBlank()) {
+            Text(
+                text = step.detail,
+                color = BrewMuted,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        if (summary.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = summary,
+                color = if (step.state == AgentStep.State.OK) BrewMuted else color,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (expandable && expanded) {
+            Text(
+                text = rest,
+                color = BrewMuted,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 30,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 3.dp),
+            )
+            if (truncated) {
+                Text(
+                    text = stringResource(R.string.chat_cmd_output_truncated),
+                    color = BrewDim,
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+        if (expandable) {
+            Text(
+                text = stringResource(
+                    if (expanded) R.string.chat_cmd_output_collapse else R.string.chat_cmd_output_expand,
+                ),
+                color = BrewDim,
+                fontSize = 10.sp,
+                modifier = Modifier
+                    .padding(top = 3.dp)
+                    .clickable { expanded = !expanded },
+            )
+        }
+    }
+}
+
+/** 命令卡右上角的状态徽标文案（配色与 [CommandStepCard] 同源） */
+@Composable
+private fun cmdStateLabel(state: AgentStep.State): String = when (state) {
+    AgentStep.State.RUNNING -> stringResource(R.string.chat_trace_tool_running)
+    AgentStep.State.AWAITING_CONFIRM -> stringResource(R.string.chat_trace_tool_awaiting_confirm)
+    AgentStep.State.OK -> stringResource(R.string.chat_cmd_state_ok)
+    AgentStep.State.FAILED -> stringResource(R.string.chat_cmd_state_failed)
+    AgentStep.State.CANCELLED -> stringResource(R.string.chat_trace_tool_cancelled)
 }
 
 /**
@@ -659,7 +881,7 @@ private fun stepText(step: AgentStep): String {
  */
 @Composable
 private fun stepLabel(step: AgentStep): String = when {
-    // 知识库检索（自动 RAG）：标题恒为空，文案在这里本地化。
+    // —— 知识库检索（自动 RAG）：标题恒为空，文案在这里本地化。——
     // 两态刻意都只是"检索了/在检索"，**不**在标题里说"命中/没命中" ——
     // 命中与否是数据，放在 detail 里（用户核对来源用），标题只描述动作。
     step.kind == AgentStep.Kind.KNOWLEDGE && step.state == AgentStep.State.RUNNING ->
@@ -669,6 +891,23 @@ private fun stepLabel(step: AgentStep): String = when {
 
     // 压缩历史：标题说动作，细节（压了多少/失败）在 detail 里
     step.kind == AgentStep.Kind.COMPRESS -> stringResource(R.string.chat_trace_compress_done)
+
+    // ★ 收尾阶段（2026-10-10）：标题恒为空（AgentStep.SUMMARY_STEP_TITLE），
+    //   文案在 UI 本地化。与"正在思考"**刻意区分**：这一段是框架在补跑文件落盘，
+    //   用户误以为"它还在想"就会以为早该结束了。
+    step.kind == AgentStep.Kind.SUMMARY && step.state == AgentStep.State.RUNNING ->
+        stringResource(R.string.chat_trace_summary_running)
+
+    step.kind == AgentStep.Kind.SUMMARY -> stringResource(R.string.chat_trace_summary_done)
+
+    // ★ 框架行为（重试 / 路由降载 / 预算追加）：标题恒为空，detail 是人话短语
+    step.kind == AgentStep.Kind.FRAMEWORK -> stringResource(R.string.chat_trace_framework)
+
+    // ★ 上下文注入：标题恒为空，detail 只含**来源摘要**（不含注入内容，见 AgentStep.contextInjected）
+    step.kind == AgentStep.Kind.MEMORY -> stringResource(R.string.chat_trace_memory)
+
+    // ★ 自省：框架发现了自己的问题（重复调用 / 标记泄漏 / 诉求与动作不匹配）
+    step.kind == AgentStep.Kind.REFLECT -> stringResource(R.string.chat_trace_reflect)
 
     // ★ 「等你点头」与「已取消」独立成文案（2026-10-06 审计修）：
     // 确认等待是 18~40s 的同步阻塞，若沿用"执行中…"，用户看到的是一个

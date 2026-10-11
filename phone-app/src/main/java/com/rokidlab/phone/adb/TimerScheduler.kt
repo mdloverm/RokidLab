@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
 import java.util.Calendar
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -60,6 +61,63 @@ class TimerScheduler(private val appContext: Context) {
 
         /** 倒计时任务错过后的补跑宽限（毫秒）。 */
         private const val COUNTDOWN_MISSED_GRACE_MS = 60 * 60 * 1000L
+
+        /**
+         * `dayEpochDay` 的合理取值上限（LocalDate.now().toEpochDay() 目前约 2 万）。
+         * 超出这个量级说明模型写了个荒谬的数（毫秒时间戳、空串被 optLong 解析成 0 之外的值等），
+         * 此时**静默退回旧的「今天/明天」语义**而不是算出 1970 年那天。
+         */
+        private const val MAX_PLAUSIBLE_EPOCH_DAY = 100_000L
+
+        /**
+         * 「指定日期 + 时分」→ 下一次触发的 epoch ms。**纯函数**（无 Android 依赖），
+         * 放在 companion 是为了让它能被 JVM 单测直接覆盖 —— 它是「周五不会排到明天」
+         * 这条不变式的**唯一**实现点，藏在需要 Context 的私有实例方法里就等于没有测试保护。
+         *
+         * ## 硬不变式：**返回值必定 > [nowMs]**
+         * 这是比「尊重日期」更优先的约束 —— 把过去时刻交给 AlarmManager 会立刻触发
+         * （或静默丢弃），两种都是 bug。所以：
+         *  1. 指定日期那一刻**在未来** → 就用它（这是「周五排到周五」的正路）；
+         *  2. 那一刻**已过**（今天该点已过，或模型给了过去的日期）→ 退回「下一次该时刻」
+         *     语义（今天未过则今天、否则明天）。**不是**简单 +1 天 —— 对过去的日期
+         *     `+1 天` 仍在过去，等于把死时间交给闹钟。
+         *  3. 荒谬的 epochDay → 由调用方 [nextFixedTime] 挡在门外，不进来。
+         *
+         * ⚠️ 从 [nowMs] **重建**当天时刻，而不是在"今天该点"上逐项 set —— 后者会沿用
+         * 今天此刻的时区偏移，跨夏令时切换日会把时刻错开 1 小时。
+         */
+        internal fun resolveDatedFixedTime(
+            dayEpochDay: Long,
+            hour: Int,
+            minute: Int,
+            nowMs: Long,
+            zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+        ): Long {
+            val tz = java.util.TimeZone.getTimeZone(zone)
+            val today = LocalDate.now(zone)
+            val wanted = today.plusDays(dayEpochDay - today.toEpochDay())
+            val dated = Calendar.getInstance(tz).apply {
+                timeInMillis = nowMs
+                set(Calendar.YEAR, wanted.year)
+                set(Calendar.MONTH, wanted.monthValue - 1)
+                set(Calendar.DAY_OF_MONTH, wanted.dayOfMonth)
+                set(Calendar.HOUR_OF_DAY, hour)
+                set(Calendar.MINUTE, minute)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            if (dated.timeInMillis > nowMs) return dated.timeInMillis
+            // 指定时刻已过 → 退回「下一次该时刻」，保证返回值必定在未来
+            val next = Calendar.getInstance(tz).apply {
+                timeInMillis = nowMs
+                set(Calendar.HOUR_OF_DAY, hour)
+                set(Calendar.MINUTE, minute)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            if (next.timeInMillis <= nowMs) next.add(Calendar.DAY_OF_YEAR, 1)
+            return next.timeInMillis
+        }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -189,7 +247,19 @@ class TimerScheduler(private val appContext: Context) {
         arm(task.id, triggerAt)
     }
 
-    /** 计算下一个未来的固定时刻（今天该点未过→今天，否则明天） */
+    /**
+     * 计算下一次触发的绝对时刻。
+     *
+     * 三条语义（[s.dayEpochDay] 为 null / 指定日期 / 已过期）：
+     *  1. **指定了日期**（`dayEpochDay != null`）→ 就落在那一天该点，**不再顺延**。
+     *     这是「周五要交报告」能被正确排到周五的关键。
+     *  2. 未指定日期 → 今天该点未过则今天，否则明天（旧的闹钟语义）。
+     *  3. **指定日期已过** → 顺延一天。这是刻意的兜底：模型把日期算错（比如把「下周五」
+     * 写成昨天）时，宁可**晚一天提醒**也不要让用户永远收不到 —— 但这种情况本该在
+     * 工具入口就被 [TimerToolProvider] 拒绝掉，这里只是不让它变成死任务。
+     *
+     * @return epoch ms；`dayEpochDay` 落在 1e12 之外（明显非法）时退回「今天/明天」语义
+     */
     private fun nextFixedTime(s: TimerSchedule.FixedTime, nowMs: Long): Long {
         val target = Calendar.getInstance().apply {
             timeInMillis = nowMs
@@ -197,6 +267,11 @@ class TimerScheduler(private val appContext: Context) {
             set(Calendar.MINUTE, s.minute)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
+        }
+        // 合理的 epochDay 量级：LocalDate 现在约 2e4，1e12 远超人可能写的日期
+        val day = s.dayEpochDay
+        if (day != null && day in -MAX_PLAUSIBLE_EPOCH_DAY..MAX_PLAUSIBLE_EPOCH_DAY) {
+            return resolveDatedFixedTime(day, s.hour, s.minute, nowMs)
         }
         if (target.timeInMillis <= nowMs) target.add(Calendar.DAY_OF_YEAR, 1)
         return target.timeInMillis
@@ -784,6 +859,9 @@ class TimerScheduler(private val appContext: Context) {
                 j.put("hour", s.hour)
                 j.put("minute", s.minute)
                 j.put("repeatDaily", s.repeatDaily)
+                // 只在**显式指定**时写：旧任务没有这个键，读出来走 has()=false → null → 旧语义。
+                // 若改成无条件写 0，0 是个合法 epochDay（1970-01-01），会把旧任务全部改成那天。
+                s.dayEpochDay?.let { j.put("dayEpochDay", it) }
             }
             is TimerSchedule.Countdown -> {
                 j.put("type", "countdown")
@@ -794,7 +872,13 @@ class TimerScheduler(private val appContext: Context) {
     }
 
     private fun parseSchedule(j: JSONObject): TimerSchedule = when (j.getString("type")) {
-        "fixed" -> TimerSchedule.FixedTime(j.optInt("hour", 8), j.optInt("minute", 0), j.optBoolean("repeatDaily", false))
+        // has() 而非 optLong：0 是合法 epochDay（1970-01-01），不能用「非 0 才算」来判断字段是否存在
+        "fixed" -> TimerSchedule.FixedTime(
+            hour = j.optInt("hour", 8),
+            minute = j.optInt("minute", 0),
+            repeatDaily = j.optBoolean("repeatDaily", false),
+            dayEpochDay = if (j.has("dayEpochDay")) j.optLong("dayEpochDay") else null,
+        )
         "countdown" -> TimerSchedule.Countdown(j.optLong("seconds", 60L))
         else -> TimerSchedule.Interval(j.optLong("seconds", 5L), j.optInt("count", 5))
     }

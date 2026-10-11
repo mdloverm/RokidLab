@@ -14,6 +14,9 @@ private const val K_ENABLED = "enabled"
 private const val K_STATE = "state"
 private const val K_STATE_SINCE = "state_since"
 
+/** 关怀提醒在决策门的类别键（同类最小间隔按此隔离） */
+private const val KIND_CARE = "care_reminder"
+
 /** IMU 判定窗口（移动/低头共用缓冲） */
 private const val MOTION_WINDOW_MS = 60_000L
 
@@ -31,8 +34,9 @@ private const val HEAD_DOWN_ANGLE_DEG = 20f
  * （久走/久坐/低头…），由模型生成贴合情境的一句关怀。
  * 未来新增事件（跌倒/瞌睡/跑步…）只需往 [collectEvents] 加检测分支，不改 UI 不改开关。
  *
- * 挂靠 [IdleGreeter] 的 30 分钟自检闹钟第②段；准入走 [ProactiveGate.ambientVisionAllowed]
- * （档位 OFF / 冷却期 / 免打扰 全拦）。IMU 数据不足时静默跳过（宁可不提醒）。
+ * 挂靠 [IdleGreeter] 的 30 分钟自检链第②段；准入走 [ProactiveGate.admitFreeProactive]
+ * （[ProactiveGatePolicy.Importance.LOW]：档位 OFF / 冷却期 / 响应惩罚 / 免打扰全拦，
+ * 同类间隔 ×2）。IMU 数据不足时静默跳过（宁可不提醒）。
  */
 class CareReminder private constructor(private val appContext: Context) {
     companion object {
@@ -91,8 +95,15 @@ class CareReminder private constructor(private val appContext: Context) {
 
         val events = collectEvents(moving, avgPitch, nowMs)
         if (events.isEmpty()) return
-        if (!ProactiveGate.get(appContext).ambientVisionAllowed(nowMs)) {
-            Log.i(TAG, "skip: gate suppress (level/cooldown/quiet), events=$events")
+        // 低价值事件（Importance.LOW）：免打扰内直接丢弃（不似日程顺延）、同类间隔 ×2、
+        // 响应惩罚期压制 —— 「关怀」是锦上添花，用户没回应时最该收敛的就是它。
+        val decision = ProactiveGate.get(appContext).admitFreeProactive(
+            KIND_CARE,
+            ProactiveGatePolicy.Importance.LOW,
+            nowMs,
+        )
+        if (decision !is GateDecision.Pass) {
+            Log.i(TAG, "skip: gate ${decision::class.simpleName}, events=$events")
             return
         }
         resetTimers(nowMs) // 提醒后重置累计，防连环

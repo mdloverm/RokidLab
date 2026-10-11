@@ -113,7 +113,7 @@ internal object FilesToolProvider : ToolProvider {
             statusText = "正在读取项目源码…",
             schema = toolSchema(
                 name = "read_code_file",
-                description = "读取对话中通过写文件工具生成的项目源码当前内容（读取手机本地的项目镜像，不改动任何文件）。当用户说“修改/改一下/调整/优化/重做/对之前的 XXX 不满意”而对象是之前生成过的代码项目或 AIUI 智能体应用时必须先调用本工具：不确定要改哪个文件时可只传 project（返回该项目的文件清单），确定后带 file 读取对应文件的完整内容，再基于读到的真实源码用“保存代码文件”工具(save_code_file)覆盖写回同一 project 的同一路径，最后用“安装 AIUI 项目”工具(install_aiui_project)重新安装到眼镜（改完可先用 open_aiui_app 传 target=phone 在手机上演示确认，再送到眼镜）。禁止凭印象或记忆整文件重编——必须先读现网源码再动手，只重写受影响的文件。",
+                description = "读取**手机本地**通过写文件工具生成的项目源码当前内容（读的是项目镜像，不改动任何文件）。⚠️ 读**眼镜**存储里的文本文件请用 read_glasses_file（用户没说哪一端时先问一句「是手机里的文件还是眼镜里的？」）。当用户说“修改/改一下/调整/优化/重做/对之前的 XXX 不满意”而对象是之前生成过的代码项目或 AIUI 智能体应用时必须先调用本工具：不确定要改哪个文件时可只传 project（返回该项目的文件清单），确定后带 file 读取对应文件的完整内容，再基于读到的真实源码用“保存代码文件”工具(save_code_file)覆盖写回同一 project 的同一路径，最后用“安装 AIUI 项目”工具(install_aiui_project)重新安装到眼镜（改完可先用 open_aiui_app 传 target=phone 在手机上演示确认，再送到眼镜）。禁止凭印象或记忆整文件重编——必须先读现网源码再动手，只重写受影响的文件。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -138,9 +138,10 @@ internal object FilesToolProvider : ToolProvider {
             statusText = "正在查看文件…",
             schema = toolSchema(
                 name = "list_files",
-                description = "列出文件。scope=\"project\"（默认）列出 App 生成过的项目工程目录（filesDir 私有镜像）；" +
+                description = "列出**手机本地**文件。scope=\"project\"（默认）列出 App 生成过的项目工程目录（filesDir 私有镜像）；" +
                     "scope=\"downloads\" 列出系统下载目录里本 App 生成的文件。project 可选（下载目录下传项目名可只看某个项目）；" +
-                    "path 可选（project 作用域下的子目录，如 pages/index）。用户问「我生成过哪些文件」「那个项目里有什么」时先用本工具。",
+                    "path 可选（project 作用域下的子目录，如 pages/index）。用户问「我生成过哪些文件」「那个项目里有什么」时先用本工具。" +
+                    "⚠️ 列**眼镜**存储里的文件请用 list_glasses_files。用户**没说哪一端时先问一句**「是手机里的文件还是眼镜里的？」。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -165,9 +166,10 @@ internal object FilesToolProvider : ToolProvider {
             statusText = "正在读取文件…",
             schema = toolSchema(
                 name = "read_text_file",
-                description = "读取一个文本文件的完整内容。scope=\"project\" 读 App 项目工程目录里的文件；" +
+                description = "读取一个**手机本地**文本文件的完整内容。scope=\"project\" 读 App 项目工程目录里的文件；" +
                     "scope=\"downloads\" 读系统下载目录里本 App 生成的文件（path 传相对路径，如 项目名/app.json 或 xxx.txt）。" +
-                    "读取前若不确定路径，先用 list_files 或 search_files 定位。**不要凭印象回答文件内容**——必须先读。",
+                    "读取前若不确定路径，先用 list_files 或 search_files 定位。**不要凭印象回答文件内容**——必须先读。" +
+                    "⚠️ 读**眼镜**存储里的文本文件请用 read_glasses_file。用户**没说哪一端时先问一句**「是手机里的文件还是眼镜里的？」。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(

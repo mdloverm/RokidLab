@@ -520,12 +520,43 @@
     <string name="chat_trace_kb_done">Searched knowledge base</string>
     <string name="chat_trace_collapse">Collapse steps</string>
     <string name="chat_trace_expand">Expand steps</string>
-    <string name="chat_trace_more">%1$d more steps</string>
+    <string name="chat_trace_more">%1$d more steps folded, tap to expand</string>
+    <string name="chat_trace_less">Collapse folded steps</string>
+    <!-- Summary phase / framework action / context injection / self-check -->
+    <string name="chat_trace_summary_running">Finishing up: writing files</string>
+    <string name="chat_trace_summary_done">Finishing up</string>
+    <string name="chat_trace_framework">Framework</string>
+    <string name="chat_trace_memory">Context added</string>
+    <string name="chat_trace_reflect">Self-check</string>
+    <!-- File artifacts in the process panel (one row: action + full path, tap to preview) -->
+    <string name="chat_trace_artifact_read">Read</string>
+    <string name="chat_trace_artifact_write">Edited</string>
+    <string name="chat_trace_artifact_create">Created</string>
+    <string name="chat_trace_artifact_delete">Deleted</string>
+    <string name="chat_trace_artifact_move">Moved</string>
+    <string name="chat_trace_artifact_touch">Touched</string>
+    <string name="chat_artifact_preview_title">File preview</string>
+    <string name="chat_artifact_close">Close preview</string>
+    <string name="chat_artifact_too_large">File is large, showing the first %1$d lines</string>
+    <string name="chat_artifact_open_failed">Could not open this file</string>
+    <string name="chat_artifact_unsupported_media">This kind of file (.%1$s) can\'t be previewed here</string>
+    <string name="chat_artifact_unsupported_large">File is too large (%1$s KB) to preview here</string>
+    <string name="chat_artifact_unsupported_binary">This is not a text file</string>
+    <string name="chat_artifact_unsupported_dir">Could not read this directory</string>
+    <string name="chat_artifact_dir_entries">Directory · %1$d entries</string>
+    <string name="chat_artifact_lines_total">%1$d lines in total</string>
+    <string name="chat_artifact_lines_chars">%1$d lines · %2$d chars</string>
     <!-- update_plan structured checklist -->
     <string name="chat_plan_title">Plan</string>
     <!-- Reasoning full-text expand -->
     <string name="chat_think_expand">Show full reasoning</string>
     <string name="chat_think_collapse">Collapse</string>
+    <!-- Command card (for run_shell / start_web_preview / run_script; see ChatBubble.CommandStepCard) -->
+    <string name="chat_cmd_state_ok">Done</string>
+    <string name="chat_cmd_state_failed">Failed</string>
+    <string name="chat_cmd_output_expand">Show output</string>
+    <string name="chat_cmd_output_collapse">Hide output</string>
+    <string name="chat_cmd_output_truncated">…Output too long; showing the beginning only</string>
     <string name="chat_settings">AI Settings</string>
     <string name="chat_settings_title">AI Service Settings</string>
     <string name="chat_settings_hint">Supports OpenAI-compatible APIs</string>
@@ -590,6 +621,7 @@
     <string name="ai_tool_cat_info_web">Info &amp; Web</string>
     <string name="ai_tool_cat_media">Music &amp; Images</string>
     <string name="ai_tool_cat_timer">Reminders &amp; Tasks</string>
+    <string name="ai_tool_cat_goal">Goals</string>
     <string name="ai_tool_cat_aiui">AI Apps</string>
     <string name="ai_tool_cat_files">Files</string>
     <string name="ai_tool_cat_shell">On-device</string>
@@ -875,6 +907,22 @@
     <!-- Walk & Look (ambient vision, fixed 15-min pace) -->
     <string name="settings_ambient_vision">Walk &amp; Look</string>
 
+    <!-- Notification digest (phone notification event source; needs system access, off by default) -->
+    <string name="settings_notification_digest">Message digest</string>
+    <string name="settings_notification_digest_on">Mentions it first when a phone notification matters</string>
+    <string name="settings_notification_digest_need_permission">Needs notification access in system settings</string>
+    <string name="proactive_notify_desc">Mentions a notification when it looks worth it</string>
+    <string name="proactive_notify_need_permission">No notification access · turning it on will guide you</string>
+    <string name="proactive_digest_whitelist">Monitored apps</string>
+    <string name="proactive_digest_whitelist_subtitle">Only collect notifications from selected apps; empty means all</string>
+    <string name="proactive_digest_whitelist_all">All apps</string>
+    <string name="proactive_digest_whitelist_count_fmt">%1$d apps selected</string>
+    <string name="proactive_digest_whitelist_loading">Loading app list…</string>
+    <string name="proactive_digest_whitelist_clear">Clear selection</string>
+
+    <!-- Goal check-in (checkpoint layer of the Goal feature; no UI switch, notification title only) -->
+    <string name="settings_goal_check">Goal check-in</string>
+
     <!-- Proactivity bottom sheet (chat input bar) -->
     <string name="chat_proactive_title">Proactivity</string>
     <string name="chat_proactive_subtitle">Companion pace · adapts to your replies</string>
@@ -973,6 +1021,12 @@
     <string name="ai_tool_stop_tts_desc">Make the glasses stop the current speech immediately</string>
     <string name="ai_tool_manage_timer_name">Timers</string>
     <string name="ai_tool_manage_timer_desc">Create, view or cancel reminders</string>
+    <string name="ai_tool_create_goal_name">Create Goal</string>
+    <string name="ai_tool_create_goal_desc">Set a long-term goal and follow up on progress</string>
+    <string name="ai_tool_update_goal_name">Update Goal</string>
+    <string name="ai_tool_update_goal_desc">Advance a goal: steps, check-ins, done or drop</string>
+    <string name="ai_tool_list_goals_name">List Goals</string>
+    <string name="ai_tool_list_goals_desc">Show all goals and their step progress</string>
     <string name="ai_tool_manage_calendar_name">Calendar</string>
     <string name="ai_tool_manage_calendar_desc">View or create calendar events</string>
     <string name="ai_tool_delete_calendar_event_name">Delete Event</string>
@@ -1926,10 +1980,15 @@
     <string name="permission_label_exact_alarm">Exact alarms</string>
     <string name="permission_label_activity_recognition">Physical activity</string>
     <string name="permission_label_accessibility">Accessibility service</string>
+    <string name="permission_label_notification_listen">Notification access</string>
+    <string name="notification_listener_label">Rokid Lab message digest</string>
     <string name="permission_label_mic">Microphone</string>
     <string name="permission_dialog_title">Permission required</string>
     <string name="permission_dialog_message">%1$s needs the following permissions:\n%2$s\n\nTap Grant now, then choose Allow in the system dialog.</string>
     <string name="permission_dialog_allow">Grant now</string>
+    <string name="permission_dialog_go_settings">Open settings</string>
+    <string name="permission_dialog_message_settings">%1$s needs you to turn it on in system settings: %2$s. Tap Open settings to go straight there, then switch it on.</string>
+    <string name="permission_opening_settings">Settings opened — find the matching switch and turn it on</string>
     <string name="permission_dialog_open_settings">Open system settings</string>
     <string name="permission_dialog_later">Later</string>
     <string name="permission_dialog_granted">Permission granted</string>
@@ -1957,6 +2016,7 @@
     <string name="permission_reason_launch">let glasses voice dial, set alarms and open apps while your phone is locked or on the home screen</string>
     <string name="permission_reason_exact_alarm">make scheduled reminders fire on time</string>
     <string name="permission_reason_activity">read steps taken since boot</string>
+    <string name="permission_reason_notification_digest">mention phone notifications worth telling you about (enable it in system settings)</string>
     <!-- Shown after a timer/agent task is created but exact-alarm is missing (task still exists) -->
     <string name="timer_exact_alarm_requested">Allow \"Exact alarms\" so it fires on time.</string>
     <string name="timer_exact_alarm_notify">Tap the notification to enable exact alarms.</string>

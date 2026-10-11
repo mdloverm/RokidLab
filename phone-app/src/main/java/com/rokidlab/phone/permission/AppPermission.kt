@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.rokidlab.phone.R
 
@@ -184,14 +185,41 @@ enum class AppPermission(
         R.string.permission_label_accessibility,
         minSdk = Build.VERSION_CODES.R,
         onboardingCritical = false,
+    ),
+
+    /**
+     * 通知使用权（`BIND_NOTIFICATION_LISTENER_SERVICE`）：「消息摘要」主动能力的前提。
+     *
+     * ⚠️ 形状与 [ACCESSIBILITY] 相同（**服务级权限**，不是 `uses-permission` 那类），改它之前先读
+     * [ACCESSIBILITY] 的三条注意事项：
+     *  1. [manifestName] 只作为"缺什么"时的可读标识，[runtimeNames] 永远不会用到它；
+     *  2. 没有 `requestPermissions` 这条路，只能在系统「设置 → 通知使用权」由用户手动开，
+     *     所以 [runtimeRequestable] = false，走 [PermissionRequestActivity] 跳设置页。
+     *     幸运的是系统提供了 `ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS` 这个**直达本应用**
+     *     的公开入口（API 22+），比无障碍那页好用得多 ——
+     *     但跳过去之后仍需用户自己拨开关，故文案只能说"已为你打开设置页"。
+     *  3. [minSdk] 无需设高：[NotificationListenerService] 自 API 18 就有，本项目 minSdk 远高于它。
+     *
+     * [onboardingCritical] = false：它属于**主动陪伴**的可选能力，不是"连上眼镜"的硬前提；
+     * 而且它授予的是读全部通知内容的能力，属于高信任授权，不该在首装引导里顺手点过去。
+     * 缺它时由 [com.rokidlab.phone.proactive.NotificationDigest] 现场引导，
+     * 引导文案走 [PermissionBridge]（禁自写「请去设置开」）。
+     */
+    NOTIFICATION_LISTEN(
+        "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE",
+        R.string.permission_label_notification_listen,
+        minSdk = Build.VERSION_CODES.LOLLIPOP,
+        onboardingCritical = false,
     );
 
     /**
      * 能否用 `requestPermissions` 弹系统授权框。
-     * false = 只能跳系统设置页/专用授权框（[OVERLAY] / [ALL_FILES] / [EXACT_ALARM] / [ACCESSIBILITY]）。
+     * false = 只能跳系统设置页/专用授权框（[OVERLAY] / [ALL_FILES] / [EXACT_ALARM] /
+     * [ACCESSIBILITY] / [NOTIFICATION_LISTEN]）。
      */
     val runtimeRequestable: Boolean
-        get() = this != OVERLAY && this != ALL_FILES && this != EXACT_ALARM && this != ACCESSIBILITY
+        get() = this != OVERLAY && this != ALL_FILES && this != EXACT_ALARM &&
+            this != ACCESSIBILITY && this != NOTIFICATION_LISTEN
 
     companion object {
         /** 是否已授予。[OVERLAY] 走 `Settings.canDrawOverlays`（AOSP 契约，全 ROM 语义一致） */
@@ -201,10 +229,27 @@ enum class AppPermission(
             if (permission == ALL_FILES) return canManageAllFiles()
             if (permission == EXACT_ALARM) return canScheduleExactAlarms(context)
             if (permission == ACCESSIBILITY) return com.rokidlab.phone.access.LabAccessibility.isEnabled(context)
+            if (permission == NOTIFICATION_LISTEN) return isNotificationListenerEnabled(context)
             return ContextCompat.checkSelfPermission(
                 context, permission.manifestName,
             ) == PackageManager.PERMISSION_GRANTED
         }
+
+        /**
+         * 通知使用权是否已开。
+         *
+         * ⚠️ 这一项**没有** `checkSelfPermission` 这条路：`BIND_NOTIFICATION_LISTENER_SERVICE`
+         * 是系统与本服务之间的 bind 权限，用户在「通知使用权」里授权后系统才 bind 我们。
+         * 查它只能用 `NotificationManagerCompat.getEnabledListenerPackages()` ——
+         * 那是 AOSP 里唯一权威的读取口，返回的是"已获授权的包名列表"。
+         * 直接读 `Settings.Secure.enabled_notification_listeners` 是拿字符串拼的私有格式，
+         * 各 ROM 分隔符/转义不一致，历史上就是这么翻车的，不要走那条路。
+         */
+        private fun isNotificationListenerEnabled(context: Context): Boolean =
+            runCatching {
+                NotificationManagerCompat.getEnabledListenerPackages(context)
+                    .contains(context.packageName)
+            }.getOrDefault(false)
 
         /**
          * 精确闹钟权限是否已开（Android 12+）。

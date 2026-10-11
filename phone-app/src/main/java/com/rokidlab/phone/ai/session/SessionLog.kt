@@ -131,6 +131,11 @@ internal class SessionLog(
 
         /** 分阶段审批的阶段判定摘要（空 ⇒ 不落字段） */
         private const val KEY_STAGES = "stages"
+
+        /** 框架自我纠偏（2026-10-09 新增，见 [Reflect]）：触发原因 / 证据 / 要求的改变 */
+        private const val KEY_REFLECT_TRIGGER = "trigger"
+        private const val KEY_REFLECT_DETAIL = "evidence"
+        private const val KEY_REFLECT_ACTION = "action"
     }
 
     /** 已分配的最大 seq 缓存（-1 = 尚未从文件加载）。写操作与读操作都在 [lock] 内访问 */
@@ -295,6 +300,13 @@ internal class SessionLog(
                 e.summary?.takeIf { it.isNotBlank() }?.let { o.put(KEY_SUMMARY, it) }
                 if (e.stageEvidence.isNotEmpty()) o.put(KEY_STAGES, JSONArray(e.stageEvidence))
             }
+
+            is Reflect -> {
+                // 三个字段都是**必填**（trigger/detail/action 缺一个，这条反思就读不懂了）
+                o.put(KEY_REFLECT_TRIGGER, e.trigger)
+                o.put(KEY_REFLECT_DETAIL, e.detail)
+                o.put(KEY_REFLECT_ACTION, e.action)
+            }
         }
         return o.toString()
     }
@@ -427,6 +439,21 @@ internal class SessionLog(
                 summary = o.optString(KEY_SUMMARY).ifBlank { null },
                 stageEvidence = readStringList(o.optJSONArray(KEY_STAGES)),
             )
+
+            // ⚠️ 与 SIDE_EFFECT_INTENT 同口径：任一必填字段缺失（空串）⇒ 整条作废。
+            //   一条"触发了反思但说不出为什么"的记录没有审计价值，留着只会让人以为它是完整的。
+            SessionEventKind.REFLECT -> {
+                val detail = o.optString(KEY_REFLECT_DETAIL)
+                val action = o.optString(KEY_REFLECT_ACTION)
+                if (detail.isBlank() || action.isBlank()) return null
+                Reflect(
+                    turn = turn,
+                    step = step,
+                    trigger = o.optString(KEY_REFLECT_TRIGGER),
+                    detail = detail,
+                    action = action,
+                )
+            }
         }
         return SessionRecord(seq, o.optLong(KEY_TS, 0L), event)
     }

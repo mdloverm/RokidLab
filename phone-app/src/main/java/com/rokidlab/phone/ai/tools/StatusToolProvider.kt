@@ -298,19 +298,26 @@ internal object StatusToolProvider : ToolProvider {
         ProactiveGatePolicy.ProactiveFeature.FOLLOWUP to "主动回访",
         ProactiveGatePolicy.ProactiveFeature.IDLE_CHAT to "空闲闲聊",
         ProactiveGatePolicy.ProactiveFeature.VISION to "走走拍拍",
+        ProactiveGatePolicy.ProactiveFeature.NOTIFY to "消息摘要",
     )
 
-    /** 六格开关快照（list 与 toggle 共用同一出口，保证模型看到的永远是切换后的真实状态） */
+    /**
+     * 七格开关快照（list 与 toggle 共用同一出口，保证模型看到的永远是切换后的真实状态）。
+     *
+     * ⚠️ 标签取 [proactiveLabels] 的**显示值**而不是 `f.id`：`entries` 新增枚举时若漏配标签，
+     * 索引会得到 null 并在文案里渲染成 "null（notify）" —— 用户和模型都看不出是漏配。
+     * 所以这里对 null 兜底成 id，宁可显示英文 id 也不要露出 null。
+     */
     private fun renderProactiveState(gate: ProactiveGate): String {
         val scene = gate.scene()
         val features = ProactiveGatePolicy.ProactiveFeature.entries.joinToString("\n") { f ->
-            "· ${proactiveLabels[f]}（${f.id}）：${if (gate.isFeatureOn(f)) "开" else "关"}"
+            "· ${proactiveLabels[f] ?: f.id}（${f.id}）：${if (gate.isFeatureOn(f)) "开" else "关"}"
         }
         return "当前场景：${scene.name}\n功能开关：\n$features"
     }
 
     /**
-     * 主动行为开关（R6）：只碰 [ProactiveGate.setFeature] 六个用户开关 ——
+     * 主动行为开关（R6）：只碰 [ProactiveGate.setFeature] 七个用户开关 ——
      * 决策门内部的免打扰/冷却/额度判定不在这里的职责范围（那是运行期策略，面板也没直接暴露）。
      */
     private fun manageProactive(context: Context, args: JSONObject): String {
@@ -322,7 +329,7 @@ internal object StatusToolProvider : ToolProvider {
                     ?: return "未知的 feature：$id（可选 ${proactiveLabels.entries.joinToString(" / ") { "${it.value}=${it.key.id}" }}）"
                 val on = args.optBoolean("on", true)
                 gate.setFeature(feature, on)
-                "已${if (on) "开启" else "关闭"}「${proactiveLabels[feature]}」。\n" + renderProactiveState(gate)
+                "已${if (on) "开启" else "关闭"}「${proactiveLabels[feature] ?: feature.id}」。\n" + renderProactiveState(gate)
             }
             else -> renderProactiveState(gate)
         }

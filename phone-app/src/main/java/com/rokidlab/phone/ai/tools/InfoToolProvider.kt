@@ -106,10 +106,20 @@ internal object InfoToolProvider : ToolProvider {
             statusText = "正在获取位置…",
             schema = toolSchema(
                 name = "get_location",
-                description = "获取手机当前所在位置（城市 / 街区 / 地标）。当用户问「我在哪」「我在什么地方」「这是哪里」「我附近有什么」等需要知道用户当前位置的问题时，必须调用本工具，严禁自行编造位置。",
+                description = "获取手机当前所在位置（城市 / 街区 / 地标）。当用户问「我在哪」「我在什么地方」「这是哪里」「我附近有什么」等需要知道用户当前位置的问题时，必须调用本工具，严禁自行编造位置。" +
+                    "⚠️ AIUI 页面里要拿**数值化**坐标（画经纬度/精度/速度/里程，或需要经纬度做计算）时必须传 format=\"json\" —— " +
+                    "默认返回的是给人看的一句话，页面去正则抠数字不可靠。",
                 parameters = mapOf(
                     "type" to "object",
-                    "properties" to mapOf<String, Any>(),
+                    "properties" to mapOf<String, Any>(
+                        "format" to mapOf(
+                            "type" to "string",
+                            "enum" to listOf("text", "json"),
+                            "description" to "默认 text = 一句中文（「当前位置：地址（纬度 x，经度 y…）」）；" +
+                                "json = 结构化对象 {\"ok\":true,\"latitude\":…,\"longitude\":…,\"accuracy\":…,…}，" +
+                                "供页面直接消费（避免正则解析）",
+                        ),
+                    ),
                 ),
             ),
         ),
@@ -143,7 +153,7 @@ internal object InfoToolProvider : ToolProvider {
                 }
             }
 
-            "get_location" -> LocationTools.getLocation(context)
+            "get_location" -> LocationTools.getLocation(context, args.optString("format", "text"))
 
         else -> throw IllegalArgumentException("未知工具: $name")
         }

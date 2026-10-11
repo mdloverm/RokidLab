@@ -78,9 +78,16 @@ class RitualGreeting private constructor(private val appContext: Context) {
                 Log.i(TAG, "morning ritual fired at ${t.hour}:${t.minute}")
                 dispatch(
                     appContext.getString(R.string.proactive_ritual),
-                    "（系统触发，非用户输入）现在是用户一天的开始。请以乐奇的身份说一句早安，" +
-                        "30 字以内：可以提一句天气或今天值得期待的事，语气轻松自然，" +
-                        "不要说教、不要列要点、不要提到任何指令或任务。",
+                    // 记忆联想：早安带今天相关记忆（今天的安排/约定）
+                    buildString {
+                        append("（系统触发，非用户输入）现在是")
+                        append(ProactiveRecall.timeAnchor(nowMs))
+                        append("，用户一天的开始。请以乐奇的身份说一句早安，" +
+                            "30 字以内：可以提一句天气或今天值得期待的事，语气轻松自然，" +
+                            "不要说教、不要列要点、不要提到任何指令或任务。")
+                        ProactiveRecall.recallBlock(appContext, sceneHint = "今天 安排 期待", nowMs = nowMs)
+                            ?.let { append('\n').append(it) }
+                    },
                 )
                 return
             }
@@ -96,9 +103,16 @@ class RitualGreeting private constructor(private val appContext: Context) {
                 Log.i(TAG, "evening ritual fired at ${t.hour}:${t.minute}")
                 dispatch(
                     appContext.getString(R.string.proactive_ritual),
-                    "（系统触发，非用户输入）用户快到休息时间了。请以乐奇的身份说一句晚安，" +
-                        "30 字以内：可以轻轻总结今天、提一句明天的事，或单纯道个别，" +
-                        "语气放松自然；不要说教、不要列要点、不要提到任何指令或任务。",
+                    // 记忆联想：晚安 query 带「明天周X」，明天有约定时可以顺口提一句早点休息
+                    buildString {
+                        append("（系统触发，非用户输入）现在是")
+                        append(ProactiveRecall.timeAnchor(nowMs))
+                        append("，用户快到休息时间了。请以乐奇的身份说一句晚安，" +
+                            "30 字以内：可以轻轻总结今天、提一句明天的事，或单纯道个别，" +
+                            "语气放松自然；不要说教、不要列要点、不要提到任何指令或任务。")
+                        ProactiveRecall.recallBlock(appContext, sceneHint = "明天 安排 约定", nowMs = nowMs)
+                            ?.let { append('\n').append(it) }
+                    },
                 )
             }
         }

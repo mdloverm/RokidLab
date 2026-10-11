@@ -523,12 +523,43 @@
     <string name="chat_trace_kb_done">已检索知识库</string>
     <string name="chat_trace_collapse">收起过程</string>
     <string name="chat_trace_expand">展开过程</string>
-    <string name="chat_trace_more">另有 %1$d 步已折叠</string>
+    <string name="chat_trace_more">另有 %1$d 步已折叠，点此展开</string>
+    <string name="chat_trace_less">收起折叠的步骤</string>
+    <!-- 收尾阶段 / 框架行为 / 上下文注入 / 自省（详见 AgentStep.Kind） -->
+    <string name="chat_trace_summary_running">正在收尾写入文件</string>
+    <string name="chat_trace_summary_done">收尾完成</string>
+    <string name="chat_trace_framework">框架处理</string>
+    <string name="chat_trace_memory">已注入上下文</string>
+    <string name="chat_trace_reflect">自我检查</string>
+    <!-- 过程面板里的文件产物（每行：操作方式 + 完整路径，可点开预览） -->
+    <string name="chat_trace_artifact_read">读取</string>
+    <string name="chat_trace_artifact_write">修改</string>
+    <string name="chat_trace_artifact_create">新建</string>
+    <string name="chat_trace_artifact_delete">删除</string>
+    <string name="chat_trace_artifact_move">移动</string>
+    <string name="chat_trace_artifact_touch">涉及</string>
+    <string name="chat_artifact_preview_title">文件预览</string>
+    <string name="chat_artifact_close">关闭预览</string>
+    <string name="chat_artifact_too_large">文件较大，仅显示前 %1$d 行</string>
+    <string name="chat_artifact_open_failed">无法打开这个文件</string>
+    <string name="chat_artifact_unsupported_media">这类文件（.%1$s）不适合在这里预览</string>
+    <string name="chat_artifact_unsupported_large">文件较大（%1$s KB），不适合在这里预览</string>
+    <string name="chat_artifact_unsupported_binary">这不是一个文本文件</string>
+    <string name="chat_artifact_unsupported_dir">无法读取该目录</string>
+    <string name="chat_artifact_dir_entries">目录 · %1$d 项</string>
+    <string name="chat_artifact_lines_total">共 %1$d 行</string>
+    <string name="chat_artifact_lines_chars">%1$d 行 · %2$d 字</string>
     <!-- update_plan 结构化计划清单 -->
     <string name="chat_plan_title">任务计划</string>
     <!-- 思考全文展开 -->
     <string name="chat_think_expand">展开全文</string>
     <string name="chat_think_collapse">收起</string>
+    <!-- 命令卡（run_shell / start_web_preview / run_script 专用，见 ChatBubble.CommandStepCard） -->
+    <string name="chat_cmd_state_ok">完成</string>
+    <string name="chat_cmd_state_failed">失败</string>
+    <string name="chat_cmd_output_expand">展开输出</string>
+    <string name="chat_cmd_output_collapse">收起输出</string>
+    <string name="chat_cmd_output_truncated">…输出过长，仅显示前面部分</string>
 
     <!-- 乐奇聊天 - AI 服务设置 -->
     <string name="chat_settings">AI 设置</string>
@@ -595,6 +626,7 @@
     <string name="ai_tool_cat_info_web">信息与联网</string>
     <string name="ai_tool_cat_media">音乐与图片</string>
     <string name="ai_tool_cat_timer">提醒与任务</string>
+    <string name="ai_tool_cat_goal">目标管理</string>
     <string name="ai_tool_cat_aiui">AI 应用</string>
     <string name="ai_tool_cat_files">文件</string>
     <string name="ai_tool_cat_shell">本机执行</string>
@@ -881,6 +913,22 @@
     <!-- 走走拍拍（环境视觉，固定 15 分钟一拍） -->
     <string name="settings_ambient_vision">走走拍拍</string>
 
+    <!-- 消息摘要（手机通知事件源；需系统「通知使用权」，默认关） -->
+    <string name="settings_notification_digest">消息摘要</string>
+    <string name="settings_notification_digest_on">手机收到值得看的通知时主动提一句</string>
+    <string name="settings_notification_digest_need_permission">需先在系统设置里授予通知使用权</string>
+    <string name="proactive_notify_desc">手机收到值得看的通知时提一句</string>
+    <string name="proactive_notify_need_permission">未授予通知使用权 · 打开开关会引导你授权</string>
+    <string name="proactive_digest_whitelist">监听应用</string>
+    <string name="proactive_digest_whitelist_subtitle">只收集勾选应用的通知；不勾选则收集全部</string>
+    <string name="proactive_digest_whitelist_all">全部应用</string>
+    <string name="proactive_digest_whitelist_count_fmt">已勾选 %1$d 个应用</string>
+    <string name="proactive_digest_whitelist_loading">正在加载应用列表…</string>
+    <string name="proactive_digest_whitelist_clear">清空选择</string>
+
+    <!-- 目标回访（Goal 目标对象的检查点层；无 UI 开关，通知标题用） -->
+    <string name="settings_goal_check">目标回访</string>
+
     <!-- 聊天输入栏「主动性」下弹面板 -->
     <string name="chat_proactive_title">主动性</string>
     <string name="chat_proactive_subtitle">陪伴频率 · 随回应自动调节</string>
@@ -928,7 +976,7 @@
     <string name="proactive_gate_quiet">免打扰时段中，主动消息顺延</string>
     <string name="proactive_gate_running">主动消息运行中 · 免打扰时段自动顺延</string>
 
-    <!-- 主动功能（6 行开关，副标题写真实触发条件） -->
+    <!-- 主动功能（7 行开关，副标题写真实触发条件） -->
     <string name="proactive_section_features">主动功能</string>
     <string name="proactive_ritual">早晚安</string>
     <string name="proactive_feat_ritual_desc">按你的作息说早安晚安</string>
@@ -979,6 +1027,12 @@
     <string name="ai_tool_stop_tts_desc">让眼镜立刻停止语音播报</string>
     <string name="ai_tool_manage_timer_name">定时任务管理</string>
     <string name="ai_tool_manage_timer_desc">创建 / 查看 / 取消定时提醒</string>
+    <string name="ai_tool_create_goal_name">创建目标</string>
+    <string name="ai_tool_create_goal_desc">帮用户立长期目标并定期回访进展</string>
+    <string name="ai_tool_update_goal_name">更新目标</string>
+    <string name="ai_tool_update_goal_desc">推进目标：完成步骤、设回访、达成或放弃</string>
+    <string name="ai_tool_list_goals_name">列出目标</string>
+    <string name="ai_tool_list_goals_desc">查看用户的所有目标与步骤进度</string>
     <string name="ai_tool_manage_calendar_name">日历管理</string>
     <string name="ai_tool_manage_calendar_desc">查看或创建日程</string>
     <string name="ai_tool_delete_calendar_event_name">删除日程</string>
@@ -1935,10 +1989,19 @@
     <string name="permission_label_exact_alarm">精确提醒</string>
     <string name="permission_label_activity_recognition">身体活动</string>
     <string name="permission_label_accessibility">无障碍服务</string>
+    <string name="permission_label_notification_listen">通知使用权</string>
+    <string name="notification_listener_label">乐奇实验室消息摘要</string>
     <string name="permission_label_mic">麦克风</string>
     <string name="permission_dialog_title">需要开启权限</string>
     <string name="permission_dialog_message">「%1$s」需要以下权限：\n%2$s\n\n点「立即开启」后，在系统弹窗里选「允许」即可。</string>
     <string name="permission_dialog_allow">立即开启</string>
+    <string name="permission_dialog_go_settings">去开启</string>
+    <!-- 「设置页开关」型专用：这些权限没有系统授权框，只能跳设置页手动开。
+         旧版共用上面那句"在系统弹窗里选允许"，会让用户等一个永远不会出现的弹窗。 -->
+    <string name="permission_dialog_message_settings">「%1$s」需要你在系统设置里手动开启：\n%2$s\n\n点「去开启」会直接打开对应的设置页，请在那里把开关打开。</string>
+    <!-- 「设置页开关」型权限的**正常跳转**提示：不能写成"权限未开启"（听着像失败）。
+         带上要找的名字，用户到了页面上才知道该点哪一项。 -->
+    <string name="permission_opening_settings">已打开设置页，请找到对应的开关并打开</string>
     <string name="permission_dialog_open_settings">去系统设置</string>
     <string name="permission_dialog_later">稍后</string>
     <string name="permission_dialog_granted">权限已开启</string>
@@ -1966,6 +2029,7 @@
     <string name="permission_reason_launch">让眼镜语音在你锁屏或回到桌面时也能拨号、设闹钟、打开应用</string>
     <string name="permission_reason_exact_alarm">让定时提醒到点准时触发</string>
     <string name="permission_reason_activity">读取自开机累计步数</string>
+    <string name="permission_reason_notification_digest">主动播报手机上值得看的通知（需在系统设置里开启）</string>
     <!-- 创建定时任务后缺精确闹钟权限时的结果提示（任务已建成，只是提醒可能不精确） -->
     <string name="timer_exact_alarm_requested">为保证到点准时，请允许「精确提醒」。</string>
     <string name="timer_exact_alarm_notify">请点通知开启「精确提醒」，确保准时提醒。</string>

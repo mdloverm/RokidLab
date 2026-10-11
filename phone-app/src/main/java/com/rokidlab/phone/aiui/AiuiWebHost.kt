@@ -3,6 +3,10 @@ package com.rokidlab.phone.aiui
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -55,6 +59,15 @@ internal class AiuiWebHost(
     private val onLoadError: (String) -> Unit = {},
     private val onCloseRequested: () -> Unit = {},
 ) {
+    /**
+     * 页面日志的分桶键（2026-10-09，P2-15）：用 .aix 文件名 = 项目名。
+     *
+     * 有了它，agent 打开某个项目后能读到**这个项目**的 console/error
+     * （真机教训：`Host capability geolocation... is not configured` 这条决定性报错
+     * 原先只进 logcat，agent 读不到 ⇒ 只能猜错因）。
+     */
+    private val logKey: String = aixFile.nameWithoutExtension
+
     companion object {
         private const val TAG = "AiuiWebHost"
 
@@ -101,6 +114,84 @@ internal class AiuiWebHost(
 
     private var destroyed = false
 
+    // ── 传感器（IMU）：页面 W3C Generic Sensor ← host.js ← 本桥（与 AiuiLinkActivity 对齐）──
+    private var sensorManager: SensorManager? = null
+    private val activeSensorListeners = mutableMapOf<Int, SensorEventListener>()
+    private val sensorLock = Any()
+
+    /** JS 传感器类型码 → Android 传感器类型（两端约定，勿单侧改动） */
+    private fun androidSensorType(type: Int): Int = when (type) {
+        0 -> Sensor.TYPE_GYROSCOPE
+        1 -> Sensor.TYPE_ACCELEROMETER
+        2 -> Sensor.TYPE_ROTATION_VECTOR // 绝对朝向（页面按 x,y,z,w 消费四元数）
+        3 -> Sensor.TYPE_MAGNETIC_FIELD
+        else -> -1
+    }
+
+    /** JS 类型码 → host.js pushSensor 的能力名（两端约定，勿单侧改动） */
+    private fun sensorCapName(type: Int): String = when (type) {
+        0 -> "gyroscope"
+        1 -> "accelerometer"
+        2 -> "absoluteOrientation"
+        else -> "magnetometer"
+    }
+
+    private fun startSensorListener(type: Int, freq: Int): Boolean {
+        val sensorType = androidSensorType(type)
+        if (sensorType < 0) return false
+        val sm = sensorManager
+            ?: (ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager)
+                ?.also { sensorManager = it }
+            ?: return false
+        val sensor = sm.getDefaultSensor(sensorType) ?: run {
+            Log.w(TAG, "sensor type=$type unavailable on device")
+            return false
+        }
+        synchronized(sensorLock) {
+            if (destroyed) return false
+            if (activeSensorListeners.containsKey(type)) return true // 重复 start 幂等
+            // 频率夹 5~100Hz：官方页面用 60Hz，FASTEST(~200Hz) 毫无必要还费电
+            val periodUs = 1_000_000 / freq.coerceIn(5, 100)
+            val listener = object : SensorEventListener {
+                override fun onSensorChanged(event: SensorEvent?) {
+                    val e = event ?: return
+                    var x = if (e.values.size > 0) e.values[0] else 0f
+                    var y = if (e.values.size > 1) e.values[1] else 0f
+                    var z = if (e.values.size > 2) e.values[2] else 0f
+                    var w = 0f
+                    if (sensorType == Sensor.TYPE_ROTATION_VECTOR) {
+                        // 旋转向量 → 四元数：SensorManager 返回 [w,x,y,z]，页面要 [x,y,z,w]
+                        val q = FloatArray(4)
+                        SensorManager.getQuaternionFromVector(q, e.values)
+                        w = q[0]; x = q[1]; y = q[2]; z = q[3]
+                    }
+                    // ns → ms：对齐 DOMHighResTimeStamp（页面只关心数值与差值，基准无关）
+                    val ts = e.timestamp / 1_000_000L
+                    val js = "window.__aiuiHost && window.__aiuiHost.pushSensor(" +
+                        "'${sensorCapName(type)}',$x,$y,$z,$w,$ts)"
+                    runOnMain {
+                        if (!destroyed) runCatching { view.evaluateJavascript(js, null) }
+                    }
+                }
+
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+            }
+            activeSensorListeners[type] = listener
+            sm.registerListener(listener, sensor, periodUs)
+            Log.i(TAG, "sensor listening type=$type period=${periodUs}us")
+        }
+        return true
+    }
+
+    private fun stopSensorListener(type: Int) {
+        val sm = sensorManager ?: return
+        synchronized(sensorLock) {
+            val listener = activeSensorListeners.remove(type) ?: return
+            runCatching { sm.unregisterListener(listener) }
+            Log.i(TAG, "sensor unregistered type=$type")
+        }
+    }
+
     /** 供外部（全屏切换、对话框关闭）判定是否已完成首帧 */
     val isBooted: Boolean get() = booted
 
@@ -132,18 +223,41 @@ internal class AiuiWebHost(
         @JavascriptInterface
         fun error(msg: String) {
             Log.e(TAG, "js error: $msg")
+            // P2-15：这是最需要被 agent 看到的一类（页面能不能跑起来全看它）
+            AiuiPageLog.note(logKey, "error", msg)
             runOnMain { onLoadError(msg) }
         }
 
         @JavascriptInterface
         fun log(msg: String) {
             Log.d(TAG, "js: $msg")
+            AiuiPageLog.note(logKey, "log", msg)
         }
 
         /** 页面调用工具（`window.Lab.callTool` 的底层） */
         @JavascriptInterface
         fun callTool(name: String, argsJson: String, cbId: String) {
             invokeToolCall(name, argsJson, cbId)
+        }
+
+        /**
+         * 页面传感器（IMU）桥：页面用 W3C Generic Sensor API（new Gyroscope() 等），
+         * ink 引擎经 host.js 通知宿主 start/stop —— 与眼镜端 AiuiLinkActivity 同一契约
+         * （两端共用同一份 assets/ink/host.js）。数据源用**手机的** SensorManager：
+         * 手机预览宿主的意义就是"先在手机上演示一遍"，手机三件套齐全且旋转向量带
+         * 磁力计融合，比眼镜 6 轴更稳。type 码：0 陀螺仪 / 1 加速度计 / 2 旋转向量 / 3 磁力计。
+         * 运行在 JS 线程，SensorManager 注册须线程安全（sensorLock）。
+         */
+        @JavascriptInterface
+        fun sensorStart(type: Int, freq: Int, targetId: String, sessionId: String): Boolean {
+            Log.i(TAG, "sensorStart type=$type freq=$freq session=$sessionId")
+            return startSensorListener(type, freq)
+        }
+
+        @JavascriptInterface
+        fun sensorStop(type: Int, targetId: String, sessionId: String) {
+            Log.i(TAG, "sensorStop type=$type session=$sessionId")
+            stopSensorListener(type)
         }
     }
 
@@ -170,7 +284,18 @@ internal class AiuiWebHost(
 
         wv.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
-                Log.d(TAG, "js[${msg?.messageLevel()}]: ${msg?.message()}")
+                val text = msg?.message().orEmpty()
+                Log.d(TAG, "js[${msg?.messageLevel()}]: $text")
+                // P2-15：进环形缓冲，供 agent 事后查询（页面报错是它唯一的自诊来源）
+                AiuiPageLog.note(
+                    logKey,
+                    level = when (msg?.messageLevel()) {
+                        ConsoleMessage.MessageLevel.ERROR -> "error"
+                        ConsoleMessage.MessageLevel.WARNING -> "warn"
+                        else -> "log"
+                    },
+                    text = text,
+                )
                 return true
             }
         }
@@ -400,6 +525,16 @@ internal class AiuiWebHost(
 
     fun destroy() {
         destroyed = true
+        // 页面可能来不及 sensorStop（宿主被销毁），这里兜底注销，避免传感器一直吃电
+        synchronized(sensorLock) {
+            val sm = sensorManager
+            if (sm != null) {
+                for (listener in activeSensorListeners.values) {
+                    runCatching { sm.unregisterListener(listener) }
+                }
+            }
+            activeSensorListeners.clear()
+        }
         mainHandler.removeCallbacksAndMessages(null)
         runCatching {
             view.loadUrl("about:blank")

@@ -89,6 +89,33 @@ internal enum class SessionEventKind(val wire: String) {
      *   且模型不需要知道"上次是谁点头的"。
      */
     SIDE_EFFECT_INTENT("effect_intent"),
+
+    /**
+     * 一次**框架驱动的自我纠偏**（2026-10-09，gps-live 事故 P0-7）。
+     *
+     * ## 它回答什么问题
+     *
+     * gps-live 案复盘时最难受的一点：**"它哪一轮意识到自己错了、改成了什么"完全查不到**。
+     * 事件流里只有"调了什么、返回了什么"，而框架那几次强行拉回（标记重升级、
+     * 诉求—动作对齐）**一个字都没落盘** ⇒ 出问题时只能靠用户抱怨，`SessionReplayTest`
+     * 也拿不到"该反思却未反思"的输入做回归。
+     *
+     * ## 与 [ContextInject] 的分工（刻意不合并）
+     *
+     * - [ContextInject] 记的是"**喂给模型的上下文**"（记忆/知识库/技能清单）——
+     *   内容会被投影进模型可见历史。
+     * - 本事件记的是"**框架对模型的干预决定**"：为什么干预（`trigger`）、
+     *   看到什么证据（`detail`）、要它怎么办（`action`）。
+     *   干预话术本身已经作为一条 user 消息进了 messages，**不从这里重复投影**
+     *   （`modelVisible = false`，否则重建 messages 时会把同一句话注入两遍）。
+     *
+     * ## 不变式（单测可盯）
+     *
+     * 1. **成对可读**：本事件之后应当能看到它触发的那次动作（下一条 `tool_call`，
+     *    或该轮最终 `assistant`）—— 否则"反思了但没改变行为"这件事无法判断。
+     * 2. **只追加**：反思不修改已落盘的历史（与 [VisibilityCut] 的"作废"是两件事）。
+     */
+    REFLECT("reflect"),
     ;
 
     companion object {
@@ -502,4 +529,53 @@ internal data class SideEffectIntent(
     val stageEvidence: List<String> = emptyList(),
 ) : SessionEvent {
     override val kind: SessionEventKind get() = SessionEventKind.SIDE_EFFECT_INTENT
+}
+
+/**
+ * 一次框架驱动的自我纠偏（见 [SessionEventKind.REFLECT] 的说明）。
+ *
+ * ⚠️ `modelVisible` 保持 `false`：干预话术已经作为 user 消息进了 messages，
+ * 这里再投影一次会让模型在同一次请求里读到两遍同一句话。
+ */
+internal data class Reflect(
+    override val turn: Int?,
+    override val step: Int? = null,
+    /** 触发原因（[ReflectTrigger] 的 wire 值，落盘供人回溯"是哪道守卫动手的"） */
+    val trigger: String,
+    /** 框架观察到的证据（框架自产、不含工具外部输出 —— 同 [LessonText] 的注入纪律） */
+    val detail: String,
+    /**
+     * 框架要求模型做出的改变（一句话）。
+     *
+     * 与 [detail] 分开的理由：`detail` 是"为什么觉得不对"，`action` 是"要它改成什么" ——
+     * 复盘时这两个问题经常只有一个出问题（判断对了但要求错了、或反之）。
+     */
+    val action: String,
+) : SessionEvent {
+    override val kind: SessionEventKind get() = SessionEventKind.REFLECT
+}
+
+/**
+ * 框架自我纠偏的**触发原因**（wire 一经发布不可改名）。
+ *
+ * 三个取值分别对应三种"假成功"（见诊断报告 §6.2）：
+ * 它们都不是"工具报错"，所以老的异常驱动自省一个都覆盖不到。
+ */
+internal enum class ReflectTrigger(val wire: String) {
+    /** 模型回了内部标记（`[NEED_TOOLS]`/`[TOOLS]`）而升级额度已用完 —— 未产出。 */
+    MARKER_LEAK("marker_leak"),
+
+    /** 同一份调用在滑动窗口内反复出现 —— 原地打转。 */
+    REPEATED_CALL("repeated_call"),
+
+    /** 用户要求动手改，本轮却零动作类调用 —— 诉求与动作不一致。 */
+    INTENT_ACTION_MISMATCH("intent_action_mismatch"),
+
+    /** 模型给出的归因结论缺少工具支撑 —— 假设未验证（预留，尚未接线）。 */
+    UNVERIFIED_ASSUMPTION("unverified_assumption"),
+    ;
+
+    companion object {
+        fun fromWire(w: String): ReflectTrigger? = entries.firstOrNull { it.wire == w }
+    }
 }

@@ -28,6 +28,9 @@ internal const val MAX_HISTORY = 500
  */
 internal object ChatHistoryStore {
 
+    /** 私有项目镜像目录名（与应用内 `filesDir/aiui_projects/` 保持一致，仅用于旧数据展示名补全） */
+    private const val PROJECTS_DIR = "aiui_projects"
+
     /** 序列化为一行 JSONL（不含换行符） */
     fun toLine(msg: ChatMsg): String = JSONObject().apply {
         put("id", msg.id)
@@ -122,6 +125,21 @@ internal object ChatHistoryStore {
                         }
                     })
                 }
+                // 文件产物：[{p: 绝对路径, l: 展示名, a: 动作}]
+                // ⚠️ 必须落盘：否则**重启后产物芯片全部消失**（文件还在，用户却点不开了）——
+                // 那种"新会话能看、旧会话不能看"的不一致比不做更让人怀疑数据丢了。
+                if (s.artifacts.isNotEmpty()) {
+                    put("r", JSONArray().apply {
+                        s.artifacts.forEach { a ->
+                            put(JSONObject().put("p", a.path).put("l", a.label).put("a", a.action.name))
+                        }
+                    })
+                }
+                // 命令类工具：命令本体 + **展示用**输出副本（见 AgentStep.command / output）。
+                // 必须落盘，否则重启后命令卡退化成普通行（命令与输出都没了）。
+                // ⚠️ output 只是本机展示副本，**不进模型上下文**；长度已由 AgentStep 截断。
+                s.command?.takeIf { it.isNotBlank() }?.let { put("c", it) }
+                s.output?.takeIf { it.isNotBlank() }?.let { put("o", it) }
             })
         }
     }
@@ -153,10 +171,45 @@ internal object ChatHistoryStore {
                         .getOrDefault(AgentStep.State.OK),
                     planSteps = planSteps,
                     fullText = o.optString("f"),
+                    artifacts = artifactsFromJson(o.optJSONArray("r")),
+                    command = o.optString("c").takeIf { it.isNotBlank() },
+                    output = o.optString("o").takeIf { it.isNotBlank() },
                 )
             )
         }
         return out
+    }
+
+    /**
+     * 文件产物数组 → [AgentStep.Artifact]。
+     *
+     * 降级纪律（与枚举一致）：**没有路径的条目直接丢**，动作不认识按 [Action.TOUCH]（中性）。
+     * 宁可少显示一个芯片，也不要给一个打不开的路径 —— 后者会让用户以为是文件丢了。
+     */
+    private fun artifactsFromJson(arr: JSONArray?): List<AgentStep.Artifact> {
+        if (arr == null || arr.length() == 0) return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = runCatching { arr.getJSONObject(i) }.getOrNull() ?: return@mapNotNull null
+            val path = o.optString("p").trim()
+            if (path.isEmpty()) return@mapNotNull null
+            val stored = o.optString("l").trim()
+            // 展示名补全：本次改动前落盘的旧数据只存了**文件名**（如 `index.html`），
+            // 用户分不清是哪个项目；这里从绝对路径补出「项目名/项目内相对路径」。
+            // 已有 `/` 的新数据直接用；不在项目镜像里的路径（下载目录等）保持原样。
+            val fromProject = path.substringAfter("/$PROJECTS_DIR/", "")
+            val label = when {
+                stored.contains('/') -> stored
+                fromProject.isNotEmpty() -> fromProject
+                stored.isNotEmpty() -> stored
+                else -> path.substringAfterLast('/')
+            }
+            AgentStep.Artifact(
+                path = path,
+                label = label,
+                action = runCatching { AgentStep.Action.valueOf(o.optString("a")) }
+                    .getOrDefault(AgentStep.Action.TOUCH),
+            )
+        }
     }
 
     /** 是否为旧的"整份 JSON 数组"格式 */

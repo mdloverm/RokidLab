@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RokidLab 聊天「过程」改造说明 — 2026-10-10</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f7f7f5;
+    --panel-alt: #f1efec;
+    --border: rgba(0,0,0,0.12);
+    --text: #1f1f1d;
+    --muted: #6b6b66;
+    --dim: #9a9a93;
+    --ok: #1d9e75;
+    --warn: #ba7517;
+    --bad: #d4537e;
+    --info: #378add;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px 56px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.65;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+  h2 {
+    font-size: 15px; font-weight: 600; margin: 32px 0 12px;
+    padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  p { margin: 0 0 12px; }
+  code {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 12.5px;
+    background: var(--panel-alt);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; background: var(--panel); }
+  td:first-child { white-space: nowrap; color: var(--muted); }
+  .tag {
+    display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px;
+    border: 1px solid var(--border); color: var(--muted); margin-right: 5px;
+  }
+  .t-ok { color: var(--ok); border-color: rgba(29,158,117,.35); }
+  .t-warn { color: var(--warn); border-color: rgba(186,117,23,.35); }
+  .t-bad { color: var(--bad); border-color: rgba(212,83,126,.35); }
+  .callout {
+    background: var(--panel); border-left: 3px solid var(--info);
+    padding: 12px 14px; margin: 14px 0; border-radius: 0 6px 6px 0;
+    font-size: 13px; color: var(--muted);
+  }
+  .callout strong { color: var(--text); font-weight: 600; }
+  ul { margin: 8px 0 14px; padding-left: 20px; }
+  li { margin-bottom: 6px; }
+  .foot { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>聊天窗口「过程」改造说明</h1>
+  <div class="sub">RokidLab phone-app · 2026-10-10 · 对照大厂 agent 过程面板的逐项覆盖</div>
+
+  <h2>一、你报的两个问题，根因在哪</h2>
+  <p><strong>问题 1：文件类操作应该是可点开的地址链接。</strong></p>
+  <p>
+    根因不在 UI，在<strong>数据面</strong>：一条工具调用的信息只有 <code>AgentStep</code> 一个结构化出口，而它<strong>没有文件字段</strong>。
+    路径被拍进 <code>detail</code> 那段「参数 → 结果」的字符串里（上限 240 字符），而
+    <code>apply_patch</code>／<code>save_code_file</code> 的参数里塞着完整 diff 或源码 ——
+    <code>path</code> 字段在 120 字符内就被顶掉了。所以在数据层就做不到「可点开」，改 UI 没有用。
+  </p>
+  <p><strong>问题 2：该在过程里的跑到对话窗口了。</strong></p>
+  <p>
+    事件流里的 14 类事件，有 <strong>9 类在「过程」面板里完全没有对应物</strong>；
+    另有「收尾兜底轮」跑工具时全程静默、子代理内层步骤的结果恒为空。
+    这些信息既然没有过程落点，就只能落进气泡正文。
+  </p>
+
+  <div class="callout">
+    <strong>一句话判据：</strong>问「这条回答的是<em>你做了什么</em>，还是<em>结果是什么</em>」——
+    前者归过程，后者归对话。<strong>过程只有一条结构化出口，缺字段就只能掉进正文。</strong>
+  </div>
+
+  <h2>二、大厂 agent 过程面板的基准项 → 本次覆盖情况</h2>
+  <table>
+    <thead><tr><th>基准项</th><th>改造前</th><th>本次</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>工具调用行</td>
+        <td>有（工具名 + 参数截断）</td>
+        <td><span class="tag t-ok">保持</span>标题走 <code>displayNameOf</code>，同工具设置页口径</td>
+      </tr>
+      <tr>
+        <td>三态状态机</td>
+        <td>有（RUNNING/AWAITING_CONFIRM/OK/FAILED/CANCELLED）</td>
+        <td><span class="tag t-ok">补齐</span>失败态不再被误画成成功（拍照失败原会显示绿勾）</td>
+      </tr>
+      <tr>
+        <td><strong>产物卡片（可点开预览）</strong></td>
+        <td><strong>无</strong> —— 路径埋在截断串里</td>
+        <td><span class="tag t-ok">新增</span><code>AgentStep.artifacts</code> + 过程行内联芯片 + 预览框</td>
+      </tr>
+      <tr>
+        <td>审批请求</td>
+        <td>只有「等你确认」瞬时态</td>
+        <td><span class="tag t-ok">新增</span>补「谁放行的」：用户点头 vs 策略静默放行</td>
+      </tr>
+      <tr>
+        <td>上下文/预算条</td>
+        <td>压缩有，注入无，预算触顶无</td>
+        <td><span class="tag t-ok">新增</span>5 类上下文注入 + token 触顶 + 自动续做</td>
+      </tr>
+      <tr>
+        <td>子代理委派树</td>
+        <td>有行，但每步结果恒为空</td>
+        <td><span class="tag t-ok">修复</span>sink 补 <code>result</code> 参数</td>
+      </tr>
+      <tr>
+        <td>可折叠 + 默认折叠</td>
+        <td>有</td>
+        <td><span class="tag t-ok">保持</span></td>
+      </tr>
+      <tr>
+        <td><strong>错误可定位 / 重试可见</strong></td>
+        <td><strong>无</strong> —— 重试只有退避 sleep，界面像是卡住</td>
+        <td><span class="tag t-ok">新增</span>重试过程步骤（含原因与第几次）</td>
+      </tr>
+      <tr>
+        <td>自我检查 / 反思</td>
+        <td>只落 logcat 与事件流</td>
+        <td><span class="tag t-ok">新增</span>重复调用、标记泄漏进过程面板</td>
+      </tr>
+      <tr>
+        <td>收尾阶段</td>
+        <td><strong>完全静默</strong>（最多 3 轮、每轮可达 120s）</td>
+        <td><span class="tag t-ok">新增</span>「收尾中」占位 + 收尾轮每个工具</td>
+      </tr>
+      <tr>
+        <td>流程状态（App 自己做的事）</td>
+        <td>占对话气泡，且靠调用顺序才被清掉</td>
+        <td><span class="tag t-ok">归位</span>进过程面板；顺序依赖消失</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>三、改了哪些文件</h2>
+  <table>
+    <thead><tr><th>文件</th><th>改动</th></tr></thead>
+    <tbody>
+      <tr><td>ai/AgentStep.kt</td><td>加 <code>artifacts</code> 字段与 <code>Artifact</code>/<code>Action</code>；加 4 个 Kind（SUMMARY/FRAMEWORK/MEMORY/REFLECT）；加 10 个工厂方法</td></tr>
+      <tr><td>store/ChatHistoryStore.kt</td><td>trace 落盘加产物三元组；回放的降级纪律（缺路径丢弃、未知动作中性化）</td></tr>
+      <tr><td>store/ChatArtifactChip.kt <span class="tag">新</span></td><td>产物芯片 + 预览框（懒读、限行、四态如实区分）</td></tr>
+      <tr><td>store/ChatBubble.kt</td><td>过程行挂产物芯片；4 个新 Kind 的图标与文案分支</td></tr>
+      <tr><td>store/ChatStateHolder.kt</td><td>状态行归位；<code>upsertDetachedTrace</code>（跨轮动作不占锚点）</td></tr>
+      <tr><td>store/ChatScreen.kt</td><td>拍照答题 4 处状态回调改走过程面板</td></tr>
+      <tr><td>domain/AiConversationService.kt</td><td>产物提取接线；新增 9 处过程发射点（注入×5、重试、预算触顶、续做、授权来源、自省×2、收尾轮）</td></tr>
+      <tr><td>ai/subagent/ReadOnlySubagent.kt</td><td>进度回调签名补 <code>result</code></td></tr>
+      <tr><td>values/strings.xml + values-en/</td><td>双语同补 16 条新文案</td></tr>
+    </tbody>
+  </table>
+
+  <h2>四、三条不该被改回去的判据</h2>
+  <ul>
+    <li><strong>不做通用路径扫描。</strong>只认「工具名 → 参数键 + 动作」登记表。
+        通用扫会把 <code>save_code_file</code> 源码里的 <code>import '../src/a.js'</code>
+        当成「它操作了这个文件」，也会把「读到路径」误报成「改了它」。</li>
+    <li><strong>解析不出工作区根就不显示芯片。</strong>宁可少一个可点的东西，
+        也不给一个打不开的路径 —— 后者会让用户以为文件丢了。</li>
+    <li><strong>产物必须落盘。</strong>否则「新会话能看、旧会话不能看」，
+        比不做更让人怀疑数据丢了。</li>
+  </ul>
+
+  <h2>五、验证情况</h2>
+  <ul>
+    <li><code>:phone-app:compileDebugKotlin</code> 通过；门禁脚本 21 provider / 105 工具 / 三表一致（未动工具表）。</li>
+    <li><code>:phone-app:testDebugUnitTest</code> 全量通过（新增约 22 条断言）。</li>
+    <li><strong>「测试能红」已实测</strong>：临时移除产物落盘 ⇒ 对应往返断言立刻失败 ⇒ 恢复后全绿。</li>
+    <li>按你的约定：<strong>未打包、未装机</strong>，设备实测留给你。</li>
+  </ul>
+
+  <div class="foot">
+    设备验证建议：① 让 AI 改一个项目文件（<code>apply_patch</code>），看过程行是否出现可点文件名 → 点开看预览；
+    ② 拍照答题走一遍，确认状态在过程面板而非对话气泡、失败时是红色；
+    ③ 在代码卡上点「运行」，确认过程面板同时出现「正在运行」并随后结清。
+  </div>
+
+</div>
+</body>
+</html>

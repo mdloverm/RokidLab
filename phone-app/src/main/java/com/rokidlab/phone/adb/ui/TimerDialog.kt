@@ -48,7 +48,30 @@ sealed class TimerAction {
 
 sealed class TimerSchedule {
     data class Interval(val seconds: Long, val count: Int) : TimerSchedule()
-    data class FixedTime(val hour: Int, val minute: Int, val repeatDaily: Boolean) : TimerSchedule()
+
+    /**
+     * 固定时刻。**为什么加 [dayEpochDay]**（2026-10-11）：
+     * 原本只有「时:分 + 是否每天」，于是**一次性任务无法指定日期** —— 「周五要交报告」
+     * 只能被排到「明天该时刻」。而 `schedule_agent_task` 的提示词却明确教模型
+     * 处理「明天下午面试」「下周二是我妈生日」这类带日期的约定：模型被要求做一件
+     * **工具无法表达**的事 ⇒ 生成的回访必然落在错误的那天 ⇒ 用户觉得「这功能不灵」，
+     * 而且是**静默错**（不报错，只是问错了日子）。
+     *
+     * [dayEpochDay] = `LocalDate.toEpochDay()`；null = 旧的「今天该点未过则今天，否则明天」语义。
+     * 用 epochDay 而不是 `yyyy-MM-dd` 字符串：跨序列化不必再解析日期格式，
+     * 也避开时区/闰年/时区偏移的字符串歧义（Kotlin 的 LocalDate 不受系统默认时区影响）。
+     *
+     * ⚠️ **null 语义必须保留**：已存在的持久化任务没有这个字段，读出来是 null，
+     * 行为与改动前完全一致（[dayEpochDay] 只在**显式指定**时生效）。
+     */
+    data class FixedTime(
+        val hour: Int,
+        val minute: Int,
+        val repeatDaily: Boolean,
+        /** 一次性任务的指定日期（epochDay）；null = 不限日期，按「今天/明天」推 */
+        val dayEpochDay: Long? = null,
+    ) : TimerSchedule()
+
     data class Countdown(val seconds: Long) : TimerSchedule()
 }
 

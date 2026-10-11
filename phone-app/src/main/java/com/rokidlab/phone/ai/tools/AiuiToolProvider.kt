@@ -255,6 +255,9 @@ internal object AiuiToolProvider : ToolProvider {
                     }
                     ToolRegistry.lastStartedAiuiAgentId = agent.agentId
                     ToolRegistry.lastStartedAiuiHost = ToolRegistry.AiuiHost.PHONE_HOST
+                    // 清掉上一次运行的日志（P2-15）：否则这次打开会把"上一版的报错"当成本次的问题
+                    // 读给模型 —— 比没有日志更糟（会把它引向一个已经不存在的 bug）。
+                    com.rokidlab.phone.aiui.AiuiPageLog.clear(demoAix.nameWithoutExtension)
                     AiuiDemoController.show(
                         AiuiDemoController.Session(
                             appName = agent.name,
@@ -264,7 +267,8 @@ internal object AiuiToolProvider : ToolProvider {
                         ),
                     )
                     val colorNote = if (colorRequested) "彩色版，" else ""
-                    return "好的，已在手机上演示「${agent.name}」（${colorNote}对话里的卡片，点「全屏操作」可用触摸滑动与点击）"
+                    return "好的，已在手机上演示「${agent.name}」（${colorNote}对话里的卡片，点「全屏操作」可用触摸滑动与点击）" +
+                        withPageLogs(demoAix.nameWithoutExtension)
                 }
 
                 // ── 眼镜端 ──
@@ -558,5 +562,32 @@ internal object AiuiToolProvider : ToolProvider {
 
         else -> throw IllegalArgumentException("未知工具: $name")
         }
+    }
+
+    /**
+     * 把**页面运行日志**附在打开结果后面（2026-10-09，P2-15）。
+     *
+     * ## 为什么必须给 agent 看
+     *
+     * gps-live 案的决定性证据是一句运行时错误
+     * （`Host capability geolocation.getCurrentPosition is not configured on Web host`），
+     * 它只进了 logcat —— 而 agent **读不到 logcat**（`read_screen` 只能看像素）。
+     * 于是它只能照着用户一句"拿不到位置"猜，猜成了"HTTPS/浏览器限制"（错因），
+     * 后续 3 轮全在这个错前提上打转。
+     *
+     * 判据：**凡是"只有用户能看见、agent 看不见"的故障信号，都是必然的误诊来源。**
+     *
+     * @param logKey 与 [com.rokidlab.phone.aiui.AiuiWebHost] 的分桶键一致（= `.aix` 文件名去扩展名）
+     * @return 追加文本；无日志时返回空串（不污染正常结果）
+     */
+    private fun withPageLogs(logKey: String?): String {
+        val logs = com.rokidlab.phone.aiui.AiuiPageLog.recent(logKey)
+        if (logs.isBlank()) return ""
+        val warn = if (com.rokidlab.phone.aiui.AiuiPageLog.hasError(logKey)) {
+            "\n\n⚠️ **页面有报错**（下面 error 行就是原因；据此判断问题出在哪，不要凭猜测回答）："
+        } else {
+            "\n\n（页面运行日志，供你判断页面是否真的正常跑起来了）"
+        }
+        return warn + "\n" + logs
     }
 }

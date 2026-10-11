@@ -288,4 +288,22 @@ class ProactiveGatePolicyTest {
         assertFalse(ProactiveGatePolicy.matchesSilence("闭嘴"))
         assertFalse(ProactiveGatePolicy.matchesSilence("安静点"))
     }
+
+    // ── 重要性分级 ──
+
+    @Test
+    fun minInterval_highBypasses_normalKeeps_lowDoubles() {
+        val base = ProactiveGatePolicy.MIN_INTERVAL_MS
+        assertEquals("HIGH 豁免同类间隔", 0L, ProactiveGatePolicy.minIntervalFor(ProactiveGatePolicy.Importance.HIGH))
+        assertEquals("NORMAL 保持基线", base, ProactiveGatePolicy.minIntervalFor(ProactiveGatePolicy.Importance.NORMAL))
+        assertEquals("LOW 最保守（×2）", base * 2, ProactiveGatePolicy.minIntervalFor(ProactiveGatePolicy.Importance.LOW))
+    }
+
+    @Test
+    fun quietHours_highAndNormalDefer_lowDrops() {
+        // 日程简报顺延到早上还有用；「你坐太久了」到早上是废话
+        assertTrue(ProactiveGatePolicy.deferQuietEvents(ProactiveGatePolicy.Importance.HIGH))
+        assertTrue(ProactiveGatePolicy.deferQuietEvents(ProactiveGatePolicy.Importance.NORMAL))
+        assertFalse(ProactiveGatePolicy.deferQuietEvents(ProactiveGatePolicy.Importance.LOW))
+    }
 }

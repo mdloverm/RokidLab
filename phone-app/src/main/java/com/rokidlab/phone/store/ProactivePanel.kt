@@ -1,5 +1,6 @@
 package com.rokidlab.phone.store
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -8,12 +9,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -21,6 +24,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -29,6 +34,7 @@ import androidx.compose.ui.Alignment.Companion.CenterVertically
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -36,10 +42,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.rokidlab.phone.R
 import com.rokidlab.phone.design.BrewBg
 import com.rokidlab.phone.design.BrewBorder
 import com.rokidlab.phone.design.BrewChat
+import com.rokidlab.phone.design.BrewCoral
 import com.rokidlab.phone.design.BrewDialog
 import com.rokidlab.phone.design.BrewDialogActions
 import com.rokidlab.phone.design.BrewDialogButton
@@ -54,9 +63,12 @@ import com.rokidlab.phone.design.BrewTextBright
 import com.rokidlab.phone.design.BrewWarning
 import com.rokidlab.phone.proactive.HEAD_DOWN_LIMIT_MS
 import com.rokidlab.phone.proactive.MOVE_LIMIT_MS
+import com.rokidlab.phone.proactive.NotificationDigest
 import com.rokidlab.phone.proactive.ProactiveGate
 import com.rokidlab.phone.proactive.ProactiveGatePolicy
 import com.rokidlab.phone.proactive.STILL_LIMIT_MS
+import com.rokidlab.phone.permission.AppPermission
+import com.rokidlab.phone.permission.PermissionBridge
 
 /**
  * 「主动性」下弹面板（聊天输入栏 Bolt 图标 → ModalBottomSheet，与知识库面板同款形态）。
@@ -86,7 +98,21 @@ internal fun ProactivePanel(onDismiss: () -> Unit) {
     var quietStart by remember { mutableStateOf(gate.quietStartMin()) }
     var quietEnd by remember { mutableStateOf(gate.quietEndMin()) }
     var pickStart by remember { mutableStateOf(false) }
+    var showWhitelist by remember { mutableStateOf(false) }
+    var whitelistCount by remember { mutableStateOf(NotificationDigest.get(ctx).whitelist().size) }
     var pickEnd by remember { mutableStateOf(false) }
+
+    // 修正历史脏状态：初版「消息摘要」开关只翻状态、不引导授权，可能留下
+    // 「开关 = on 但系统未授权」的组合 —— 它**永远不会生效**（NotificationDigest.onTick
+    // 拿不到权限直接 return），属于"显示已开启、其实不工作"的假成功。
+    // 这里回落为 off，让面板状态诚实：用户看到"关 + 缺授权"，点一下即被引导去开。
+    LaunchedEffect(Unit) {
+        val digest = NotificationDigest.get(ctx)
+        if (digest.isEnabled() && !digest.hasListenerPermission()) {
+            gate.setFeature(ProactiveGatePolicy.ProactiveFeature.NOTIFY, false)
+            features = features + (ProactiveGatePolicy.ProactiveFeature.NOTIFY to false)
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -273,6 +299,46 @@ internal fun ProactivePanel(onDismiss: () -> Unit) {
                 ProactiveFeatureRow(features, ProactiveGatePolicy.ProactiveFeature.VISION, gate) { on ->
                     features = features + (ProactiveGatePolicy.ProactiveFeature.VISION to on)
                 }
+
+                ProactiveFeatureRow(features, ProactiveGatePolicy.ProactiveFeature.NOTIFY, gate) { on ->
+                    features = features + (ProactiveGatePolicy.ProactiveFeature.NOTIFY to on)
+                }
+                // 白名单入口：只在「消息摘要」开启时出现（Muse 式「只听指定 App」）
+                if (features[ProactiveGatePolicy.ProactiveFeature.NOTIFY] == true) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clip(BrewShapeStandard)
+                            .background(BrewPanel)
+                            .border(1.dp, BrewBorder, BrewShapeStandard)
+                            .clickable { showWhitelist = true }
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.proactive_digest_whitelist),
+                                color = BrewTextBright,
+                                fontSize = 13.sp,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = if (whitelistCount == 0) {
+                                    stringResource(R.string.proactive_digest_whitelist_all)
+                                } else {
+                                    stringResource(
+                                        R.string.proactive_digest_whitelist_count_fmt,
+                                        whitelistCount,
+                                    )
+                                },
+                                color = BrewMuted,
+                                fontSize = 11.sp,
+                            )
+                        }
+                        Text(text = "›", color = BrewMuted, fontSize = 16.sp)
+                    }
+                }
                 // 会话内陪伴（对话内的话题枯竭/沉默追击）不属于场景六格，单独一行
                 ProactiveToggleRow(
                     title = stringResource(R.string.proactive_chat_companion),
@@ -319,6 +385,15 @@ internal fun ProactivePanel(onDismiss: () -> Unit) {
                 pickEnd = false
             },
             onDismiss = { pickEnd = false },
+        )
+    }
+    if (showWhitelist) {
+        DigestWhitelistDialog(
+            onDismiss = { showWhitelist = false },
+            onSaved = { count ->
+                whitelistCount = count
+                showWhitelist = false
+            },
         )
     }
 }
@@ -564,7 +639,7 @@ private fun TimeText(value: Int, onClick: () -> Unit) {
 }
 
 /**
- * 六格之一：开关 + 该能力在当前设置下的真实触发条件副标题。
+ * 七格之一：开关 + 该能力在当前设置下的真实触发条件副标题。
  * 切换即写宿主开关并回写「当前场景」的记忆（切走再切回自动恢复）。
  */
 @Composable
@@ -574,6 +649,22 @@ private fun ProactiveFeatureRow(
     gate: ProactiveGate,
     onLocal: (Boolean) -> Unit,
 ) {
+    val ctx = LocalContext.current
+    // 「消息摘要」的可用性取决于**系统级通知使用权**，而它只能由用户去设置页手动开。
+    // 授权状态不能只读一次：用户很可能刚顺着引导去开完再回来，副标题必须反映真实结果，
+    // 否则会停在"未授予"让人以为没生效。
+    var listenGranted by remember { mutableStateOf(NotificationDigest.get(ctx).hasListenerPermission()) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                listenGranted = NotificationDigest.get(ctx).hasListenerPermission()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val subtitle = when (feature) {
         ProactiveGatePolicy.ProactiveFeature.RITUAL ->
             stringResource(R.string.proactive_feat_ritual_desc)
@@ -596,6 +687,16 @@ private fun ProactiveFeatureRow(
 
         ProactiveGatePolicy.ProactiveFeature.VISION ->
             stringResource(R.string.proactive_vision_every)
+
+        // 通知使用权未授予时，副标题直接说清「缺什么」——
+        // ⚠️ 文案必须与实际行为一致：打开开关**确实会**把授权页拉起来（见下方 onChecked），
+        // 之前这里写"点此前往设置"但点击只翻开关，是**承诺了不存在的动作**
+        ProactiveGatePolicy.ProactiveFeature.NOTIFY ->
+            if (listenGranted) {
+                stringResource(R.string.proactive_notify_desc)
+            } else {
+                stringResource(R.string.proactive_notify_need_permission)
+            }
     }
     val title = when (feature) {
         ProactiveGatePolicy.ProactiveFeature.RITUAL -> stringResource(R.string.proactive_ritual)
@@ -604,14 +705,35 @@ private fun ProactiveFeatureRow(
         ProactiveGatePolicy.ProactiveFeature.FOLLOWUP -> stringResource(R.string.settings_followup)
         ProactiveGatePolicy.ProactiveFeature.IDLE_CHAT -> stringResource(R.string.settings_idle_greeting)
         ProactiveGatePolicy.ProactiveFeature.VISION -> stringResource(R.string.settings_ambient_vision)
+        ProactiveGatePolicy.ProactiveFeature.NOTIFY -> stringResource(R.string.settings_notification_digest)
     }
     ProactiveToggleRow(
         title = title,
         subtitle = subtitle,
         checked = features[feature] == true,
-        onChecked = {
-            gate.setFeature(feature, it)
-            onLocal(it)
+        onChecked = { on ->
+            // 「消息摘要」读的是系统通知，没授予通知使用权时**只翻开关不会让它工作**
+            // （NotificationDigest.onTick 拿不到权限会直接 return）⇒ 打开时必须先把
+            // 授权路径递到用户面前，否则就是"开关说开了、功能其实不会跑"的假成功。
+            //
+            // 走 PermissionBridge（不自写「请去设置开」文案）：它已处理"后台拉不起界面
+            // 就退通知栏兜底"，与拨号/短信等既有权限诉求同一条链路。
+            if (feature == ProactiveGatePolicy.ProactiveFeature.NOTIFY) {
+                android.util.Log.i(
+                    "ProactivePanel",
+                    "notify toggle on=$on granted=$listenGranted",
+                )
+                if (on && !listenGranted) {
+                    val launched = PermissionBridge.request(
+                        ctx,
+                        listOf(AppPermission.NOTIFICATION_LISTEN),
+                        ctx.getString(R.string.permission_reason_notification_digest),
+                    )
+                    android.util.Log.i("ProactivePanel", "notification access request launched=$launched")
+                }
+            }
+            gate.setFeature(feature, on)
+            onLocal(on)
         },
     )
 }
@@ -654,6 +776,114 @@ private fun ProactiveToggleRow(
                 uncheckedThumbColor = BrewMuted,
             ),
         )
+    }
+}
+
+/**
+ * 「监听应用」多选对话框（消息摘要的应用白名单）：
+ * 只列有启动入口的用户应用（排除本 App），勾选集为空 = 收全部 ——
+ * 白名单语义是许可扩展而非屏蔽（见 [com.rokidlab.phone.proactive.NotificationDigestPolicy.passesWhitelist]）。
+ * 每项展示应用名 + 包名：包名是过滤的唯一事实，只显示应用名会看不出两个「笔记」有什么区别。
+ */
+@Composable
+private fun DigestWhitelistDialog(
+    onDismiss: () -> Unit,
+    onSaved: (Int) -> Unit,
+) {
+    val ctx = LocalContext.current
+    var apps by remember { mutableStateOf(emptyList<Pair<String, String>>()) } // (应用名, 包名)
+    var selected by remember { mutableStateOf(NotificationDigest.get(ctx).whitelist()) }
+    // 应用列表一次性加载（数量级几十~几百，主页入口过滤后可控；不落盘不缓存，开面板才查）
+    LaunchedEffect(Unit) {
+        apps = runCatching {
+            val pm = ctx.packageManager
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            pm.queryIntentActivities(intent, 0)
+                .asSequence()
+                .mapNotNull { it.activityInfo?.packageName }
+                .filter { it != ctx.packageName }
+                .distinct()
+                .map { pkg ->
+                    val label = runCatching {
+                        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                    }.getOrDefault(pkg)
+                    label to pkg
+                }
+                .sortedBy { it.first.lowercase() }
+                .toList()
+        }.getOrDefault(emptyList())
+    }
+    BrewDialog(
+        onDismiss = onDismiss,
+        title = stringResource(R.string.proactive_digest_whitelist),
+        subtitle = stringResource(R.string.proactive_digest_whitelist_subtitle),
+        color = BrewCoral,
+    ) {
+        BrewDialogContent {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                if (apps.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.proactive_digest_whitelist_loading),
+                        color = BrewMuted,
+                        fontSize = 12.sp,
+                    )
+                }
+                apps.forEach { (label, pkg) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selected = if (pkg in selected) selected - pkg else selected + pkg
+                            }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = pkg in selected,
+                            onCheckedChange = { on ->
+                                selected = if (on) selected + pkg else selected - pkg
+                            },
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = label,
+                                color = BrewTextBright,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = pkg,
+                                color = BrewMuted,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        BrewDialogActions {
+            BrewDialogButton(
+                text = stringResource(R.string.proactive_digest_whitelist_clear),
+                onClick = { selected = emptySet() },
+                enabled = selected.isNotEmpty(),
+            )
+            Spacer(Modifier.width(8.dp))
+            BrewDialogButton(
+                text = stringResource(R.string.done),
+                onClick = {
+                    NotificationDigest.get(ctx).setWhitelist(selected)
+                    onSaved(selected.size)
+                },
+            )
+        }
     }
 }
 

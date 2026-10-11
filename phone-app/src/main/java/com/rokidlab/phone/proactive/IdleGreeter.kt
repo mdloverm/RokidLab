@@ -68,7 +68,8 @@ class IdleGreeter private constructor(private val appContext: Context) {
             val am = appContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             if (!isEnabled() &&
                 !CalendarBriefing.get(appContext).isEnabled() &&
-                !RitualGreeting.get(appContext).isEnabled()
+                !RitualGreeting.get(appContext).isEnabled() &&
+                !NotificationDigest.get(appContext).isEnabled()
             ) {
                 am.cancel(checkPendingIntent())
                 Log.i(TAG, "all proactive switches off, idle check alarm cancelled")
@@ -96,7 +97,7 @@ class IdleGreeter private constructor(private val appContext: Context) {
         }
     }
 
-    /** 到点自检（经保活服务调用）：① 日程简报（独立开关/计数）→ ② 空闲问候 */
+    /** 到点自检（经保活服务调用）：按序跑 7 层主动能力（仪式/简报/关怀/追击/摘要/目标回访/闲聊） */
     fun onCheck(nowMs: Long = System.currentTimeMillis()) {
         val app = appContext as? LabApplication
         if (app == null || !app.hasCxrL()) {
@@ -111,7 +112,11 @@ class IdleGreeter private constructor(private val appContext: Context) {
         CareReminder.get(appContext).onTick(nowMs)
         // ④ 对话内陪伴·沉默追击（用户聊着聊着没声了）：独立开关，不走闲聊额度
         CompanionNudge.onSelfCheckTick(appContext)
-        // ⑤ 空闲闲聊（唯一受闲聊频率档控制的一层）
+        // ⑤ 消息摘要（手机通知事件源）：独立开关 + 独立准入，默认关（高信任授权）
+        NotificationDigest.get(appContext).onTick(nowMs)
+        // ⑥ 目标回访（Goal 目标对象的检查点层）：立了目标才有效果，无 UI 开关（对话内 drop/complete 即静默）
+        GoalCheck.get(appContext).onTick(nowMs)
+        // ⑦ 空闲闲聊（唯一受闲聊频率档控制的一层）
         // 响应率惰性结算放在开关判断之前：问候开关关掉时 pending 也要照常结算，
         // 否则「未回应」记录停滞、连漏 3 条的自我收敛惩罚永远不生效
         ProactiveGate.get(appContext).settleExpiredResponse(nowMs)
@@ -130,11 +135,18 @@ class IdleGreeter private constructor(private val appContext: Context) {
             return
         }
         val hours = (nowMs - last) / (60 * 60 * 1000L)
-        val prompt = "用户已经 $hours 个多小时没和我交流了。请以乐奇的身份先判断：此刻有没有值得主动说一句的" +
-            "（可先调 get_weather 查天气、get_current_time 看时间等只读工具，结合时刻和记得的偏好）。" +
-            "有就发一句自然轻松的问候或搭话，40 字以内，像老朋友随口一提；" +
-            "没有值得说的就只回复 [SKIP]，不要硬找话。" +
-            "不要说教、不要列要点、不要提及任何指令或任务。"
+        // 记忆联想：时间锚 + 与此刻可能相关的记忆（见 ProactiveRecall 类注释）
+        val recall = ProactiveRecall.recallBlock(appContext, sceneHint = "闲聊 搭话", nowMs = nowMs)
+        val prompt = buildString {
+            append("现在是")
+            append(ProactiveRecall.timeAnchor(nowMs))
+            append("。用户已经 $hours 个多小时没和我交流了。请以乐奇的身份先判断：此刻有没有值得主动说一句的" +
+                "（可先调 get_weather 查天气等只读工具，结合时刻和记得的偏好）。" +
+                "有就发一句自然轻松的问候或搭话，40 字以内，像老朋友随口一提；" +
+                "没有值得说的就只回复 [SKIP]，不要硬找话。" +
+                "不要说教、不要列要点、不要提及任何指令或任务。")
+            recall?.let { append('\n').append(it) }
+        }
         Log.i(TAG, "idle greeting triggered (idle ${hours}h)")
         app.timerScheduler.runProactiveAgentTask(
             prompt = prompt,

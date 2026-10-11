@@ -24,6 +24,7 @@ import com.rokidlab.phone.permission.AppPermission
 import com.rokidlab.phone.permission.PermissionBridge
 import org.json.JSONObject
 import java.text.SimpleDateFormat
+import java.time.LocalDate
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
@@ -52,7 +53,7 @@ internal object TimerToolProvider : ToolProvider {
             statusText = "正在处理定时任务…",
             schema = toolSchema(
                 name = "manage_timer",
-                description = "管理定时提醒 / 定时任务，一个工具管三种意图。action=\"create\"：创建（「5分钟后提醒我喝水」「明早8点叫我」「17点打开小智」）。action=\"list\"：列出全部（「我有哪些提醒」「几点有提醒」）。action=\"cancel\"：取消（「取消刚才的提醒」「删掉那个闹钟」；全部取消传 all=true）。注意：到点要我自己查资料再汇报，或到点要**播放某首歌**的需求，请改用 schedule_agent_task —— 本工具到点只会念一句固定内容（或在眼镜上打开指定应用），放不了音乐。",
+                description = "管理**眼镜端**的定时提醒 / 定时任务，一个工具管三种意图。action=\"create\"：创建（「5分钟后提醒我喝水」「明早8点叫我」「17点打开小智」）。action=\"list\"：列出全部（「我有哪些提醒」「几点有提醒」）。action=\"cancel\"：取消（「取消刚才的提醒」「删掉那个闹钟」；全部取消传 all=true）。⚠️ 让**手机响铃**（手机闹钟/倒计时）请用 set_phone_alarm；用户**没说哪一端时先问一句**「让手机响还是眼镜提醒你？」，不要默认任何一端。注意：到点要我自己查资料再汇报，或到点要**播放某首歌**的需求，请改用 schedule_agent_task —— 本工具到点只会念一句固定内容（或在眼镜上打开指定应用），放不了音乐。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -90,6 +91,7 @@ internal object TimerToolProvider : ToolProvider {
                         "schedule_type" to mapOf("type" to "string", "enum" to listOf("fixed", "countdown", "interval"), "description" to "fixed=每天/某天的固定时刻（默认）；countdown=多少秒后执行一次；interval=每 N 秒执行一次，共 M 次"),
                         "hour" to mapOf("type" to "integer", "description" to "schedule_type=fixed 时的小时，24 小时制 0~23，如 8 表示早上 8 点"),
                         "minute" to mapOf("type" to "integer", "description" to "schedule_type=fixed 时的分钟 0~59，默认 0"),
+                        "date" to mapOf("type" to "string", "description" to "schedule_type=fixed 且**只执行一次**时的指定日期，格式 YYYY-MM-DD（如 \"2026-10-16\" 表示 10 月 16 日那天触发一次）。⚠️ 用户提到**具体日期**的约定（「下周五交报告」「周五要面试」「下周二是我妈生日」）时必须填，否则任务会落到明天；只说「每天/每天早上」时才不填、走 repeatDaily"),
                         "repeat_daily" to mapOf("type" to "boolean", "description" to "schedule_type=fixed 时是否每天重复，默认 false（只执行一次）；用户说「每天」时传 true"),
                         "seconds" to mapOf("type" to "integer", "description" to "schedule_type=countdown/interval 时的间隔秒数（须 > 0）"),
                         "count" to mapOf("type" to "integer", "description" to "schedule_type=interval 时的重复次数，默认 1"),
@@ -272,17 +274,38 @@ internal object TimerToolProvider : ToolProvider {
                         if (hour !in 0..23) return "请提供 0~23 的小时（hour）"
                         if (minute !in 0..59) return "分钟需在 0~59 之间"
                         val repeatDaily = args.optBoolean("repeat_daily", false)
-                        schedule = TimerSchedule.FixedTime(hour, minute, repeatDaily)
-                        val now = Calendar.getInstance()
-                        val target = Calendar.getInstance().apply {
-                            set(Calendar.HOUR_OF_DAY, hour)
-                            set(Calendar.MINUTE, minute)
-                            set(Calendar.SECOND, 0)
+                        // 日期先行校验：宁可让模型改对，也不要把回访排在错的那天
+                        val dayEpochDay = when (val r = parseOnceDate(args.optString("date"), repeatDaily)) {
+                            is ParseResult.Ok -> r.day
+                            is ParseResult.BadFormat ->
+                                return "date 格式应为 YYYY-MM-DD（如 2026-10-16），收到的「${r.raw}」无法识别"
+                            is ParseResult.Past ->
+                                return "date「${r.raw}」已经过去了。请确认这个约定的真实日期" +
+                                    "（若用户指的是「下周」，请换算成下周的具体日期再重试）"
+                            ParseResult.Conflict ->
+                                return "date 与 repeat_daily 冲突：要么指定某一天，要么每天重复"
                         }
+                        schedule = TimerSchedule.FixedTime(hour, minute, repeatDaily, dayEpochDay)
+                        val now = Calendar.getInstance()
+                        val today = LocalDate.now()
                         val dayLabel = when {
                             repeatDaily -> "每天"
-                            target.timeInMillis > now.timeInMillis -> "今天"
-                            else -> "明天"
+                            dayEpochDay != null -> when (dayEpochDay - today.toEpochDay()) {
+                                0L -> "今天"
+                                1L -> "明天"
+                                else -> {
+                                    val wanted = today.plusDays(dayEpochDay - today.toEpochDay())
+                                    "${wanted.monthValue} 月 ${wanted.dayOfMonth} 日"
+                                }
+                            }
+                            else -> {
+                                val target = Calendar.getInstance().apply {
+                                    set(Calendar.HOUR_OF_DAY, hour)
+                                    set(Calendar.MINUTE, minute)
+                                    set(Calendar.SECOND, 0)
+                                }
+                                if (target.timeInMillis > now.timeInMillis) "今天" else "明天"
+                            }
                         }
                         label = "$dayLabel " + String.format(Locale.CHINA, "%02d:%02d", hour, minute)
                     }
@@ -334,5 +357,60 @@ internal object TimerToolProvider : ToolProvider {
         } else {
             " " + context.getString(R.string.timer_exact_alarm_notify)
         }
+    }
+
+    /**
+     * 解析 `schedule_agent_task` 的 `date` 参数（`YYYY-MM-DD`）→ epochDay。
+     *
+     * ⚠️ 直接挂在 `internal object` 上（**不能**用 companion —— object 内声明 companion
+     * 会报 "Modifier 'companion' is not applicable inside 'standalone object'"）。
+     * 单测从 `TimerToolProvider.parseOnceDate(...)` 直接调，无需实例。
+     *
+         * ## 为什么必须是「拒绝」而不是「容错」
+     * 日期算错的后果不是报错，而是**在错误的那天**弹出回访 —— 用户看到的是
+     * 「周一问我周五的事」，比不提醒更糟（说明它不可信）。所以：
+     *  - 格式非法 → [ParseResult.BadFormat]，让模型改对；
+     *  - 日期已过 → [ParseResult.Past]，明确告诉它"这个约定已经过期"，
+     *    模型据此改口问用户「你是指下周吗」而不是默默排到明天；
+     *  - `repeatDaily = true` 却给了 date → 忽略多余的 date（见实现注释）。
+     *
+     * ⚠️ 用 `LocalDate.parse` 而不是 `SimpleDateFormat`：后者默认**宽松**，
+     * `2026-13-45` 会被自动滚到下一年 2 月，模型写错日期反而"成功"了 ——
+     * 正是本方法要防的那种静默错误。
+     *
+     * @param today 今天的 epochDay（抽出参数便于单测固定"今天"）
+     */
+    internal fun parseOnceDate(
+        raw: String?,
+        repeatDaily: Boolean,
+        today: Long = LocalDate.now().toEpochDay(),
+    ): ParseResult {
+        if (repeatDaily) {
+            // 「每天都执行」与「某一天」互斥，但这里选**忽略多余的 date** 而不是拒绝：
+            // 模型顺手填了 date 的概率不低，为这点摩擦让它整个建不成反而更糟。
+            return ParseResult.Ok(null)
+        }
+        val text = raw?.trim().orEmpty()
+        if (text.isEmpty()) return ParseResult.Ok(null)
+        val date = runCatching { LocalDate.parse(text) }.getOrElse { return ParseResult.BadFormat(text) }
+        val epochDay = date.toEpochDay()
+        // 今天该点还没到的话，模型写今天日期是合法的 → 只挡**早于今天**的
+        if (epochDay < today) return ParseResult.Past(text)
+        return ParseResult.Ok(epochDay)
+    }
+
+    /** [parseOnceDate] 的结果 */
+    internal sealed class ParseResult {
+        /** [day] 为 null = 不限日期（按旧「今天/明天」语义） */
+        data class Ok(val day: Long?) : ParseResult()
+
+        /** 格式非法（非 YYYY-MM-DD 或不是真实存在的日期） */
+        data class BadFormat(val raw: String) : ParseResult()
+
+        /** 日期已过 */
+        data class Past(val raw: String) : ParseResult()
+
+        /** 与 repeat_daily 冲突（保留给将来真要做严格校验时用） */
+        object Conflict : ParseResult()
     }
 }

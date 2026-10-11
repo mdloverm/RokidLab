@@ -64,6 +64,10 @@
 - 输入唯一可靠通道 = Page 级 onKeyDown/onKeyUp；bindfocus/触摸/悬停/拖拽不可靠。
 - 官方环境有默认行为（Backspace 返回、↑↓ 滚动、Enter 激活），自托管没有、页面全包；键处理首行 `event.preventDefault()`。
 - 文字是第一反馈通道；任何按键后必须 setData 刷新文字/高亮/计分。
+- 传感器（2026-10-09 起两端宿主都可用）：页面用 W3C Generic Sensor API（`new Gyroscope()` / `new AbsoluteOrientationSensor()` / Accelerometer / Magnetometer），眼镜端数据源是眼镜本地 IMU，**手机预览（AiuiWebHost）自动改用手机的 IMU**（旋转向量带磁力计融合，比眼镜 6 轴更稳）——同一份页面代码两端都跑，无需区分。
+  ⚠️ 上面这句「**无需区分**」**只对宿主侧能力成立**（传感器 / 画布 / 按键 / 音频这一层）；
+  **工具口不是** —— 工具永远在手机执行，而「作用于哪端」要另判，见 §9 的端归属表。
+
 
 ## 4. 按键输入契约（⚠️ 全部宿主统一：手机全屏预览 = 眼镜手柄，同一套）
 
@@ -158,9 +162,54 @@ page { width: 450px; height: 360px; background-color: #000000FF; overflow: hidde
 - 用户只说「做个支持手柄的 XX」时直接套官方模板/设计规范产出，不必再询问。
 - 彩色项目交付自检（官方 checklist 不含此项，随同步会丢，故钉在本文）：**每页 CSS 已按 §2.4 全彩 token 重写** + open_aiui_app(target=phone,color=true) 两步都做了才算完成；对旧绿色项目做彩色版必须逐页重写配色，**只补 color=true 不算合格**。
 
-## 9. 调用手机端工具（Lab 工具口）
+## 9. 调用端侧工具（Lab 工具口）
 
-页面可调用手机端绝大部分工具（音乐/天气/搜索/提醒/设备信息等），这是页面与外部世界交互的唯一通道——不要在页面里 fetch 外网。
+页面可调用端侧绝大部分工具（音乐/天气/搜索/提醒/设备信息等），这是页面与外部世界交互的唯一通道——不要在页面里 fetch 外网。
+
+### 9.00 ★ 端能力归属：**三类，不是"手机端/眼镜端"两类**（2026-10-09 补，最高频误判来源）
+
+⚠️ **页面只有这一个调用口，没有第二种通道**。所谓"双端调用"**不是两条通道**，而是**同一个调用口 + 不同工具组合**。三类要分清：
+
+| 类别 | 例子 | **实际跑在哪** |
+| --- | --- | --- |
+| ① **宿主侧能力** | IMU 传感器、画布、按键/触摸、音频播放 | **跟着页面所在的宿主走**：眼镜页用眼镜 IMU；手机预览用手机 IMU |
+| ② **普通工具**（`Lab.callTool` 的绝大多数） | 位置/天气/音乐/文件/搜索/提醒/知识库… | **永远在手机执行** |
+| ③ **眼镜专属工具**（下表 18 个） | 眼镜状态/应用/文件/相机/麦克风/头姿/歌词 | 执行体仍在**手机**，**动作代理到眼镜**；眼镜离线即失败 |
+
+**两条推论（务必记住）**：
+1. **页面里不存在"调用眼镜端能力"这种调用方式** ——"双端"只是工具选择不同。
+2. ⚠️ **眼镜页面调 `get_location`，拿到的也是手机的 GPS**（没有"眼镜侧定位工具"）。
+   所以**不要**写「手机预览读手机 GPS、推到眼镜后读眼镜定位」这类话 —— 两端拿的都是手机的位置。
+
+**③ 眼镜专属工具全清单（18 个，页面同样可调）**：
+- 眼镜状态/应用/文件（7）：`get_glasses_status`、`list_glasses_apps`、`launch_glasses_app`、`manage_glasses_app`、`list_glasses_files`、`read_glasses_file`、`download_glasses_file`
+- 眼镜 AIUI 应用（4）：`install_aiui_project`、`list_my_aiui_apps`、`pull_official_aiui`、`stop_aiui_app`
+- 头部姿态（4）：`get_head_pose`、`get_motion_history`、`set_motion_rule`、`remove_motion_rule`
+- 眼镜麦克风（1）：`listen_ambient`　· 眼镜摄像头（1）：`look_at_view`
+- 眼镜歌词/TTS（2）：`show_lyrics`、`stop_tts`
+
+⇒ **想让页面用眼镜的相机/麦克风/头姿，就调上面这些工具**（很多页面压根没想到它们可用）。
+⚠️ 判"能不能用"看 `Lab.listTools()` 的**实时清单**，不要按"我在哪端"来分支 —— 双端差异不该渗进每个页面。
+
+### 9.01 ⚠️ 页面取位置：**`navigator.geolocation` 在本宿主上必失败**（2026-10-09 补）
+
+- **不要写 `navigator.geolocation`**（`getCurrentPosition` / `watchPosition`）。
+  自托管宿主**没有实现**这个宿主能力：`ink/host.js` 的 `buildHostCapabilities()` 只挂了 4 个传感器钩子，
+  两端 JS 桥也只有 `callTool` / `sensorStart` / `sensorStop` / `log`。
+  调用会抛 `Host capability geolocation.getCurrentPosition is not configured on Web host`，
+  回落成错误码 2，页面文案就成了"暂时拿不到位置" —— 而**位置其实是拿得到的**。
+- ✅ **唯一正确写法**：走工具口 —— `globalThis.Lab.callTool('get_location', {}, cb)`。
+- ✅ **拿到结果必须解析进主数据字段**：`get_location` 返回的是**一句人话**
+  （`当前位置：地址（纬度 x，经度 y，精度 ±n 米，来源 gps）`），要把它落进页面真正显示的字段；
+  ⚠️ **只 setData 到一个底部提示行 = 用户仍看到"拿不到位置"**（踩过：主界面数值全由 applyFix 填，
+  回退只写了 note，结果 GPS 早在手里而屏幕上仍是空的）。
+- ⚠️ **"实时"受限**：眼镜宿主 `setInterval` **零执行**（见 §9.0）⇒ 眼镜端只能**按键触发单次定位**；
+  手机预览可尝试轮询近似，但须先自测定时器是否可用。
+- 📌 官方 `apis.md` / `apis-navigator.md` 里指向 `./geo/geolocation.md` 的链接是**死链**（该文件不存在）
+  —— 别再按那条链去找文档，以本节的结论为准。
+
+### 9.02 工具清单与开放边界
+
 **不开放的只有 6 个**：`open_aiui_app`（页面打开自己＝自指递归）、`list_sessions` / `read_session` / `session_trace`（会读到用户的全部会话与完整事件流，页面是第三方制品不该能批量枚举导出）、`research_subtask`（只读子代理）/ `execute_subtask`（**write 型子代理**，能写本机状态——比 research_subtask 更危险，2026-10-02 加入）。调它们只会收到明确的拒绝文案，**别把它当成工具名写错**。
 ⚠️ `shell` 域与 `screen` 域是**带闸门开放**（2026-10-01 起）：能调用，但**每一次都会先向用户弹确认**，用户同意才执行、问不到用户（眼镜/手机都无确认通道）直接拒。页面里调用它们**不会**立刻执行——回调会等到用户点头或超时拒绝；⚠️ 超时可能较长（等用户确认），不要在页面里连续重试刷确认框。
 　· **`shell` 域全部 14 个**：`run_shell`、`install_packages`、`restore_container`、`snapshot_container`、`save_script`、`list_scripts`、`run_script`、`delete_script`、`start_web_preview`、`stop_web_preview`、`list_runs`、`read_run_output`、`write_run_input`、`stop_run`
@@ -209,7 +258,10 @@ globalThis.Lab.callTool('control_music', { action: 'play', songName: '西厢' },
   self.setData({ tip: err ? ('失败: ' + err) : String(res).substring(0, 30) });
 });
 ```
-- 工具名**逐字照抄**，写错只会收到 `unknown tool: xxx`：`control_music` `get_now_playing` `get_weather` `search_web` `fetch_webpage` `manage_timer` `get_current_time` `calculate` `search_knowledge_base` `save_summary_txt` `show_image` `get_glasses_status` `get_phone_status`；不确定就先 `globalThis.Lab.listTools(function (tools, err) { … })`。
+- 工具名**逐字照抄**，写错只会收到 `unknown tool: xxx`。**按端归类**（见 §9.00）：
+  · **手机侧（结果来自手机）**：`control_music` `get_now_playing` `get_weather` `get_location` `search_web` `fetch_webpage` `get_current_time` `calculate` `search_knowledge_base` `save_summary_txt` `show_image` `get_phone_status`
+  · **眼镜侧（动作落到眼镜，眼镜离线即失败）**：`get_glasses_status` `list_glasses_apps` `launch_glasses_app` `list_glasses_files` `read_glasses_file` `download_glasses_file` `look_at_view` `listen_ambient` `get_head_pose` `set_motion_rule` `show_lyrics` `stop_tts` `manage_timer`
+  不确定就先 `globalThis.Lab.listTools(function (tools, err) { … })`（它给的是**当前可调的权威清单**，含上面没列到的工具）。
   📌 `listTools` 给出的是**当前页面可调的权威清单**——工具开关（设置页/开发者页）随时会变，**它才是唯一准确的来源**，本行只给常用范例。
 - 参数名按常规直觉（songName/keyword/city），但**必填参数不能省**：`control_music` 必须传 `{action:'play',songName:'…'}`（传 `{}` 会失败）；结果都是字符串，自己 `JSON.parse`。
 - **一次只发起一个调用**（通道串行，并发会超时）；**失败不要自动重试**（会绕过去重，造成重复拨号等副作用）。

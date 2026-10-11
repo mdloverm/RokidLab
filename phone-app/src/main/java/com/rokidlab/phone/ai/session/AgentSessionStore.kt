@@ -313,6 +313,26 @@ internal companion object {
     }
 
     /**
+     * 记录一次**框架驱动的自我纠偏**（2026-10-09，P0-7）。
+     *
+     * 三个字段都走 `clip`：事件流只追加，超长文本会永久留在文件里（同 [appendSideEffectIntent]）。
+     * ⚠️ `turn` 可为 null（无主线的后台动作也会被纠偏），与 [SideEffectIntent] 同口径。
+     */
+    fun appendReflect(
+        turn: Int?,
+        trigger: ReflectTrigger,
+        detail: String,
+        action: String,
+    ): Long = append(
+        Reflect(
+            turn = turn,
+            trigger = trigger.wire,
+            detail = SessionLog.clip(detail).first,
+            action = SessionLog.clip(action).first,
+        ),
+    ).seq
+
+    /**
      * 结束一轮。
      *
      * 两条完全不同的收尾路径，**这个分支不能省**：

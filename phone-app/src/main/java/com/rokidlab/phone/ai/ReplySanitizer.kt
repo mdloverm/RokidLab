@@ -30,7 +30,12 @@ object ReplySanitizer {
 
     fun sanitize(raw: String): String {
         var s = raw.trim()
-        if (s.isEmpty() || !s.startsWith("<")) return s
+        if (s.isEmpty()) return s
+        // ★ 内部协议标记（[NEED_TOOLS]/[TOOLS]）永不外泄（2026-10-09，P0-1）。
+        // 本方法是手机气泡与眼镜 TTS **共用的唯一出口**（sanitizeForGlass 也调它），
+        // 所以标记过滤放在这里 = 一次覆盖两条显示通道。
+        // 主循环的终态护栏负责"判定 + 兜底文案"，这里只负责"一个字都不许漏出去"。
+        if (!s.startsWith("<")) return InternalMarkerGuard.stripMarkers(s)
 
         val blocks = BLOCK.findAll(s).toList()
         if (blocks.isNotEmpty()) {
@@ -49,7 +54,7 @@ object ReplySanitizer {
 
         s = LEAD.replace(s, "")
         s = TAIL.replace(s, "")
-        return s.trim()
+        return InternalMarkerGuard.stripMarkers(s.trim())
     }
 
     // ═══════════════════ 眼镜通道专用：Markdown → 口语文本 ═══════════════════

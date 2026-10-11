@@ -150,6 +150,41 @@ object AiuiProject {
         }
     }
 
+    /**
+     * 把"用户/模型嘴里的项目名"解析成**真实存在的项目文件夹名**。
+     *
+     * ## 为什么必须有它（2026-10-10 用户反馈）
+     * 用户是按**应用名**叫项目的 —— 管理页/回复里显示的可能是中文显示名（AGENTS.md 标题）
+     * 或带后缀的登记名（如「AIUI 自检 (aiui-selftest)」），而落盘与文件工具用的是**文件夹名**
+     * （`aiui-selftest`）。模型把应用名原样当 `project` 传进来时，[projectDir] 找不到目录
+     * ⇒ 一律"项目不存在" —— 用户看到的就是"让它改 AIUI 项目总说找不到"。
+     *
+     * 解析顺序：
+     *  1. 原名直查目录（模型多数时候给的就是正确文件夹名，这里最省）；
+     *  2. 忽略大小写的文件夹名精确；
+     *  3. 显示名（AGENTS.md 标题）精确；
+     *  4. 双向包含 —— **只在唯一命中时采用**：`html` 同时像 `html-test` / `html-games` 时
+     *     宁可不猜（改错项目比如实报错更糟）。
+     *
+     * ⚠️ 刻意不复用 [matchLocalProject] 的宽松包含：那个给"演示打开"用，这里会改文件，判据必须更严。
+     *
+     * @return 真实项目文件夹名；null = 解析不出（确实不存在）
+     */
+    fun resolveProjectName(context: Context, name: String): String? {
+        val q = name.trim()
+        if (q.isEmpty()) return null
+        if (projectDir(context, q).isDirectory) return sanitizeName(q)
+        val projects = localProjects(context)
+        projects.firstOrNull { it.equals(q, ignoreCase = true) }?.let { return it }
+        projects.firstOrNull { projectDisplayName(context, it).equals(q, ignoreCase = true) }?.let { return it }
+        val qLower = q.lowercase()
+        return projects.filter {
+            val d = projectDisplayName(context, it).lowercase()
+            val p = it.lowercase()
+            p.contains(qLower) || qLower.contains(p) || d.contains(qLower) || qLower.contains(d)
+        }.singleOrNull()
+    }
+
     /** 本地 .aix 文件名 → 合法 agentId（眼镜 cxr 目录文件名 / Sys_AIUI_Start 包名）。 */
     fun agentIdFromFileName(fileName: String): String {
         val base = fileName.trim().substringBeforeLast('.', fileName)

@@ -41,6 +41,15 @@ object ToolRegistry {
     const val DOMAIN_KNOWLEDGE = "knowledge" // 本地知识库检索
     const val DOMAIN_GLASSES = "glasses"    // 眼镜设备（ADB 查询/控制）
     const val DOMAIN_TIMER = "timer"        // 定时提醒/任务
+    /**
+     * 目标管理域：Muse 式长期目标的建立/推进/回访（create_goal / update_goal / list_goals）。
+     *
+     * 单独成域而不是塞进 [DOMAIN_TIMER]：定时任务是「到点响一次」的闹钟语义，
+     * 目标是「持续盯着、定期回访」的陪伴语义 —— 用户想关掉的心智不同
+     * （「别设闹钟」≠「别问我目标进展」）。目标数据存 proactive 包的 GoalStore，
+     * 定期回访由 GoalCheck 挂 30 分钟自检链，本域只管对话侧的读写入口。
+     */
+    const val DOMAIN_GOAL = "goal"          // 目标管理（立目标/推进/回访）
     const val DOMAIN_MEDIA = "media"        // 音乐播放/歌词
     const val DOMAIN_DISPLAY = "display"    // 屏幕展示（图片等，仅手机端显示）
     const val DOMAIN_WEB = "web"            // 联网搜索/读网页
@@ -143,7 +152,7 @@ object ToolRegistry {
 
     /** 全部工具域（主 Agent 默认全量装配，未来可拆出子集） */
     val DOMAIN_ALL: Set<String> = setOf(
-        DOMAIN_INFO, DOMAIN_KNOWLEDGE, DOMAIN_GLASSES, DOMAIN_TIMER,
+        DOMAIN_INFO, DOMAIN_KNOWLEDGE, DOMAIN_GLASSES, DOMAIN_TIMER, DOMAIN_GOAL,
         DOMAIN_MEDIA, DOMAIN_DISPLAY, DOMAIN_WEB, DOMAIN_FILES, DOMAIN_AIUI, DOMAIN_PHONE,
         DOMAIN_RESEARCH, DOMAIN_VISION, DOMAIN_HEARING, DOMAIN_SHELL, DOMAIN_MCP, DOMAIN_BROWSER, DOMAIN_SCREEN,
     )
@@ -201,6 +210,7 @@ object ToolRegistry {
         com.rokidlab.phone.ai.tools.KnowledgeToolProvider,
         com.rokidlab.phone.ai.tools.GlassesToolProvider,
         com.rokidlab.phone.ai.tools.TimerToolProvider,
+        com.rokidlab.phone.ai.tools.GoalToolProvider,
         com.rokidlab.phone.ai.tools.MediaToolProvider,
         com.rokidlab.phone.ai.tools.DisplayToolProvider,
         com.rokidlab.phone.ai.tools.WebToolProvider,
@@ -410,6 +420,13 @@ object ToolRegistry {
         INFO_WEB(R.string.ai_tool_cat_info_web),
         MEDIA(R.string.ai_tool_cat_media),
         TIMER(R.string.ai_tool_cat_timer),
+        /**
+         * 目标管理（立长期目标、推进步骤、定期回访）。
+         *
+         * 位置紧跟 [TIMER] 之后：两者都是「时间线上未来要做的事」，但定时是响一次、
+         * 目标是盯一路 —— 分开分类，用户想关「让它问我目标进展」时不必连带关定时。
+         */
+        GOAL(R.string.ai_tool_cat_goal),
         AIUI(R.string.ai_tool_cat_aiui),
         FILES(R.string.ai_tool_cat_files),
         /**
@@ -451,6 +468,7 @@ object ToolRegistry {
         DOMAIN_GLASSES -> ToolCategory.GLASSES
         DOMAIN_PHONE -> ToolCategory.PHONE
         DOMAIN_TIMER -> ToolCategory.TIMER
+        DOMAIN_GOAL -> ToolCategory.GOAL
         DOMAIN_MEDIA, DOMAIN_DISPLAY -> ToolCategory.MEDIA
         DOMAIN_AIUI -> ToolCategory.AIUI
         DOMAIN_FILES -> ToolCategory.FILES
@@ -1053,6 +1071,23 @@ private const val CODE_GEN_REPLY_MAX_CHARS = 120
 
 /** markdown 围栏代码块（``` 与 ~~~） */
 private val FENCED_CODE_BLOCK = Regex("```[^`]*```|~~~[^~]*~~~", RegexOption.DOT_MATCHES_ALL)
+
+/**
+ * 「已生成 N 个文件，保存在…项目。」这类**收尾状态句**。
+ *
+ * 框架（[finalizeCodeGenReply] 的权威结论）与模型（系统提示词里给的结论示例）都会产出它。
+ * 它只是机器口吻的状态复述 —— 到底生成了几个文件、放在哪，过程卡片里的产物芯片 + 文件卡
+ * 已经讲清楚。正文气泡已有内容时再追加一句，用户看到的就是"回复里混进了不该有的东西"
+ * （2026-10-10 用户反馈）。UI 侧据此在合并正文时**不再追加**。
+ */
+private val CODE_GEN_STATUS_LINE = Regex("""已生成\s*\d+\s*个文件[^。]*。?""")
+
+/**
+ * 一句话是否**恰好**是 [CODE_GEN_STATUS_LINE] 那类收尾状态句（整句匹配，不做部分匹配）。
+ *
+ * 只认整句：正文里顺带提到"已生成 3 个文件"的句子不是状态复述，不该被当成重复而丢弃。
+ */
+internal fun isCodeGenStatusLine(text: String): Boolean = CODE_GEN_STATUS_LINE.matches(text.trim())
 
 /** 形似代码的超长行前缀（用于识别模型把源码直接当成回复文本的情况） */
 private val CODE_LIKE_LINE_PREFIX = Regex(

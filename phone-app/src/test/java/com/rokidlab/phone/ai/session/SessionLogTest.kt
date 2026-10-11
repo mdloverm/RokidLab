@@ -231,6 +231,15 @@ class SessionLogTest {
             CompactionStart(turn = null, trigger = "MANUAL"),
             CompactionSummary(turn = 4, shadowedSeqs = listOf(1L, 2L, 7L), text = "[更早对话摘要]\n· 要点", turnsCompressed = 2),
             CompactionEnd(turn = 4, error = "boom"),
+            // 自我纠偏（2026-10-09，P0-7）：三个字段全给满 ——
+            // trigger/detail/action 任一为空都会让 decode 整条作废（那是刻意的），
+            // 所以样本必须都是非空值，否则漏改 encode/decode 不会被这条发现。
+            Reflect(
+                turn = 4,
+                trigger = ReflectTrigger.REPEATED_CALL.wire,
+                detail = "同一调用第 2 次出现：read_code_file（参数一致）",
+                action = "提醒模型换动作或说明卡在哪一步",
+            ),
         )
 
         val log = newLog()

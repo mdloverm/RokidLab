@@ -74,7 +74,7 @@ internal object GlassesToolProvider : ToolProvider {
             statusText = "正在查询眼镜状态…",
             schema = toolSchema(
                 name = "get_glasses_status",
-                description = "查询 Rokid 眼镜的整体状态，一次返回三部分：①电量百分比与充电状态；②存储空间占用（已用/剩余）；③设备系统信息（型号、厂商、Android 版本、SDK 版本、序列号）。凡是问眼镜自身状况的都调用本工具 —— 「眼镜还有多少电」「要充电吗」「存储还剩多少」「内存够不够」「什么型号」「什么版本」「系统信息/设备信息」。数值由设备实时读取，不要凭印象回答。",
+                description = "查询 Rokid 眼镜的整体状态，一次返回三部分：①电量百分比与充电状态；②存储空间占用（已用/剩余）；③设备系统信息（型号、厂商、Android 版本、SDK 版本、序列号）。凡是问眼镜自身状况的都调用本工具 —— 「眼镜还有多少电」「要充电吗」「存储还剩多少」「内存够不够」「什么型号」「什么版本」「系统信息/设备信息」。数值由设备实时读取，不要凭印象回答。⚠️ 查**手机**的电量/音量/亮度用 get_phone_status。用户**没说哪一端时先问一句**「你是问手机还是眼镜？」（注意：手机与眼镜是两台独立设备，电量不通用）。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf<String, Any>(),
@@ -91,7 +91,8 @@ internal object GlassesToolProvider : ToolProvider {
             statusText = "正在查询应用列表…",
             schema = toolSchema(
                 name = "list_glasses_apps",
-                description = "列出 Rokid 眼镜上安装的应用。当用户询问眼镜装了哪些应用、有没有某个应用时调用。",
+                description = "列出 Rokid **眼镜上**安装的应用。当用户询问眼镜装了哪些应用、有没有某个应用时调用。" +
+                    "⚠️ 列出**手机上**的应用请用 list_phone_apps。用户**没说哪一端时先问一句**「要看哪一边的应用列表？」。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -111,7 +112,10 @@ internal object GlassesToolProvider : ToolProvider {
             statusText = "正在打开应用…",
             schema = toolSchema(
                 name = "launch_glasses_app",
-                description = "打开眼镜上安装的应用。当用户说“打开某应用”“启动某应用”时调用。传入用户口中的应用名称（如“小智”“Via”“小游戏”），不需要包名。",
+                description = "打开**眼镜上**安装的应用。仅当用户指明眼镜端时（「打开眼镜上的 XX」「戴上眼镜打开 XX」）才调用；" +
+                    "⚠️ 用户**没说哪一端时先问一句**「是在手机上打开还是眼镜上打开？」，不要自行选一端。" +
+                    "传入用户口中的应用名称（如“小智”“Via”“小游戏”），不需要包名。" +
+                    "要打开**手机上**安装的应用请用 open_phone_app。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -183,7 +187,8 @@ internal object GlassesToolProvider : ToolProvider {
             statusText = "正在查看眼镜文件…",
             schema = toolSchema(
                 name = "list_glasses_files",
-                description = "列出 Rokid 眼镜存储里某个目录的内容（文件名、类型、大小、修改时间）。用户问“眼镜里有什么文件/照片”时先调本工具看路径；要把某个文件拿到手机上用 download_glasses_file，要看文本内容用 read_glasses_file。",
+                description = "列出 Rokid **眼镜**存储里某个目录的内容（文件名、类型、大小、修改时间）。用户问“眼镜里有什么文件/照片”时先调本工具看路径；要把某个文件拿到手机上用 download_glasses_file，要看文本内容用 read_glasses_file。" +
+                    "⚠️ 列出**手机**上的文件请用 list_files。用户**没说哪一端时先问一句**「是手机里的文件还是眼镜里的？」。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -202,7 +207,8 @@ internal object GlassesToolProvider : ToolProvider {
             statusText = "正在读取眼镜文件…",
             schema = toolSchema(
                 name = "read_glasses_file",
-                description = "读取 Rokid 眼镜存储里一个**文本**文件的内容（日志、配置、txt/json/csv 等）。路径先用 list_glasses_files 查。图片/音频等二进制文件读出来是乱码，拿到手机用 download_glasses_file。",
+                description = "读取 Rokid **眼镜**存储里一个**文本**文件的内容（日志、配置、txt/json/csv 等）。路径先用 list_glasses_files 查。图片/音频等二进制文件读出来是乱码，拿到手机用 download_glasses_file。" +
+                    "⚠️ 读**手机**上的文本文件请用 read_text_file / read_code_file。用户**没说哪一端时先问一句**「是手机里的文件还是眼镜里的？」。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(

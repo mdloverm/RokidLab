@@ -119,18 +119,18 @@ internal object ReadOnlySubagent {
      * 串味的后果是进度行归错（不影响执行结果），比 [pendingUserText] 轻，
      * 但两者是同一类缺陷、同一种修法，不要只修一个。
      */
-    private val subStepSink = ThreadLocal<((Int, String, String) -> Unit)?>()
+    private val subStepSink = ThreadLocal<((Int, String, String, String?) -> Unit)?>()
 
     /**
      * 由主循环在调用子代理工具**之前**写入（在执行该工具的那个线程上）。
-     * @param sink `(roundIndex, toolName, stateName)`；null = 不上报（保持调用前行为）
+     * @param sink `(roundIndex, toolName, stateName, result?)`；null = 不上报（保持调用前行为）
      */
-    fun setSubStepSink(sink: ((Int, String, String) -> Unit)?) {
+    fun setSubStepSink(sink: ((Int, String, String, String?) -> Unit)?) {
         subStepSink.set(sink)
     }
 
     /** 由子代理取走并清空，避免残留到下一次调用 */
-    internal fun takeSubStepSink(): ((Int, String, String) -> Unit)? =
+    internal fun takeSubStepSink(): ((Int, String, String, String?) -> Unit)? =
         subStepSink.get().also { subStepSink.remove() }
 
     /**
@@ -143,7 +143,7 @@ internal object ReadOnlySubagent {
      *   最长 [MAX_WALL_MS] = 90 秒。这是唯一一条"用户能明确感到它在骗我"的路径：
      *   90 秒的阻塞操作，界面上只有 1 行。
      *
-     *   回调参数是 `(roundIndex, toolName, state)`；主循环据此推成
+     *   回调参数是 `(roundIndex, toolName, state, result?)`；主循环据此推成
      *   `AgentStep`（key 用 `sub:` 前缀，避免与主循环的 `tool:<id>` 撞）。
      *   为 null（调用方不关心）时行为与改造前完全一致。
      * @return 给主 Agent 的结论文本（**永远返回可读文本，不抛异常** ——
@@ -153,7 +153,7 @@ internal object ReadOnlySubagent {
         context: Context,
         question: String,
         rounds: Int,
-        onSubStep: ((Int, String, String) -> Unit)? = null,
+        onSubStep: ((Int, String, String, String?) -> Unit)? = null,
     ): String {
         val q = question.trim()
         if (q.isEmpty()) return "子任务没说要查什么（question 不能为空）。请写清要回答的问题。"
@@ -206,7 +206,7 @@ internal object ReadOnlySubagent {
         question: String,
         maxRounds: Int,
         background: String?,
-        onSubStep: ((Int, String, String) -> Unit)? = null,
+        onSubStep: ((Int, String, String, String?) -> Unit)? = null,
     ): String {
         val app = context.applicationContext as? LabApplication
         val cfg = if (app?.hasCxrL() == true) app.cxrL.getAiConfig() else null
@@ -258,13 +258,22 @@ internal object ReadOnlySubagent {
                 //   否则这 90 秒里界面上只有外层一行 research_subtask 在转圈。
                 //   回调本身抛异常不能影响子任务执行（它只是进度展示）⇒ runCatching。
                 runCatching {
-                    onSubStep?.invoke(round, tc.name, AgentStep.State.RUNNING.name)
+                    onSubStep?.invoke(round, tc.name, AgentStep.State.RUNNING.name, null)
                 }
                 val rawOut = executeReadOnly(context, tc, localOnly)
                 runCatching {
                     val failed = rawOut.startsWith("工具执行失败") || rawOut.startsWith("工具 ") &&
                         rawOut.contains("被策略拦截")
-                    onSubStep?.invoke(round, tc.name, (if (failed) AgentStep.State.FAILED else AgentStep.State.OK).name)
+                    // ★ 带上 rawOut（2026-10-10）：原先终态回调**不带结果**，
+                    //   于是每条子代理内层步骤只有工具名、detail 恒空 ——
+                    //   用户看到一串"search_web / fetch_webpage"却不知道查到了什么、
+                    //   哪一步失败了。只读工具的结果是可以展示的（非写入副作用），
+                    //   且 [AgentStep.subStep] 会按 MAX_DETAIL_CHARS 截断。
+                    onSubStep?.invoke(
+                        round, tc.name,
+                        (if (failed) AgentStep.State.FAILED else AgentStep.State.OK).name,
+                        rawOut,
+                    )
                 }
                 messages.put(JSONObject().apply {
                     put("role", "tool")

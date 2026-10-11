@@ -214,8 +214,14 @@ internal class SourceRateLimitGuard(
  * 按链路状态自动拒绝会在蓝牙抖动时把功能表现为「被安全策略挡住」
  * （2026-09-11 实测事故：用户已授权却打不出电话）。手动态语义明确、行为可预期。
  *
- * ⚠️ 只对 [ToolSource.CONVERSATION] 生效：AIUI 页面的代码就在眼镜上跑，
- * 不存在"本机模式"这个状态。
+ * ⚠️ 只对 [ToolSource.CONVERSATION] 生效：AIUI 页面**没有"本机模式"这个状态**
+ * （页面要么跑在手机预览宿主 `AiuiWebHost`、要么跑在眼镜宿主 `AiuiLinkActivity`，
+ * 两者都意味着"设备就在手边"）。
+ *
+ * 📌 术语（2026-10-09 统一）：**「AIUI 页面」只指页面制品本身，不指运行端** ——
+ * 旧注释写成"AIUI 页面的代码就在眼镜上跑"，把页面与眼镜宿主划了等号，
+ * 而实际上手机预览宿主跑的是同一份页面代码。运行端请分别说
+ * **手机预览宿主（`AiuiWebHost`）** / **眼镜宿主（`AiuiLinkActivity`）**。
  */
 internal class GlassesDependencyGuard : ToolGuard {
 

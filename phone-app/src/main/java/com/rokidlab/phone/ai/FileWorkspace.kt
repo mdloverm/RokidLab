@@ -82,18 +82,15 @@ object FileWorkspace {
 
     /**
      * 在项目根目录内解析相对路径。
-     * @return null = 项目名非法 / 项目不存在 / 路径非法 / 越出项目根
+     * @return null = 项目不存在 / 路径非法 / 越出项目根
      *
      * `internal`（而非 private）：压缩/解压（[ArchiveTools]）也要按**同一套**路径规则
      * 定位项目文件 —— 复制一份规则出来迟早会与这份分叉（本文件的类注释已把"同一份约束
      * 不能有两套"写成了硬约束）。
      */
     internal fun resolveInProject(context: Context, project: String, rel: String): File? {
-        val proj = project.trim()
-        if (!PROJECT_NAME.matches(proj)) return null
         val segs = splitRel(rel) ?: return null
-        val root = AiuiProject.projectDir(context, proj)
-        if (!root.isDirectory) return null
+        val root = projectRoot(context, project) ?: return null
         val target = if (segs.isEmpty()) root else File(root, segs.joinToString("/"))
         val rootPath = root.canonicalPath + File.separator
         val targetPath = runCatching { target.canonicalPath }.getOrNull() ?: return null
@@ -101,12 +98,40 @@ object FileWorkspace {
         return target
     }
 
-    /** 列出（项目名）→ 项目根；名非法或目录不存在返回 null（`internal`：见 [resolveInProject]） */
+    /**
+     * （项目名）→ 项目根目录；解析不出或目录不存在返回 null（`internal`：见 [resolveInProject]）。
+     *
+     * ⚠️ 名字先经 [AiuiProject.resolveProjectName] 归一：用户是按**应用名**叫项目的
+     * （可能是中文显示名或带后缀的登记名，如「AIUI 自检 (aiui-selftest)」），而目录名是
+     * **文件夹名**（`aiui-selftest`），两者经常不一致 —— 不归一就会出现
+     * "让它改 AIUI 项目总说找不到"（2026-10-10 用户反馈）。
+     */
     internal fun projectRoot(context: Context, project: String): File? {
-        val proj = project.trim()
-        if (!PROJECT_NAME.matches(proj)) return null
-        val dir = AiuiProject.projectDir(context, proj)
+        val resolved = AiuiProject.resolveProjectName(context, project) ?: return null
+        val dir = AiuiProject.projectDir(context, resolved)
         return if (dir.isDirectory) dir else null
+    }
+
+    /**
+     * 「项目不存在」时给模型的**可执行**提示：列出本机真实项目文件夹名。
+     *
+     * 为什么不只说"不存在"：模型拿不到候选名只能反复猜/换个说法再试（真机上就是这样循环报错的）。
+     * 列出真实文件夹名后它下一轮就能直接用对。
+     *
+     * `internal`：WebTools（[WebTools.readProjectFile] / [WebTools.writeProjectFile]）也用同一句，
+     * 同一份措辞不该有两处实现。
+     */
+    internal fun availableProjectsHint(context: Context): String {
+        val names = File(context.filesDir, "aiui_projects").listFiles()
+            ?.filter { it.isDirectory && !it.name.startsWith(".") }
+            ?.map { it.name }
+            ?.sorted()
+            .orEmpty()
+        return if (names.isEmpty()) {
+            "本机还没有任何项目，请先用「保存代码文件」生成。"
+        } else {
+            "本机现有项目：${names.joinToString("、")}（请直接用其中的**项目文件夹名**）。"
+        }
     }
 
     private fun scopeOf(raw: String): String =
@@ -268,25 +293,41 @@ object FileWorkspace {
 
     private fun listProject(context: Context, project: String, path: String): String {
         val proj = project.trim()
-        if (proj.isBlank()) return "列出失败：project 不能为空（要列出所有项目请传 path 为空并先说明项目名）"
-        if (!PROJECT_NAME.matches(proj)) return "列出失败：项目名不合法（仅限中英文、数字、下划线、连字符，最长 40 字符）"
+        if (proj.isBlank()) {
+            // ★ 不传 project = 看**本机有哪些项目**（2026-10-10 用户反馈："让它改某个项目总说找不到"）：
+            //   模型在改之前最需要的就是这份清单。原先这里直接报"project 不能为空"，
+            //   模型只能猜名字 → 猜错 → 再猜，正是"找不到"循环的起点。
+            val root = File(context.filesDir, "aiui_projects")
+            val dirs = root.listFiles()
+                ?.filter { it.isDirectory && !it.name.startsWith(".") }
+                ?.sortedBy { it.name }
+                .orEmpty()
+            if (dirs.isEmpty()) return "本机还没有任何项目，请先用「保存代码文件」生成。"
+            val lines = dirs.map { d ->
+                val n = d.walkTopDown().count { it.isFile && !it.name.startsWith(".") }
+                "- ${d.name}（$n 个文件）"
+            }
+            return "本机项目清单（${dirs.size} 个）：\n" + lines.joinToString("\n") +
+                "\n要看某个项目的文件明细，请传 project=<上面的名字>；下载目录用 scope=\"downloads\"。"
+        }
         val root = projectRoot(context, proj)
-            ?: return "项目「$proj」不存在或还没有任何文件。可用 download 作用域查看下载目录，" +
-                "或先用「保存代码文件」生成项目。"
-        val dir = resolveInProject(context, proj, path)
+            ?: return "项目「$proj」不存在或还没有任何文件。${availableProjectsHint(context)}" +
+                "（下载目录里的文件请用 scope=\"downloads\" 查看）"
+        val projName = root.name
+        val dir = resolveInProject(context, projName, path)
             ?: return "列出失败：路径不合法或越出项目目录（$path）"
-        if (!dir.isDirectory) return "「$proj/${path.trim('/')}」不是一个目录"
+        if (!dir.isDirectory) return "「$projName/${path.trim('/')}」不是一个目录"
         val entries = (dir.listFiles() ?: emptyArray())
             .filter { !it.name.startsWith(".") }
             .sortedWith(compareBy({ !it.isDirectory }, { it.name }))
-        if (entries.isEmpty()) return "「$proj/${relPathOf(dir, root)}」是空目录"
+        if (entries.isEmpty()) return "「$projName/${relPathOf(dir, root)}」是空目录"
         val shown = entries.take(MAX_LIST_ENTRIES)
         val lines = shown.map { f ->
             val rel = relPathOf(f, root)
             if (f.isDirectory) "- $rel/（目录，${(f.listFiles()?.size ?: 0)} 项）"
             else "- $rel（${humanSize(f.length())}）"
         }
-        val head = "项目「$proj」目录清单（${entries.size} 项" +
+        val head = "项目「$projName」目录清单（${entries.size} 项" +
             (if (entries.size > shown.size) "，只显示前 ${shown.size} 项" else "") + "）：\n"
         return head + lines.joinToString("\n")
     }
@@ -304,12 +345,32 @@ object FileWorkspace {
             return if (proj.isEmpty()) "系统下载目录里没有本 App 生成的文件"
             else "下载目录里没有「$proj」项目的公开副本"
         }
-        val shown = rows.sortedBy { it.rel + it.name }.take(MAX_LIST_ENTRIES)
+        // ★ 隐藏/系统条目过滤（2026-10-09，P2-13）：真机上 `list_files(scope="downloads")`
+        // 曾返回 **5309 项**（只显示前 200 行），把整个下载目录的隐藏系统树
+        // （`.7934039a/.u/u0/0/1/1…` 这类）连同用户文件一起灌进模型上下文 ——
+        // 一次调用就吃掉大量 window，还让模型误以为"这里有几千个相关文件"。
+        // 判据：**路径里任意一段以 `.` 开头**即视为隐藏/系统条目，不进清单（也不计入总数）。
+        val visible = rows.filterNot { r ->
+            (r.rel + r.name).split('/').any { seg -> seg.startsWith(".") }
+        }
+        val hiddenCount = rows.size - visible.size
+        if (visible.isEmpty()) {
+            return "系统下载目录里没有可展示的文件" +
+                (if (hiddenCount > 0) "（已过滤 $hiddenCount 项隐藏/系统条目）" else "")
+        }
+        val shown = visible.sortedBy { it.rel + it.name }.take(MAX_LIST_ENTRIES)
         val lines = shown.map { "- ${it.rel}${it.name}（${humanSize(it.size)}）" }
-        val head = "系统下载目录清单（${rows.size} 项" +
-            (if (rows.size > shown.size) "，只显示前 ${shown.size} 项" else "") + "）：\n"
+        val head = "系统下载目录清单（${visible.size} 项" +
+            (if (visible.size > shown.size) "，只显示前 ${shown.size} 项" else "") +
+            (if (hiddenCount > 0) "；已过滤 $hiddenCount 项隐藏/系统条目" else "") + "）：\n"
         return head + lines.joinToString("\n") +
-            "\n（下载目录只支持查看与删除；要改文件内容请在 project 作用域操作）"
+            if (visible.size > shown.size) {
+                // 条目过多时给出**可执行的收窄建议**：只列一部分等于让模型猜，不如告诉它怎么缩小范围
+                "\n（条目较多，请传 project 只看某一个项目，或先用 search_files 按文件名搜索；" +
+                    "下载目录只支持查看与删除，要改文件内容请在 project 作用域操作）"
+            } else {
+                "\n（下载目录只支持查看与删除；要改文件内容请在 project 作用域操作）"
+            }
     }
 
     // ═══════════════════════════════════════════════════════
@@ -325,25 +386,26 @@ object FileWorkspace {
         if (path.trim().isBlank()) {
             return "读取失败：path 不能为空（要列出目录请用「列出文件」工具）"
         }
-        if (projectRoot(context, proj) == null) {
-            return "项目「$proj」不存在或还没有可读取的源码"
-        }
-        val file = resolveInProject(context, proj, path)
+        val root = projectRoot(context, proj)
+            ?: return "项目「$proj」不存在或还没有可读取的源码。${availableProjectsHint(context)}"
+        val projName = root.name
+        val file = resolveInProject(context, projName, path)
             ?: return "读取失败：路径不合法或越出项目目录（$path）"
-        if (!file.exists()) return "读取失败：「$proj/${path.trim('/')}」不存在"
-        if (file.isDirectory) return "读取失败：「$proj/${path.trim('/')}」是目录，不是文件"
+        if (!file.exists()) return "读取失败：「$projName/${path.trim('/')}」不存在"
+        if (file.isDirectory) return "读取失败：「$projName/${path.trim('/')}」是目录，不是文件"
         // 解码走 TextEncoding（判定 BOM/UTF-8/GBK）而不是硬编码 UTF-8：
         // 中文用户手上的 txt 常是 GBK/UTF-16，硬解会读出一整篇替换符 —— 那时模型会
         // "诚实地"把乱码当内容转述给用户，比报错更糟
         val raw = runCatching { TextEncoding.decode(file.readBytes()) }.getOrElse {
-            return "读取失败：无法读取 $proj/${path.trim('/')}（${it.message}）"
+            return "读取失败：无法读取 $projName/${path.trim('/')}（${it.message}）"
         }
+        val label = "$projName/${path.trim('/')}"
         return if (raw.length > MAX_READ_CHARS) {
-            "「$proj/${path.trim('/')}」共 ${raw.length} 字符，已截断为前 $MAX_READ_CHARS 字符：\n" +
+            "「$label」共 ${raw.length} 字符，已截断为前 $MAX_READ_CHARS 字符：\n" +
                 raw.take(MAX_READ_CHARS) +
                 "\n\n（已截断。需要后面的内容请缩小 path 指向更具体的文件，或用「搜索文件」定位）"
         } else {
-            "「$proj/${path.trim('/')}」完整内容（${raw.length} 字符）：\n$raw"
+            "「$label」完整内容（${raw.length} 字符）：\n$raw"
         }
     }
 
@@ -468,12 +530,12 @@ object FileWorkspace {
         if (content.length > MAX_WRITE_CHARS) {
             return "修改失败：内容过大（${content.length} 字符 > $MAX_WRITE_CHARS），请拆小后分次写入"
         }
-        if (projectRoot(context, proj) == null) {
-            return "修改失败：项目「$proj」不存在。请先用「保存代码文件」生成项目，或确认项目名"
-        }
-        val file = resolveInProject(context, proj, path)
+        val root = projectRoot(context, proj)
+            ?: return "修改失败：项目「$proj」不存在。${availableProjectsHint(context)}"
+        val projName = root.name
+        val file = resolveInProject(context, projName, path)
             ?: return "修改失败：路径不合法或越出项目目录（$path）"
-        if (file.isDirectory) return "修改失败：「$proj/${path.trim('/')}」是目录"
+        if (file.isDirectory) return "修改失败：「$projName/${path.trim('/')}」是目录"
         val appending = !mode.trim().equals("overwrite", ignoreCase = true)
         if (appending && !file.isFile) {
             return "修改失败：要追加的文件不存在。追加只能用于已有文件；新建文件请用「保存代码文件」"
@@ -488,7 +550,7 @@ object FileWorkspace {
             val backup = writeTextFileWithBackup(file, merged)
             val act = if (appending) "已追加" else "已覆盖"
             val undo = backup?.let { "\n（已备份原文件为 $it，需要退回可用「恢复文件」工具）" } ?: ""
-            "$act「$proj/${path.trim('/')}」（${old.length} → ${merged.length} 字符）。$undo" +
+            "$act「$projName/${path.trim('/')}」（${old.length} → ${merged.length} 字符）。$undo" +
                 "注意：这是项目镜像（App 私有），要同步到手机下载目录请重新「保存代码文件」或安装 AIUI 项目。"
         }.getOrElse { "修改失败：写入出错（${it.message}）" }
     }
@@ -512,15 +574,17 @@ object FileWorkspace {
         val proj = project.trim()
         if (proj.isBlank()) return "恢复失败：project 不能为空"
         if (path.trim().isBlank()) return "恢复失败：path 不能为空"
-        if (projectRoot(context, proj) == null) return "恢复失败：项目「$proj」不存在"
-        val file = resolveInProject(context, proj, path)
+        val root = projectRoot(context, proj)
+            ?: return "恢复失败：项目「$proj」不存在。${availableProjectsHint(context)}"
+        val projName = root.name
+        val file = resolveInProject(context, projName, path)
             ?: return "恢复失败：路径不合法或越出项目目录（$path）"
-        if (file.isDirectory) return "恢复失败：「$proj/${path.trim('/')}」是目录"
+        if (file.isDirectory) return "恢复失败：「$projName/${path.trim('/')}」是目录"
         val dir = file.absoluteFile.parentFile
             ?: return "恢复失败：无法确定文件所在目录"
         val all = listBackups(dir, file.name)
         if (all.isEmpty()) {
-            return "恢复失败：「$proj/${path.trim('/')}」没有任何备份。" +
+            return "恢复失败：「$projName/${path.trim('/')}」没有任何备份。" +
                 "备份只在文件被**修改前**自动创建（修改 / 增量编辑），新建文件不产生备份。" +
                 "如果文件已被改坏且没有备份，只能用 edit_text_file 以 mode=overwrite 重写完整内容。"
         }
@@ -539,7 +603,7 @@ object FileWorkspace {
             val content = TextEncoding.decode(chosen.readBytes())
             // 恢复本身也先备份：万一"恢复"这个动作选错了备份，还能再退回来
             writeTextFileWithBackup(file, content)
-            "已把「$proj/${path.trim('/')}」恢复到备份 $original 的内容（${content.length} 字符，" +
+            "已把「$projName/${path.trim('/')}」恢复到备份 $original 的内容（${content.length} 字符，" +
                 "备份时间戳 ${FileBackupNaming.timestampOf(chosen.name)}）。" +
                 "（恢复前的版本也已备份，可再次恢复回去）"
         }.getOrElse { "恢复失败：读取备份出错（${it.message}）" }
@@ -577,13 +641,13 @@ object FileWorkspace {
         if (proj.isBlank()) return "补丁失败：project 不能为空"
         if (path.trim().isBlank()) return "补丁失败：path 不能为空"
         if (patch.isBlank()) return "补丁失败：patch 不能为空"
-        if (projectRoot(context, proj) == null) {
-            return "补丁失败：项目「$proj」不存在。请先用「保存代码文件」生成项目，或确认项目名"
-        }
-        val file = resolveInProject(context, proj, path)
+        val root = projectRoot(context, proj)
+            ?: return "补丁失败：项目「$proj」不存在。${availableProjectsHint(context)}"
+        val projName = root.name
+        val file = resolveInProject(context, projName, path)
             ?: return "补丁失败：路径不合法或越出项目目录（$path）"
-        if (file.isDirectory) return "补丁失败：「$proj/${path.trim('/')}」是目录"
-        val label = "$proj/${path.trim('/')}"
+        if (file.isDirectory) return "补丁失败：「$projName/${path.trim('/')}」是目录"
+        val label = "$projName/${path.trim('/')}"
         val op = operation.trim().lowercase().ifEmpty { "update" }
 
         if (op == "delete") {
@@ -657,41 +721,44 @@ object FileWorkspace {
     private fun deleteProject(context: Context, project: String, path: String): String {
         val proj = project.trim()
         if (proj.isBlank()) return "删除失败：project 不能为空（不允许删除整个工作区）"
-        if (!PROJECT_NAME.matches(proj)) return "删除失败：项目名不合法（$proj）"
-        val root = projectRoot(context, proj)
+        // 名字先归一（应用名 → 项目文件夹名）：删除会连带注销登记 + 删眼镜端副本，
+        // 用对名字比"报个找不到"重要（2026-10-10 用户反馈：改/删 AIUI 项目总说找不到）。
+        val resolved = AiuiProject.resolveProjectName(context, proj)
+        val root = resolved?.let { AiuiProject.projectDir(context, it).takeIf(File::isDirectory) }
+        val name = resolved ?: proj
         if (root == null) {
-            // 项目镜像不在，可能只剩公开副本
-            val pub = WebTools.deleteDownloadedProject(context, proj)
-            val glasses = unlinkRegistryRecords(context, proj)
+            // 项目镜像不在，可能只剩公开副本（名称解析不出时用原名再尽力试一次）
+            val pub = WebTools.deleteDownloadedProject(context, name)
+            val glasses = unlinkRegistryRecords(context, name)
             val glassesNote = if (glasses.isNullOrEmpty()) "" else "；眼镜端：${glasses.joinToString("；")}"
             return if (pub > 0 || !glasses.isNullOrEmpty()) {
-                "项目「$proj」没有工程镜像，已删除下载目录里的 $pub 个公开文件$glassesNote"
+                "项目「$name」没有工程镜像，已删除下载目录里的 $pub 个公开文件$glassesNote"
             } else {
-                "删除失败：项目「$proj」不存在"
+                "删除失败：项目「$proj」不存在。${availableProjectsHint(context)}"
             }
         }
         if (path.trim().isBlank()) {
             val mirrorOk = runCatching { root.deleteRecursively() }.getOrDefault(false)
-            val pub = runCatching { WebTools.deleteDownloadedProject(context, proj) }.getOrDefault(0)
+            val pub = runCatching { WebTools.deleteDownloadedProject(context, name) }.getOrDefault(0)
             // 删除已安装记录：登记表里的 agentId 对应本地 .aix 包（含彩色预览包）与眼镜端副本。
             // 不联动的话：对话里说"把项目删了"，手机源文件没了，眼镜上却还能语音打开它。
-            val glasses = unlinkRegistryRecords(context, proj)
-            Log.i(TAG, "delete project $proj: mirror=$mirrorOk public=$pub registry=$glasses")
+            val glasses = unlinkRegistryRecords(context, name)
+            Log.i(TAG, "delete project $name: mirror=$mirrorOk public=$pub registry=$glasses")
             val glassesNote = when {
                 glasses == null -> ""
                 glasses.isEmpty() -> ""
                 else -> "；眼镜端：${glasses.joinToString("；")}"
             }
             return if (mirrorOk) {
-                "已删除项目「$proj」（工程镜像 + 下载目录里的 $pub 个公开文件$glassesNote），不可恢复"
+                "已删除项目「$name」（工程镜像 + 下载目录里的 $pub 个公开文件$glassesNote），不可恢复"
             } else {
-                "删除项目「$proj」失败（工程镜像未能完整删除）"
+                "删除项目「$name」失败（工程镜像未能完整删除）"
             }
         }
-        val target = resolveInProject(context, proj, path)
+        val target = resolveInProject(context, name, path)
             ?: return "删除失败：路径不合法或越出项目目录（$path）"
-        if (!target.exists()) return "删除失败：「$proj/${path.trim('/')}」不存在"
-        val label = "$proj/${path.trim('/')}"
+        if (!target.exists()) return "删除失败：「$name/${path.trim('/')}」不存在"
+        val label = "$name/${path.trim('/')}"
         val ok = if (target.isDirectory) runCatching { target.deleteRecursively() }.getOrDefault(false)
         else runCatching { target.delete() }.getOrDefault(false)
         return if (ok) "已删除「$label」，不可恢复" else "删除「$label」失败"
@@ -758,10 +825,12 @@ object FileWorkspace {
         if (proj.isBlank()) return "移动失败：project 不能为空"
         if (from.trim().isBlank()) return "移动失败：from 不能为空"
         if (to.trim().isBlank()) return "移动失败：to 不能为空"
-        if (projectRoot(context, proj) == null) return "移动失败：项目「$proj」不存在"
-        val src = resolveInProject(context, proj, from)
+        val root = projectRoot(context, proj)
+            ?: return "移动失败：项目「$proj」不存在。${availableProjectsHint(context)}"
+        val projName = root.name
+        val src = resolveInProject(context, projName, from)
             ?: return "移动失败：源路径不合法或越出项目目录（$from）"
-        val dst = resolveInProject(context, proj, to)
+        val dst = resolveInProject(context, projName, to)
             ?: return "移动失败：目标路径不合法或越出项目目录（$to）"
         if (!src.exists()) return "移动失败：源「$from」不存在"
         if (dst.exists()) return "移动失败：目标「$to」已存在，请换一个名字（本工具不覆盖）"
