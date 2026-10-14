@@ -193,10 +193,16 @@ class LabApplication : Application() {
         com.rokidlab.phone.platform.CapabilityProbe.refresh(this)
 
         // 手机端工具确认通道：需要用户点头的工具（发短信/删文件/装包/第三方 MCP 工具）在
-        // **眼镜不可用时**（本机模式、未连接）由它问一次；眼镜在线时仍走眼镜通道（眼镜优先）。
+        // **App 在前台时优先**由它问一次（用户正看着手机）；不在前台时走眼镜通道，
+        // 眼镜也不可用（本机模式、未连接）时再由它兜底。
         // 必须在启动期硬接线：不注册时本机模式下的确认能力**整体失效且不报错**
         // （闸门会走"问不到用户"分支，按工具声明的 ToolConfirmPolicy 分流）。
         com.rokidlab.phone.ai.PhoneToolConfirmChannel.init(this)
+
+        // ask_user 作答通道（2026-10-12）：需要用户拍板时弹选项卡收集作答。
+        // 与确认通道同判据：不 init 则 appContext 为 null，ask() 直接返回"没问到"
+        // 且**不报错** —— 模型只会看到"等待超时"，排查时很难想到是忘了接线。
+        com.rokidlab.phone.ai.AskUserChannel.init(this)
 
         // 音色与播报三态（VoicePrefs）：ChatBubble / AiConversationService 首次读取前必须就绪
         com.rokidlab.phone.store.VoicePrefs.ensure(this)
@@ -316,6 +322,21 @@ class LabApplication : Application() {
         // 进程级前台判定：权限/界面拉起相关的逻辑（BAL 豁免判断）依赖"本应用当前有没有界面在前台"，
         // 而 AOSP 没有公开 API（getRunningAppProcesses 在 Android 11+ 已受限）→ 自建计数。
         AppForegroundTracker.install(this)
+        // ★ 「人真的离开了 App」⇒ 把等待中的确认/提问收掉（2026-10-13 审计 M4 补完）。
+        //
+        // 改造前只接了 onTrimMemory（内存压力），KDoc 却写着"App 被切到后台且拉不起界面时" ——
+        // 承诺与实现不符：无内存压力地切后台时，已挂起的等待仍会白挂满 40s（确认）/ 120s（提问）。
+        // 现在接**持续后台**回调（AppForegroundTracker 自带防抖，见其 BACKGROUND_CONFIRM_MS）。
+        //
+        // 语义 = **"问不到了"**（aborted = false）：与这次等待**自然超时**完全一致 ——
+        // 由工具自己声明的 ToolConfirmPolicy 分流，放行的那档会在授权留痕里记成 POLICY
+        // （"未能征求你确认，按策略放行"，见 AgentSessionManager.appendSideEffectIntent），
+        // 用户回来能在过程里看到它发生了什么。**不要**用 aborted=true —— 那是"用户叫停"的语义，
+        // 会把"人不在"误判成"用户拒绝"，凭空剥夺工具本该有的降级路径。
+        AppForegroundTracker.onEnterBackground = {
+            com.rokidlab.phone.ai.PhoneToolConfirmChannel.abortAll(aborted = false)
+            com.rokidlab.phone.ai.AskUserChannel.abortAll()
+        }
     }
 
     /**
@@ -511,24 +532,34 @@ class LabApplication : Application() {
     fun hasCxrL(): Boolean = ::cxrL.isInitialized
 
     /**
-     * 内存压力回调：把**等待中的手机端工具确认**全部取消掉。
+     * **内存压力**回调：把等待中的手机端工具确认与 ask_user 作答全部收掉。
      *
      * ⚠️ 接线原因（2026-10-07 审计）：`PhoneToolConfirmChannel.abortAll()` 此前
-     * **定义了但零调用方** —— 它的 KDoc 承诺「App 被切到后台且拉不起界面时避免对话线程
-     * 白挂满 40s」，但没人调它，于是这个承诺是空的。眼镜通道同一场景有 cleanup 兜底
+     * **定义了但零调用方** —— 它的 KDoc 承诺"避免对话线程白挂满 40s"，但没人调，
+     * 于是这个承诺是空的。眼镜通道同一场景有 cleanup 兜底
      * （`CxrLHiRokidSession` 调 `GlassToolConfirmChannel.abortAll`），
      * **两个通道的对称性是假的**：只有手机端会白挂满超时。
      *
-     * 📌 判据：「有个abortAll 方法」不等于「有清理路径」—— 必须反查调用方计数。
+     * 📌 判据：「有个 abortAll 方法」不等于「有清理路径」—— 必须反查调用方计数。
      * 只看定义就以为"已处理"是这类缺陷最常见的漏法。
      *
-     * 语义说明：`abortAll` 把等待者标记为「未获授权」（cancelled=false + countDown），
-     * 于是闸门按 `BLOCK` 判定 ⇒ **被取消的副作用动作一律不执行**，这正是内存吃紧时想要的。
+     * ⚠️ **覆盖范围（2026-10-13 审计更正）**：本回调只覆盖 `TRIM_MEMORY_RUNNING_LOW` 及以上，
+     * 即**内存吃紧**那一档；**无内存压力的切后台**由
+     * [AppForegroundTracker.onEnterBackground] 覆盖（两者都收掉等待，语义同为"问不到"）。
+     *
+     * 语义：`abortAll(aborted = false)` = **"问不到了"**，与这次等待**自然超时**完全一致
+     * （由工具声明的 `ToolConfirmPolicy` 分流）。原始 KDoc 写的是"被取消的副作用动作一律不执行"，
+     * 那与实现不符 —— `abortAll` 从不是"拒绝"，`aborted=true` 才是（那留给"用户叫停"，
+     * 见 [com.rokidlab.phone.domain.AiConversationService.abortCurrentAi]）。此处刻意用 false：
+     * 内存压力与"人离开"同性质（都是问不到），不该改判定结果，只该省掉白等。
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (level >= TRIM_MEMORY_RUNNING_LOW) {
-            com.rokidlab.phone.ai.PhoneToolConfirmChannel.abortAll()
+            com.rokidlab.phone.ai.PhoneToolConfirmChannel.abortAll(aborted = false)
+            // ask_user 作答通道同场景兜底：等待中的选项卡一并放弃（等待方拿到"没问到"），
+            // 避免工具循环在内存吃紧时还白挂满 120s。
+            com.rokidlab.phone.ai.AskUserChannel.abortAll()
             Log.i(TAG, "trim memory level=$level: aborted pending phone confirmations")
         }
     }

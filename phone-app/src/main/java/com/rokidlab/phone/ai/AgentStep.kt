@@ -100,6 +100,22 @@ data class AgentStep(
      * 落盘前按 [MAX_OUTPUT_CHARS] 截断（防长日志把历史文件撑大）；null = 还在跑。
      */
     val output: String? = null,
+    /**
+     * ★ **apply_patch 专用：改动内容着色 diff**（2026-10-12 对标 Codex 的过程卡缺口）。
+     *
+     * 行首保留 `+`/`-`/空格 语义前缀，UI 据此着色（+绿 / −红 / 上下文灰）并折叠：
+     * 收起时只显示 `+12/−4` 统计行。与 [output] 同一条纪律：**只进本地 UI 与聊天历史，
+     * 不进模型上下文** —— 模型看到的是工具原始回填，这份副本不花任何 token。
+     * 从参数 patch 解析（[com.rokidlab.phone.ai.PatchApplier.parseHunks]），
+     * RUNNING 与终态都带（用户在执行中就能看改动）；落盘前按 [MAX_DIFF_CHARS] 截断。
+     */
+    val diff: String? = null,
+    /**
+     * ★ **本步骤实际耗时**（毫秒，仅终态填）。2026-10-12 对标 Codex：终态行右端显示
+     * `1.2s` / `2m05s`，用户才能区分「一条命令 0.3s」和「装包 8 分钟」，
+     * 也才能看出「这轮慢在哪一步」。RUNNING / AWAITING_CONFIRM 时为 null。
+     */
+    val durationMs: Long? = null,
 ) {
     /**
      * 一个可点开预览的文件产物。
@@ -281,12 +297,21 @@ data class AgentStep(
         const val MAX_OUTPUT_CHARS = 4_000
 
         /**
+         * apply_patch 的**展示用 diff**（[AgentStep.diff]）上限（字符）。
+         *
+         * 与 [MAX_OUTPUT_CHARS] 同一量级考量：够看清改动全貌（典型补丁几十行），
+         * 又不会把 JSONL 撑爆；超出截断，UI 按 `length >= MAX_DIFF_CHARS` 标注"已截断"。
+         */
+        const val MAX_DIFF_CHARS = 4_000
+
+        /**
          * 构造一条工具调用的过程步骤。
          *
          * @param callId 模型的 tool_call id，用作覆盖键
          * @param state 进行中 / 成功 / 失败
          * @param argsRaw 原始参数 JSON（模型可能给出非法 JSON，这里只做字符串截断，不做解析）
          * @param result 工具返回文本（仅结束态传入）
+         * @param durationMs 实际耗时毫秒（仅终态由主循环传入；RUNNING 保持 null）
          * @param artifacts 产物覆盖（特殊工具如 `save_code_file` 的产物形态不在通用参数表里，
          *   由调用方算好传入；null = 按 [artifactOf] 自行提取）
          */
@@ -296,6 +321,7 @@ data class AgentStep(
             state: State,
             argsRaw: String = "",
             result: String? = null,
+            durationMs: Long? = null,
             artifactBaseDir: String? = null,
             artifacts: List<Artifact>? = null,
         ): AgentStep {
@@ -304,6 +330,9 @@ data class AgentStep(
             // ★ 命令类工具走**专用命令卡**（2026-10-10 用户选「方案 B」）：
             //   命令与输出各自成字段，detail 留空 —— 再拼一句"命令 → 退出码"就是重复。
             val isCommand = name in COMMAND_TOOLS
+            // ★ apply_patch 的展示 diff（2026-10-12）：RUNNING 与终态都带 ——
+            //   用户在执行中就能点开看改了什么，不必等到完成。
+            val diff = diffOf(name, argsRaw)
             val detail = when {
                 isCommand -> ""
                 // ★ 有产物芯片时，文件身份由芯片承载，detail 只留结果句
@@ -315,7 +344,12 @@ data class AgentStep(
                     if (args.isNotEmpty()) append(args).append(' ')
                     append("→ ").append(compact(resultFor(name, result), MAX_DETAIL_CHARS))
                 }
-                args.isNotEmpty() -> args
+                // save_code_file 执行中（结果还没有）：参数摘要后补一句「正在写入 N KB」——
+                // ★ 不替代参数摘要（用户仍要知道在写哪个文件），只在后面追加大小。
+                args.isNotEmpty() -> {
+                    val size = if (name == "save_code_file") contentSizeOf(argsRaw) else ""
+                    if (size.isEmpty()) args else "$args · 正在写入 $size"
+                }
                 else -> ""
             }
             return AgentStep(
@@ -340,7 +374,44 @@ data class AgentStep(
                 } else {
                     null
                 },
+                diff = diff,
+                durationMs = durationMs?.takeIf { state == State.OK || state == State.FAILED || state == State.CANCELLED },
             )
+        }
+
+        /**
+         * apply_patch 的参数 → 展示用 diff 文本（行首 `+`/`-`/空格 前缀，UI 据此着色）。
+         *
+         * 复用 [PatchApplier.parseHunks] 而不是自己 split：解析规则（@@ 分段、裸空行=上下文、
+         * 无前缀行宽容处理）必须与真正执行补丁的引擎**同源**，否则 UI 展示的改动与
+         * 实际落盘的改动可能不一致。非 apply_patch / patch 为空 / 解析不出 → null。
+         */
+        private fun diffOf(name: String, argsRaw: String): String? {
+            if (name != "apply_patch") return null
+            val patch = runCatching { JSONObject(argsRaw).optString("patch") }.getOrNull()
+            if (patch.isNullOrBlank()) return null
+            val hunks = runCatching { PatchApplier.parseHunks(patch) }.getOrNull().orEmpty()
+            if (hunks.isEmpty()) return null
+            val sb = StringBuilder()
+            outer@ for (h in hunks) {
+                for (op in h.ops) {
+                    val line = op.kind.toString() + op.text
+                    if (sb.length + line.length + 1 > MAX_DIFF_CHARS) break@outer
+                    sb.append(line).append('\n')
+                }
+            }
+            return sb.toString().trimEnd('\n').takeIf { it.isNotEmpty() }
+        }
+
+        /**
+         * save_code_file 参数 content 的人类可读大小（`680 B` / `3.2 KB`）。
+         * 解析不出（非法 JSON / 无 content）→ 空串，detail 就不含大小，不编数字。
+         */
+        private fun contentSizeOf(argsRaw: String): String {
+            val content = runCatching { JSONObject(argsRaw).optString("content") }.getOrNull()
+            if (content.isNullOrEmpty()) return ""
+            return if (content.length < 1024) "${content.length} B"
+            else String.format(java.util.Locale.ROOT, "%.1f KB", content.length / 1024.0)
         }
 
         /**
@@ -613,6 +684,13 @@ data class AgentStep(
             "delete_file" to ArtifactSpec(listOf("path", "file"), Action.DELETE),
             "move_file" to ArtifactSpec(listOf("to", "from"), Action.MOVE),
             "unzip_file" to ArtifactSpec(listOf("target", "path"), Action.CREATE),
+            // ⚠️ `zip_files` / `save_summary_txt` **刻意不登记在这里**（2026-10-13 审计）：
+            //   本表按**参数**推产物路径，而这两个工具的产物是「下载目录」里的新文件
+            //   （名字来自 zipName / title，且经 sanitize），参数里没有可信的输出路径 ——
+            //   硬登记入参（project / paths / title）会指向"输入"甚至不存在的路径，
+            //   那正是铁律禁止的"指令指向不存在的对象"（用户点了芯片打不开）。
+            //   ⇒ 这两者的产物由**工具自己在写成功后**经 [com.rokidlab.phone.ai.ProducedFileSink]
+            //   回报真实绝对路径，主循环在 `runToolWorker` 里合并进芯片（同一个产物不会重复）。
         )
 
         /**
@@ -681,12 +759,18 @@ data class AgentStep(
             name: String,
             state: State,
             result: String? = null,
+            // ★ 产物芯片（2026-10-12）：write 型子代理内层会写文件/打补丁，
+            //   只有工具名没有芯片 = 用户看到"它在调 apply_patch"却不知道动了哪个文件。
+            //   由调用方用 artifactOf(toolName, argsJson, baseDir) 现算后传入，
+            //   这里不做解析（subStep 保持纯展示，解析失败宁可没芯片也不猜）。
+            artifacts: List<Artifact> = emptyList(),
         ): AgentStep = AgentStep(
             key = key,
             kind = Kind.TOOL,
             title = name,
             detail = compact(result.orEmpty(), MAX_DETAIL_CHARS),
             state = state,
+            artifacts = artifacts,
         )
 
         /**

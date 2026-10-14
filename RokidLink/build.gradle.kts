@@ -102,8 +102,8 @@ android {
         applicationId = "com.rokidlab.rokidlink"
         minSdk = 28
         targetSdk = 34
-        versionCode = 23
-        versionName = "4.5"
+        versionCode = 24
+        versionName = "4.6"
     }
 
     signingConfigs {

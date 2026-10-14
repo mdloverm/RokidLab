@@ -5,6 +5,7 @@ import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.ai.ToolRisk
 import com.rokidlab.phone.ai.ToolRiskMap
 import com.rokidlab.phone.ai.session.AuthorizationSource
+import com.rokidlab.phone.permission.AppForegroundTracker
 import org.json.JSONObject
 
 /**
@@ -73,9 +74,17 @@ internal object ApprovalGate {
     private fun activeGuards(): List<ToolGuard> = guardsOverride ?: defaultGuards
 
     /**
+     * 仅供测试替换「App 是否在前台」的判据（见 [phoneFocused]）；null = 读真实前台状态。
+     * 与 [guardsOverride] 同一做法：让"前台 ⇒ 手机优先"这条规则能被纯 JVM 单测钉住。
+     */
+    @Volatile
+    internal var phoneFocusOverride: Boolean? = null
+
+    /**
      * 副作用工具的用户确认通道。**有两个实现**，取值顺序见 [activeChannel]：
      *  1. 眼镜端（`GlassToolConfirmChannel`）—— 用户戴着眼镜时最顺手，也是既有主路径；
-     *  2. 手机端（[com.rokidlab.phone.ai.PhoneToolConfirmChannel]）—— 本机模式 / 未连接眼镜时兜底。
+     *  2. 手机端（[com.rokidlab.phone.ai.PhoneToolConfirmChannel]）—— App 在前台时**优先**（用户在看手机），
+     *     其余情况（本机模式 / 未连接眼镜 / 手机不在前台）作为兜底。
      *
      * 两个都不可用时，按工具声明的 [com.rokidlab.phone.ai.ToolConfirmPolicy] 分流
      * （见类注释 —— 改造前这里是一律放行，即"fail-open 的唯一产地"）。
@@ -137,15 +146,22 @@ internal object ApprovalGate {
     }
 
     /**
-     * 一次确认的**结果 + 取消标志**（不可变值对象）。
+     * 一次确认的**结果 + 取消标志 + 中止标志**（不可变值对象）。
      *
      * @param allowed    用户点了「允许」
      * @param cancelled 用户**显式取消**（=拒绝）。false = 没问到/超时/通道不可用 ⇒ 由闸门
      *   按工具自己的 `ToolConfirmPolicy` 分流（PROCEED 放行 / BLOCK 拒绝）。
+     * @param aborted   这次等待被**中止**了 —— 用户叫停 / 生成被新消息抢占（线程被中断）。
+     *   ⚠️ **与"没问到"必须分开**（2026-10-13 审计修 H1）：
+     *   改造前中断也走 [NOT_ANSWERED]，于是闸门按工具声明对 `PROCEED` 工具**静默放行** ——
+     *   用户明明按了停止，删文件/装包这类副作用照样真的发生，而结果随代际作废被丢弃，
+     *   用户、模型、过程卡片**三边都看不到**。aborted 一律 [ToolDecision.Deny]：没人批准，
+     *   就不执行；"用户叫停"也不该被记成一次"静默放行"。
      */
     data class ConfirmOutcome(
         val allowed: Boolean,
         val cancelled: Boolean,
+        val aborted: Boolean = false,
     ) {
         companion object {
             /** 「没问到」—— 两条通道都不可用、或拉起界面失败 */
@@ -156,6 +172,9 @@ internal object ApprovalGate {
 
             /** 「用户明确取消」 */
             val CANCELLED = ConfirmOutcome(allowed = false, cancelled = true)
+
+            /** 「等待被中止」—— 用户叫停 / 代际被抢占（线程中断）。一律拒绝，不按声明分流 */
+            val ABORTED = ConfirmOutcome(allowed = false, cancelled = false, aborted = true)
         }
     }
 
@@ -169,7 +188,8 @@ internal object ApprovalGate {
      * ★ 为什么必须有：眼镜通道要求**眼镜在线**，而「本机模式」的设计目标恰恰是
      * "不连眼镜也能用" —— 两者在定义上互斥。于是本机模式下所有需要确认的工具
      * 都落到了 fail-open 分支（静默执行，连"要不要问"都不产生）。
-     * 本通道只在眼镜通道不可用时接管 ⇒ 眼镜在线时行为与改造前**完全一致**。
+     * 本通道在眼镜通道不可用时接管；App 在前台时（用户在看手机）则**优先**用它 ——
+     * 详见 [activeChannel] 的 2026-10-12 说明。
      */
     @Volatile
     var phoneConfirmationResolver: ConfirmResolver? = null
@@ -208,8 +228,31 @@ internal object ApprovalGate {
         fun record(name: String, source: AuthorizationSource, prompt: String?, stages: List<String>)
     }
 
-    @Volatile
-    var authorizationSink: AuthorizationTrace? = null
+    /**
+     * 授权留痕出口的存储。
+     *
+     * ⚠️ **必须是 [ThreadLocal]，不能是全局 var**（2026-10-13 审计修 H2）。
+     *
+     * 改造前它是个 `@Volatile var`，调用方这样用：记住 previous → 覆盖全局 → `finally` 还原。
+     * 那个"还原"在并发下有真实缺陷：并行泳道的只读工具 P 与串行泳道的副作用工具 S
+     * （S 正阻塞在 18~40s 的确认等待里）交错时，P 先结束并把 sink 还原成**进入时的 null**
+     * ⇒ 用户点头后 [trace] 读到的已是 null ⇒ **USER_APPROVED/POLICY 留痕与过程归因行双双消失**。
+     * 讽刺的是"没问成就执行了"恰恰是最需要能查出来的情形。
+     *
+     * 同线程性成立（这是本修法的前提，不是假设）：[authorizationSink] 的**写方**
+     * （`AiConversationService.executeToolInTurn`）与**读方**（[trace]，经 [resolveAsk]）
+     * 必然在同一根线程 —— 工具审批与工具执行是同步、同线程的；并行泳道各自持有
+     * **专属线程**（`launchDedicatedLane`，非池线程复用），串行泳道直接跑在生成线程上。
+     * ⇒ 用 ThreadLocal 让"哪次调用用哪个 sink"从结构上成立，不再依赖还原顺序。
+     *
+     * ⚠️ 若将来把工具执行改到**池线程/协程派发**，这条同线程前提即失效，
+     * 必须改回"随 [preExecute] 参数显式下发"（闸门是纯判定层，收显式依赖本就是更干净的形态）。
+     */
+    private val sinkHolder = ThreadLocal<AuthorizationTrace?>()
+
+    var authorizationSink: AuthorizationTrace?
+        get() = sinkHolder.get()
+        set(value) = sinkHolder.set(value)
 
     // ════════════════════════════════════════════════════════════════════
     // 门面：唯一对外入口
@@ -375,6 +418,20 @@ internal object ApprovalGate {
             return ToolDecision.Deny(
                 DecisionOrigin.RISK_CONFIRMATION,
                 "你已取消本次操作，未执行：'$toolName'",
+                // ★ 结构化标志（2026-10-13 审计修）：下游据此判 CANCELLED（"你的决定"）
+                //   而不是 FAILED（"操作失败"）—— 不再靠 reason 文本匹配
+                cancelled = true,
+            )
+        }
+        // ★ 被中止（用户叫停 / 代际被抢占）—— 一律拒绝，**不走**工具声明的 PROCEED 分流。
+        //   改造前这条落进下面的"没问到"分支，PROCEED 工具于是被静默放行：
+        //   用户按了停止，副作用却真的发生，而结果随代际作废一并丢弃（三边都看不到）。
+        //   放在 AIUI 页面分支之前：中止是比"超时"更强的语义，任何来源都不该放行。
+        if (outcome.aborted) {
+            return ToolDecision.Deny(
+                DecisionOrigin.RISK_CONFIRMATION,
+                "任务已中止，未执行：'$toolName'",
+                cancelled = true,
             )
         }
         // 页面路径：确认等待被压进页窗，超窗未确认 = 页面侧已（或将）显示失败，
@@ -420,19 +477,37 @@ internal object ApprovalGate {
     }
 
     /**
-     * 当前可用的确认通道：**眼镜优先、手机兜底**。
+     * 当前可用的确认通道。**默认眼镜优先、手机兜底**；但 **App 在前台时手机优先**（2026-10-12）。
      *
-     * 为什么眼镜优先：眼镜语音是主入口，用户说话时戴着眼镜，悬浮层确认 + TTS 是他熟悉的方式；
-     * 而"眼镜在线却没戴"是一个我们无法从链路状态判定的状态（需要佩戴检测，不在本轮范围内），
-     * 贸然改成手机优先反而会把既有主路径的体验换掉。手机通道的定位是**补上"
-     * 眼镜不可用时根本没有确认"这个洞**，不是替换眼镜通道。
+     * ## 为什么前台时倒过来（用户实测反馈）
+     * 原实现无条件眼镜优先。于是用户在手机上聊天时，需要确认的动作（如删除）
+     * **只在眼镜上弹**，手机端什么都不显示 —— 用户明明在看着手机，却无从确认，
+     * 只能干等 40s 超时（表现为"卡住了"）。判据必须是 [AppForegroundTracker.isForeground]
+     * （App 真的在前台 ＝ 用户在看手机），而**不能**用 `canLaunchUi`：后者含
+     * 「后台 + 已授悬浮窗」，那恰恰是"用户可能没看手机、戴着眼镜"的情形，仍应走眼镜。
+     *
+     * ## 为什么其余情况仍保持眼镜优先
+     * 眼镜语音是主入口：用户说话时手机通常不在前台（在口袋/桌上），悬浮层确认 + TTS
+     * 是他熟悉的方式。手机通道的定位是**补洞**，不是替换既有主路径。
      *
      * ⚠️ [ConfirmResolver.isAvailable] 也必须包在 `runCatching` 里：通道实现要读链路状态、
      * 读 SharedPreferences，抛异常时应当按"这条通道不可用"继续往下走，
      * 而不是让一个本该被确认的动作因为异常直接崩掉整轮对话。
      */
-    private fun activeChannel(): ConfirmResolver? =
+    private fun activeChannel(): ConfirmResolver? = if (phoneFocused()) {
+        firstAvailable(phoneConfirmationResolver) ?: firstAvailable(confirmationResolver)
+    } else {
         firstAvailable(confirmationResolver) ?: firstAvailable(phoneConfirmationResolver)
+    }
+
+    /**
+     * 「App 此刻在不在前台」—— 前台 ⇒ 手机优先。
+     *
+     * [phoneFocusOverride] 是**测试接缝**（与 [guardsOverride] 同一做法）：JVM 单测里没有
+     * Activity 生命周期，[AppForegroundTracker] 恒为 false，不开口子这条规则就钉不住。
+     */
+    private fun phoneFocused(): Boolean =
+        phoneFocusOverride ?: AppForegroundTracker.isForeground
 
     private fun firstAvailable(resolver: ConfirmResolver?): ConfirmResolver? =
         resolver?.takeIf { runCatching { it.isAvailable() }.getOrDefault(false) }
@@ -515,9 +590,10 @@ internal object ApprovalGate {
     // 测试支撑
     // ════════════════════════════════════════════════════════════════════
 
-    /** 复位注入状态（两条确认通道 + 授权留痕出口 + 策略集）。仅测试调用。 */
+    /** 复位注入状态（两条确认通道 + 授权留痕出口 + 策略集 + 前台判据）。仅测试调用。 */
     internal fun resetForTest() {
         guardsOverride = null
+        phoneFocusOverride = null
         confirmationResolver = null
         phoneConfirmationResolver = null
         // ⚠️ sink 必须一起复位：它是个全局挂载点，不复位会让上一个用例的 sink

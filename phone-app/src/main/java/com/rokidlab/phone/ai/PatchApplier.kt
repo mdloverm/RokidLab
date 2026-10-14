@@ -237,9 +237,9 @@ internal object PatchApplier {
                     val fits = want >= 0 && want + pattern.size <= src.size
                     val matches = fits && src.subList(want, want + pattern.size)
                         .indices.all { src[want + it].trimEnd() == pattern[it].trimEnd() }
-                    if (matches) want else throw PatchApplyException(notFound(pattern, hintLine))
+                    if (matches) want else throw PatchApplyException(notFound(src, pattern, hintLine))
                 } else {
-                    throw PatchApplyException(notFound(pattern, hintLine))
+                    throw PatchApplyException(notFound(src, pattern, hintLine))
                 }
             }
         }
@@ -289,14 +289,49 @@ internal object PatchApplier {
     }
 
 
-    private fun notFound(old: List<String>, hintLine: Int?): String {
+    private fun notFound(src: List<String>, old: List<String>, hintLine: Int?): String {
         val where = if (hintLine != null) "（@@ 里给的行号是第 $hintLine 行附近）" else ""
         val sample = old.filter { it.isNotEmpty() }.take(2)
             .joinToString(" / ") { "「${it.take(40)}」" }
+        // 定位失败时附上文件里**最接近的实拍内容**：模型不必再整读一遍文件就能照着改
+        // 上下文行 —— 这是省一轮重试的关键（历史实测补丁失败往往要多烧 2~3 轮）。
+        val nearest = nearestContext(src, old)
         return "补丁定位失败$where：在文件里找不到这几行${if (sample.isEmpty()) "" else " —— $sample"}。" +
-            "⚠️ **不要原样重试同一个补丁**：先用 read_text_file 读一次该文件确认真实内容与行号，" +
-            "再按实际内容重写片段（上下文要多带几行）；或改用 edit_text_file(mode=overwrite) 写完整内容。" +
+            (if (nearest.isNullOrBlank()) "" else "\n文件里最接近的几行（注意实际行号与措辞，多半与补丁里的写法有出入）：\n$nearest") +
+            "⚠️ **不要原样重试同一个补丁**：对照上面实际内容修正上下文（并多带 1~2 行独特行）；" +
+            "拿不准就先 read_text_file 读该文件确认，再按实际内容重写片段；" +
+            "或改用 edit_text_file(mode=overwrite) 写完整内容。" +
             "⚠️ 本次没有改动任何内容，文件保持原样。"
+    }
+
+    /**
+     * 在 [src] 里找与 [pattern] **最接近**的位置，返回带行号的实拍片段（最多 6 行，行号 1-based）。
+     * 评分 = 窗口内逐行（trimEnd 容错）匹配的行数；全文件 0 分时返回 null（没有可比的东西）。
+     */
+    private fun nearestContext(src: List<String>, pattern: List<String>): String? {
+        val pats = pattern.filter { it.isNotBlank() }
+        if (pats.isEmpty() || src.isEmpty()) return null
+        var bestScore = 0
+        var bestAt = -1
+        for (i in 0..(src.size - pats.size).coerceAtLeast(0)) {
+            var score = 0
+            for (j in pats.indices) {
+                if (src[i + j].trimEnd() == pats[j].trimEnd()) score++
+            }
+            if (score > bestScore) {
+                bestScore = score
+                bestAt = i
+            }
+        }
+        if (bestAt < 0) return null
+        val sb = StringBuilder()
+        var shown = 0
+        for (k in bestAt until (bestAt + pats.size).coerceAtMost(src.size)) {
+            if (src[k].isBlank()) continue
+            sb.append("  L${k + 1}｜").append(src[k].trim().take(60)).append('\n')
+            if (++shown >= 6) break
+        }
+        return sb.toString().trimEnd().ifEmpty { null }
     }
 
     private fun ambiguous(hits: List<Int>, old: List<String>, hintLine: Int?): String {

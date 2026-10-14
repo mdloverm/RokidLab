@@ -276,6 +276,30 @@ object FileWorkspace {
     /** 低版本（<29）下载目录根 → `File`（`internal`：见 [openDownloadInput]） */
     internal fun legacyRoot(context: Context): File = legacyDownloadRoot(context)
 
+    /**
+     * 下载目录里某个文件的**绝对路径**（产物芯片用，2026-10-13）。
+     *
+     * ## 为什么需要它
+     * [ArchiveTools.zipFiles] 与 [WebTools.saveSummary] 把产物写进**下载目录**，
+     * 而 `AgentStep.ARTIFACT_SPECS` 只能从**调用参数**推路径 —— 这两者的入参里没有产物路径
+     * （名字是 `zipName` / `title` 经 sanitize 之后的），硬推会指向输入甚至不存在的文件。
+     * 所以路径由工具侧在写成功后经 [ProducedFileSink] 回报，本函数是那个路径的**唯一产地**：
+     * 与 [ArchiveTools.writeDownloadFile] 的落盘位置保持一一对应（API29+ 走 MediaStore
+     * 的公共下载目录，低版本走应用专属目录）。
+     *
+     * ⚠️ 刻意**不用** `MediaStore` 查询反查（`DATA` 列已废弃，且同名文件可能被系统改名）：
+     * 落盘代码已经先删同名行，路径可预期，直接拼即可。
+     */
+    internal fun downloadAbsPath(context: Context, name: String): String =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                name,
+            ).absolutePath
+        } else {
+            File(legacyDownloadRoot(context), name).absolutePath
+        }
+
     // ═══════════════════════════════════════════════════════
     // ① 列目录
     // ═══════════════════════════════════════════════════════

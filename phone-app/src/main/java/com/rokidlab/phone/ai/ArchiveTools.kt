@@ -113,6 +113,10 @@ object ArchiveTools {
                 }
             }
             Log.i(TAG, "zip ok: $proj -> $relDir/$name (${entries.size} entries, ${totalBytes}B)")
+            // ★ 产物回报（2026-10-13 审计修）：zip 的产物是**下载目录里的新文件**，
+            //   参数里没有它的路径（名字来自 zipName/project 且经 sanitize）⇒ ARTIFACT_SPECS
+            //   推不出来。由这里在**写成功之后**回报真实绝对路径，过程行才会出现可点芯片。
+            ProducedFileSink.record(FileWorkspace.downloadAbsPath(context, name), name)
             "已打包「$proj」的 ${entries.size} 个文件（原始 ${human(totalBytes)}）为「手机存储/$relDir/$name」。"
         } catch (e: Exception) {
             Log.e(TAG, "zip failed: $proj -> ${e.message}")

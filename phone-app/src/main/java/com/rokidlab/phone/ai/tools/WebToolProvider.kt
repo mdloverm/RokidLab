@@ -90,7 +90,7 @@ internal object WebToolProvider : ToolProvider {
             statusText = "正在读取网页内容…",
             schema = toolSchema(
                 name = "fetch_webpage",
-                description = "读取一个具体网页链接的正文内容并转为纯文本（含网页标题）。配合 search_web 使用：当用户想了解某网页的详细内容、或需要总结某个搜索结果页面时，传入该网页完整链接调用本工具。返回的正文供你阅读后进行总结。",
+                description = "读取一个具体网页链接的正文内容并转为纯文本（含网页标题）。配合 search_web 使用：当用户想了解某网页的详细内容、或需要总结某个搜索结果页面时，传入该网页完整链接调用本工具。返回的正文供你阅读后进行总结。⚠️ 只能读 http:// 或 https:// 网址；file:// 或本机路径一律拒绝 —— 要看本机项目文件/代码请用 read_code_file（或 list_files 浏览），不要拿本工具试。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(

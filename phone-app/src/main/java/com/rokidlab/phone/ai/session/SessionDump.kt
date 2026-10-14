@@ -111,7 +111,10 @@ internal object SessionDump {
         return when (val e = r.event) {
             is TurnStart -> "#${r.seq} ${who}— 收到（${e.source.wire}）"
             is UserMessage -> "#${r.seq} ${who}用户：${clip(e.text, TEXT_CLIP)}"
-            is AssistantMessage -> "#${r.seq} ${who}乐奇：${clip(e.text, TEXT_CLIP)}"
+            is AssistantMessage -> "#${r.seq} ${who}乐奇：${clip(e.text, TEXT_CLIP)}" +
+                // ★ 半截标记（2026-10-13 审计修）：与 SessionTrace 同判据 ——
+                //   打断/失败落的是半截输出，续读时不能当成完整结论。
+                if (e.partial) "（半截）" else ""
             is ToolCall -> "#${r.seq} ${who}调用工具 ${e.name}(${clip(e.args, TEXT_CLIP)})"
             is ToolResult -> "#${r.seq} ${who}工具返回 ${e.name} → ${clip(e.content, TEXT_CLIP)}" +
                 if (e.truncated) "（原文已截断）" else ""

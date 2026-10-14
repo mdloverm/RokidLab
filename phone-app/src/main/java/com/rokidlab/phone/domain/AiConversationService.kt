@@ -87,6 +87,15 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
         const val THINKING_EMIT_INTERVAL_MS = 400L
 
         /**
+         * 工具参数流式进度推 UI 的最小间隔（毫秒）。
+         *
+         * 代码生成轮模型会逐帧吐 `save_code_file` 的 content（实测单文件数万字符、上千个 delta），
+         * 每个 delta 都推一次会把「过程」卡片刷爆；与思考同一套节流理由。间隔比思考略长：
+         * 这里的文案只变一个数字，刷太快反而晃眼。
+         */
+        const val TOOL_ARG_EMIT_INTERVAL_MS = 600L
+
+        /**
          * 兜底总结轮的最大轮数（主循环工具轮预算用尽后的收尾阶段）。
          * 每轮都会注入「禁止再调工具、直接给结论」的引导语，并把当轮 tool_calls 照常执行 ——
          * 多文件生成时模型可能仍需连续几轮 save_code_file 落盘，因此"当轮没有正文"属正常，
@@ -236,6 +245,7 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             collect(
                 listOf(
                     com.rokidlab.phone.ai.AgentPlan.schema(),
+                    com.rokidlab.phone.ai.AskUser.schema(),
                     com.rokidlab.phone.ai.SkillRegistry.schema(),
                     com.rokidlab.phone.ai.SkillRegistry.sectionSchema(),
                     com.rokidlab.phone.ai.SkillRegistry.installSchema(),
@@ -354,6 +364,13 @@ class AiConversationService(private val session: com.rokidlab.phone.glasses.CxrL
             if (oldGen != generation) {
                 oldJob.cancel()
                 Log.i(TAG, "superseded gen=$oldGen job cancelled (new gen=$generation)")
+                // ★ 2026-10-13 审计修（H1+M3）：被抢占的旧生成可能正**阻塞在确认/提问等待**上。
+                //   cancel 会把协程取消翻译成线程中断（runInterruptible），但屏幕上的
+                //   确认框/选项卡不会被撤掉 —— 用户面对一个点什么都没用的死弹窗，
+                //   而对应的副作用工具还可能按"超时"语义被静默放行（H1）。
+                //   aborted=true 让等待方立刻拿到"被中止"，闸门一律拒绝执行。
+                com.rokidlab.phone.ai.PhoneToolConfirmChannel.abortAll(aborted = true)
+                com.rokidlab.phone.ai.AskUserChannel.abortAll()
             }
         }
         val job = aiScope.launch {
@@ -972,8 +989,10 @@ private fun executeToolInTurn(
             // ★ 「用户自己点的取消」标成 CANCELLED 而不是 FAILED（2026-10-06 审计修）：
             //   回来看到一圈红点 + "失败"等于告诉用户"你的操作失败了"，
             //   而实际发生的是"你说了不做，它就没做" —— 后者是**用户的决定**，不是错误。
-            //   判据用 reason 里的既有措辞（"你已取消本次操作"），不新增状态字段。
-            if (decision.reason.contains("已取消")) {
+            //   ⚠️ 判据 2026-10-13 从「reason 文本 contains("已取消")」改为**结构化标志**
+            //   [com.rokidlab.phone.ai.approval.ToolDecision.Deny.cancelled]：
+            //   读文案的写法太脆 —— 改一个字，"你的决定"就变成"操作失败"的红叉。
+            if (decision.cancelled) {
                 ctx.onTrace?.invoke(AgentStep.cancelled(tc.id, tc.name, decision.reason))
             }
             // 差距③（2026-10-01）：拒绝信息从"一句话"升级为"错误+原因+下一步"，
@@ -1068,6 +1087,36 @@ private fun executeToolInTurn(
                         com.rokidlab.phone.ai.SkillRegistry.executeDelete(session.appContext, tc.arguments)
                     com.rokidlab.phone.ai.AgentPlan.TOOL_NAME ->
                         com.rokidlab.phone.ai.AgentPlan.execute(tc.arguments)
+                    // ask_user（决策点伪工具）：阻塞等用户点选（最长 120s，并行泳道专属线程），
+                    // 作答原文回填。过程行不走通用工具行（"执行 ask_user"是黑话）：
+                    // 在分支内发「等待用户选择：<问题>」→ 终态「用户已…」两条框架步骤（同 key 覆盖）。
+                    com.rokidlab.phone.ai.AskUser.TOOL_NAME -> {
+                        val q = com.rokidlab.phone.ai.AskUser.parse(tc.arguments)
+                        if (q != null) {
+                            ctx.onTrace?.invoke(
+                                AgentStep.framework(
+                                    "等待用户选择：${q.text}",
+                                    id = "ask_${tc.id}",
+                                    state = AgentStep.State.RUNNING,
+                                ),
+                            )
+                        }
+                        val note = com.rokidlab.phone.ai.AskUserChannel.askParsed(
+                            session.appContext, tc.arguments,
+                        )
+                        ctx.onTrace?.invoke(
+                            AgentStep.framework(
+                                when {
+                                    note.startsWith("用户的选择") || note.startsWith("用户的回答") -> note
+                                    note == com.rokidlab.phone.ai.AskUser.DECLINED_NOTE -> "用户跳过了这个问题"
+                                    else -> "没有等到用户回应（超时或界面拉不起来）"
+                                },
+                                id = "ask_${tc.id}",
+                                state = AgentStep.State.OK,
+                            ),
+                        )
+                        note
+                    }
                     // 真实工具：参数合法性与审批已在重试循环外统一处理，这里直接执行
                     else -> ToolRegistry.execute(session.appContext, tc.name, tc.arguments)
                 }
@@ -1363,6 +1412,7 @@ private fun executeToolInTurn(
                     }
                     if (!localLight) {
                         add(com.rokidlab.phone.ai.AgentPlan.TOOL_NAME to "多步任务显式规划：生成带状态的步骤计划")
+                        add(com.rokidlab.phone.ai.AskUser.TOOL_NAME to "需要用户拍板时给出候选项，弹选项卡等用户点选后继续")
                     }
                     if (skillsOn) {
                         if (skillsContext != null) {
@@ -1580,6 +1630,10 @@ private fun executeToolInTurn(
                             if (longTermOn && !localLight) add(longTermMemory.schema())
                             // 任务计划伪工具（Agent 缺口 #1）：所有域子集都带，多步任务显式规划
                             if (!localLight) add(com.rokidlab.phone.ai.AgentPlan.schema())
+                            // 决策点伪工具（2026-10-12）：需要用户拍板时弹选项卡收集作答。
+                            // 与 update_plan 同闸门（localLight 本地轻量无此链路）；
+                            // 菜单探测/意图路由子集按名截取时天然不带 —— 决策点只出现在完整 Agent 任务里。
+                            if (!localLight) add(com.rokidlab.phone.ai.AskUser.schema())
                             if (skillsOn) {
                                 // 读技能（第 2 层按需加载）：只有**装了技能**才挂 —— 零技能时
                                 // load_skill 没有任何可加载对象，挂上只会诱使模型空调一次。
@@ -1614,9 +1668,20 @@ private fun executeToolInTurn(
                     // 校验也照跑）；伪工具（长期记忆/任务计划/技能）本轮一律不挂 —— 求最小 Schema 面。
                     routedToolNames != null -> {
                         val routed = routedToolNames!!
-                        buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
+                        val subset = buildTools(ToolRegistry.SESSION_AGENT_DOMAINS)
                             .filter { ToolRegistry.nameOf(it) in routed }
                             .toMutableList()
+                        // ★ 空集兜底（2026-10-13 审计修）：路由词表与注册表**可能漂移**
+                        //   （工具改名/被设置页禁用后，词表里的名字一个都匹配不上）。
+                        //   改造前路由分支不检查空集 ⇒ 本轮下发 0 个工具，模型"想调也没得调"，
+                        //   且不报错（表现为"AI 说做不了"）。与菜单点名分支的兜底（同上）对齐：
+                        //   退化成全量，宁可多花 token 也不让能力凭空消失。
+                        if (subset.isEmpty()) {
+                            Log.w(TAG, "routed tool subset empty (routed=$routed) -> fall back to full set")
+                            buildTools(ToolRegistry.SESSION_AGENT_DOMAINS).toMutableList()
+                        } else {
+                            subset
+                        }
                     }
                     else -> buildTools(
                         if (localLight) ToolRegistry.SESSION_LOCAL_DOMAINS
@@ -1665,10 +1730,14 @@ private fun executeToolInTurn(
                         // 前缀自动做 prompt caching，首条 system 一旦掺入每轮变化的记忆/资料，
                         // 缓存就从那里断掉 —— 命中价 ≈ miss 价的 2%，差距是真金白银。
                         put(
-                            // 闲聊快路：精简人设（无工具准则，含 [NEED_TOOLS] 逃生舱约定）；
-                            // 正常轮：完整人设，可选能力条款按**本次真正下发的**工具做闸门
-                            if (fastPathActive) service.buildChatOnlySystemMessage()
-                            else service.buildSystemMessage(
+                        // 闲聊快路：精简人设（无工具准则，含 [NEED_TOOLS] 逃生舱约定）；
+                        // 菜单探测轮：中间档人设（2026-10-12 P2 —— 探测轮只挂 3 个引导工具，
+                        // 完整版人设 ~10.5k 字符的准则绝大多数用不上，却每轮付全价；
+                        // 点中工具重建请求时 menuProbeActive 已复位，自动换回完整人设）；
+                        // 正常轮：完整人设，可选能力条款按**本次真正下发的**工具做闸门
+                        if (fastPathActive) service.buildChatOnlySystemMessage()
+                        else if (menuProbeActive) service.buildMenuProbeSystemMessage()
+                        else service.buildSystemMessage(
                                 localMode = localLight,
                                 availableTools = assembledToolNames,
                                 projectRules = projectRules(),
@@ -1690,8 +1759,20 @@ private fun executeToolInTurn(
                         service.buildContextTailMessage(
                             contextText = mergedContext,
                             instruction = instruction,
-                            memories = longTermContext,
-                            lessons = lessonsContext,
+                            // 记忆/教训按轮降档（2026-10-12 P2）：闲聊快路与菜单探测轮要么不干活、
+                            // 要么只做意图盘点，top-12 记忆（峰值 ~3.6k 字符）+ top-6 教训纯属陪跑
+                            // —— 各降为 4/2 条。正常轮（含工具轮）不变。
+                            // ⚠️ 只影响尾消息（历史之后），不碰缓存前缀纪律。
+                            memories = if ((fastPathActive || menuProbeActive) && longTermOn) {
+                                longTermMemory.memoriesContext(session.appContext, text, topK = 4)
+                            } else {
+                                longTermContext
+                            },
+                            lessons = if ((fastPathActive || menuProbeActive) && longTermOn) {
+                                longTermMemory.lessonsContext(session.appContext, text, lessonTopK = 2)
+                            } else {
+                                lessonsContext
+                            },
                             skills = skillsContext,
                             // 闲聊快路不下发预算说明：那段讲的是"工具调用轮次"，本轮压根没有工具，
                             // 提它等于诱导模型去找不存在的额度机制
@@ -1857,6 +1938,8 @@ private fun executeToolInTurn(
                 //   按窗口推导（窗口未知时不限），服务端 usage 优先、TokenMeter 兜底。
                 val tokenBudget = com.rokidlab.phone.ai.compaction.TokenBudget
                     .forWindow(route.capabilities.contextWindow)
+                // 新一轮开始：清掉上一轮的实时 token 计数（过程卡在生成中才会重新显示）
+                com.rokidlab.phone.store.ChatStateHolder.setLiveTokens(null)
                 var tokenExhausted = false
                 // 已自动续做次数（分账额度触顶后自动再开一段，见 MAX_AUTO_CONTINUES）
                 var autoContinues = 0
@@ -1874,6 +1957,9 @@ private fun executeToolInTurn(
                 // （落盘/装机/拨号/建日程…）。用来发现"用户要改，agent 却只读了一圈"这种假成功
                 // —— gps-live 案 T2~T7 共 37 次工具调用、**0 次写操作**，用户说的却是"修"和"重写"。
                 var actionToolUsed = false
+                // ★ 诉求漂移提醒只发一次（2026-10-12，补 intent_mismatch）：本轮已就
+                // git clone 外部仓库提醒过模型 ⇒ 后续同类调用不再重复注入。
+                var driftNoted = false
                 // 该检查是否已触发过（只自问一次，防死循环）
                 var intentAlignChecked = false
                 // 下一轮是否强制工具调用（tool_choice=required）：计划续做轮置位，
@@ -1912,6 +1998,16 @@ private fun executeToolInTurn(
                                 userText = text,
                             )
                         }
+                        // ★ 进「过程」（2026-10-12，P1）：抢占此前全程静默——半截正文只落
+                        //   事件流，气泡里没有任何"任务被打断、可续做"的痕迹，用户感知
+                        //   就是"跑到一半悄悄没了"。FRAMEWORK 行：中断是框架的决定。
+                        //   （锚点若已被结清，这条会落空 —— 无害，只是少一行提示。）
+                        onTrace?.invoke(
+                            AgentStep.framework(
+                                "任务已中断，进度已保存；说「继续」可接着做",
+                                id = "superseded_round_$round",
+                            )
+                        )
                         return@launchAiGeneration
                     }
                     // 流式：实时推送 content 增量给 UI（工具调用轮 content 通常为空，最终回复轮逐字推送）；
@@ -1925,6 +2021,8 @@ private fun executeToolInTurn(
                     // 每个都写一次 SnapshotStateList 会让主线程持续重组。
                     val reasoningBuf = StringBuilder()
                     var lastThinkEmitAt = 0L
+                    // 工具参数流式进度的节流时间戳（见 TOOL_ARG_EMIT_INTERVAL_MS）
+                    var lastToolArgEmitAt = 0L
                     // 本轮模型请求。抽成局部函数是为了在里面接**一次**上下文溢出恢复：
                     // 改造前溢出只会整轮失败，给用户一句「这次内容太长了，换个短一点的问题再试」——
                     // 而真正能修的动作（压掉历史再发一次）代码里根本没有。现在命中"输入超长"
@@ -1972,6 +2070,24 @@ private fun executeToolInTurn(
                                 if (now - lastThinkEmitAt >= THINKING_EMIT_INTERVAL_MS) {
                                     lastThinkEmitAt = now
                                     onTrace.invoke(AgentStep.thinking(round, reasoningBuf.toString()))
+                                }
+                            },
+                            // ★ 工具参数流式进度（2026-10-12 对标 Codex）：代码生成的**主耗时**
+                            //   在模型逐帧吐 save_code_file 的 content 上 —— 这期间既无 reasoning
+                            //   也无 content，过程卡片此前只有一行静止的「正在思考」，用户不知道
+                            //   它在写哪个文件、写到哪了（用户反馈"生成/修改文件全程只有思考中"）。
+                            //   这里把累积参数长度刷成实时进度（「正在生成代码文件 · 3.2 KB」）。
+                            //   ⚠️ 思考已产出内容时不覆盖：那行正在流式显示推理正文，用它换一个
+                            //   数字是净损失；思考没开（reasoningBuf 恒空）时才由它接管这一行。
+                            onToolArgs = if (onTrace == null) null else { toolName, argChars ->
+                                if (reasoningBuf.isEmpty()) {
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastToolArgEmitAt >= TOOL_ARG_EMIT_INTERVAL_MS) {
+                                        lastToolArgEmitAt = now
+                                        onTrace.invoke(
+                                            AgentStep.thinking(round, toolArgProgressText(toolName, argChars)),
+                                        )
+                                    }
                                 }
                             },
                         )
@@ -2253,7 +2369,7 @@ private fun executeToolInTurn(
                                     put("role", "user")
                                     put("content", planPrompt)
                                 })
-                                link?.let { sendGlassesProgress(it, "→ 计划未完成，继续执行…") }
+                                link?.let { sendGlassesProgress(it, "→ 继续执行…") }
                                 // ★ 同时上报手机过程（2026-10-06 审计修）：原先只发眼镜，
                                 //   手机过程里**没有任何痕迹** ⇒ 用户看到的是
                                 //   「多出几个 think 但工具行没增加」，以为它卡住重复思考；
@@ -2439,7 +2555,10 @@ private fun executeToolInTurn(
                             // 而 `if (!silent)` 恰好把它跳过 ⇒ 这份文案永远用不上。
                             // 这两个工具是 READ_ONLY 档（不弹审批、不写盘），属于用户可感知的能力。
                             val silent = tc.name == com.rokidlab.phone.ai.LongTermMemoryManager.TOOL_NAME ||
-                                tc.name == com.rokidlab.phone.ai.AgentPlan.TOOL_NAME
+                                tc.name == com.rokidlab.phone.ai.AgentPlan.TOOL_NAME ||
+                                // ask_user：眼镜进度走通道里的 TTS 提醒（"请看手机"），
+                                // 不发「→ 正在执行 ask_user…」这种黑话行
+                                tc.name == com.rokidlab.phone.ai.AskUser.TOOL_NAME
                             // 代码落盘工具：进度提示要带具体文件名（「正在生成 app.json…」→「app.json 生成成功」）
                             val isCodeFile = tc.name == ToolRegistry.TOOL_CODE_FILE
                             val relFile = if (isCodeFile) {
@@ -2452,7 +2571,9 @@ private fun executeToolInTurn(
                                     // 「→」＝进行中图标（GB2312 字形，单色屏不缺字）
                                     sendGlassesProgress(
                                         it,
-                                        if (isCodeFile && relFile.isNotEmpty()) "→ 正在生成 $relFile…"
+                                        // ★ 精简（2026-10-12 用户要求）：眼镜单色屏只留「操作 + 文件名」，
+                                        //   进行中/成功/失败三个状态靠 →/√/× 区分，不再铺一句完整说明
+                                        if (isCodeFile && relFile.isNotEmpty()) "→ 生成 $relFile"
                                         else "→ " + ToolRegistry.statusText(tc.name),
                                     )
                                 }
@@ -2464,7 +2585,10 @@ private fun executeToolInTurn(
                             // update_plan 不显示为工具行（"执行 update_plan…"是黑话），
                             // 改由下方的结构化计划清单（AgentStep.Kind.PLAN）呈现。
                             val traceVisible = tc.name != LongTermMemoryManager.TOOL_NAME &&
-                                tc.name != com.rokidlab.phone.ai.AgentPlan.TOOL_NAME
+                                tc.name != com.rokidlab.phone.ai.AgentPlan.TOOL_NAME &&
+                                // ask_user 不走通用工具行：分支内自发自终两条框架步骤
+                                // （「等待用户选择：…」→「用户已选择/跳过/超时」，同 key 覆盖）
+                                tc.name != com.rokidlab.phone.ai.AskUser.TOOL_NAME
                             if (traceVisible) {
                                 // ★ 文件产物（2026-10-10）：让「过程」行里的文件名可点开预览。
                                 //   save_code_file 特殊 —— 参数是 project+file（不是 path），
@@ -2488,7 +2612,73 @@ private fun executeToolInTurn(
                                     ),
                                 )
                             }
-                            results[idx] = runToolInTurn(tc, agentTurn, execCtx)
+                            // ★ write 型子代理内层进度上报（2026-10-12）：execute_subtask 内层
+                            //   6~8 轮写文件/打补丁此前一行过程都不发，用户只见外层一行转圈
+                            //   （最长 120 秒）——"改代码/生成代码不知道它在干嘛"的主路径。
+                            //   与只读子代理的 setSubStepSink 同一套 ThreadLocal 手法；
+                            //   sink 在这里（执行工具的线程、artifactBaseDirOf 可见的作用域）写入，
+                            //   由 SubagentToolProvider 在 execute 时取走即清。
+                            //   ⚠️ 写型子代理 sideEffect=true 恒走串行泳道（本线程直接执行），
+                            //   set/take 必在同线程；若未来改走并行泳道，sink 会取不到
+                            //   ⇒ 退化为"只有外层一行"（与改造前一致，不会错显）。
+                            if (tc.name == com.rokidlab.phone.ai.subagent.WriteSubagent.TOOL_NAME) {
+                                com.rokidlab.phone.ai.subagent.WriteSubagent.setSubStepSink { round, toolName, stateName, argsJson, result ->
+                                    val subState = runCatching { AgentStep.State.valueOf(stateName) }
+                                        .getOrDefault(AgentStep.State.RUNNING)
+                                    onTrace?.invoke(
+                                        AgentStep.subStep(
+                                            key = "sub:${tc.id}:$round:$toolName",
+                                            name = toolName,
+                                            state = subState,
+                                            result = result,
+                                            // 产物芯片：内层文件工具的参数同样带 project/path，
+                                            // 与主循环工具行走同一套解析（解析不出 → 无芯片，不猜路径）
+                                            artifacts = AgentStep.artifactOf(
+                                                toolName, argsJson, artifactBaseDirOf(argsJson),
+                                            ),
+                                        ),
+                                    )
+                                }
+                            }
+                            // ★ 输出直播 + 耗时（2026-10-12 对标 Codex）：shell/script 是 sideEffect 工具
+                            //   ⇒ 恒走串行泳道（本线程直接执行），执行前装 ThreadLocal sink，
+                            //   逐行输出在此**节流**（≥500ms）刷回 RUNNING 命令卡 —— 用户能看着
+                            //   输出滚出来，而不是盯着一圈转圈猜。finally 清 sink 兜底（同线程）。
+                            val execT0 = android.os.SystemClock.elapsedRealtime()
+                            val liveTool = tc.name == com.rokidlab.phone.ai.tools.ShellToolProvider.TOOL_RUN ||
+                                tc.name == "run_script"
+                            if (liveTool) {
+                                val liveBuf = StringBuilder()
+                                var lastPush = 0L
+                                com.rokidlab.phone.ai.tools.ShellToolProvider.setLiveOutputSink { line ->
+                                    if (liveBuf.length + line.length + 1 <= AgentStep.MAX_OUTPUT_CHARS) {
+                                        liveBuf.append(line).append('\n')
+                                    }
+                                    val now = android.os.SystemClock.elapsedRealtime()
+                                    if (now - lastPush >= 500L) {
+                                        lastPush = now
+                                        val tail = liveBuf.toString().lines()
+                                            .takeLast(15).joinToString("\n").takeLast(2_000)
+                                        onTrace?.invoke(
+                                            AgentStep.tool(
+                                                tc.id, tc.name, AgentStep.State.RUNNING,
+                                                argsRaw = tc.arguments,
+                                            ).copy(output = tail.takeIf { it.isNotBlank() }),
+                                        )
+                                    }
+                                }
+                            }
+                            // ★ 产物回报通道开工（2026-10-13 审计修）：工具在写成功那一刻
+                            //   `ProducedFileSink.record(真实绝对路径)` —— zip / 总结 txt 这类
+                            //   "路径不在参数里"的产物只可能这样拿到（ARTIFACT_SPECS 推不出来）。
+                            //   begin 在此清残留，取走见下方 take()，兜底清理在 finally。
+                            com.rokidlab.phone.ai.ProducedFileSink.begin()
+                            try {
+                                results[idx] = runToolInTurn(tc, agentTurn, execCtx)
+                            } finally {
+                                if (liveTool) com.rokidlab.phone.ai.tools.ShellToolProvider.setLiveOutputSink(null)
+                            }
+                            val execElapsedMs = android.os.SystemClock.elapsedRealtime() - execT0
                             // ⚠️ 必须在**执行工具的这个线程**上取（ThreadLocal 语义），且必须在
                             // trace 回调之前 —— 与 runTool 紧邻，避免中间被别的逻辑岔开。
                             // 出图工具（眼镜相机 look_at_view / 手机截屏 capture_screen）都走这条通道，
@@ -2496,30 +2686,36 @@ private fun executeToolInTurn(
                             if (tc.name in com.rokidlab.phone.ai.tools.VisionToolProvider.pendingImageTools) {
                                 lookImages[idx] = com.rokidlab.phone.ai.tools.VisionToolProvider.takePendingImage()
                             }
+                            // 工具自己回报的产物（取走即清，必须在构造终态过程行之前取）
+                            val reportedFiles = com.rokidlab.phone.ai.ProducedFileSink.take()
                             if (traceVisible) {
                                 val okStep = !AgentStep.isFailureResult(results[idx])
                                 val endState =
                                     if (okStep) AgentStep.State.OK else AgentStep.State.FAILED
-                                val step = if (tc.name == ToolRegistry.TOOL_CODE_FILE) {
-                                    // save_code_file 特殊：参数是 project+file（不是 path），
-                                    // 且要等结果才知道是否真落盘。只有真落盘（"已生成"开头）
-                                    // 才算 CREATE；失败时保留路径但动作降为 WRITE ——
-                                    // 文件**不存在**，标"新建"等于骗用户点一个打不开的芯片。
-                                    AgentStep.tool(
-                                        tc.id, tc.name, endState,
-                                        argsRaw = tc.arguments, result = results[idx],
-                                        artifacts = saveCodeArtifact(
-                                            tc.arguments,
-                                            results[idx]?.startsWith("已生成") == true,
-                                        ),
+                                // 参数推出的产物（ARTIFACT_SPECS）+ 工具回报的产物（ProducedFileSink）
+                                // 合并；按路径去重，参数推的那条优先（它的 action 更精确，如 READ/WRITE）。
+                                val baseArts = if (tc.name == ToolRegistry.TOOL_CODE_FILE) {
+                                    saveCodeArtifact(
+                                        tc.arguments,
+                                        results[idx]?.startsWith("已生成") == true,
                                     )
                                 } else {
-                                    AgentStep.tool(
-                                        tc.id, tc.name, endState,
-                                        argsRaw = tc.arguments, result = results[idx],
-                                        artifactBaseDir = artifactBaseDirOf(tc.arguments),
-                                    )
+                                    AgentStep.artifactOf(tc.name, tc.arguments, artifactBaseDirOf(tc.arguments))
                                 }
+                                val arts = if (reportedFiles.isEmpty()) {
+                                    baseArts
+                                } else {
+                                    val known = baseArts.mapTo(HashSet()) { it.path }
+                                    baseArts + reportedFiles
+                                        .filter { it.path !in known }
+                                        .map { AgentStep.Artifact(it.path, it.label, AgentStep.Action.CREATE) }
+                                }
+                                val step = AgentStep.tool(
+                                    tc.id, tc.name, endState,
+                                    argsRaw = tc.arguments, result = results[idx],
+                                    durationMs = execElapsedMs,
+                                    artifacts = arts,
+                                )
                                 onTrace?.invoke(step)
                             }
                             // 计划更新（update_plan 伪工具）：
@@ -2542,8 +2738,9 @@ private fun executeToolInTurn(
                                 link?.let {
                                     sendGlassesProgress(
                                         it,
-                                        if (r?.startsWith("已生成") == true) "√ $relFile 生成成功"
-                                        else "× 生成 $relFile 失败，请换个说法再试",
+                                        // ★ 精简：只回「符号 + 文件名」，失败建议留给手机端/TTS 总结
+                                        if (r?.startsWith("已生成") == true) "√ $relFile"
+                                        else "× $relFile",
                                     )
                                 }
                             }
@@ -2555,8 +2752,9 @@ private fun executeToolInTurn(
                                 link?.let {
                                     sendGlassesProgress(
                                         it,
+                                        // ★ 精简：× 已经表达失败，不再补「失败」二字
                                         if (ok) "√ ${ToolRegistry.doneText(tc.name)}"
-                                        else "× ${ToolRegistry.doneText(tc.name)} 失败",
+                                        else "× ${ToolRegistry.doneText(tc.name)}",
                                     )
                                 }
                             }
@@ -2572,6 +2770,12 @@ private fun executeToolInTurn(
                             // 三条泳道（并行/串行/收尾）共用这一个 finally，行为一致。
                             com.rokidlab.phone.ai.tools.VisionToolProvider.clearPendingImage()
                             com.rokidlab.phone.ai.subagent.ReadOnlySubagent.clearPendingUserText()
+                            // write 型子代理 sink 的同类兜底：工具在真正执行前被拦下时
+                            // 槽位不会被 take 走，不清会让池线程上后来者拿到旧 sink。
+                            com.rokidlab.phone.ai.subagent.WriteSubagent.clearSubStepSink()
+                            // 产物回报通道的同类兜底（2026-10-13）：工具被拦下/抛异常时槽位
+                            // 不会被 take 走，不清会让后来者拿到上一件产物的路径（错挂芯片）。
+                            com.rokidlab.phone.ai.ProducedFileSink.clear()
                             // finally 兜底 countDown（幂等，可重复减到 0）：body 若抛出未捕获异常，
                             // latch 永不归零 ⇒ await 永久挂起 ⇒ 生成线程卡死。
                             // 串行泳道没有自己的份额，多减在 count=0 后是无操作，无害。
@@ -2602,15 +2806,40 @@ private fun executeToolInTurn(
                             runToolWorker(idx)
                         }
                     }
-                    serialIdx.forEach { idx -> runToolWorker(idx) }
+                    serialIdx.forEach { idx ->
+                        // ★ H1 修复（2026-10-13 审计）：副作用工具执行**前**补一个代际检查点。
+                        //
+                        // 改造前检查点只在每轮开头（`for (round ...)` 顶部），而确认等待是 18~40s
+                        // 的同步阻塞 —— 用户在这段时间里叫停（或发新消息抢占）时：
+                        //   ① 协程取消 → 线程中断 → 通道返回"没问到" → PROCEED 工具被静默放行，
+                        //      副作用真的发生（删文件/装包），而结果随代际作废被一并丢弃，
+                        //      用户、模型、过程卡片三边都看不到；
+                        //   ② 即便通道那侧已按 [ApprovalGate.ConfirmOutcome.aborted] 拒绝，
+                        //      这一层再兜一次，覆盖"工具不检查中断标志"的少数实现。
+                        // 只对**串行泳道**（副作用工具）生效：并行泳道是只读工具，
+                        // 按设计"代际取消不波及这些子任务"，不在这里跳过。
+                        if (isSuperseded()) {
+                            val skipped = turn.toolCalls[idx]
+                            results[idx] = "任务已中止，未执行：'${skipped.name}'"
+                            Log.i(TAG, "skip side-effect tool ${skipped.name} (superseded at serial lane)")
+                        } else {
+                            runToolWorker(idx)
+                        }
+                    }
                     // 超时兜底（2026-10-02 体检）：await 是阻塞调用、不响应协程取消 —— 若 aiScope 在
                     // launch 的子任务起跑前被取消（服务销毁时序），协程体不执行、finally 里的
-                    // countDown 不会跑，无界 await 会把生成线程永久挂死。上限 120s 远大于正常上界
-                    // （审批闸门 35s + 工具自身网络超时），只在「子任务永远没起跑」的病态场景触发；
-                    // 超时放行后缺位的并行结果由下方 `results[idx] ?: "工具执行失败"` 兜底，顺序不变。
-                    val joined = latch.await(120, java.util.concurrent.TimeUnit.SECONDS)
+                    // countDown 不会跑，无界 await 会把生成线程永久挂死。
+                    // ⚠️ 上限 150s（2026-10-13 审计修）：必须**严格大于**并行泳道里最长的工具等待，
+                    //    否则会出现"主循环已超时放行、真实结果随后才到"的分叉。最长的是
+                    //    ask_user 的 120s（AskUserChannel.ASK_TIMEOUT_MS，READ_ONLY 伪工具走并行泳道），
+                    //    改造前两者都是 120s ⇒ 恰好等值时存在边界竞争（模型上下文里是
+                    //    "工具执行失败"，事件流里是真实结果）。留 30s 余量把注释里那句
+                    //    "远大于正常上界"重新变成事实。
+                    // 只在「子任务永远没起跑」的病态场景触发；超时放行后缺位的并行结果
+                    // 由下方 `results[idx] ?: "工具执行失败"` 兜底，顺序不变。
+                    val joined = latch.await(150, java.util.concurrent.TimeUnit.SECONDS)
                     if (!joined) {
-                        Log.e(TAG, "parallel tool lane did not join in 120s (scope cancelled?) — proceed with partial results")
+                        Log.e(TAG, "parallel tool lane did not join in 150s (scope cancelled?) — proceed with partial results")
                     }
                     // 按原顺序回填 tool 消息
                     turn.toolCalls.forEachIndexed { idx, tc ->
@@ -2619,7 +2848,15 @@ private fun executeToolInTurn(
                             codeGenUsed = true
                             if (results[idx]?.startsWith("已生成") == true) {
                                 codeFileTargetOf(tc)?.let { (p, f) ->
-                                    genFilesByProject.getOrPut(p) { LinkedHashSet() }.add(f)
+                                    val files = genFilesByProject.getOrPut(p) { LinkedHashSet() }
+                                    files.add(f)
+                                    // ★ 多文件生成汇总进度（2026-10-12 对标 Codex）：每成功落一个
+                                    //   文件就刷新同一行框架步骤「项目 p 已生成 N 个文件」——
+                                    //   此前只有逐个 save_code_file 工具行，没有"整个项目
+                                    //   生成了多少"的汇总视角，多文件长任务看不到进度全貌。
+                                    onTrace?.invoke(
+                                        AgentStep.framework("项目 $p 已生成 ${files.size} 个文件", "codegen:progress"),
+                                    )
                                     // 产物级 checkpoint：成功落盘的文件进任务状态，
                                     // 续做时模型知道哪些文件已有、不必重新生成
                                     com.rokidlab.phone.ai.AgentTaskStore.recordArtifact(
@@ -2685,6 +2922,35 @@ private fun executeToolInTurn(
                             TAG,
                             "tool ${tc.name} args=${tc.arguments.length}chars -> ${result.length}chars",
                         )
+                        // ★ 诉求漂移自省（2026-10-12，补 AgentStep 注释承诺的 intent_mismatch）：
+                        // 生成任务里模型跑去 git clone 外部仓库 —— 真机实例（贪吃蛇白屏修复）：
+                        // 修贪吃蛇却在 Download/Lab/ 下克隆了 pacman 参考仓库（30s+ 下载、留下整个
+                        // 无关项目目录、事后无人清理），且全程无任何自省——intent_mismatch 触发器
+                        // 此前只存在于 KDoc 里没有实现。这里把「拉外部仓库」这个最容易漂移的大动作
+                        // 先兜住。⚠️ 只提示不拦截（clone 可能正是用户要求的"帮我 clone xx 项目"）。
+                        val driftNote = if (!driftNoted && tc.name == "run_shell" &&
+                            runCatching {
+                                JSONObject(tc.arguments).optString("command")
+                            }.getOrDefault("").contains(
+                                Regex("git\\s+clone", RegexOption.IGNORE_CASE),
+                            )
+                        ) {
+                            driftNoted = true
+                            agentTurn?.reflect(
+                                com.rokidlab.phone.ai.session.ReflectTrigger.INTENT_ACTION_MISMATCH,
+                                detail = "生成任务中拉取外部仓库（git clone）",
+                                action = "确认克隆确属用户诉求；完成后说明理由并清理无关目录",
+                            )
+                            onTrace?.invoke(
+                                AgentStep.reflect(
+                                    "intent_mismatch",
+                                    "拉取外部仓库（git clone）——已提醒确认这步是否必要",
+                                )
+                            )
+                            "\n\n（框架提醒：本轮在生成任务里执行了 git clone。若这不是用户明确要求的动作，请在最终回复说明克隆它的理由；用完的参考仓库要清理掉，不要把无关项目目录留在用户下载目录。）"
+                        } else {
+                            ""
+                        }
                         // ★ 原地打转检测（2026-10-09，P0-6）：同指纹在滑动窗口内第 2 次出现就提醒。
                         // 现有自省只认"工具抛异常"，而真机的失效模式是**工具全部成功却毫无进展**
                         // （gps-live：37 次调用 0 写、同一文件读 5 遍、同一个不存在的文件读 2 遍），
@@ -2727,7 +2993,7 @@ private fun executeToolInTurn(
                         // —— 注入隔离的语义会反过来伤到自己。
                         val safeResult = com.rokidlab.phone.ai.UntrustedContent.wrap(
                             ToolRegistry.contentTrustOf(tc.name), tc.name, result,
-                        ) + repeatNote
+                        ) + repeatNote + driftNote
                         messages.put(JSONObject().apply {
                             put("role", "tool")
                             put("tool_call_id", tc.id)
@@ -2824,6 +3090,9 @@ private fun executeToolInTurn(
                         (turn.content ?: "") + results.joinToString("") { it ?: "" },
                     )
                     val charged = tokenBudget.chargeRound(turn.usage, estThisRound)
+                    // ★ 实时 token 计量（2026-10-12 对标 Codex）：每轮计费后刷新的累计值，
+                    //   过程卡在生成中显示「≈N tokens」（ChatStateHolder.liveTokens）。
+                    com.rokidlab.phone.store.ChatStateHolder.setLiveTokens(tokenBudget.total)
                     if (turn.usage != null || estThisRound > 0) {
                         Log.i(
                             TAG,
@@ -2897,7 +3166,7 @@ private fun executeToolInTurn(
                                         "请接着完成目标；若确实已经全部完成，直接用一两句中文给出最终结论。",
                                 )
                             })
-                            link?.let { sendGlassesProgress(it, "→ 继续执行剩余步骤…") }
+                            link?.let { sendGlassesProgress(it, "→ 继续执行…") }
                             // ★ 同上：手机过程也要能看到预算触顶的自动续做（原先只有眼镜有）
                             onTrace?.invoke(
                                 AgentStep.thinking(
@@ -2950,6 +3219,13 @@ private fun executeToolInTurn(
                                 userText = text,
                             )
                         }
+                        // ★ 进「过程」（2026-10-12，P1）：收尾阶段被抢占也不再静默（同轮首检查点）
+                        onTrace?.invoke(
+                            AgentStep.framework(
+                                "收尾被打断，进度已保存；说「继续」可接着做",
+                                id = "superseded_summary",
+                            )
+                        )
                         return@launchAiGeneration
                     }
                     var finalTurn: com.rokidlab.phone.ai.ChatTurn? = null
@@ -3073,6 +3349,7 @@ private fun executeToolInTurn(
                                     artifacts = sumArtifacts,
                                 )
                             )
+                            val sumT0 = android.os.SystemClock.elapsedRealtime()
                             val out = runToolInTurn(tc, agentTurn, execCtx)
                             onTrace?.invoke(
                                 AgentStep.tool(
@@ -3082,6 +3359,7 @@ private fun executeToolInTurn(
                                     else AgentStep.State.OK,
                                     argsRaw = tc.arguments,
                                     result = out,
+                                    durationMs = android.os.SystemClock.elapsedRealtime() - sumT0,
                                     artifactBaseDir = sumBase,
                                     artifacts = if (isSumCodeFile) {
                                         saveCodeArtifact(tc.arguments, out.startsWith("已生成"))
@@ -3187,12 +3465,16 @@ private fun executeToolInTurn(
                                 val mirror = java.io.File(appCtx.filesDir, "aiui_projects/$proj/$rel")
                                 if (mirror.isFile) {
                                     android.util.Log.i(TAG, "codegen file card: $proj/$rel (${mirror.length()}B)")
-                                    com.rokidlab.phone.store.ChatStateHolder.addFile(
-                                        isUser = false,
-                                        path = mirror.absolutePath,
-                                        name = "$proj/$rel",
-                                        chars = mirror.length().toInt(),
-                                    )
+                                    // ★ 工具循环线程不是主线程：文件卡要写 Compose 状态列表，
+                                    //   统一切回主线程（[ChatStateHolder.runOnMain] 是唯一入口）
+                                    com.rokidlab.phone.store.ChatStateHolder.runOnMain {
+                                        com.rokidlab.phone.store.ChatStateHolder.addFile(
+                                            isUser = false,
+                                            path = mirror.absolutePath,
+                                            name = "$proj/$rel",
+                                            chars = mirror.length().toInt(),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -3225,6 +3507,29 @@ private fun executeToolInTurn(
                 // 放在「落 replyRef 之前」＝显示、语音播报、会话记忆三处统一拿到干净文本。
                 // 真机事故（2026-09-17 15:11）：眼镜上直接显示 `<answer>西安明天晴，最高31度…`。
                 reply = com.rokidlab.phone.ai.ReplySanitizer.sanitize(reply)
+                // ★ 触顶确定性收尾（2026-10-12，P0-B）：轮次/token 预算用尽时，由**框架**在
+                //   回复尾部追加"停在哪 + 还剩什么 + 说继续可接着做"，不依赖收尾轮模型自觉。
+                //   为什么放这里（定稿链最后一步、replyRef.set 之前）：
+                //   ① 收尾总结轮可能 3 轮无正文 → reply 落固定兜底「抱歉，无法处理」——
+                //      那串文案必须照样带上预算说明，用户才知道不是任务完成；
+                //   ② codeGenUsed 时 finalizeCodeGenReply 会把结论收敛成「已生成 N 个文件」，
+                //      模型按提示写的"还剩哪些步骤"在这条路径上会被整段丢弃 —— 只有在
+                //      收敛**之后**追加才保得住；
+                //   ③ 放在 sanitize 之后：这段文案由框架拼，不走清洗器，避免被误伤。
+                //   下一轮的续做由 AgentTaskStore.pendingContext 注入（说「继续」即接续）。
+                if (budgetExhausted || tokenExhausted) {
+                    val stopNote = if (localLight) {
+                        // 本地轻量模式不落任务快照（markStatus 全程被 !localLight 挡住），
+                        // 读快照会拿到旧会话的残留 —— 退化为不带步骤的通用说明
+                        val reason = if (tokenExhausted) "本轮 token 预算用尽" else "本轮工具轮次预算用尽"
+                        "（$reason，先做到这里。对我说「继续」我可以接着做。）"
+                    } else {
+                        com.rokidlab.phone.ai.AgentTaskStore.budgetStopNote(
+                            session.appContext, tokenExhausted = tokenExhausted,
+                        )
+                    }
+                    reply = (reply + "\n\n" + stopNote).trim()
+                }
                 replyRef.set(reply)
                 // 粘滞位落账：本轮用过工具（含收尾阶段的 save_code_file）→ 下一轮闲聊快路避让
                 lastTurnHadToolCalls = turnUsedTools || codeGenUsed
@@ -3274,6 +3579,14 @@ private fun executeToolInTurn(
                             userText = text,
                         )
                     }
+                    // ★ 进「过程」（2026-10-12，P1）：异常路径的抢占同样不再静默
+                    //   （与上方两处 superseded 分支同款；锚点已结清时落空，无害）
+                    onTrace?.invoke(
+                        AgentStep.framework(
+                            "任务已中断，进度已保存；说「继续」可接着做",
+                            id = "superseded_catch",
+                        )
+                    )
                     return@launchAiGeneration
                 }
                 Log.e(TAG, "DeepSeek API failed", e)
@@ -3642,6 +3955,12 @@ private fun executeToolInTurn(
         } else {
             Log.i(TAG, "abortCurrentAi: bumped aiGenSeq -> $seq (no in-flight generation)")
         }
+        // ★ 2026-10-13 审计修（M3+H1）：用户叫停时，屏幕上**等待中的**确认框/选项卡必须一起撤掉，
+        //   否则留下一个点什么都没用的死弹窗（改造前 abortAll 只在内存压力与眼镜 cleanup 被调，
+        //   这条路径从不调）。aborted=true 让等待方立刻拿到"被中止" —— 闸门一律拒绝执行，
+        //   不会有"用户已叫停却仍发生副作用"（H1）。
+        com.rokidlab.phone.ai.PhoneToolConfirmChannel.abortAll(aborted = true)
+        com.rokidlab.phone.ai.AskUserChannel.abortAll()
         // 收尾「过程」：被打断的请求不会再有第二段（OK/FAILED）事件，不兜底的话
         // 聊天窗口里会永远挂着一个转圈的「进行中」步骤，看起来像卡死
         traceFinishSink?.invoke(true)
@@ -3688,4 +4007,21 @@ private fun executeToolInTurn(
         traceSink = onStep
         traceFinishSink = onFinish
     }
+
+    /**
+     * 工具**参数流式生成期**的一行实时进度（见 [TOOL_ARG_EMIT_INTERVAL_MS]）。
+     *
+     * 文案取自 [ToolRegistry.statusText]（眼镜进度行与状态栏的同一份"人性化进度文案"），
+     * 剥掉尾缀「…」再挂上"已生成多大"——**不另造一套说法**，否则同一个动作在三处
+     * 各说一词。查不到的工具类型走它的兜底（"正在执行 xxx"）。
+     */
+    private fun toolArgProgressText(toolName: String, argChars: Int): String {
+        val base = ToolRegistry.statusText(toolName).removeSuffix("…")
+        if (argChars <= 0) return base
+        return "$base · ${argSizeText(argChars)}"
+    }
+
+    /** 参数字节数的可读形式（`680 B` / `3.2 KB`），与 AgentStep 的 content 大小同刻度 */
+    private fun argSizeText(n: Int): String =
+        if (n < 1024) "$n B" else String.format(java.util.Locale.ROOT, "%.1f KB", n / 1024.0)
 }

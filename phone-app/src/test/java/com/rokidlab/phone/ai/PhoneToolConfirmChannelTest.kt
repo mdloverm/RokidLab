@@ -21,9 +21,9 @@ import org.junit.Test
  * "用户同意了"，于是一个需要确认的动作被**静默执行** —— 而用户什么都没看到。
  * 那是比"拒绝"坏得多的一种失败（用户以为没人问、系统以为问过了）。
  *
- * ⚠️ 通道**选择**逻辑（眼镜优先、手机兜底）不在这里测 —— 它在
+ * ⚠️ 通道**选择**逻辑（App 前台时手机优先，否则眼镜优先、手机兜底）不在这里测 —— 它在
  * [com.rokidlab.phone.ai.approval.ApprovalGate.resolveAsk] 里，用例是
- * `ApprovalGateTest.F9` / `F10`。这里不重复造一份"通道选择"的假实现。
+ * `ApprovalGateTest.F9` / `F10` / `F11`。这里不重复造一份"通道选择"的假实现。
  */
 class PhoneToolConfirmChannelTest {
 

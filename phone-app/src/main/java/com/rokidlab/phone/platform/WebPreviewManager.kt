@@ -102,7 +102,7 @@ object WebPreviewManager {
 
     private val _previews = MutableStateFlow<List<PreviewInfo>>(emptyList())
 
-    /** 当前在跑的预览（聊天页据此显示预览条） */
+    /** 当前在跑的预览（聊天页据此显示预览条；预览窗 = 独立 [com.rokidlab.phone.store.WebPreviewActivity]） */
     val previews: StateFlow<List<PreviewInfo>> get() = _previews
 
     private fun refreshState() {

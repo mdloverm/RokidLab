@@ -120,13 +120,16 @@ class GoldenAgentEvalTest {
     }
 
     @Test
-    fun `B5 AIUI 会话域仅含 aiui files info web knowledge shell`() {
-        // 排除项才是这个子集的意义：眼镜管理(timer/media/display)/手机域/research/vision/mcp
+    fun `B5 AIUI 会话域仅含 aiui files info web knowledge shell vision`() {
+        // 排除项才是这个子集的意义：眼镜管理(timer/media/display)/手机域/research/mcp
         // 都是"这份活干不上"的域，每轮少发十几个 Schema。
         // web + knowledge 是**输入侧素材**（只读），页面生成常以"把这份资料做成页面"开头，
         // 砍掉它们会让切换到子集后的下一轮突然失去素材来源，模型只能凭印象编数据。
         // shell 是 2026-10-01 补进来的（save_code_file 准则要求落盘后用 start_web_preview /
         // run_shell 验证，见 ToolRegistry.SESSION_AIUI_DOMAINS 的 KDoc）—— 本金标此前漏更新。
+        // vision 是 2026-10-12 补进来的（真机缺口：save_code_file 一落盘子集生效，
+        // capture_screen 随 vision 域消失 ⇒ 模型只能拿 http_request"验证"，而白屏时
+        // HTTP 照样 200 —— 渲染判据必须靠截屏目视，见 ToolRegistry KDoc）。
         assertEquals(
             setOf(
                 ToolRegistry.DOMAIN_AIUI,
@@ -135,6 +138,7 @@ class GoldenAgentEvalTest {
                 ToolRegistry.DOMAIN_WEB,
                 ToolRegistry.DOMAIN_KNOWLEDGE,
                 ToolRegistry.DOMAIN_SHELL,
+                ToolRegistry.DOMAIN_VISION,
             ),
             ToolRegistry.SESSION_AIUI_DOMAINS,
         )
@@ -202,6 +206,17 @@ class GoldenAgentEvalTest {
         assertTrue(
             "缺「想看代码就在正文用围栏代码块给」的分流说明",
             sys.contains("围栏代码块"),
+        )
+        // ★ 2026-10-12 目视验证判据（真机缺口：白屏时 HTTP 照样 200，
+        //   http_request 不能代替截屏目视）—— 与 capture_screen 随 vision 域补进
+        //   SESSION_AIUI_DOMAINS 配套，缺一条渲染验证闭环就断在最后一环。
+        assertTrue(
+            "缺 capture_screen 目视验证判据",
+            sys.contains("capture_screen"),
+        )
+        assertTrue(
+            "缺「http 200 不能代替渲染验证」判据",
+            sys.contains("证明不了页面能渲染"),
         )
     }
 

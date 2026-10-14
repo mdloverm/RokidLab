@@ -6,23 +6,35 @@ import java.util.concurrent.TimeUnit
 /**
  * 一次外部进程执行的结果。
  *
- * [failure] 非空表示**进程根本没起来**（与"起来了但返回非 0"是两类事，必须分开说）：
- *  - `启动失败：IOException: …: error=13, Permission denied` ⇒ SELinux 域不许 exec
- *  - `error=2, No such file or directory` ⇒ 二进制不在位（例如 `nativeLibraryDir` 是空目录）
+ * [failure] 非空表示**这一轮没拿到「起来了且正常返回」的结果**（与"起来了但返回非 0"是两类事，
+ * 必须分开说）。它有两种成因，靠 [timedOut] 区分：
+ *  - **根本没起来**（[timedOut] = false）：`启动失败：IOException: …: error=13, Permission denied`
+ *    ⇒ SELinux 域不许 exec；`error=2, No such file or directory` ⇒ 二进制不在位。
+ *  - **起来了但超时被强杀**（[timedOut] = true）：`超时 180s（已强杀）` —— 环境没问题，
+ *    是那条命令自己没结束。
  */
 data class ExecResult(
     val code: Int,
     val stdout: String,
     val stderr: String,
     val failure: String? = null,
+    /**
+     * 超时被强杀 —— 进程**起来过**，只是没在时限内结束。
+     *
+     * ⚠️ 必须与 [failure] 的另一半（"根本没起来"：二进制缺失 / SELinux 挡住）分开：
+     * 2026-10-12 实锤，两者在 [failure] 上长得一模一样，上层把「超时」汇报成
+     * 「命令没被拉起来（环境本身有问题）」，把模型和用户的排查方向整个带偏。
+     */
+    val timedOut: Boolean = false,
 ) {
-    /** 进程是否真的被拉起来了（能拉起才谈得上"返回值"） */
-    val launched: Boolean get() = failure == null
+    /** 进程是否真的被拉起来了（**超时也算拉起来了** —— 它跑过，只是没结束） */
+    val launched: Boolean get() = failure == null || timedOut
 
     val ok: Boolean get() = launched && code == 0
 
     /** 单行摘要，便于落日志 */
     fun summary(): String = when {
+        timedOut -> "超时中断（$failure）"
         !launched -> "未拉起（$failure）"
         code == 0 -> "OK（退出码 0）"
         else -> "退出码 $code"
@@ -41,7 +53,8 @@ data class ExecResult(
  * **写第二遍必漏一处**的细节：
  *  1. 两个管道必须**并发**读 —— 子进程写满管道时会阻塞在写，而父进程阻塞在读另一个流，
  *     双向死锁（表现为"命令永远不返回"）；
- *  2. 超时必须 `destroyForcibly()` —— 否则调用方永久挂住（解压 350 MB 的文件时尤其危险）。
+ *  2. 超时必须把进程收掉（[stopProcess]：先 SIGTERM 再 SIGKILL）——
+ *     否则调用方永久挂住（解压 350 MB 的文件时尤其危险）。
  *
  * ## ⚠️ 不做 shell 展开
  * 参数**逐项传数组**，绝不拼接命令行字符串：路径里出现空格/引号不会被拆错，
@@ -107,10 +120,13 @@ object ProcessRun {
 
             val finished = proc.waitFor(timeoutSec, TimeUnit.SECONDS)
             if (!finished) {
-                proc.destroyForcibly()
+                stopProcess(proc)
                 outThread.join(500L)
                 errThread.join(500L)
-                return ExecResult(-1, out.toString().trim(), err.toString().trim(), "超时 ${timeoutSec}s（已强杀）")
+                return ExecResult(
+                    -1, out.toString().trim(), err.toString().trim(),
+                    "超时 ${timeoutSec}s（已强杀）", timedOut = true,
+                )
             }
             outThread.join(1_000L)
             errThread.join(1_000L)
@@ -119,5 +135,27 @@ object ProcessRun {
             // IOException 的 message 自带 errno（error=13 / error=2 …），这正是判据所在
             ExecResult(-1, "", "", "启动失败：${e.javaClass.simpleName}: ${e.message}")
         }
+    }
+
+    /**
+     * 超时回收：**先 SIGTERM 再 SIGKILL** —— 别直接糊 SIGKILL。
+     *
+     * ## 为什么不能只 `destroyForcibly()`
+     * 那一发是 SIGKILL，只作用于被直接拉起的那个进程（proot）自己。而 proot 是 tracer：
+     * 正常路径上它会把信号转给 tracee（guest 里的 bash）并跑 `--kill-on-exit` 的清理；
+     * SIGKILL 把这条路径整个绕过 ⇒ guest 那一侧的进程没人接管，被 reparent 到 init 继续跑
+     * （占 CPU / IO，而且我们再也拿不到它们的 pid）。先用**可捕获的** SIGTERM 给它一条
+     * 正常退出路径，3 秒不退再 SIGKILL 兜底。
+     *
+     * ## 已知不保证（保守处理，留痕）
+     * 若 proot 卡到连 SIGTERM 都处理不了，兜底的 SIGKILL 仍可能留下 guest 残留进程。
+     * 根治要在超时前枚举 proot 的整棵进程树 —— 但 Android 的 `java.lang.Process`
+     * **没有 `pid()`**，只能按脚本名扫 `/proc/<pid>/cmdline` 反查，代价明显大于收益，故暂不做。
+     * 重开条件：再次在真机上观察到「超时后遗留容器进程」（`ps` 里 proot/bash/node 仍在）。
+     */
+    private fun stopProcess(proc: Process) {
+        runCatching { proc.destroy() }
+        val exited = runCatching { proc.waitFor(3, TimeUnit.SECONDS) }.getOrDefault(false)
+        if (!exited) runCatching { proc.destroyForcibly() }
     }
 }

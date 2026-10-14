@@ -332,11 +332,9 @@
     <string name="chat_prompt_clear">Clear</string>
     <string name="chat_common_cancel">Cancel</string>
     <string name="chat_common_confirm">OK</string>
-    <!-- Context usage (2026-09-19) -->
+    <!-- Context usage (2026-09-19); the warn/critical/compressed lines were removed
+         on 2026-10-12 when the bar became an icon -->
     <string name="chat_context_title">Context usage</string>
-    <string name="chat_context_warn">Context %1$d%% used — older turns get compressed automatically</string>
-    <string name="chat_context_critical">Context nearly full — the earliest turns will be compressed</string>
-    <string name="chat_context_compressed">Earlier turns compressed to a summary</string>
     <string name="chat_context_compressed_hint">The earliest turns were compressed to a summary, so some details may be lost.</string>
     <string name="chat_context_messages">History messages %1$d / %2$d</string>
     <string name="chat_context_history_tokens">History tokens %1$d / %2$d</string>
@@ -506,13 +504,27 @@
     <string name="chat_send_failed">Send failed</string>
     <string name="chat_reply_failed">AI reply failed</string>
     <string name="chat_empty_hint">Start chatting with LeQi. Replies will be spoken on your glasses.</string>
+    <string name="chat_welcome_title">Hi, I\'m LeQi</string>
+    <string name="chat_suggest_schedule">What\'s my schedule today?</string>
+    <string name="chat_suggest_weather">Check the weather now</string>
+    <string name="chat_suggest_music">Play some music</string>
+    <string name="chat_suggest_note">Take a note for me</string>
+    <string name="chat_scroll_bottom">Scroll to bottom</string>
+    <string name="chat_msg_retry">Retry</string>
+    <string name="chat_at_kb_title">Cite knowledge base</string>
+    <string name="chat_suggest_translate">Translate a sentence for me</string>
+    <string name="chat_suggest_joke">Tell me a joke</string>
+    <string name="chat_suggest_edit_title">Customize suggestion</string>
+    <string name="chat_suggest_edit_hint">Leave empty to restore default</string>
 
     <!-- Chat - AI process (thinking / tool calls) timeline -->
     <string name="chat_trace_title">Steps</string>
     <string name="chat_trace_steps">%1$d steps</string>
+    <string name="chat_trace_live_tokens">%1$s tokens</string>
     <string name="chat_trace_thinking">Thinking</string>
     <string name="chat_trace_thought">Done thinking</string>
     <string name="chat_trace_tool_running">Running…</string>
+    <string name="chat_trace_waiting_secs">waiting %1$ds</string>
     <string name="chat_trace_compress_done">Compressed earlier conversation to keep answering</string>
     <string name="chat_trace_tool_awaiting_confirm">Waiting for your confirmation…</string>
     <string name="chat_trace_tool_cancelled">Cancelled</string>
@@ -548,6 +560,7 @@
     <string name="chat_artifact_lines_chars">%1$d lines · %2$d chars</string>
     <!-- update_plan structured checklist -->
     <string name="chat_plan_title">Plan</string>
+    <string name="chat_plan_empty">No task plan yet</string>
     <!-- Reasoning full-text expand -->
     <string name="chat_think_expand">Show full reasoning</string>
     <string name="chat_think_collapse">Collapse</string>
@@ -2008,6 +2021,15 @@
     <string name="tool_confirm_message">%1$s\n\nThis action needs your approval before the AI runs it.</string>
     <string name="tool_confirm_allow">Allow</string>
     <string name="tool_confirm_deny">Cancel</string>
+    <string name="tool_confirm_expired">This confirmation timed out; no action was taken</string>
+
+    <!-- ask_user option card (AskUserActivity): shown when the AI needs the user to make
+         a choice; answers flow back to the model via AskUserChannel. -->
+    <string name="ask_user_title">The AI needs your choice</string>
+    <string name="ask_user_ok">OK</string>
+    <string name="ask_user_skip">Skip</string>
+    <string name="ask_user_expired">This question timed out; your choice was not delivered</string>
+    <string name="ask_user_free_hint">Or type your own answer</string>
     <string name="permission_reason_contacts">look up a contact and dial</string>
     <string name="permission_reason_phone">place the call directly (without it only the dialer can be opened)</string>
     <string name="permission_reason_sms">send text messages directly</string>

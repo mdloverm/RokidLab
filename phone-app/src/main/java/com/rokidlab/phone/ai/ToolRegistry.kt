@@ -181,9 +181,18 @@ object ToolRegistry {
      * 而这两个工具都归 shell 域。子集缺了它，代码生成刚一开场验证工具就从 Schema 里消失，
      * 验证闭环变成空头支票——模型要么调不到、要么调了报「未知工具」白耗一轮。
      * shell 域有 ApprovalGate 全套风险闸门兜底（本子集从来不是安全边界），放进子集无权限放宽。
+     *
+     * 为什么必须含 [DOMAIN_VISION]（2026-10-12，真机缺口）：渲染验证的最后一环是
+     * **capture_screen 截屏目视确认**——真机实例（贪吃蛇白屏修复）：save_code_file 一落盘
+     * 本子集生效，capture_screen 随 vision 域一起消失，模型只剩 http_request「验证」，
+     * 而**白屏时 HTTP 照样 200** ⇒ 伪验证通过、白屏照旧交付。渲染问题的判据只能是人眼级
+     * 的「画面非空白」，capture_screen 是子集里唯一能给出这个判据的工具（+1~2 个 Schema）。
+     * 同域的 look_at_view（眼镜相机）顺带保留，生成眼镜页面时可用于实机目检。
      */
-    val SESSION_AIUI_DOMAINS: Set<String> =
-        setOf(DOMAIN_AIUI, DOMAIN_FILES, DOMAIN_INFO, DOMAIN_WEB, DOMAIN_KNOWLEDGE, DOMAIN_SHELL)
+    val SESSION_AIUI_DOMAINS: Set<String> = setOf(
+        DOMAIN_AIUI, DOMAIN_FILES, DOMAIN_INFO, DOMAIN_WEB, DOMAIN_KNOWLEDGE,
+        DOMAIN_SHELL, DOMAIN_VISION,
+    )
 
     /** 代码/项目文件落盘工具名（把生成的文件写入手机下载目录的对应项目文件夹） */
     const val TOOL_CODE_FILE = "save_code_file"

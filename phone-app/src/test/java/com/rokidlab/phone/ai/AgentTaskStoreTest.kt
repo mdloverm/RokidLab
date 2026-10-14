@@ -63,4 +63,45 @@ class AgentTaskStoreTest {
         assertTrue("不能是空串（空串与'没内容'无法区分）", note.isNotBlank())
         assertTrue(note.contains("上一轮被中断"))
     }
+
+    // ═══ budgetStopNote（2026-10-12，P0-B 触顶确定性收尾）═══
+
+    /** 有未完成步骤：必须点名步骤并给出「继续」的方式——这正是框架兜底文案存在的意义 */
+    @Test
+    fun `预算触顶时有未完成步骤要点名并提示继续`() {
+        val note = AgentTaskStore.budgetStopNote(
+            pendingTitles = listOf("生成页面骨架", "写入样式", "联调数据"),
+            hasPlan = true,
+            tokenExhausted = false,
+        )
+        assertTrue("要点名未完成步骤", note.contains("还没做的步骤"))
+        assertTrue("步骤标题要出现", note.contains("生成页面骨架") && note.contains("联调数据"))
+        assertTrue("要说明继续的方式", note.contains("继续"))
+        assertFalse("轮次触顶不该说 token", note.contains("token"))
+    }
+
+    /** 无计划快照（闲聊轮被触顶兜住）：不得虚构"还剩哪些步骤"（与 plainInterruptNote 同一判据） */
+    @Test
+    fun `预算触顶时无计划不得指向不存在的步骤`() {
+        val note = AgentTaskStore.budgetStopNote(
+            pendingTitles = emptyList(),
+            hasPlan = false,
+            tokenExhausted = true,
+        )
+        assertFalse("无计划时说「还没做的步骤：」＝指向不存在的对象", note.contains("还没做的步骤"))
+        assertTrue("仍要说明触顶原因", note.contains("token 预算用尽"))
+        assertTrue("仍要给出继续方式", note.contains("继续"))
+    }
+
+    /** 计划全部完成却触顶：如实说完成，不要吓用户"没做完" */
+    @Test
+    fun `预算触顶但计划已全部完成时如实说完成`() {
+        val note = AgentTaskStore.budgetStopNote(
+            pendingTitles = emptyList(),
+            hasPlan = true,
+            tokenExhausted = false,
+        )
+        assertTrue(note.contains("计划内的步骤都已标记完成"))
+        assertFalse("没有未完成步骤就不该出现步骤清单", note.contains("还没做的步骤"))
+    }
 }

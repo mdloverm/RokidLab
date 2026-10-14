@@ -76,6 +76,12 @@ internal object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
 
         /** 用户显式点了「取消」（区别于没问到 / 页面被回收） */
         @Volatile var cancelled = false
+
+        /**
+         * 等待被**中止**：用户叫停当前任务 / 生成被新消息抢占（[abortAll] 带 aborted=true）。
+         * 与"没问到"分开 —— 中止必须拒绝，不得按 PROCEED 静默放行（见 [ApprovalGate.ConfirmOutcome.aborted]）。
+         */
+        @Volatile var aborted = false
     }
 
     /**
@@ -131,16 +137,24 @@ internal object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
         pending[id] = waiter
         val wait = minOf(maxWaitMs, CONFIRM_TIMEOUT_MS)
         return try {
-            ctx.startActivity(ToolConfirmActivity.createIntent(ctx, id, toolName, prompt))
-            if (!waiter.latch.await(wait, TimeUnit.MILLISECONDS)) {
-                Log.w(TAG, "phone confirm timeout (id=$id tool=$toolName)")
-                ApprovalGate.ConfirmOutcome.NOT_ANSWERED
-            } else {
-                ApprovalGate.ConfirmOutcome(waiter.allowed, waiter.cancelled)
+            ctx.startActivity(ToolConfirmActivity.createIntent(ctx, id, toolName, prompt, wait))
+            val answered = waiter.latch.await(wait, TimeUnit.MILLISECONDS)
+            when {
+                // 中止优先判定：abortAll(aborted=true) 会 countDown，await 返回 true
+                waiter.aborted -> ApprovalGate.ConfirmOutcome.ABORTED
+                !answered -> {
+                    Log.w(TAG, "phone confirm timeout (id=$id tool=$toolName)")
+                    ApprovalGate.ConfirmOutcome.NOT_ANSWERED
+                }
+
+                else -> ApprovalGate.ConfirmOutcome(waiter.allowed, waiter.cancelled)
             }
         } catch (e: InterruptedException) {
+            // ★ 2026-10-13 审计修 H1：中断 = 用户叫停 / 代际被抢占（runInterruptible 把协程取消
+            //   翻译成线程中断）。改造前这里返回 NOT_ANSWERED，闸门于是对 PROCEED 工具**静默放行**
+            //   —— 用户已叫停，副作用照样执行。现在如实报"被中止"，闸门一律拒绝。
             Thread.currentThread().interrupt()
-            ApprovalGate.ConfirmOutcome.NOT_ANSWERED
+            ApprovalGate.ConfirmOutcome.ABORTED
         } catch (e: Exception) {
             // BAL 拦截是**静默丢弃**（既不抛异常也不返回失败），能走到这里的只有
             // "Activity 未注册 / 系统拒绝启动"这类硬错误 —— 如实报"没问到"，让闸门按声明分流。
@@ -154,32 +168,42 @@ internal object PhoneToolConfirmChannel : ApprovalGate.ConfirmResolver {
     /**
      * 用户答复回执（由 [ToolConfirmActivity] 调用，主线程）。
      *
+     * @return true = 本次回执被认领（对应等待者还在）；false = 已超时/已被中止/是别的调用的 id。
+     *   ★ 返回值的用途（2026-10-13 审计修 M2）：界面据此给"本次确认已过期"的反馈 ——
+     *   改造前这里只落一行日志就返回，用户点的是**已经不作数的**弹窗却看不到任何提示，
+     *   误以为是自己批准了（而副作用可能早已按超时策略发生或已放弃）。
      * @param cancelled true = 用户**显式取消**（⇒ 拒绝）；false = 没问到 / 页面被回收
      *   （⇒ 由闸门按工具声明的 `ToolConfirmPolicy` 分流）。
      *   ⚠️ 这个区分必须由界面如实传，不能在这里猜 —— 它决定"用户说不"与"没问到"两条语义。
      */
-    fun onUserAnswer(requestId: String, allowed: Boolean, cancelled: Boolean) {
+    fun onUserAnswer(requestId: String, allowed: Boolean, cancelled: Boolean): Boolean {
         val w = pending.remove(requestId) ?: run {
             Log.w(TAG, "confirm result for unknown/expired id=$requestId")
-            return
+            return false
         }
         w.allowed = allowed
         w.cancelled = cancelled
         w.latch.countDown()
         Log.i(TAG, "phone confirm result (id=$requestId allowed=$allowed cancelled=$cancelled)")
+        return true
     }
 
     /**
-     * 清空全部等待中的确认（App 被切到后台且拉不起界面、连接流程重启等场景），
-     * 避免对话线程白挂满 40s。与 [GlassToolConfirmChannel.abortAll] 对称。
+     * 清空全部等待中的确认，避免对话线程白挂满 40s。
+     *
+     * @param aborted true = **用户叫停/任务被抢占**（[com.rokidlab.phone.domain.AiConversationService.abortCurrentAi]、
+     *   新代际抢占）—— 等待方拿到"被中止"，闸门一律拒绝执行；
+     *   false（默认）= 通道消失（内存压力、连接流程重启）—— 等待方拿到"没问到"，按工具声明分流。
+     *   ⚠️ 这个区分是 2026-10-13 审计修的主轴：叫停之后不能再有副作用发生。
      */
-    fun abortAll() {
+    fun abortAll(aborted: Boolean = false) {
         val n = pending.size
         pending.values.forEach {
             it.cancelled = false
+            it.aborted = aborted
             it.latch.countDown()
         }
         pending.clear()
-        if (n > 0) Log.w(TAG, "aborted $n pending phone confirmations")
+        if (n > 0) Log.w(TAG, "aborted $n pending phone confirmations (aborted=$aborted)")
     }
 }

@@ -231,8 +231,12 @@ internal object SessionGraph {
 
             is CompactionSummary -> {
                 kind = Kind.COMPACTION
+                // ⚠️ 2026-10-13 审计修：`+` 的优先级**高于** `if/else`，改造前
+                //   `"…" + if (cond) "，N 轮" else "" + "）"` 里那个 `+ "）"` 绑到了 **else 分支**
+                //   ⇒ `turnsCompressed > 0` 时标题缺右括号（"压缩摘要（覆盖 3 条，2 轮"）。
+                //   括号必须显式包住 if/else 表达式。
                 title = "压缩摘要（覆盖 ${e.shadowedSeqs.size} 条" +
-                    if (e.turnsCompressed > 0) "，$e.turnsCompressed 轮" else "" + "）"
+                    (if (e.turnsCompressed > 0) "，${e.turnsCompressed} 轮" else "") + "）"
                 detail = e.text
             }
 

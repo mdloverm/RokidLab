@@ -1,6 +1,7 @@
 package com.rokidlab.phone.ai.approval
 
 import com.rokidlab.phone.ai.AgentPlan
+import com.rokidlab.phone.ai.AskUser
 import com.rokidlab.phone.ai.LongTermMemoryManager
 import com.rokidlab.phone.ai.SkillRegistry
 import com.rokidlab.phone.ai.ToolConfirmPolicy
@@ -55,6 +56,11 @@ internal object PseudoTools {
         SkillRegistry.TOOL_INSTALL to ToolRisk.LOCAL_SIDE_EFFECT,
         SkillRegistry.TOOL_DELETE to ToolRisk.LOCAL_SIDE_EFFECT,
         AgentPlan.TOOL_NAME to ToolRisk.READ_ONLY,
+        // ask_user（2026-10-12）：把候选项弹给用户点选、阻塞等作答 —— 不写任何数据，
+        // 是 READ_ONLY（走并行泳道专属线程阻塞，不吃动作轮预算）。
+        // ⚠️ 它瞬时"失败"不是异常而是返回说明文案（超时/拉不起界面），因此不会触发重试；
+        //    若改成抛异常驱动，重试会把同一个问题重复弹给用户。
+        AskUser.TOOL_NAME to ToolRisk.READ_ONLY,
         LongTermMemoryManager.TOOL_NAME to ToolRisk.LOCAL_SIDE_EFFECT,
     )
 

@@ -1,6 +1,14 @@
 package com.rokidlab.phone.store
 
 import android.content.Context
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Checklist
@@ -36,23 +45,34 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rokidlab.phone.R
@@ -73,6 +93,7 @@ import com.rokidlab.phone.design.BrewSuccess
 import com.rokidlab.phone.design.BrewText
 import com.rokidlab.phone.design.BrewTextBright
 import com.rokidlab.phone.platform.InteractiveRunManager
+import kotlinx.coroutines.delay
 
 // ===== 对话气泡 =====
 @Composable
@@ -104,8 +125,20 @@ internal fun ChatBubble(
      * 没动过的卡片则实时跟随本值（两层状态见 [TraceBlock]）—— 否则设置页改了聊天窗口不响应。
      */
     expandTrace: Boolean = true,
+    /**
+     * 本条是失败提示条时的一键重试回调（复用「重新生成」链路）。
+     * 传 null 不显示重试入口。专业 Agent 的失败气泡都带内联重试 —— 补救不该藏在菜单里。
+     */
+    onRetry: (() -> Unit)? = null,
+    /**
+     * 纯闲聊（无过程步骤）且正文尚未开始流式时显示三点打字指示。
+     * 有过程步骤时不为 true —— TraceBlock 的「正在思考」行是更具体的反馈。
+     */
+    typing: Boolean = false,
 ) {
     val isUser = msg.isUser
+    val haptic = LocalHapticFeedback.current
+    fun hapticTick() = haptic.performHapticFeedback(HapticFeedbackType.LongPress)
 
     // 流程状态消息：居中灰字，无气泡
     if (msg.isStatus) {
@@ -141,12 +174,19 @@ internal fun ChatBubble(
         Column(modifier = Modifier.widthIn(max = 300.dp)) {
             // AI 过程卡片：放在气泡**上方**、气泡之外 —— 它描述的是"回答是怎么来的"，
             // 混进气泡正文里会和回答本身抢注意力（且气泡内嵌套卡片视觉上是双层容器）。
-            if (!isUser && msg.trace.isNotEmpty()) {
-                TraceBlock(msg.id, msg.trace, msg.usage, expandTrace)
+            //
+            // ★ 2026-10-12：`update_plan` 步骤**不进时间线** —— 计划入口已移到输入框上方那一行
+            //   （ChatScreen 的 [PlanChip] + [PlanSheet]），这里剔掉它，避免同一条计划出现两份、
+            //   也避免「计划步骤」在"过程 · N 步"里被当成一次工具调用计数。
+            val traceSteps = if (isUser) emptyList() else msg.trace.filterNot { it.kind == AgentStep.Kind.PLAN }
+            if (traceSteps.isNotEmpty()) {
+                TraceBlock(msg.id, traceSteps, msg.usage, expandTrace)
                 Spacer(Modifier.height(6.dp))
             }
             // 工具执行阶段正文还是空的：此时只显示过程卡片，等正文开始流式生成再出现气泡，
             // 避免留下一个「只有时间戳的空气泡」。
+            // （本轮过程里只有计划步骤时两条都不渲染 —— 那条计划已经在上方入口里可见，
+            //   此时再补一个空气泡反而多一块空白。）
             val showBubble = msg.content.isNotBlank() || msg.imageUrl != null ||
                 msg.filePath != null || msg.trace.isEmpty()
             if (showBubble) {
@@ -158,44 +198,62 @@ internal fun ChatBubble(
                     .let { m -> if (isUser && onClickUser != null) m.clickable { onClickUser?.invoke() } else m }
                     .padding(horizontal = 12.dp, vertical = 8.dp)
                 Column(modifier = bubbleModifier) {
-                    // 图片消息：先渲染图片卡片，再附caption 文本（仅手机端；眼镜端 TTS/显示不受影响）。
-                    msg.imageUrl?.let { url ->
-                        ChatImageCard(url)
-                        if (msg.content.isNotBlank()) {
-                            // ★ 走 markdown 而不是纯 Text（2026-10-06 审计修）：
-                            // caption 由模型自由填写，它常写成
-                            //「这是 **架构图**：\n- 第一层\n- 第二层」这种带格式的内容。
-                            // 用 Text 的话星号与连字符会**原样显示**。
-                            // 更要紧的是：一条消息里"先流出一段正文、再挂上图"时，
-                            // 整个气泡会改走这条分支 ⇒ 前面那段已排版的正文
-                            // 也会跟着退化成纯文本（整条回复掉格式）。
-                            ChatMarkdownBody(
-                                text = msg.content,
-                                textColor = if (isUser) BrewBg else BrewTextBright,
-                                modifier = Modifier.padding(top = 6.dp),
-                            )
-                        }
-                    } ?: msg.filePath?.let { path ->
-                        // 文件消息（用户上传 / AI 产出）：文件卡 + caption，形态与图片一致
+                    // ★ 图片与文件**可以同时挂**在同一条消息上（2026-10-12 审计修）：原先用
+                    //   `imageUrl?.let{…} ?: filePath?.let{…}` 串联 ⇒ 有图时文件卡被整个吞掉
+                    //   （用户上传「图片 + 说明文件」时文件凭空消失）。改为各自独立渲染，caption 只出一次。
+                    val hasAttachment = msg.imageUrl != null || msg.filePath != null
+                    // 首 token 前的等待期：三点打字指示（只有纯闲聊会走到这里，Agent 轮次有过程行）
+                    if (typing) {
+                        TypingDots()
+                    }
+                    // 图片消息：先渲染图片卡片（仅手机端；眼镜端 TTS/显示不受影响）
+                    msg.imageUrl?.let { url -> ChatImageCard(url) }
+                    // 文件消息（用户上传 / AI 产出）：文件卡，形态与图片一致
+                    msg.filePath?.let { path ->
                         ChatFileCard(
                             path = path,
                             name = msg.fileName ?: path.substringAfterLast('/'),
                             chars = msg.fileChars,
                         )
-                        if (msg.content.isNotBlank()) {
-                            // 同上：caption 也要走 markdown（理由见图片分支的注释）
-                            ChatMarkdownBody(
-                                text = msg.content,
-                                textColor = if (isUser) BrewBg else BrewTextBright,
-                                modifier = Modifier.padding(top = 6.dp),
-                            )
-                        }
-                    } ?: run {
-                        // 普通文字消息：轻量 Markdown 渲染（代码块/标题/列表/加粗），整体支持长按选字
+                    }
+                    if (msg.content.isNotBlank()) {
+                        // caption 一律走 markdown（2026-10-06 审计修）：caption 由模型自由填写，
+                        // 常写成「这是 **架构图**：\n- 第一层」这种带格式的内容，用 Text 会把
+                        // 星号/连字符**原样显示**；「先流正文、再挂附件」时纯文本还会让整条回复掉格式。
                         ChatMarkdownBody(
                             text = msg.content,
                             textColor = if (isUser) BrewBg else BrewTextBright,
+                            modifier = if (hasAttachment) Modifier.padding(top = 6.dp) else Modifier,
                         )
+                    }
+                    // 失败提示条的内联重试（专业 Agent 标配）：一 tap 重问，不用进菜单找
+                    if (msg.failed && onRetry != null) {
+                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(BrewRadiusSmall))
+                                .border(1.dp, BrewRed.copy(alpha = 0.45f), RoundedCornerShape(BrewRadiusSmall))
+                                .clickable {
+                                    hapticTick()
+                                    onRetry()
+                                }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Refresh,
+                                contentDescription = null,
+                                tint = BrewRed,
+                                modifier = Modifier.size(13.dp),
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                text = stringResource(R.string.chat_msg_retry),
+                                color = BrewRed,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
                     }
                     // ★ Token 成本的**兜底出口**（2026-10-06 审计修）：
                     // [TraceCostLine] 原本只在过程卡 `if (expanded)` 分支里，而**纯闲聊消息
@@ -226,7 +284,10 @@ internal fun ChatBubble(
                                 tint = if (isUser) BrewBg.copy(alpha = 0.85f) else BrewMuted,
                                 modifier = Modifier
                                     .size(18.dp)
-                                    .clickable { onActions() },
+                                    .clickable {
+                                        hapticTick()
+                                        onActions()
+                                    },
                             )
                         }
                         // 播放按钮（仅 AI 回复）：点一下用当前音色播报本条内容。
@@ -239,7 +300,10 @@ internal fun ChatBubble(
                                 tint = if (speaking) BrewChat else BrewMuted,
                                 modifier = Modifier
                                     .size(18.dp)
-                                    .clickable { onSpeak() },
+                                    .clickable {
+                                        hapticTick()
+                                        onSpeak()
+                                    },
                             )
                         }
                     }
@@ -251,6 +315,37 @@ internal fun ChatBubble(
 
 /** 过程卡片展开时最多显示的步骤数：超出只留最近几步，避免长任务把对话列表撑成瀑布 */
 private const val MAX_VISIBLE_STEPS = 6
+
+/**
+ * 三点打字指示（首 token 前的等待反馈，对标专业产品的 typing dots）。
+ *
+ * 一个无限转动的相位 [0,1) 驱动三个点：点 i 的亮度 = 1 - |相位*3 - i 折返| 的距离，
+ * 波峰依次扫过三点 —— 与"逐点各自跑动画"相比只创建一个 InfiniteTransition，开销最小。
+ */
+@Composable
+private fun TypingDots() {
+    val transition = rememberInfiniteTransition(label = "typingDots")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(durationMillis = 900, easing = LinearEasing)),
+        label = "typingPhase",
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        repeat(3) { i ->
+            val local = ((phase * 3f - i) % 3f).let { if (it < 0f) it + 3f else it }
+            val alpha = (1f - kotlin.math.abs(local - 1f)).coerceIn(0.25f, 1f)
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 2.5.dp)
+                    .graphicsLayer { this.alpha = alpha }
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(BrewMuted),
+            )
+        }
+    }
+}
 
 /**
  * AI 过程区块（思考 / 工具调用时间线 + 本轮成本）。
@@ -270,7 +365,12 @@ private const val MAX_VISIBLE_STEPS = 6
  *   设置页说"展开"、卡片还是折着，两个控件各说各的（用户报的冲突）。
  */
 @Composable
-private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, expandByDefault: Boolean) {
+private fun TraceBlock(
+    msgId: Long,
+    steps: List<AgentStep>,
+    usage: MsgUsage?,
+    expandByDefault: Boolean,
+) {
     // null = 用户没单独动过这张卡 ⇒ 跟随设置页默认值；非 null = 用户点过 ⇒ 以他为准
     var manual by remember(msgId) { mutableStateOf<Boolean?>(null) }
     val expanded = manual ?: expandByDefault
@@ -294,7 +394,9 @@ private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, ex
             .clip(RoundedCornerShape(10.dp))
             .background(BrewPanel)
             .border(1.dp, BrewBorder, RoundedCornerShape(10.dp))
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+            // 展开/收起平滑过渡（瞬变会让"过程"卡一惊一乍；时长与气泡入场一致）
+            .animateContentSize(tween(durationMillis = 220, easing = FastOutSlowInEasing)),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -323,6 +425,19 @@ private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, ex
                 color = BrewDim,
                 fontSize = 11.sp,
             )
+            // ★ 实时 token 计量（2026-10-12 对标 Codex）：生成中显示本轮已计费累计
+            //   （`≈1.2k tokens`）。与最终 [TraceCostLine] 的关系：这是**进行中**的
+            //   下界估计（标 ≈），收尾后由成本行给出权威数字。仅 running 时显示。
+            if (running) {
+                ChatStateHolder.liveTokens.collectAsState().value?.takeIf { it > 0 }?.let { live ->
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.chat_trace_live_tokens, "≈" + fmtTokens(live)),
+                        color = BrewDim,
+                        fontSize = 11.sp,
+                    )
+                }
+            }
             Spacer(Modifier.weight(1f))
             if (running) {
                 CircularProgressIndicator(
@@ -358,9 +473,9 @@ private fun TraceBlock(msgId: Long, steps: List<AgentStep>, usage: MsgUsage?, ex
                 )
             }
             shown.forEach { step ->
-                // update_plan 渲染成勾选清单，不进工具时间线（「执行 update_plan…」是黑话）
                 when {
-                    step.kind == AgentStep.Kind.PLAN -> PlanStepCard(step)
+                    // 计划步骤在 [ChatBubble] 里已被剔除（入口在输入框上方），这里只是 when 穷尽
+                    step.kind == AgentStep.Kind.PLAN -> Unit
                     // ★ 命令类工具走专用命令卡（shell 图标 + monospace 命令 + 状态徽标 + 可展开输出），
                     //   判据是 command 非空 —— 旧历史（本字段落地前）为 null ⇒ 自动退回通用行。
                     step.command != null -> CommandStepCard(step)
@@ -493,6 +608,32 @@ internal fun fmtElapsed(ms: Long): String = when {
     else -> "${ms / 60_000L}m${(ms % 60_000L) / 1000L}s"
 }
 
+/**
+ * ★ 等待秒数（2026-10-12）：进行中的步骤显示「已等待 Ns」。
+ *
+ * 为什么要有：真机实例（贪吃蛇白屏修复）里有多处 23~38s 的长间隙——模型整段生成
+ * save_code_file 参数、用户在审批弹窗犹豫——期间过程行只有转圈，用户不知道是
+ * "卡死了"还是"在干活"。跳动的秒数给等待一个**刻度**，是最低成本的"生命感"。
+ *
+ * [key] 是步骤 key：remember 依它记首帧时间，同 key 的状态覆盖（RUNNING→终态）不重置。
+ * ≥5s 才显示（快工具不闪数字）；仅 [AgentStep.State.RUNNING] 与
+ * [AgentStep.State.AWAITING_CONFIRM]（等你确认也是等待，且秒数能暴露"弹窗挂了多久"）。
+ */
+@Composable
+private fun rememberRunningSeconds(state: AgentStep.State, key: String): Int? {
+    val running = state == AgentStep.State.RUNNING || state == AgentStep.State.AWAITING_CONFIRM
+    val startedAt = remember(key) { System.currentTimeMillis() }
+    var elapsed by remember(key) { mutableIntStateOf(0) }
+    if (!running) return null
+    LaunchedEffect(key) {
+        while (true) {
+            elapsed = ((System.currentTimeMillis() - startedAt) / 1000L).toInt()
+            delay(1000)
+        }
+    }
+    return elapsed.takeIf { it >= 5 }
+}
+
 /** 过程时间线中的一步：状态色圆点 + 图标 + 标题（工具名/思考文案）+ 摘要 */
 @Composable
 private fun TraceStepRow(step: AgentStep) {
@@ -508,6 +649,22 @@ private fun TraceStepRow(step: AgentStep) {
     // 思考全文展开/收起：detail 只压一行预览，fullText 是整段推理（落盘限长 8000）
     var thinkExpanded by remember(step.key) { mutableStateOf(false) }
     val expandable = step.kind == AgentStep.Kind.THINKING && step.fullText.isNotBlank()
+    // RUNNING 态的圆点做呼吸动画（"它在忙"）；AWAITING_CONFIRM 刻意不呼吸 ——
+    // 静止 = "在等你"，动态 = "在干活"，两种等待肉眼可分
+    val dotAlpha = if (step.state == AgentStep.State.RUNNING) {
+        val transition = rememberInfiniteTransition(label = "stepDot")
+        transition.animateFloat(
+            initialValue = 0.3f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                tween(durationMillis = 650, easing = LinearEasing),
+                RepeatMode.Reverse,
+            ),
+            label = "stepDotAlpha",
+        ).value
+    } else {
+        1f
+    }
     Row(modifier = Modifier
         .fillMaxWidth()
         .padding(top = 7.dp)
@@ -515,20 +672,23 @@ private fun TraceStepRow(step: AgentStep) {
         Box(
             modifier = Modifier
                 .padding(top = 5.dp)
+                .graphicsLayer { alpha = dotAlpha }
                 .size(6.dp)
                 .clip(CircleShape)
                 .background(color),
         )
         Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // ★ 等待秒数：进行中步骤右端显示「已等待 Ns」（≥5s 才出现，见 helper KDoc）
+            val waitSec = rememberRunningSeconds(step.state, step.key)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Icon(
                     imageVector = when (step.kind) {
                         AgentStep.Kind.THINKING -> Icons.Outlined.Psychology
                         // 知识库检索：书 —— 一眼区分"模型调了工具"和"App 自己先查了你的文档"
                         AgentStep.Kind.KNOWLEDGE -> Icons.Outlined.MenuBook
                         AgentStep.Kind.TOOL -> Icons.Outlined.Build
-                        // PLAN 不走进时间线（由 PlanStepCard 渲染），仅为 when 穷尽
+                        // PLAN 不走进时间线（入口在输入框上方，见 PlanChip），这里仅为 when 穷尽
                         // 压缩历史：用"压缩"图标（与「思考」「工具」不同，
                         // 用户需要区分"它在想" vs"框架改了我的上下文"）
                         AgentStep.Kind.COMPRESS -> Icons.Outlined.Compress
@@ -554,7 +714,27 @@ private fun TraceStepRow(step: AgentStep) {
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+                if (waitSec != null) {
+                    Text(
+                        text = stringResource(R.string.chat_trace_waiting_secs, waitSec),
+                        color = BrewDim,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                    )
+                } else {
+                    // ★ 终态耗时（2026-10-12 对标 Codex）：这步实际花了多久。
+                    //   与等待秒数互斥（一个在跑一个已结束）；null = 旧历史没这数据，不占位。
+                    step.durationMs?.let { dur ->
+                        Text(
+                            text = fmtElapsed(dur),
+                            color = BrewDim,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
             if (expandable) {
                 Text(
@@ -595,6 +775,8 @@ private fun TraceStepRow(step: AgentStep) {
             //   芯片是"它动了哪些文件" —— 后者是对前者的展开，不该抢主位。
             //   非 TOOL 类步骤（思考/计划/压缩）不会有 artifacts，这里天然短路。
             ArtifactChips(step.artifacts)
+            // ★ apply_patch 的着色 diff 卡（2026-10-12 对标 Codex）：改动内容可见
+            DiffBlock(step)
         }
     }
 }
@@ -661,6 +843,17 @@ private fun CommandStepCard(step: AgentStep) {
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(6.dp))
+            // ★ 等待秒数：与通用工具行同一 helper（RUNNING/等你确认 ≥5s 才显示）
+            val waitSec = rememberRunningSeconds(step.state, step.key)
+            if (waitSec != null) {
+                Text(
+                    text = stringResource(R.string.chat_trace_waiting_secs, waitSec),
+                    color = BrewDim,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.width(6.dp))
+            }
             Text(
                 text = cmdStateLabel(step.state),
                 color = color,
@@ -668,6 +861,16 @@ private fun CommandStepCard(step: AgentStep) {
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
             )
+            // ★ 终态耗时（2026-10-12 对标 Codex）：与通用工具行同一口径（fmtElapsed）
+            step.durationMs?.let { dur ->
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = fmtElapsed(dur),
+                    color = BrewDim,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                )
+            }
         }
         // 命令本体：monospace + 内嵌底色块 —— "这是一条命令"的形状语言
         step.command?.takeIf { it.isNotBlank() }?.let { cmd ->
@@ -760,59 +963,230 @@ private fun cmdStateLabel(state: AgentStep.State): String = when (state) {
 }
 
 /**
- * update_plan 的**勾选清单**卡片：模型为多步任务立的计划，同 key 覆盖所以只渲染最新一版。
+ * apply_patch 的**着色 diff 卡**（2026-10-12 对标 Codex 的「改动可见」缺口）。
  *
- * 状态配色与时间线一致：done=BrewSuccess、in_progress=BrewAmber（转圈）、pending=BrewDim；
- * 完成的标题置弱，进行中的高亮 —— 不展开多行长文，眼镜式扫一眼就知道做到第几步。
+ * ## 收起时只给统计行
+ * `+12/−4` 一行就说清改动量；点开才看着色 diff（+绿 / −红 / 上下文灰，monospace）。
+ * 补丁全文落盘已按 [AgentStep.MAX_DIFF_CHARS] 截断，展开超限时如实话注"已截断"。
+ *
+ * ⚠️ [AgentStep.diff] 是**展示副本**（与 output 同一条纪律）：只进本地 UI 与聊天历史，
+ * 不进模型上下文 —— 展示多长都不花 token。旧历史没有该字段 → null 短路，自动退回旧行。
  */
 @Composable
-private fun PlanStepCard(step: AgentStep) {
-    val steps = step.planSteps
-    if (steps.isEmpty()) {
-        // 解析失败的脏数据兜底：退回普通时间线行（至少不空白）
-        TraceStepRow(step)
-        return
+private fun DiffBlock(step: AgentStep) {
+    val diff = step.diff?.takeIf { it.isNotBlank() } ?: return
+    var expanded by remember(step.key) { mutableStateOf(false) }
+    // 统计行直接从展示文本数前缀 —— 与渲染同源，保证数字和颜色行永远对得上
+    var added = 0
+    var removed = 0
+    diff.lines().forEach { l ->
+        when {
+            l.startsWith("+") -> added++
+            l.startsWith("-") -> removed++
+        }
     }
-    val doneCount = steps.count { it.status == "done" }
+    // 逐行着色一次构建（remember：同 diff 不重复算；落盘已截断 ⇒ 最多几千字符）
+    val styled = remember(diff) {
+        buildAnnotatedString {
+            diff.lines().forEachIndexed { i, line ->
+                if (i > 0) append('\n')
+                val c = when {
+                    line.startsWith("+") -> BrewSuccess
+                    line.startsWith("-") -> BrewRed
+                    else -> BrewMuted
+                }
+                withStyle(SpanStyle(color = c)) { append(line) }
+            }
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 7.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .padding(top = 5.dp)
+            .clip(RoundedCornerShape(BrewRadiusSmall))
             .background(BrewPanelAlt)
-            .border(1.dp, BrewBorder, RoundedCornerShape(8.dp))
-            .padding(horizontal = 9.dp, vertical = 7.dp),
+            .border(1.dp, BrewBorder, RoundedCornerShape(BrewRadiusSmall))
+            .padding(horizontal = 9.dp, vertical = 6.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Outlined.Checklist,
-                contentDescription = null,
-                tint = if (doneCount == steps.size) BrewSuccess else BrewAmber,
-                modifier = Modifier.size(13.dp),
-            )
-            Spacer(Modifier.width(4.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded },
+        ) {
             Text(
-                text = stringResource(R.string.chat_plan_title),
+                // 统计行：改动量的最低成本摘要（Codex 的 apply_patch 卡同款形状）
+                text = "+$added/−$removed",
                 color = BrewText,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.weight(1f))
-            Text(
-                text = "$doneCount/${steps.size}",
-                color = BrewDim,
-                fontSize = 11.sp,
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = null,
+                tint = BrewMuted,
+                modifier = Modifier.size(14.dp),
             )
         }
-        Spacer(Modifier.height(5.dp))
-        steps.forEach { ps ->
-            PlanStepRow(ps)
+        if (expanded) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = styled,
+                fontSize = 10.sp,
+                lineHeight = 14.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 24,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (diff.length >= AgentStep.MAX_DIFF_CHARS) {
+                Text(
+                    text = stringResource(R.string.chat_cmd_output_truncated),
+                    color = BrewDim,
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
     }
 }
 
+/**
+ * 「任务计划」**图标**：常驻在输入框上方那一行（与 [ContextChip] 并列），点开独立计划浮层（[PlanSheet]）。
+ *
+ * ## 形态由来（2026-10-12 用户要求）
+ * ①图标要在这一行（不在聊天流里）；②与上下文图标**并列**显示。⇒ 只画一个图标：
+ * 计划状态全由**颜色**表达（全部完成=绿 / 本轮进行中=琥珀 / 无计划或已收尾未完成=弱色），
+ * 文字（"任务计划"、`2/5`）都收进弹层，避免底栏堆字、也避免两个入口一高一低。
+ *
+ * ★ 恒常可见（`step` 可为 null）：用户找不到入口会以为"这功能没了"；没有计划时点开
+ * [PlanSheet] 会给一句"当前没有任务计划"。
+ */
 @Composable
-private fun PlanStepRow(ps: com.rokidlab.phone.ai.AgentPlan.PlanStep) {
+internal fun PlanChip(step: AgentStep?, onClick: () -> Unit) {
+    val steps = step?.planSteps.orEmpty()
+    val allDone = steps.isNotEmpty() && steps.all { it.status == "done" }
+    val live = step != null && isPlanLive(step)
+    Icon(
+        imageVector = Icons.Outlined.Checklist,
+        contentDescription = stringResource(R.string.chat_plan_title),
+        tint = when {
+            allDone -> BrewSuccess
+            live -> BrewAmber
+            else -> BrewMuted
+        },
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 6.dp, vertical = 5.dp)
+            .size(16.dp),
+    )
+}
+
+/**
+ * 任务计划浮层（底部弹层）：计划的**唯一完整视图**。
+ *
+ * - 头部：图标（最左）+ 标题 + 完成度 + 收起/展开箭头；
+ * - 点头部 = 在「整份清单」与「只有标题」之间切换（用户要的"手动缩小展开"）；
+ * - 下划 / 点遮罩 = 关闭（[onDismiss]）；入口在输入框上方那一行的 [PlanChip]，可再次点开。
+ *
+ * ★ `step` 可为 null（2026-10-12）：入口图标**恒常可见**，而此时可能一条计划都还没有 ——
+ *   这种情况给一句"当前没有任务计划"，而不是弹一个空壳（空白弹层会被当成"坏了"）。
+ *
+ * ⚠️ 内容取自**当前最新的那条计划步骤**（ChatScreen 侧实时取，见调用处）——
+ * 生成过程中每一步的状态更新会直接反映在这里，不需要本组件自己做状态机。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PlanSheet(step: AgentStep?, onDismiss: () -> Unit) {
+    val steps = step?.planSteps.orEmpty()
+    val doneCount = steps.count { it.status == "done" }
+    val live = step != null && isPlanLive(step)
+    val sheetState = rememberModalBottomSheetState()
+    var expanded by remember { mutableStateOf(true) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = BrewPanel,
+        contentColor = BrewText,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 18.dp, end = 18.dp, bottom = 24.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // 没有清单可展开时头部不该可点（点了没反应像坏了）
+                    .let { m -> if (steps.isEmpty()) m else m.clickable { expanded = !expanded } }
+                    .padding(vertical = 4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Checklist,
+                    contentDescription = null,
+                    tint = when {
+                        steps.isEmpty() -> BrewMuted
+                        doneCount == steps.size -> BrewSuccess
+                        live -> BrewAmber
+                        else -> BrewDim
+                    },
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = stringResource(R.string.chat_plan_title),
+                    color = BrewTextBright,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.weight(1f))
+                if (steps.isNotEmpty()) {
+                    Text(
+                        text = "$doneCount/${steps.size}",
+                        color = BrewDim,
+                        fontSize = 12.sp,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = null,
+                        tint = BrewMuted,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            if (steps.isEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.chat_plan_empty),
+                    color = BrewDim,
+                    fontSize = 12.sp,
+                )
+            } else if (expanded) {
+                Spacer(Modifier.height(8.dp))
+                steps.forEach { ps -> PlanStepRow(ps, live = live) }
+            }
+        }
+    }
+}
+
+/**
+ * 这份计划是否**还在跑**（决定要不要转圈 / 用琥珀色）。
+ *
+ * ★ 2026-10-12 修「任务清单还在转」：转圈的判据原先只看 `planSteps[].status == "in_progress"`。
+ * 可那个字段只在 `update_plan` 被再次调用时才会被改写 —— 计划中途结束时它**没人去翻**，
+ * 于是收尾后（甚至重启回放后）那一步会永远转圈。这里把判据换成**外层步骤的状态**：
+ * 收尾时 `finishTrace` / `settleStaleTrace` 一定会把外层 RUNNING 写成终态，转圈自然停。
+ */
+private fun isPlanLive(step: AgentStep): Boolean =
+    step.state == AgentStep.State.RUNNING || step.state == AgentStep.State.AWAITING_CONFIRM
+
+@Composable
+private fun PlanStepRow(ps: com.rokidlab.phone.ai.AgentPlan.PlanStep, live: Boolean) {
     val (tint, labelColor) = when (ps.status) {
         "done" -> BrewSuccess to BrewMuted
         "in_progress" -> BrewAmber to BrewText
@@ -824,7 +1198,8 @@ private fun PlanStepRow(ps: com.rokidlab.phone.ai.AgentPlan.PlanStep) {
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        if (ps.status == "in_progress") {
+        // 只有"本轮还在跑"才转圈；已收尾的 in_progress 用静态 ▸ 表示（见 [isPlanLive]）
+        if (ps.status == "in_progress" && live) {
             CircularProgressIndicator(
                 modifier = Modifier
                     .padding(top = 2.dp)
@@ -834,7 +1209,11 @@ private fun PlanStepRow(ps: com.rokidlab.phone.ai.AgentPlan.PlanStep) {
             )
         } else {
             Text(
-                text = if (ps.status == "done") "✓" else "·",
+                text = when (ps.status) {
+                    "done" -> "✓"
+                    "in_progress" -> "▸"
+                    else -> "·"
+                },
                 color = tint,
                 fontSize = 11.sp,
                 lineHeight = 14.sp,

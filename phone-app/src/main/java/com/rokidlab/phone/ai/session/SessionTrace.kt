@@ -110,7 +110,14 @@ internal object SessionTrace {
 
             is UserMessage -> Item(r.seq, e.turn, r.ts, Category.MESSAGE, "你：${oneLine(e.text, TITLE_CLIP)}", e.text)
 
-            is AssistantMessage -> Item(r.seq, e.turn, r.ts, Category.MESSAGE, "乐奇：${oneLine(e.text, TITLE_CLIP)}", e.text)
+            is AssistantMessage -> Item(
+                r.seq, e.turn, r.ts, Category.MESSAGE,
+                // ★ 半截标记（2026-10-13 审计修）：被打断/失败时落的那条 assistant 是半截输出，
+                //   与完整结论同形显示会让排查者误以为"它当时就是这么说的"（"为什么这句话没说完"
+                //   得另外去翻 TurnEnd 的 reason）。
+                "乐奇：${oneLine(e.text, TITLE_CLIP)}${if (e.partial) "（半截）" else ""}",
+                e.text,
+            )
 
             is ToolCall -> Item(
                 r.seq, e.turn, r.ts, Category.TOOL,
@@ -210,7 +217,12 @@ internal object SessionTrace {
         e.detail?.takeIf { it.isNotBlank() }?.let { parts.add("原因：$it") }
         stat?.modelCalls?.let { parts.add("模型调用 $it 次") }
         if (e.promptTokens != null || e.completionTokens != null) {
-            parts.add("输入 ${e.promptTokens ?: 0} / 输出 ${e.completionTokens ?: 0} token")
+            // ⚠️ 2026-10-13 审计修：缺的那一半**必须显示为"?"**，不能 `?: 0`。
+            //   服务端 usage 只回一半（例如只给 completionTokens）时，`?: 0` 把"不知道"
+            //   渲染成"输入 0 token" —— 与本项目「宁可说不知道，别用 0 冒充」的铁律冲突，
+            //   也会让排查者误判模型调用形态。聊天气泡侧（ChatBubble.TraceCostLine）
+            //   对部分未知用的是「≥」口径，两处现在是同一个意思。
+            parts.add("输入 ${e.promptTokens?.toString() ?: "?"} / 输出 ${e.completionTokens?.toString() ?: "?"} token")
         }
         stat?.elapsedMs?.let { parts.add("耗时 ${"%.1f".format(it / 1000.0)} 秒") }
         return parts.takeIf { it.isNotEmpty() }?.joinToString("\n")

@@ -129,6 +129,15 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
 
+        <!-- 本机网页预览全屏窗：WebView 必须在独立轻量 Activity 的 onCreate 里创建
+             （挂 Compose 树/Dialog 在真机上进不了渲染管线，2026-10-13 排查实录，
+             见 WebPreviewActivity 类注释）。标准 launchMode：最多 2 个预览各自独立开窗。 -->
+        <activity
+            android:name=".store.WebPreviewActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/Theme.RokidLabPhone.Fullscreen" />
+
         <!-- 统一授权页：AI 工具在后台发现缺权限时，由 PermissionBridge 拉起本页
              （前台直接弹系统授权框；后台凭悬浮窗豁免拉起；两者都不可用时退通知栏提醒）。
              noHistory + excludeFromRecents：它只是"授权通道"，不该留在返回栈或最近任务里。 -->
@@ -151,6 +160,19 @@
             android:launchMode="singleTop"
             android:noHistory="true"
             android:theme="@style/Theme.RokidLabPhone.Transparent" />
+
+        <!-- 用户选择页（ask_user 伪工具的界面部分）：模型需要用户拍板时弹出选项卡
+             （单选/多选/可自定义输入），作答经 AskUserChannel 回填给模型继续执行。
+             noHistory + excludeFromRecents：与 ToolConfirmActivity 同判据 ——
+             只是一次"问一句 → 答一句"的通道，不该留在返回栈里。 -->
+        <activity
+            android:name=".ai.AskUserActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:noHistory="true"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.RokidLabPhone.BottomSheet" />
 
         <!-- MCP OAuth 回调落地页：浏览器完成授权后重定向 rokidlab://mcp/callback 拉起本页换 token。
              ⚠️ exported=true 是必须的 —— 回调来自**浏览器进程**，与无障碍服务同理属于少数例外；

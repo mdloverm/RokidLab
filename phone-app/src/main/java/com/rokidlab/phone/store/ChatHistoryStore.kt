@@ -49,6 +49,10 @@ internal object ChatHistoryStore {
         usageToJson(msg.usage)?.let { put("usage", it) }
         // 轮号（单字母键，理由同 trace 的键名策略）
         msg.turn?.let { put("t", it) }
+        // 失败标记：只在 true 时落键（老历史无此字段 = 正常消息）
+        if (msg.failed) put("failed", true)
+        // 用户反馈：1=有用 -1=没用；null 不落键 = 未标记
+        msg.feedback?.let { put("fb", it) }
     }.toString()
 
     /**
@@ -140,6 +144,11 @@ internal object ChatHistoryStore {
                 // ⚠️ output 只是本机展示副本，**不进模型上下文**；长度已由 AgentStep 截断。
                 s.command?.takeIf { it.isNotBlank() }?.let { put("c", it) }
                 s.output?.takeIf { it.isNotBlank() }?.let { put("o", it) }
+                // apply_patch 展示 diff（AgentStep.diff）：与 output 同一条纪律 ——
+                // 只进本地 UI 与聊天历史，不进模型上下文；长度已由 AgentStep 截断。
+                s.diff?.takeIf { it.isNotBlank() }?.let { put("x", it) }
+                // 终态耗时（毫秒）；RUNNING 步骤为 null 不写
+                s.durationMs?.let { put("m", it) }
             })
         }
     }
@@ -167,13 +176,19 @@ internal object ChatHistoryStore {
                         .getOrDefault(AgentStep.Kind.TOOL),
                     title = o.optString("t"),
                     detail = o.optString("d"),
+                    // ★ M5（2026-10-12 修）：未知 / 缺失的 state **不直接降级成 OK**。
+                    //   OK 意味着"已确认成功"，把读不懂的状态画成绿勾等于伪造成功。
+                    //   改为落到 RUNNING，交给 [settleStaleTrace]（唯一一处决定"结果未知怎么收场"
+                    //   的文档化出口）按"上一轮没来得及收尾"统一处理。
                     state = runCatching { AgentStep.State.valueOf(o.optString("s")) }
-                        .getOrDefault(AgentStep.State.OK),
+                        .getOrDefault(AgentStep.State.RUNNING),
                     planSteps = planSteps,
                     fullText = o.optString("f"),
                     artifacts = artifactsFromJson(o.optJSONArray("r")),
                     command = o.optString("c").takeIf { it.isNotBlank() },
                     output = o.optString("o").takeIf { it.isNotBlank() },
+                    diff = o.optString("x").takeIf { it.isNotBlank() },
+                    durationMs = if (o.has("m")) o.optLong("m") else null,
                 )
             )
         }
@@ -224,6 +239,11 @@ internal object ChatHistoryStore {
         if (trimmed.isEmpty()) return emptyList()
         val all = (if (isLegacyFormat(trimmed)) parseLegacyArray(trimmed) else parseJsonLines(trimmed))
             .map { it.settleStaleTrace() }
+            // ★ M4（2026-10-12 修）：**状态行不进历史**。状态行（`isStatus`）的语义是"进行中"，
+            //   重启后不可能还有"进行中"的动作；而它原先靠 `clearStatusLines` 在轮末清掉，
+            //   该调用已随"状态行归位过程面板"改造而消失 ⇒ 盘上的残留（尤其老会话里的
+            //   "正在识别文字…"）会永远立在聊天里。这里统一在回放时丢弃。
+            .filterNot { it.isStatus }
         return if (all.size > maxHistory) all.subList(all.size - maxHistory, all.size).toList() else all
     }
 
@@ -292,27 +312,42 @@ internal object ChatHistoryStore {
             val o = runCatching { arr.getJSONObject(i) }.getOrNull() ?: continue
             fromJson(o)?.let { out.add(it) }
         }
+        // ★ M2（2026-10-12 修）：旧数组格式也要按 id 去重 —— 迁移过来的文件里若同一 id 出现多次
+        //   （历史上被追加过两次），不去重会在聊天流里显示成**两条一模一样的消息**。
+        return dedupeById(out)
+    }
+
+    /**
+     * 按 [ChatMsg.id] 去重：后写覆盖先写，位置沿用首次出现的位置；id ≤ 0 的行无法识别身份，
+     * 按独立条目保留（[fromJson] 已挡掉既无 id 又无 content 的脏行）。
+     *
+     * JSONL 与旧数组格式共用同一份去重语义（M2，2026-10-12），避免两条路径行为不一致。
+     */
+    private fun dedupeById(msgs: List<ChatMsg>): List<ChatMsg> {
+        val out = ArrayList<ChatMsg>(msgs.size)
+        val indexById = HashMap<Long, Int>()
+        for (m in msgs) {
+            val at = if (m.id > 0L) indexById[m.id] else null
+            if (at != null) {
+                out[at] = m
+            } else {
+                if (m.id > 0L) indexById[m.id] = out.size
+                out.add(m)
+            }
+        }
         return out
     }
 
     /** 回放 JSONL：后写覆盖先写（位置不变），无 id 的行按独立条目保留 */
     private fun parseJsonLines(text: String): List<ChatMsg> {
-        val out = ArrayList<ChatMsg>()
-        val indexById = HashMap<Long, Int>()
-        for (raw in text.lineSequence()) {
-            val line = raw.trim()
-            if (line.isEmpty()) continue
-            val o = runCatching { JSONObject(line) }.getOrNull() ?: continue
-            val msg = fromJson(o) ?: continue
-            val at = if (msg.id > 0L) indexById[msg.id] else null
-            if (at != null) {
-                out[at] = msg
-            } else {
-                if (msg.id > 0L) indexById[msg.id] = out.size
-                out.add(msg)
-            }
+        val raw = ArrayList<ChatMsg>()
+        for (line in text.lineSequence()) {
+            val t = line.trim()
+            if (t.isEmpty()) continue
+            val o = runCatching { JSONObject(t) }.getOrNull() ?: continue
+            fromJson(o)?.let { raw.add(it) }
         }
-        return out
+        return dedupeById(raw)
     }
 
     private fun fromJson(o: JSONObject): ChatMsg? {
@@ -332,6 +367,8 @@ internal object ChatHistoryStore {
             filePath = o.optString("filePath", "").ifBlank { null },
             fileName = o.optString("fileName", "").ifBlank { null },
             fileChars = if (o.has("fileChars")) o.optInt("fileChars") else null,
+            failed = o.optBoolean("failed", false),
+            feedback = if (o.has("fb")) o.optInt("fb") else null,
         )
     }
 }

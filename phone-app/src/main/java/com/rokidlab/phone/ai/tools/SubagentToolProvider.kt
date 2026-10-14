@@ -133,7 +133,16 @@ internal object SubagentToolProvider : ToolProvider {
             )
 
         WriteSubagent.TOOL_NAME ->
-            WriteSubagent.run(context, args.optString("task"), args.optInt("rounds", 0))
+            // ★ 内层进度上报（2026-10-12）：与只读子代理同款——write 型子代理内层
+            //   6~8 轮写文件/打补丁此前一行过程都不发，用户只见外层转圈最长 120 秒。
+            //   sink 由主循环在 runTool 之前写入（[WriteSubagent.setSubStepSink]），
+            //   run() 内部**取走即清**，不让它泄漏到下一次子代理。
+            WriteSubagent.run(
+                context,
+                args.optString("task"),
+                args.optInt("rounds", 0),
+                WriteSubagent.takeSubStepSink(),
+            )
 
         else -> throw IllegalArgumentException("未知工具: $name")
     }

@@ -335,11 +335,9 @@
     <string name="chat_prompt_clear">清空</string>
     <string name="chat_common_cancel">取消</string>
     <string name="chat_common_confirm">确定</string>
-    <!-- 上下文占用（2026-09-19）：把原本静默的裁剪变成可归因的可见状态 -->
+    <!-- 上下文占用（2026-09-19）：把原本静默的裁剪变成可归因的可见状态
+         （2026-10-12：占用条改图标后，原先贴在条下的 warn/critical/compressed 三行提示随之删除） -->
     <string name="chat_context_title">上下文占用</string>
-    <string name="chat_context_warn">上下文已用 %1$d%%，超出会自动压缩早期对话</string>
-    <string name="chat_context_critical">上下文接近上限，最早几轮对话即将被压缩</string>
-    <string name="chat_context_compressed">更早的对话已压缩为摘要</string>
     <string name="chat_context_compressed_hint">最早几轮的原话已被压缩成摘要，细节可能记不全。</string>
     <string name="chat_context_messages">历史消息 %1$d / %2$d</string>
     <string name="chat_context_history_tokens">历史 token %1$d / %2$d</string>
@@ -509,13 +507,27 @@
     <string name="chat_send_failed">发送失败</string>
     <string name="chat_reply_failed">AI 回复失败</string>
     <string name="chat_empty_hint">和乐奇开始聊天吧，回复将通过眼镜语音播报</string>
+    <string name="chat_welcome_title">你好，我是乐奇</string>
+    <string name="chat_suggest_schedule">今天有什么安排？</string>
+    <string name="chat_suggest_weather">看看现在的天气</string>
+    <string name="chat_suggest_music">放一首歌</string>
+    <string name="chat_suggest_note">帮我记一条备忘</string>
+    <string name="chat_scroll_bottom">回到底部</string>
+    <string name="chat_msg_retry">重试</string>
+    <string name="chat_at_kb_title">引用知识库</string>
+    <string name="chat_suggest_translate">帮我翻译一句话</string>
+    <string name="chat_suggest_joke">讲个笑话</string>
+    <string name="chat_suggest_edit_title">自定义建议词</string>
+    <string name="chat_suggest_edit_hint">清空则恢复默认</string>
 
     <!-- 乐奇聊天 - AI 过程（思考 / 工具调用）时间线 -->
     <string name="chat_trace_title">过程</string>
     <string name="chat_trace_steps">%1$d 步</string>
+    <string name="chat_trace_live_tokens">%1$s tokens</string>
     <string name="chat_trace_thinking">正在思考</string>
     <string name="chat_trace_thought">思考完毕</string>
     <string name="chat_trace_tool_running">执行中…</string>
+    <string name="chat_trace_waiting_secs">已等待 %1$ds</string>
     <string name="chat_trace_compress_done">已压缩早期对话以继续回答</string>
     <string name="chat_trace_tool_awaiting_confirm">等你确认…</string>
     <string name="chat_trace_tool_cancelled">已取消</string>
@@ -551,6 +563,7 @@
     <string name="chat_artifact_lines_chars">%1$d 行 · %2$d 字</string>
     <!-- update_plan 结构化计划清单 -->
     <string name="chat_plan_title">任务计划</string>
+    <string name="chat_plan_empty">当前没有任务计划</string>
     <!-- 思考全文展开 -->
     <string name="chat_think_expand">展开全文</string>
     <string name="chat_think_collapse">收起</string>
@@ -2021,6 +2034,17 @@
     <string name="tool_confirm_message">%1$s\n\n这个操作需要你点头一次，AI 才会执行。</string>
     <string name="tool_confirm_allow">允许</string>
     <string name="tool_confirm_deny">取消</string>
+    <!-- 确认框/选项卡已过期（超时或任务被中止）后用户才操作的提示：如实告知"这次不作数"，
+         否则用户会以为是自己批准/取消了，而副作用可能早已按超时策略发生或已放弃。 -->
+    <string name="tool_confirm_expired">本次确认已超时，未执行任何操作</string>
+
+    <!-- ask_user 选项卡（用户选择页）：模型需要用户拍板时，
+         由 AskUserActivity 在手机上弹候选项收集作答，眼镜在线时另有 TTS 提醒看手机。 -->
+    <string name="ask_user_title">AI 需要你做个选择</string>
+    <string name="ask_user_ok">确定</string>
+    <string name="ask_user_skip">跳过</string>
+    <string name="ask_user_expired">本次提问已超时，选择未送达</string>
+    <string name="ask_user_free_hint">也可输入你自己的答案</string>
     <string name="permission_reason_contacts">查找联系人并拨号</string>
     <string name="permission_reason_phone">直接拨出电话（没有它只能打开拨号盘）</string>
     <string name="permission_reason_sms">直接发出短信</string>

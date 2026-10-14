@@ -1,23 +1,20 @@
 {
     "schemaVersion":  1,
-    "generatedAt":  "2026-09-28T00:00:00.000Z",
-    "brewVersion":  "4.4",
-    "brewVersionCode":  29,
+    "generatedAt":  "2026-10-11T00:00:00.000Z",
+    "brewVersion":  "4.6",
+    "brewVersionCode":  31,
     "brewIconUrl":  "",
-    "brewApkUrl":  "https://gitee.com/dlover1314/RokidLab/releases/download/v4.4/RokidLab-v4.4-release.apk",
-    "brewReleaseUrl":  "https://gitee.com/dlover1314/RokidLab/releases/tag/v4.4",
-    "brewNotes":  "云萌TTS + 官方AIUI拉取 + remi图形界面 + 记忆评分淘汰",
+    "brewApkUrl":  "https://gitee.com/dlover1314/RokidLab/releases/download/v4.6/RokidLab-v4.6-release.apk",
+    "brewReleaseUrl":  "https://gitee.com/dlover1314/RokidLab/releases/tag/v4.6",
+    "brewNotes":  "AI 拍板选项卡 + 本机网页预览 + 聊天页体验重构",
     "brewChanges":  [
-                        "长期记忆升级：mem0 式评分淘汰 + 混合检索，越重要的记忆留得越久",
-                        "Token 压缩记账：上下文超限自动压缩，长对话不再爆 token",
-                        "云萌云端 TTS：19 音色 + 语速可调，AI 气泡支持单次点播",
-                        "官方 AIUI 拉取：一键把眼镜上的官方智能体拉到手机管理",
-                        "remi 图形界面：聊天里跑带窗口按钮的 Python 程序，预览条直接打开",
-                        "读写子代理：独立上下文干重活，主对话更干净",
-                        "MCP OAuth 授权与动态工具接入",
-                        "新工具：打开导航 / 卸载应用 / 手电筒 / 步数查询",
-                        "眼镜端 AIUI 链路与按键/ASR 推送增强",
-                        "内嵌眼镜端更新为 4.4 release 包（需重装眼镜端生效）"
+                        "ask_user 选项卡：AI 需要拍板时手机弹选项，点选即回，不用再打字",
+                        "本机网页预览：AI 生成的网页在手机全屏打开",
+                        "工具产物芯片：zip / 摘要等真实产物路径直点直达",
+                        "聊天页重构：欢迎建议词（可自定义）、回到底部、过程卡实时 token 与等待秒数",
+                        "确认框过期提示：超时后的批准 / 取消如实告知不作数",
+                        "AI 基建加固：SSE 流、任务存储、会话追踪与子代理增强",
+                        "内嵌眼镜端更新为 4.6 release 包（需重装眼镜端生效）"
                     ],
     "apps":  [
                  {

@@ -30,8 +30,9 @@ import org.junit.Test
  *    混淆任意两个都会造成「用户没操作却说被取消」或「用户取消了却照样执行」。
  *    2026-09-23 起再叠一层：**问不到时的放行/拒绝由工具声明的 `ToolConfirmPolicy` 决定**
  *    （`BLOCK` 拒 / `PROCEED` 放行），不再按域硬编码 —— 见 F8 / K4 / K5。
- * 4. **确认通道是眼镜优先、手机兜底**：手机通道只为补上"本机模式下根本没有确认"这个洞，
- *    不替换既有眼镜主路径 —— 见 F9 / F10。
+ * 4. **确认通道是眼镜优先、手机兜底；但 App 在前台时手机优先**（2026-10-12）：
+ *    手机通道原本只为补上"本机模式下根本没有确认"这个洞；前台优先是因为用户正看着手机，
+ *    若仍只弹眼镜端，手机侧毫无提示、只能干等超时 —— 见 F9 / F10 / F11。
  * 5. **AIUI 页面的拒绝文案逐字不变**（页面侧按字面分支处理，[PageScope] 是唯一产地）。
  */
 class ApprovalGateTest {
@@ -145,8 +146,9 @@ class ApprovalGateTest {
             )
         }
         assertEquals(
-            "伪工具应恰为 7 个（4 个原有 + 2026-09-20 新增的技能管理三件套；新增/删除都要同步这里）",
-            7,
+            "伪工具应恰为 8 个（4 个原有 + 2026-09-20 新增的技能管理三件套 + " +
+                "2026-10-12 新增的 ask_user 决策点伪工具；新增/删除都要同步这里）",
+            8,
             PseudoTools.names().size,
         )
     }
@@ -546,6 +548,66 @@ class ApprovalGateTest {
             "「没问到」绝不能被读成「用户取消了」—— 那会让可重做的动作被无谓拒绝",
             ApprovalGate.ConfirmOutcome.NOT_ANSWERED.cancelled,
         )
+        // ★ 第四态 ABORTED（2026-10-13 审计修 H1）：与「没问到」必须分开 ——
+        //   两者 allowed/cancelled 都是 false，唯一区别就是这个 aborted 标志。
+        //   若它被丢掉，闸门就会把"用户叫停"当成"没问到"，对 PROCEED 工具静默放行。
+        assertFalse(ApprovalGate.ConfirmOutcome.ABORTED.allowed)
+        assertFalse(ApprovalGate.ConfirmOutcome.ABORTED.cancelled)
+        assertTrue(
+            "ABORTED 必须能被识别 —— 它是「用户叫停」与「没问到」唯一的区分依据",
+            ApprovalGate.ConfirmOutcome.ABORTED.aborted,
+        )
+        assertFalse(
+            "「没问到」不能被误标成「被中止」—— 那会把超时降级放行的工具一律硬拒",
+            ApprovalGate.ConfirmOutcome.NOT_ANSWERED.aborted,
+        )
+    }
+
+    /**
+     * G4（2026-10-13 审计修 H1 的回归护栏）：**被中止 ⇒ 一律拒绝**，不看工具声明的 PROCEED。
+     *
+     * 改造前：用户叫停（或发新消息抢占）会把协程取消翻译成线程中断，通道返回「没问到」，
+     * 闸门于是对 `PROCEED` 工具**静默放行** —— 用户明明按了停止，删文件/装包照样真的发生，
+     * 而结果随代际作废被丢弃，用户/模型/过程卡片三边都看不到。
+     */
+    private class AbortedResolver : ApprovalGate.ConfirmResolver {
+        override val channelId: String = "aborted-fake"
+        override fun isAvailable(): Boolean = true
+        @Suppress("UNUSED_PARAMETER")
+        override fun confirm(toolName: String, prompt: String): Boolean = false
+        @Suppress("UNUSED_PARAMETER")
+        override fun confirmOutcome(
+            toolName: String,
+            prompt: String,
+            maxWaitMs: Long,
+        ): ApprovalGate.ConfirmOutcome = ApprovalGate.ConfirmOutcome.ABORTED
+    }
+
+    @Test
+    fun `G4 等待被中止时必须拒绝 - 不得按 PROCEED 静默放行`() {
+        ApprovalGate.confirmationResolver = AbortedResolver()
+        ApprovalGate.phoneConfirmationResolver = null
+        // failClosed=false 的 Ask = PROCEED 档（问不到就放行）。被中止若走这条，
+        // 副作用就会在用户叫停之后真的发生 —— 正是本用例要钉死的行为。
+        val proceedAsk = ToolDecision.Ask(DecisionOrigin.RISK_CONFIRMATION, "删除文件 x", failClosed = false)
+
+        val r = ApprovalGate.resolveAsk(proceedAsk, "delete_file")
+
+        assertTrue(
+            "被中止 ⇒ 必须拒绝。Allow 意味着用户叫停后副作用仍会执行（2026-10-13 修 H1 要防的正是这个）",
+            r is ToolDecision.Deny,
+        )
+        assertTrue(
+            "被中止属于「用户/任务主动中止」⇒ 结构化 cancelled 标志必须为 true（展示为 CANCELLED 而非 FAILED）",
+            (r as ToolDecision.Deny).cancelled,
+        )
+        assertTrue(
+            "原因要说清是中止，不能借用「没问到」的措辞",
+            r.reason.contains("中止"),
+        )
+        // BLOCK 档同样拒绝（不因档位不同而分叉）
+        val blockAsk = ToolDecision.Ask(DecisionOrigin.RISK_CONFIRMATION, "发短信", failClosed = true)
+        assertTrue(ApprovalGate.resolveAsk(blockAsk, "send_sms") is ToolDecision.Deny)
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -556,7 +618,7 @@ class ApprovalGateTest {
         private val available: Boolean,
         private val confirmed: Boolean,
         private val cancelled: Boolean = false,
-        /** 通道标识：用它在断言里区分"这次问的是眼镜还是手机"（眼镜优先，见 F9） */
+        /** 通道标识：用它在断言里区分"这次问的是眼镜还是手机"（前台手机优先，见 F9 / F11） */
         override val channelId: String = "glasses-fake",
     ) : ApprovalGate.ConfirmResolver {
         var lastPrompt: String? = null
@@ -704,7 +766,9 @@ class ApprovalGateTest {
     }
 
     @Test
-    fun `F9 眼镜通道优先 手机通道只在它不可用时接管`() {
+    fun `F9 手机不在前台时 眼镜通道优先 手机只在它不可用时接管`() {
+        // 前提：App **不在**前台（手机在口袋/桌上）—— 此时眼镜语音才是用户的主路径
+        ApprovalGate.phoneFocusOverride = false
         val glasses = FakeResolver(available = true, confirmed = false, cancelled = true, channelId = "glasses")
         val phone = FakeResolver(available = true, confirmed = true, channelId = "phone")
 
@@ -737,6 +801,35 @@ class ApprovalGateTest {
         assertTrue(
             "MCP 的 Ask 是 fail-closed ⇒ 都不可用时必须拒绝",
             ApprovalGate.resolveAsk(mcpAsk, "mcp__srv__danger") is ToolDecision.Deny,
+        )
+    }
+
+    /**
+     * ★ 2026-10-12 用户实测：在手机上聊天时，需要确认的动作（如删除）**只在眼镜上弹**，
+     * 手机端什么都不显示 ⇒ 用户看着手机却无从确认，只能干等 40s 超时。
+     * 规则改为：App 在前台（＝用户在看手机）时手机通道优先；前台但手机通道不可用则回落眼镜。
+     */
+    @Test
+    fun `F11 App 在前台时手机优先 手机不可用才回落眼镜`() {
+        ApprovalGate.phoneFocusOverride = true
+        val glasses = FakeResolver(available = true, confirmed = false, cancelled = true, channelId = "glasses")
+        val phone = FakeResolver(available = true, confirmed = true, channelId = "phone")
+        ApprovalGate.confirmationResolver = glasses
+        ApprovalGate.phoneConfirmationResolver = phone
+
+        assertEquals(
+            "前台 ⇒ 手机通道胜出（用户正看着手机）",
+            ToolDecision.Allow,
+            ApprovalGate.resolveAsk(ask, "call_phone"),
+        )
+        assertEquals("必须真的问过手机通道", 1, phone.calls)
+        assertEquals("前台时不该再去问眼镜（那正是漏掉手机弹窗的成因）", 0, glasses.calls)
+
+        // 前台但手机通道不可用（理论上不该发生）⇒ 回落眼镜，而不是判成"问不到"
+        ApprovalGate.phoneConfirmationResolver = FakeResolver(available = false, confirmed = true)
+        assertTrue(
+            "手机不可用时回落眼镜（眼镜端显式取消 ⇒ 拒绝）",
+            ApprovalGate.resolveAsk(ask, "call_phone") is ToolDecision.Deny,
         )
     }
 
@@ -993,6 +1086,9 @@ class ApprovalGateTest {
         assertFalse("读技能原文可安全重试", "load_skill" in side)
         assertFalse("回填计划文本可安全重试", "update_plan" in side)
         assertFalse("只读清单可安全重试", "list_skills" in side)
+        // ask_user 是 READ_ONLY（"失败"走说明文案而非异常），不该进重放禁令；
+        // 否则一次瞬时失败会把这个选择题**原样重弹给用户**
+        assertFalse("问用户的伪工具不可自动重放", "ask_user" in side)
     }
 
     @Test

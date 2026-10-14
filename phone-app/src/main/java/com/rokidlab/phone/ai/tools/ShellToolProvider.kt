@@ -125,7 +125,7 @@ internal object ShellToolProvider : ToolProvider {
             statusText = "正在本机执行命令…",
             schema = toolSchema(
                 name = TOOL_RUN,
-                description = "在这台手机上的一台 Linux 环境（Ubuntu 容器）里执行 shell 命令，返回退出码、标准输出与标准错误。用于用户要求「跑个命令/算一下/处理文件/写个脚本/用 python/grep 一下」这类需要真正执行的任务，例如统计、文本与数据处理、下载（curl/wget）、解压、调 python3 脚本。⚠️ 这里**不是**手机的 Android shell：pm/am/dumpsys/input/getprop 这类系统命令在容器里不存在，也不要指望真机 root（容器里的 root 是假的，只够 apt 用）。📁 **与手机交换文件走两个挂载点**：① /mnt/lab —— 用户已授予「所有文件访问」时直通手机的「下载/Lab」文件夹（系统文件管理器可见，双向读写）；未授权时在 App 私有目录（结果里会注明哪种）。用户给的输入文件让他放进「下载/Lab」，容器产出的成品写到 /mnt/lab 用户就能拿到。② /mnt/download —— **只读**镜像手机整个「下载」目录（同样需要「所有文件访问」；未授予时不存在）：save_code_file 存到「下载/<项目名>/」的项目从这里读，运行/预览它们就用这个路径。除这两个挂载点外不要猜 /sdcard 等任何手机路径（容器里不存在）。生成**可运行项目**（脚本/网页/服务）时优先写到 /mnt/lab/<项目名>/，之后运行与预览都从那里找。⚠️ **运行之前轮次生成的代码前不要凭记忆猜路径**：先 ls 确认文件实际位置，再显式传 cwd（省略 cwd 时沿用上一次成功执行的工作目录，首次为 /）。可用的东西：bash + 常用命令行工具。curl、wget、unzip、zip、xz-utils、jq 装环境时已预装，直接用（缺了才考虑 install_packages 补）。python3 / node / git 属**可选组件**：缺 python3、git 时可自己用 install_packages 装，缺 node（用户没在本机执行环境里装 Node.js）只能如实告知并指引他去「设置 → 本机执行环境」安装，**不要试着用 apt 装 nodejs 顶替**。python3 已装时 `python` 与 `pip` 别名同样可用（已自动补符号链接）；pip 已配 break-system-packages，全局 pip install 可直接用。**java/javac 可能未预装**：先 `command -v javac` 探一下；缺时优先引导用户去「设置 → 本机执行环境」点 Java 的「安装」（OpenJDK 21，走国内 apt 镜像，下载约 82MB、装后约 300MB），用户同意由你代装时再用 install_packages 装 openjdk-21-jdk-headless（装前向用户说明体积与耗时）；用户只是随口一提时如实说明本机没装 Java 即可。**Python GUI 框架（tkinter/PyQt/Kivy 等）在容器里开不出窗口**（没有显示服务器和 GPU），不要装也不要跑——需要图形界面时按类型选：**按钮/表单/计算器/绘图板类 → 生成 remi 程序**（容器已装 remi，纯 Python 写窗口应用；用 ```python 代码块交给用户点运行即可，GUI 在聊天预览条自动打开，`start(MyApp, port=…)` 端口写什么都行——运行时已自动桥接，不要用 tkinter/pygame 思路写）；**游戏/动画类 → 生成 HTML5 canvas 网页**（start_web_preview 预览）；也可按需求做 AIUI 页面。⚠️ **缺命令要装包时用 install_packages 工具**，不要在 run_shell 里跑 `apt-get install`：那条通道不问用户、且 600s 超时上限会把装到一半的 dpkg 强杀（留下半配置状态）。命令里多级引号容易写错，建议把复杂逻辑写成 heredoc 或 `bash -c`。⚠️ 返回内容过长会被截断，所以**自己先过滤**：加 `head`/`tail`/`grep -c`/`wc -l`，不要直接 cat 一个大文件。若返回里说「本机执行环境还没安装」，就把这个事实如实告诉用户并指引他去「设置 → 本机执行环境」安装，**不要假装命令已经执行过**。音乐、电话、闹钟、网页搜索这些已有专用工具，不要用本工具绕道。",
+                description = "在这台手机上的一台 Linux 环境（Ubuntu 容器）里执行 shell 命令，返回退出码、标准输出与标准错误。用于用户要求「跑个命令/算一下/处理文件/写个脚本/用 python/grep 一下」这类需要真正执行的任务，例如统计、文本与数据处理、下载（curl/wget）、解压、调 python3 脚本。⚠️ 这里**不是**手机的 Android shell：pm/am/dumpsys/input/getprop 这类系统命令在容器里不存在，也不要指望真机 root（容器里的 root 是假的，只够 apt 用）。📁 **与手机交换文件走两个挂载点**：① /mnt/lab —— 用户已授予「所有文件访问」时直通手机的「下载/Lab」文件夹（系统文件管理器可见，双向读写）；未授权时在 App 私有目录（结果里会注明哪种）。用户给的输入文件让他放进「下载/Lab」，容器产出的成品写到 /mnt/lab 用户就能拿到。② /mnt/download —— **只读**镜像手机整个「下载」目录（同样需要「所有文件访问」；未授予时不存在）：save_code_file 存到「下载/<项目名>/」的项目从这里读，运行/预览它们就用这个路径。除这两个挂载点外不要猜 /sdcard 等任何手机路径（容器里不存在）。生成**可运行项目**（脚本/网页/服务）时优先写到 /mnt/lab/<项目名>/，之后运行与预览都从那里找。⚠️ **运行之前轮次生成的代码前不要凭记忆猜路径**：先 ls 确认文件实际位置，再显式传 cwd（省略 cwd 时沿用上一次成功执行的工作目录，首次为 /）。可用的东西：bash + 常用命令行工具。curl、wget、unzip、zip、xz-utils、jq 装环境时已预装，直接用（缺了才考虑 install_packages 补）。python3 / node / git 属**可选组件**：缺 python3、git 时可自己用 install_packages 装，缺 node（用户没在本机执行环境里装 Node.js）只能如实告知并指引他去「设置 → 本机执行环境」安装，**不要试着用 apt 装 nodejs 顶替**。python3 已装时 `python` 与 `pip` 别名同样可用（已自动补符号链接）；pip 已配 break-system-packages，全局 pip install 可直接用。**java/javac 可能未预装**：先 `command -v javac` 探一下；缺时优先引导用户去「设置 → 本机执行环境」点 Java 的「安装」（OpenJDK 21，走国内 apt 镜像，下载约 82MB、装后约 300MB），用户同意由你代装时再用 install_packages 装 openjdk-21-jdk-headless（装前向用户说明体积与耗时）；用户只是随口一提时如实说明本机没装 Java 即可。**Python GUI 框架（tkinter/PyQt/Kivy 等）在容器里开不出窗口**（没有显示服务器和 GPU），不要装也不要跑——需要图形界面时按类型选：**按钮/表单/计算器/绘图板类 → 生成 remi 程序**（容器已装 remi，纯 Python 写窗口应用；用 ```python 代码块交给用户点运行即可，GUI 在聊天预览条自动打开，`start(MyApp, port=…)` 端口写什么都行——运行时已自动桥接，不要用 tkinter/pygame 思路写）；**游戏/动画类 → 生成 HTML5 canvas 网页**（start_web_preview 预览）；也可按需求做 AIUI 页面。⚠️ **缺命令要装包时用 install_packages 工具**，不要在 run_shell 里跑 `apt-get install`：那条通道不问用户、且 600s 超时上限会把装到一半的 dpkg 强杀（留下半配置状态）。命令里多级引号容易写错，建议把复杂逻辑写成 heredoc 或 `bash -c`。⚠️ 返回内容过长会被截断，所以**自己先过滤**：加 `head`/`tail`/`grep -c`/`wc -l`，不要直接 cat 一个大文件。若返回里说「本机执行环境还没安装」，就把这个事实如实告诉用户并指引他去「设置 → 本机执行环境」安装，**不要假装命令已经执行过**。⚠️ **别跑不会自己结束的命令**（常驻服务、事件循环不结束的脚本、等输入的交互程序）：它会把整轮对话钉到超时，用户界面一直停在「运行中」。这类活要么用 `timeout <秒> <命令>` 包一层，要么写成会自然退出的脚本，要么用 background=true 丢后台。**超时不是环境坏了**：环境自检正常时不要建议用户去查容器。音乐、电话、闹钟、网页搜索这些已有专用工具，不要用本工具绕道。",
                 parameters = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -254,6 +254,25 @@ internal object ShellToolProvider : ToolProvider {
         ),
     )
 
+    // ═══ 串行泳道的**输出直播**（2026-10-12 对标 Codex 的过程实时性缺口）═══
+    //
+    // run_shell / run_script 是 sideEffect=true ⇒ 恒走串行泳道，在**生成协程的线程**上执行。
+    // 主循环在执行前把 sink 装进这个 ThreadLocal（finally 里清掉），runShell 把逐行输出
+    // 回传给主循环节流刷「过程」命令卡 —— 用户第一次能看着命令输出滚出来，而不是
+    // 盯着一圈转圈猜它在干嘛。并行泳道的工具线程上 sink 为空 ⇒ 自动退化为旧行为，无害。
+    // ⚠️ set/clear 必须在**同一线程**（ThreadLocal 语义），主循环侧保证。
+    private val liveOutputSink = ThreadLocal<((String) -> Unit)?>()
+
+    /** 主循环执行工具前装 sink（null = 清除）；必须与执行同线程调用 */
+    fun setLiveOutputSink(sink: ((String) -> Unit)?) {
+        liveOutputSink.set(sink)
+    }
+
+    private fun takeLiveOutputSink(): ((String) -> Unit)? = liveOutputSink.get()
+
+    /** 供 run_script（ScriptToolProvider）复用同一条通道：取当前线程的输出直播 sink */
+    internal fun takeLiveOutputLine(): ((String) -> Unit)? = takeLiveOutputSink()
+
     override fun execute(context: Context, name: String, args: JSONObject): String {
         // 执行前的共享目录快照：跑完与它做 diff，差集就是这次真正写出来的文件。
         // 为什么靠 diff 而不是解析命令：写文件的方式太多（重定向/tee/脚本内部写/clone），
@@ -295,7 +314,16 @@ internal object ShellToolProvider : ToolProvider {
             return runInBackground(context, command, cwd)
         }
         val timeout = args.optInt("timeoutSec", DEFAULT_TIMEOUT_SEC).coerceIn(5, MAX_TIMEOUT_SEC)
-        val result = runCatching { ProotShell.runCommand(context, command, cwd = cwd, timeoutSec = timeout.toLong()) }
+        // 输出直播：sink 非空（串行泳道）时逐行回传给主循环刷过程卡（stderr 一并给——
+        // 报错栈恰恰是用户最想实时看到的）。sink 为空 = 并行泳道/旧路径，行为不变。
+        val live = takeLiveOutputSink()
+        val result = runCatching {
+            ProotShell.runCommand(
+                context, command, cwd = cwd, timeoutSec = timeout.toLong(),
+                onStdoutLine = live,
+                onStderrLine = live,
+            )
+        }
             .getOrElse { e ->
                 Log.w(TAG, "run_shell 抛异常：${e.javaClass.simpleName}: ${e.message}")
                 return "执行本机命令时出错：${e.javaClass.simpleName}: ${e.message}"
@@ -425,6 +453,19 @@ internal object ShellToolProvider : ToolProvider {
      * 所以这里不做二次截断，只把空段省掉以免白占 token。
      */
     internal fun format(r: com.rokidlab.phone.platform.ExecResult): String {
+        // ⚠️ 超时 ≠ 环境没起来，必须**先分流**：两者在 ExecResult.failure 上原本长得一样，
+        // 曾统一走进下面那个"环境本身有问题"分支（2026-10-12 实锤：模型写的 node 脚本
+        // 事件循环不退出 → 超时被报成"环境坏了"，用户与模型都被带偏去查容器）。
+        if (r.timedOut) {
+            val sb = StringBuilder(
+                "命令被超时中断：${r.failure}。已按失败处理，但**这不是环境故障** ——" +
+                    "是这条命令自己没有结束（常驻服务、事件循环不结束的脚本、等输入的交互程序都会这样）。" +
+                    "要么改成会自然退出的写法，要么用 `timeout <秒> <命令>` 包一层，要么用 background=true 丢后台。",
+            )
+            if (r.stdout.isNotBlank()) sb.append("\n\n[超时前已产生的输出]\n").append(r.stdout.trim())
+            if (r.stderr.isNotBlank()) sb.append("\n\n[标准错误]\n").append(r.stderr.trim())
+            return sb.toString()
+        }
         if (!r.launched) {
             return "命令没被拉起来（环境本身有问题）：${r.failure}。" +
                 "这通常意味着容器二进制缺失或被系统挡住，请如实告知用户，并建议他到「设置 → 本机执行环境」跑一次自检。"

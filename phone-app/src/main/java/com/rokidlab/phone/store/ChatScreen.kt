@@ -12,7 +12,9 @@ import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +30,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -37,6 +40,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
@@ -44,6 +54,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.PsychologyAlt
@@ -53,7 +64,10 @@ import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -64,15 +78,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -85,7 +104,10 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.rokidlab.phone.R
 import com.rokidlab.phone.ai.AgentSessionManager
+import com.rokidlab.phone.ai.AgentStep
 import com.rokidlab.phone.ai.ContextUsage
+import com.rokidlab.phone.ai.KbDocInfo
+import com.rokidlab.phone.ai.KnowledgeBase
 import com.rokidlab.phone.aiui.AiuiDemoCard
 import com.rokidlab.phone.aiui.AiuiDemoController
 import com.rokidlab.phone.app.LabApplication
@@ -128,6 +150,9 @@ private fun readThinkMode(prefs: android.content.SharedPreferences): String {
 }
 /** 是否已在乐奇页就通知权限做过首次提示（只主动弹一次，拒绝后不再打扰） */
 private const val KEY_NOTIF_PERM_PROMPTED = "notif_perm_prompted_for_lab"
+
+/** 欢迎页建议词自定义持久化：chat_suggest_0..5，缺省/空 = 用内置默认（长按建议词编辑） */
+private const val KEY_SUGGEST_PREFIX = "chat_suggest_"
 
 /** 聊天消息 */
 internal data class ChatMsg(
@@ -190,6 +215,18 @@ internal data class ChatMsg(
      *   不进 [ChatStateHolder.persist]。会话重载后运行卡自然消失（和"过程"不落盘同理）。
      */
     val runId: String? = null,
+    /**
+     * 本条是**发送失败**的提示条（回复失败 / 发送失败）：气泡内直接给「重试」入口，
+     * 不再让用户长按找「重新生成」。只对 AI 提示条为 true。
+     */
+    val failed: Boolean = false,
+    /**
+     * 用户对这条 AI 回复的反馈：1 = 有用，-1 = 没用，null = 未标记。
+     * 本地记录（随消息落盘、随会话保留）。**UI 入口已移除**：纯本地埋点没有消费方，
+     * 点完无反馈感，徒增菜单噪音（见 ChatMessageActionsDialog 内注释）；
+     * 字段与 JSONL fb 持久化保留，待未来有统计/回流需求再接回入口。
+     */
+    val feedback: Int? = null,
 )
 
 /**
@@ -268,6 +305,9 @@ internal fun ChatModule(app: LabApplication) {
     var promptTarget by remember { mutableStateOf<ChatSessionMeta?>(null) }
     // 消息级操作弹层（点气泡内「···」触发：复制 / 编辑重发 / 重新生成 / 删除）
     var actionTarget by remember { mutableStateOf<ChatMsg?>(null) }
+    // 触感反馈：发送/停止/菜单/建议词等关键动作给一次轻触确认（CompareTo ChatGPT 的做法）
+    val haptic = LocalHapticFeedback.current
+    fun hapticTick() = haptic.performHapticFeedback(HapticFeedbackType.LongPress)
     // 正在编辑重发的消息（null = 未进入编辑态）。
     // 编辑**就地发生在底部输入框**里，不再弹独立窗口 —— 见 startEdit()
     var editingTarget by remember { mutableStateOf<ChatMsg?>(null) }
@@ -315,6 +355,28 @@ internal fun ChatModule(app: LabApplication) {
     var showContextInfo by remember { mutableStateOf(false) }
     /** 执行轨迹视图（§4.3.5）：从上下文面板进入 */
     var showTrace by remember { mutableStateOf(false) }
+    // ── 任务计划浮层（2026-10-12 用户要求：计划走**独立底部弹层**）──
+    // 入口在输入框上方那一行的最左侧（ChatBubble.PlanChip），完整清单在这里看。
+    var planSheetOpen by remember { mutableStateOf(false) }
+    // 实时取"最新一版计划"：同 key 覆盖 ⇒ 最后出现的那条就是最新版（生成中的状态更新直接反映）
+    val latestPlanStep: AgentStep? = ChatStateHolder.messages.asReversed()
+        .firstNotNullOfOrNull { m -> m.trace.lastOrNull { it.kind == AgentStep.Kind.PLAN } }
+    // 新计划出现时自动弹出一次；同一份计划的后续更新（步骤标题不变）不重复弹，不打断用户
+    var shownPlanSignature by remember { mutableStateOf<String?>(null) }
+    val planSignature = latestPlanStep?.planSteps?.joinToString("|") { it.title }
+    LaunchedEffect(planSignature) {
+        if (planSignature != null && planSignature != shownPlanSignature) {
+            shownPlanSignature = planSignature
+            planSheetOpen = true
+        }
+    }
+    // 计划从消息流里消失（换/清会话）时把浮层一起收掉，避免它悬在空数据上
+    LaunchedEffect(latestPlanStep) {
+        if (latestPlanStep == null) planSheetOpen = false
+    }
+    // 生成期间禁止切/建会话（H1）：在途那一轮会把过程与正文写进"当前会话"，
+    // 中途换会话会让它落进别人的记录里。标志同步给 ChatStateHolder（唯一事实来源）。
+    LaunchedEffect(sending) { ChatStateHolder.setGenerating(sending) }
     // 「本机模式」开关（不连眼镜也能聊）：状态源是 LabApplication（每次发送时读取），
     // 这里只做 UI 镜像，因此首次组合时取当前值即可。
     var localOnly by remember { mutableStateOf(app.chatLocalOnlyEnabled) }
@@ -376,25 +438,92 @@ internal fun ChatModule(app: LabApplication) {
         }
     }
 
+    // ── 贴底滚动唯一出口 ─────────────────────────────────────────────
+    // 所有"滚到最新"的动作（appendMsg / 跟随效应 / 回到底部钮 / 演示卡片）统一走这里：
+    // 目标 = 末项 + 超大偏移（夹到列表真底，见 bottomIndex 注释）。
+    // animated = true 时动画落地后**立刻非动画再夹一次**：animateScrollToItem 的目标按
+    // 起飞瞬间的内容高度计算，流式内容在途中增长会让动画停在半空，随后手势钩子看到
+    // canScrollForward=true 就把跟随误判成"用户上翻"而解除 —— 消息跟一半停住
+    // （2026-10-13 用户报「跟随没有完全到底」）。动画被用户拖拽打断则直接返回，
+    // 落点交给手势钩子按用户意图裁定。
+    suspend fun stickToBottom(animated: Boolean) {
+        if (animated) {
+            try {
+                listState.animateScrollToItem(bottomIndex(), 1_000_000)
+            } catch (_: Exception) {
+                return
+            }
+            // 落地后仅当真的差一截才补夹：静态内容时动画本来就精确落底，
+            // 无条件再夹 = 已到底还原地瞬移一次，观感就是"弹一下"
+            // （2026-10-13 用户报 AIUI 卡片弹出后跳动）。流式途中增长的情况仍会
+            // canScrollForward=true ⇒ 补夹执行，"跟一半停住"的修复不受影响。
+            if (!listState.canScrollForward) {
+                pinnedToBottom = true
+                return
+            }
+        }
+        runCatching { listState.scrollToItem(bottomIndex(), 1_000_000) }
+        // 主动贴底后显式保持跟随：若结算瞬间恰有新内容落地，手势钩子可能已把 pinned
+        // 翻成 false，这里纠正回来（用户真的上翻走的是拖拽路径，钩子仍会正常关闭）
+        pinnedToBottom = true
+    }
+
+    // AIUI 卡片落位期间为 true：挂起补钉等其他滚动源，让卡片自己的收敛路径独占滚动
+    // （避免多方对同一份高度估算误差重复补偿 ⇒ 跳几下，详见下方补钉注释）。
+    var aiuiSettling by remember { mutableStateOf(false) }
+
+    // ── 贴底位置失守补钉 ────────────────────────────────────────────
+    // 跟随态下列表"还能往下滚"就立刻重新夹底。会失守的场景全部覆盖：
+    //   · 输入区上方任何一行出现/收起（上下文图标、引用条、附件条、程序模式条）挤压视口；
+    //   · 键盘开合改变视口；
+    //   · LazyColumn 对未测量 item 用估算高度，夹底后 item 实际量出来的高度与估算不符，
+    //     位置被修正漂走 —— 夹底"看起来执行了"却差一截（2026-10-13 截图确认：回复结算完，
+    //     末条气泡下半截仍被切在屏幕外）。
+    // 只在 canScrollForward false→true 翻转时动作：已在底时内容增长会翻转它（夹回），
+    // 用户上翻不经过翻转（拖拽开始时就翻转，但 isScrollInProgress 守卫挡住；
+    // 惯性停下时已无翻转），手势钩子随后按落点裁定 pinned，不会跟用户抢滚动。
+    //
+    // ⚠️ aiuiSettling 期间必须让路：AIUI 卡片是新 item、在屏幕外从未被测量，滚到它
+    //    必然用**估算高度**算目标 —— 本补钉、stickToBottom 的落地补夹、卡片自己的
+    //    滚动动画会对**同一份估算误差各自补偿一次**，叠起来就是"跳几下"
+    //    （2026-10-13 用户报）。卡片落位改由下方单条收敛路径负责，这里挂起。
+    LaunchedEffect(Unit) {
+        var lastCanForward = listState.canScrollForward
+        snapshotFlow { listState.canScrollForward }.collect { canForward ->
+            val was = lastCanForward
+            lastCanForward = canForward
+            if (canForward && !was && pinnedToBottom && !listState.isScrollInProgress &&
+                !aiuiSettling && messages.isNotEmpty()
+            ) {
+                stickToBottom(animated = false)
+            }
+        }
+    }
+
     LaunchedEffect(ChatStateHolder.currentSessionId, messages.size, followRevision) {
         if (messages.isEmpty()) return@LaunchedEffect
-        val toListEnd: suspend () -> Unit = {
-            // 走 bottomIndex()：卡片在场时末项是卡片而不是消息，目标必须一致
-            listState.scrollToItem(bottomIndex(), 1_000_000)
-        }
         val sessionId = ChatStateHolder.currentSessionId
         if (positionedSession != sessionId) {
-            runCatching { toListEnd() }
+            // 进入/切换会话：无条件定位到最底部并保持跟随
+            stickToBottom(animated = false)
             positionedSession = sessionId
         } else if (pinnedToBottom && !listState.isScrollInProgress) {
             // 用户手势进行中不抢滚动（拖拽/惯性时贴底会打架）；手势结束由上面的监听
             // 按最终位置重新裁定是否继续跟随
-            runCatching { toListEnd() }
-            // 我们是主动贴底：若结算瞬间恰好有新内容落地（canScrollForward 被 flip 成
-            // true），手势监听会把 pinned 误判成"用户上翻了"导致跟随悄悄失效 ——
-            // 这里显式保持跟随（用户真的上翻时走的不是这条路径，监听仍会正常关闭）
-            pinnedToBottom = true
+            stickToBottom(animated = false)
         }
+    }
+
+    // ── 新消息入场动画 ─────────────────────────────────────────────
+    // 只对「刚新增的那一条」做一次淡入+上移：记住上次的条数，进入页面/切会话不重放。
+    // ⚠️ 不能按 msg.id 是否"见过"判断 —— 切会话回放历史时全是"没见过的 id"，会全体重放。
+    var lastMsgCount by remember { mutableStateOf(-1) }
+    var appearId by remember { mutableStateOf(0L) }
+    LaunchedEffect(messages.size) {
+        if (lastMsgCount in 1 until messages.size) {
+            messages.lastOrNull()?.let { appearId = it.id }
+        }
+        lastMsgCount = messages.size
     }
 
     // ── AI 产出文件 → 聊天里的文件卡 ─────────────────────────────────
@@ -612,16 +741,15 @@ internal fun ChatModule(app: LabApplication) {
         }
     }
 
-    fun appendMsg(isUser: Boolean, content: String, isStatus: Boolean = false, turn: Int? = null) {
-        ChatStateHolder.add(isUser, content, isStatus, turn = turn)
-        scope.launch {
-            try {
-                // 统一走 bottomIndex() + 超大偏移（见其注释）：原先顶对齐到末项，
-                // 与跟随效应的"夹到列表底"是两个位置，卡片在场时来回切就上下跳。
-                listState.animateScrollToItem(bottomIndex(), 1_000_000)
-            } catch (_: Exception) {
-            }
-        }
+    fun appendMsg(
+        isUser: Boolean,
+        content: String,
+        isStatus: Boolean = false,
+        turn: Int? = null,
+        failed: Boolean = false,
+    ) {
+        ChatStateHolder.add(isUser, content, isStatus, turn = turn, failed = failed)
+        scope.launch { stickToBottom(animated = true) }
     }
 
 /**
@@ -701,7 +829,7 @@ internal fun ChatModule(app: LabApplication) {
         }
         if (session == null) {
             sending = false
-            appendMsg(false, ctx.getString(R.string.chat_send_failed))
+            appendMsg(false, ctx.getString(R.string.chat_send_failed), failed = true)
             return
         }
         // sendAiTextMessage 内含多次 Thread.sleep + join（最长可阻塞 30s），
@@ -720,7 +848,11 @@ internal fun ChatModule(app: LabApplication) {
                         sending = false
                         // 用户停止/被新请求抢占时 success=false 且 err=null：静默，不显示失败气泡
                         if (!success && !err.isNullOrBlank()) {
-                            appendMsg(false, ctx.getString(R.string.chat_reply_failed) + ": $err")
+                            appendMsg(
+                                false,
+                                ctx.getString(R.string.chat_reply_failed) + ": $err",
+                                failed = true,
+                            )
                         }
                         // 「过程」卡片的收尾已由会话层统一负责（sendAiTextMessage 入口包装 onResult +
                         // 抢占/中止两处兜底），此处不再重复 —— 见 AiConversationService.setAgentTraceSink
@@ -748,7 +880,11 @@ internal fun ChatModule(app: LabApplication) {
                 scope.launch {
                     sending = false
                     ChatStateHolder.finishTrace(failed = true)
-                    appendMsg(false, ctx.getString(R.string.chat_reply_failed) + ": ${e.message}")
+                    appendMsg(
+                        false,
+                        ctx.getString(R.string.chat_reply_failed) + ": ${e.message}",
+                        failed = true,
+                    )
                 }
             }
         }
@@ -1193,72 +1329,262 @@ internal fun ChatModule(app: LabApplication) {
         //   原先滚到 messages.size 是"卡片顶对齐视口顶"，卡片高于剩余空间时与跟随
         //   效应的位置不同，流式更新期间两处来回切 ⇒ 上下跳动（2026-10-10 用户报）。
         LaunchedEffect(aiuiDemoShowing) {
-            if (aiuiDemoShowing) {
+            if (!aiuiDemoShowing) return@LaunchedEffect
+            // 卡片落位的**唯一收敛路径**（不走 stickToBottom，避开它的落地补夹；
+            // 落位期间 aiuiSettling 挡住补钉，避免三方对同一估算误差各补一次 ⇒ 跳几下）：
+            //   ① 动画冲到底 —— 卡片此时在屏幕外、用的是估算高度，落点可能差一截；
+            //   ② 等一帧让 LazyColumn 把卡片真正测量出来；
+            //   ③ 用真实高度精确夹底（位移只剩 ① 的估算误差，通常很小）。
+            aiuiSettling = true
+            try {
                 runCatching { listState.animateScrollToItem(bottomIndex(), 1_000_000) }
+                withFrameNanos { }
+                runCatching { listState.scrollToItem(bottomIndex(), 1_000_000) }
+                withFrameNanos { }   // 让夹底结果稳定一帧，再放开其他滚动源
+            } finally {
+                aiuiSettling = false
             }
+            pinnedToBottom = true
         }
 
         if (messages.isEmpty() && !aiuiDemoShowing) {
-            Box(
+            // 空状态欢迎页（对标专业 Agent 的首屏引导）：问候 + 场景建议词。
+            // 建议词点击即发送 —— 专业产品的做法（填入再等用户按发送，转化率反而低）。
+            // 长按可自定义（2026-10-13 用户要求）：自定义文案存 prefs（chat_suggest_<i>），
+            // 清空并确定 = 恢复默认，不另做重置入口。
+            val defaultSuggestions = listOf(
+                stringResource(R.string.chat_suggest_schedule),
+                stringResource(R.string.chat_suggest_weather),
+                stringResource(R.string.chat_suggest_music),
+                stringResource(R.string.chat_suggest_note),
+                stringResource(R.string.chat_suggest_translate),
+                stringResource(R.string.chat_suggest_joke),
+            )
+            // 自定义覆盖层：null = 该槽位用默认；保存在对话框确定时落 prefs + 刷状态
+            var suggestOverrides by remember {
+                mutableStateOf(
+                    List(defaultSuggestions.size) { i -> prefs.getString(KEY_SUGGEST_PREFIX + i, null) },
+                )
+            }
+            fun saveSuggestion(index: Int, text: String) {
+                val trimmed = text.trim().take(30)
+                prefs.edit().putString(KEY_SUGGEST_PREFIX + index, trimmed.ifEmpty { null }).apply()
+                suggestOverrides = suggestOverrides.toMutableList().also {
+                    it[index] = trimmed.ifEmpty { null }
+                }
+            }
+            // 正在自定义的建议词下标（null = 未打开编辑框）
+            var editSuggest by remember { mutableStateOf<Int?>(null) }
+            val suggestions = List(defaultSuggestions.size) { i ->
+                suggestOverrides[i] ?: defaultSuggestions[i]
+            }
+            Column(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .padding(horizontal = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
             ) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(28.dp))
+                        .background(BrewChat),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Bolt,
+                        contentDescription = null,
+                        tint = BrewBg,
+                        modifier = Modifier.size(30.dp),
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = stringResource(R.string.chat_welcome_title),
+                    color = BrewTextBright,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(6.dp))
                 Text(
                     text = stringResource(R.string.chat_empty_hint),
                     color = BrewMuted,
                     fontSize = 13.sp,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(36.dp),
                 )
+                Spacer(Modifier.height(20.dp))
+                suggestions.chunked(2).forEachIndexed { rowIdx, rowItems ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowItems.forEachIndexed { colIdx, s ->
+                            val index = rowIdx * 2 + colIdx
+                            WelcomeSuggestion(
+                                text = s,
+                                enabled = !sending,
+                                onClick = {
+                                    hapticTick()
+                                    input = s
+                                    send()
+                                },
+                                onLongClick = {
+                                    hapticTick()
+                                    editSuggest = index
+                                },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // 长按自定义建议词：清空并确定 = 恢复默认（见 saveSuggestion）
+                editSuggest?.let { idx ->
+                    var draft by remember(idx) { mutableStateOf(suggestions[idx]) }
+                    AlertDialog(
+                        onDismissRequest = { editSuggest = null },
+                        title = { Text(stringResource(R.string.chat_suggest_edit_title)) },
+                        text = {
+                            Column {
+                                OutlinedTextField(
+                                    value = draft,
+                                    onValueChange = { draft = it },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    text = stringResource(R.string.chat_suggest_edit_hint),
+                                    color = BrewMuted,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                hapticTick()
+                                saveSuggestion(idx, draft)
+                                editSuggest = null
+                            }) { Text(stringResource(R.string.chat_common_confirm)) }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { editSuggest = null }) {
+                                Text(stringResource(R.string.chat_common_cancel))
+                            }
+                        },
+                    )
+                }
             }
         } else {
-            LazyColumn(
-                state = listState,
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                // 水平 16dp：与顶栏、输入区统一（UI-DESIGN.md §1.4「页面水平 padding 16dp」），
-                // 三处各写一个数字是这类"看起来差一点"的根源
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(messages, key = { it.id }) { msg ->
-                    ChatBubble(
-                        msg,
-                        onActions = { actionTarget = msg },
-                        // AI 回复气泡右下角喇叭 = 点播本条内容（云萌手机播 / 默认眼镜 TTS）
-                        onSpeak = if (!msg.isUser && !msg.isStatus) {
-                            { speakMsg(msg) }
-                        } else {
-                            null
-                        },
-                        speaking = speakingMsgId == msg.id,
-                        // 用户发言**点一下就是编辑重发**（以前要先点「···」再选「编辑重发」）：
-                        // 用户对一条自己说过的话最常做的动作就是"改一下再说一遍"。
-                        // 发送中不给点 —— 编辑重发会截断历史，与在飞的请求冲突。
-                        // 正文在 SelectionContainer 里（长按走"选字"），所以这里只挂单击，不挂长按。
-                        onClickUser = if (msg.isUser && !msg.isStatus && !sending) {
-                            { startEdit(msg) }
-                        } else {
-                            null
-                        },
-                        expandTrace = expandTrace,
-                    )
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    // 水平 16dp：与顶栏、输入区统一（UI-DESIGN.md §1.4「页面水平 padding 16dp」），
+                    // 三处各写一个数字是这类"看起来差一点"的根源
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(messages, key = { it.id }) { msg ->
+                        // typing：纯闲聊（无过程步骤）且正文还没开始流式 → 三点打字指示。
+                        // 有过程步骤时不显示 —— TraceBlock 的「正在思考」行已经是更具体的反馈。
+                        val typing = sending && !msg.isUser && !msg.isStatus && msg.runId == null &&
+                            msg.trace.isEmpty() && msg.content.isBlank() &&
+                            msg.id == messages.lastOrNull()?.id
+                        BubbleAppear(fresh = msg.id == appearId) {
+                            ChatBubble(
+                                msg,
+                                onActions = { actionTarget = msg },
+                                // AI 回复气泡右下角喇叭 = 点播本条内容（云萌手机播 / 默认眼镜 TTS）
+                                onSpeak = if (!msg.isUser && !msg.isStatus) {
+                                    { speakMsg(msg) }
+                                } else {
+                                    null
+                                },
+                                speaking = speakingMsgId == msg.id,
+                                // 用户发言**点一下就是编辑重发**（以前要先点「···」再选「编辑重发」）：
+                                // 用户对一条自己说过的话最常做的动作就是"改一下再说一遍"。
+                                // 发送中不给点 —— 编辑重发会截断历史，与在飞的请求冲突。
+                                // 正文在 SelectionContainer 里（长按走"选字"），所以这里只挂单击，不挂长按。
+                                onClickUser = if (msg.isUser && !msg.isStatus && !sending) {
+                                    { startEdit(msg) }
+                                } else {
+                                    null
+                                },
+                                expandTrace = expandTrace,
+                                // 失败提示条：气泡内一键重试（复用「重新生成」链路）
+                                onRetry = if (msg.failed) {
+                                    { regenerate(msg) }
+                                } else {
+                                    null
+                                },
+                                typing = typing,
+                                // 计划入口不在气泡里了（移到输入框上方那一行的 PlanChip，见下方）
+                            )
+                        }
+                    }
+                    // AIUI 演示卡片：排在消息流末尾 = AI 那条回复的正下方。它是工具触发的
+                    // UI 副作用（见 AiuiDemoController），**不进消息历史**，不在演示时零节点。
+                    if (aiuiDemoShowing) {
+                        item(key = "aiui-demo") { AiuiDemoCard() }
+                    }
                 }
-                // AIUI 演示卡片：排在消息流末尾 = AI 那条回复的正下方。它是工具触发的
-                // UI 副作用（见 AiuiDemoController），**不进消息历史**，不在演示时零节点。
-                if (aiuiDemoShowing) {
-                    item(key = "aiui-demo") { AiuiDemoCard() }
+                // 「回到底部」悬浮钮：用户上翻（贴底跟随解除）后出现，一键回最新消息。
+                // 上翻翻历史 + 生成中想看最新进展是高频动作，手动划回去太费劲。
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = !pinnedToBottom,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 4.dp, bottom = 4.dp),
+                    enter = fadeIn(tween(150)) + scaleIn(
+                        initialScale = 0.8f,
+                        animationSpec = tween(150),
+                    ),
+                    exit = fadeOut(tween(150)) + scaleOut(
+                        targetScale = 0.8f,
+                        animationSpec = tween(150),
+                    ),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(BrewPanelHi)
+                            .border(1.dp, BrewBorder, RoundedCornerShape(18.dp))
+                            .clickable {
+                                hapticTick()
+                                pinnedToBottom = true
+                                scope.launch { stickToBottom(animated = true) }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = stringResource(R.string.chat_scroll_bottom),
+                            tint = BrewText,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
                 }
             }
         }
 
-        // 上下文占用条（常驻细条）：把原本完全静默的上下文裁剪变成可归因的可见状态。
-        // 会话记忆关闭时组件内部自行不渲染（见 ChatContextBar）
-        contextUsage?.let { usage ->
-            ChatContextBar(usage = usage, onClick = { showContextInfo = true })
+        // 输入框上方那一行（2026-10-12 用户要求）：两个**图标并列**
+        //   左 = 任务计划（恒常可见，点开计划浮层）
+        //   右 = 上下文占用（原先是细长条，已去掉 —— 占用高低改由图标颜色表达）
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PlanChip(step = latestPlanStep, onClick = { planSheetOpen = true })
+            contextUsage?.takeIf { it.enabled }?.let { usage ->
+                ContextChip(usage = usage, onClick = { showContextInfo = true })
+            }
         }
 
         // 程序模式条：运行中的本地程序 ↔ 聊天输入框的连接开关
@@ -1463,20 +1789,36 @@ internal fun ChatModule(app: LabApplication) {
             // 刻意的层级表达；行高按 1.4 倍给 25sp，多行时不会挤。
             // 最小高度 38dp（2026-09-25 用户反馈"输入窗口也提高一点"）：单行时只有 ~25sp 高，
             // 比下面 38dp 的工具行薄一截，视觉上不协调 ⇒ 与工具行按钮同高起底，单行垂直居中
-            BasicTextField(
-                value = input,
-                onValueChange = { input = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 38.dp)
-                    // 进入编辑态时自动聚焦（否则键盘不弹，用户还得再点一下输入框）
-                    .focusRequester(inputFocus),
-                textStyle = TextStyle(color = BrewTextBright, fontSize = 18.sp, lineHeight = 25.sp),
-                cursorBrush = SolidColor(BrewChat),
-                singleLine = false,
-                maxLines = 4,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { send() }),
+            // @知识库引用：输入以「@」结尾时浮出文档清单，点选把「文档名 」补进输入。
+            // 模型看到 @文档名 会用知识库检索工具取内容 —— @ 只是降低引用门槛的快捷入口。
+            var atDismissed by remember { mutableStateOf(false) }
+            var kbDocs by remember { mutableStateOf<List<KbDocInfo>>(emptyList()) }
+            LaunchedEffect(input.endsWith("@")) {
+                if (input.endsWith("@")) {
+                    kbDocs = withContext(Dispatchers.IO) {
+                        runCatching { KnowledgeBase.listDocs(ctx) }.getOrDefault(emptyList())
+                    }
+                }
+            }
+            Box(modifier = Modifier.fillMaxWidth()) {
+                BasicTextField(
+                    value = input,
+                    onValueChange = {
+                        input = it
+                        // 手动删掉 @ 后允许再次触发（点菜单外关闭则不再自动弹出，直到 @ 重新输入）
+                        if (!it.endsWith("@")) atDismissed = false
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 38.dp)
+                        // 进入编辑态时自动聚焦（否则键盘不弹，用户还得再点一下输入框）
+                        .focusRequester(inputFocus),
+                    textStyle = TextStyle(color = BrewTextBright, fontSize = 18.sp, lineHeight = 25.sp),
+                    cursorBrush = SolidColor(BrewChat),
+                    singleLine = false,
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { send() }),
                     decorationBox = { inner ->
                         Box(
                             modifier = Modifier.fillMaxWidth(),
@@ -1498,7 +1840,47 @@ internal fun ChatModule(app: LabApplication) {
                             inner()
                         }
                     },
-            )
+                )
+                DropdownMenu(
+                    expanded = input.endsWith("@") && !atDismissed && kbDocs.isNotEmpty(),
+                    onDismissRequest = { atDismissed = true },
+                    modifier = Modifier.widthIn(max = 280.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.chat_at_kb_title),
+                        color = BrewMuted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                    kbDocs.forEach { doc ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = doc.name,
+                                    color = BrewText,
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Outlined.MenuBook,
+                                    contentDescription = null,
+                                    tint = BrewChat,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            },
+                            onClick = {
+                                hapticTick()
+                                // 输入正以 @ 结尾：把「@」替换为「@文档名 」，保留一个空格方便继续输入
+                                input = input.dropLast(1) + "@${doc.name} "
+                                atDismissed = true
+                            },
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(8.dp))
             // 下层工具行：左＝供应商图标（已配置则画该品牌图标，未配置默认云图标）+ 思考深度（默认自动）
             // + 原顶部标题栏的四个功能图标（本机模式 / 拍照 / 知识库 / 清空，风格与左边两个统一）；
@@ -1652,6 +2034,7 @@ internal fun ChatModule(app: LabApplication) {
                             }
                         )
                         .clickable(enabled = canSend) {
+                            hapticTick()
                             if (sending) {
                                 // 停止当前回复：取消模型生成 + 停眼镜端播报（abortCurrentAi 内含
                                 // tts_stop 下行，放后台线程避免阻塞主线程）
@@ -1838,7 +2221,7 @@ internal fun ChatModule(app: LabApplication) {
 
     if (showContextInfo) {
         contextUsage?.let { usage ->
-            ContextUsageDialog(
+            ContextUsageSheet(
                 usage = usage,
                 onCompact = {
                     val r = runCatching { AgentSessionManager.compactNow() }.getOrNull()
@@ -1857,6 +2240,12 @@ internal fun ChatModule(app: LabApplication) {
 
     if (showTrace) {
         SessionTraceDialog(onDismiss = { showTrace = false })
+    }
+
+    // 任务计划浮层：内容**实时**取最新那条计划（生成中步骤状态会就地更新，不需要重开）；
+    // 还没有计划（latestPlanStep == null）也要能打开 —— 给一句"当前没有任务计划"（入口恒常可见）
+    if (planSheetOpen) {
+        PlanSheet(step = latestPlanStep, onDismiss = { planSheetOpen = false })
     }
 
     // 首次进入乐奇的通知权限说明框
@@ -1896,4 +2285,60 @@ internal fun ChatModule(app: LabApplication) {
             },
         )
     }
+}
+
+/**
+ * 新消息入场：淡入 + 轻微上移，**一次性**。
+ *
+ * [fresh] = 这条是不是刚新增的那条（[ChatModule] 里的 appearId 判定）。
+ * 用 rememberSaveable 记「动画放过了没有」：LazyColumn 滚动回收后重新进入组合不再重放，
+ * 也不会因为流式更新（同一条消息高频重组）把动画掐断重来。
+ */
+@Composable
+private fun BubbleAppear(fresh: Boolean, content: @Composable () -> Unit) {
+    var pending by rememberSaveable { mutableStateOf(fresh) }
+    val progress = remember { Animatable(if (pending) 0f else 1f) }
+    LaunchedEffect(Unit) {
+        if (pending) {
+            progress.animateTo(1f, tween(durationMillis = 240, easing = FastOutSlowInEasing))
+            pending = false
+        }
+    }
+    Box(
+        modifier = Modifier.graphicsLayer {
+            alpha = progress.value
+            translationY = (1f - progress.value) * 20f
+        },
+    ) {
+        content()
+    }
+}
+
+/**
+ * 欢迎页建议词 chip：点击直接发送，**长按进入自定义**（编辑框见欢迎页调用处）。
+ * combinedClickable 需要 ExperimentalFoundationApi，收敛在这个小组件里避免传染整个文件。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WelcomeSuggestion(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    Text(
+        text = text,
+        color = BrewText,
+        fontSize = 13.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(BrewPanel)
+            .border(1.dp, BrewBorder, RoundedCornerShape(18.dp))
+            .combinedClickable(
+                enabled = enabled,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    )
 }

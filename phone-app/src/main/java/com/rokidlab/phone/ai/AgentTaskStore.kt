@@ -306,6 +306,12 @@ object AgentTaskStore {
      * [markStatus] 改造后无槽位也会建快照，于是**闲聊/问答/翻译类中断**也会走到这里 ——
      * 而这类任务根本没有 plan，"从第几步接着做"是句无意义的话，模型要么忽略、要么
      * 反而去找并不存在的步骤。宁可在没有计划时说人话，也不要给一个指向虚构对象的指令。
+     *
+     * ★ 2026-10-12（用户实测事故）：原措辞「或明显仍在推进该任务」给了模型**自行接管整个计划**的
+     * 许可 —— 用户只说「预览那个魔塔的HTML」（一分钟的活），模型却认定"明显仍在推进该任务"，
+     * 转头去补计划里遗留的「修 bug」步骤：读 3 个源文件 + 长篇推理 + 一次被拦的 run_shell，
+     * 22 步预算跑光，最终回复是空的。现在把续做收紧成**只有用户明确说「继续/接着做」**才接管；
+     * 单点动作（预览/看一眼/导出）只做那一个动作，并用一句话告知计划里的剩余步骤。
      */
     fun pendingContext(context: Context): String? {
         val snap = load(context) ?: return null
@@ -315,9 +321,69 @@ object AgentTaskStore {
         if (!hasPlan) return plainInterruptNote(snap)
         val body = render(snap)
         return "[未完成的任务（可续做）]\n$body\n" +
-            "若用户本轮要求继续/接着做，或明显仍在推进该任务：请从「→」那一步接着做，" +
-            "不要重做已完成的步骤（已产出文件可直接用 read_code_file 读取，不必重新生成）；" +
+            "⚠️ 只有用户**本轮明确要求继续/接着做**时才从「→」那一步接着做；" +
+            "若用户本轮只提出一个具体动作（例如「预览一下」「看一眼那个页面」「导出」），" +
+            "**只完成这个动作并如实汇报**，不要顺手接管计划里其余未完成步骤 ——" +
+            "用一句话告诉用户计划还差哪几步即可。续做时不要重做已完成的步骤" +
+            "（已产出文件可直接用 read_code_file 读取，不必重新生成），并顺手把**已核实完成、或" +
+            "经核实不需要做**的步骤标成 done（没跟上的状态会一直挂在「还没做的步骤」里反复汇报）；" +
             "若用户要放弃该任务，调用 clear_agent_task。"
+    }
+
+    /**
+     * 预算/token 触顶时给**用户**看的确定性收尾说明（2026-10-12）。
+     *
+     * ## 为什么由框架拼、不走模型
+     * 触顶后的收尾总结轮依赖模型自觉执行提示词（"如实说明还剩哪些步骤"）——实测不可靠：
+     * 3 轮收尾没产出正文时回复落到固定兜底「抱歉，我暂时无法处理这个问题」，
+     * 代码场景 `finalizeCodeGenReply` 又会把结论收敛成「已生成 N 个文件」——
+     * 两条路都会**吞掉"还剩什么没做"**，用户感知就是"做到中间突然没了"。
+     * 这段说明在最终回复定稿后由主循环直接追加（见 AiConversationService 的
+     * budgetExhausted/tokenExhausted 分支），不经过模型。
+     *
+     * @param tokenExhausted true = token 预算触顶；false = 工具轮次预算触顶
+     * @return 追加到回复尾部的说明文本（永远非空——即使没有快照也要说清"停在哪"）
+     */
+    fun budgetStopNote(context: Context, tokenExhausted: Boolean): String {
+        val snap = load(context)
+        val pending = snap?.steps?.filter { it.status != "done" }.orEmpty()
+        return budgetStopNote(
+            pendingTitles = pending.map { it.title },
+            hasPlan = !snap?.steps.isNullOrEmpty(),
+            tokenExhausted = tokenExhausted,
+        )
+    }
+
+    /**
+     * [budgetStopNote] 的**纯函数版**（措辞选择单测可锁，与 [plainInterruptNote] 同一做法）。
+     *
+     * @param pendingTitles 未完成步骤的标题（快照无计划/无快照时为空表）
+     * @param hasPlan 快照里**存在计划**（含已全部完成的）—— 决定"没做完"还是"已完成"的措辞
+     */
+    internal fun budgetStopNote(
+        pendingTitles: List<String>,
+        hasPlan: Boolean,
+        tokenExhausted: Boolean,
+    ): String {
+        val reason = if (tokenExhausted) "本轮 token 预算用尽" else "本轮工具轮次预算用尽"
+        return buildString {
+            append("（").append(reason).append("，任务先做到这里。")
+            when {
+                // 有未完成步骤：点名前 5 条（宁少勿错，全部清单下轮续做时会注入）
+                pendingTitles.isNotEmpty() -> {
+                    append("还没做的步骤：")
+                    val shown = pendingTitles.take(5)
+                    append(shown.joinToString("、"))
+                    if (pendingTitles.size > shown.size) append("等共 ${pendingTitles.size} 步")
+                    append("。")
+                }
+                // 有计划但全部完成：如实说完成，别吓用户"没做完"
+                hasPlan -> append("计划内的步骤都已标记完成。")
+                // 无计划快照：不虚构步骤（与 pendingContext 的退化措辞同一判据）
+                else -> append("可能还有内容没有处理完。")
+            }
+            append("对我说「继续」我就接着做。）")
+        }
     }
 
     /**
@@ -369,7 +435,8 @@ object AgentTaskStore {
         }
         sb.append(
             "从「→」那一步接着做（已完成的不要重做）；每完成一步就用 update_plan 更新一次状态，" +
-                "全部完成后把所有步骤标为 done，最后用一两句中文总结。",
+                "**经核实不需要做、或已经满足的步骤也要标成 done**（留在 in_progress 会一直出现在" +
+                "「还没做的步骤」里），全部完成后把所有步骤标为 done，最后用一两句中文总结。",
         )
         if (snap.artifacts.isNotEmpty()) {
             val byProject = snap.artifacts.groupBy { it.project }

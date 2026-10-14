@@ -1,5 +1,7 @@
 package com.rokidlab.phone.ai
 
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -111,5 +113,47 @@ class SseStreamAccumulatorTest {
         val turn = acc.build()
         assertEquals("我先查一下", turn.content)
         assertEquals(1, turn.toolCalls.size)
+    }
+
+    // ── onToolArgs（工具参数流式进度）──
+
+    /** 用 org.json 拼一条 tool_calls 的 SSE 行：手写转义极易出错，这里交给库 */
+    private fun toolCallLine(
+        index: Int,
+        id: String? = null,
+        name: String? = null,
+        args: String? = null,
+    ): String {
+        val fn = JSONObject()
+        if (name != null) fn.put("name", name)
+        if (args != null) fn.put("arguments", args)
+        val tc = JSONObject().put("index", index).put("function", fn)
+        if (id != null) tc.put("id", id)
+        val delta = JSONObject().put("tool_calls", JSONArray().put(tc))
+        return "data: " + JSONObject()
+            .put("choices", JSONArray().put(JSONObject().put("delta", delta)))
+            .toString()
+    }
+
+    @Test
+    fun `onToolArgs 报工具名与累计参数长度`() {
+        // 上游拿「累计长度」直接展示("写到多大了")，因此契约是**累积**而不是本帧增量
+        val events = mutableListOf<Pair<String, Int>>()
+        val acc = SseStreamAccumulator(onToolArgs = { n, len -> events.add(n to len) })
+        acc.onSseLine(toolCallLine(0, id = "c1", name = "save_code_file", args = "{\"file\":"))
+        acc.onSseLine(toolCallLine(0, args = "\"app.js\","))
+        assertEquals(listOf("save_code_file", "save_code_file"), events.map { it.first })
+        assertEquals("{\"file\":".length, events[0].second)
+        assertEquals("{\"file\":".length + "\"app.js\",".length, events[1].second)
+    }
+
+    @Test
+    fun `工具名未到时不回调 onToolArgs`() {
+        // name 与 arguments 可能分在不同 chunk（本帧只有 arguments）：上游要靠名字选文案，
+        // 无名回调只会给它一个无从展示的数字
+        val events = mutableListOf<Pair<String, Int>>()
+        val acc = SseStreamAccumulator(onToolArgs = { n, len -> events.add(n to len) })
+        acc.onSseLine(toolCallLine(0, args = "{\"a\":1}"))
+        assertTrue("工具名未知时不该回调", events.isEmpty())
     }
 }

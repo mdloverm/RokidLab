@@ -122,6 +122,9 @@ internal class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
 
         /** 眼镜端回执「no」= 用户显式取消（区别于超时/链路不可用） */
         @Volatile var cancelled = false
+
+        /** 等待被中止（用户叫停/代际被抢占）—— 必须拒绝，不得按 PROCEED 放行 */
+        @Volatile var aborted = false
     }
 
     override fun isAvailable(): Boolean {
@@ -190,12 +193,17 @@ internal class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
                 // 超时：latch 被 abortAll 兜底 countDown 时也走这里，那不是"用户取消"
                 Log.w(TAG, "confirm timeout (id=$id) -> deny")
                 ApprovalGate.ConfirmOutcome.NOT_ANSWERED
+            } else if (waiter.aborted) {
+                // ★ 2026-10-13 审计修 H1：被中止（用户叫停/代际抢占）≠ 没问到 —— 一律拒绝
+                Log.i(TAG, "confirm aborted by user stop (id=$id) -> deny")
+                ApprovalGate.ConfirmOutcome.ABORTED
             } else {
                 ApprovalGate.ConfirmOutcome(waiter.allowed, waiter.cancelled)
             }
         } catch (e: InterruptedException) {
+            // ★ 同上：协程取消翻译成线程中断 = 用户叫停 ⇒ 报"被中止"，闸门拒绝执行
             Thread.currentThread().interrupt()
-            ApprovalGate.ConfirmOutcome.NOT_ANSWERED
+            ApprovalGate.ConfirmOutcome.ABORTED
         } finally {
             pending.remove(id)
         }
@@ -273,17 +281,21 @@ internal class GlassToolConfirmChannel : ApprovalGate.ConfirmResolver {
     /**
      * 清空全部等待中的确认（连接断开 / Session.cleanup 时调用，避免线程挂满 35s）。
      *
-     * 批量 countDown 后，等待方会在 [confirmOutcome] 里读到 `allowed=false, cancelled=false`
-     * ⇒ 被判为"没问到"按工具声明分流，**不会**被误读成"用户取消了"。
+     * @param aborted true = **用户叫停/任务被抢占**（`AiConversationService` 的
+     *   `abortCurrentAi` 与新代际抢占）—— 等待方拿到"被中止"，闸门一律拒绝执行；
+     *   false（默认）= 通道消失（断连 / cleanup）—— 判为"没问到"按工具声明分流，
+     *   **不会**被误读成"用户取消了"。
+     *   ⚠️ 两者必须分开：断连是环境问题（按声明分流），叫停是用户意图（绝不执行）。
      */
-    fun abortAll() {
+    fun abortAll(aborted: Boolean = false) {
         val n = pending.size
         pending.values.forEach {
             it.cancelled = false
+            it.aborted = aborted
             it.latch.countDown()
         }
         pending.clear()
-        if (n > 0) Log.w(TAG, "aborted $n pending confirmations")
+        if (n > 0) Log.w(TAG, "aborted $n pending confirmations (aborted=$aborted)")
     }
 
     // 操作摘要不再由本类生成：闸门把 ToolEntry.summarize 的产物随 confirm(prompt) 传进来，

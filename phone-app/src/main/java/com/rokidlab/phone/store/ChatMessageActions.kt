@@ -103,6 +103,9 @@ internal fun ChatMessageActionsDialog(
                     onClick = onRegenerate,
                 )
             }
+            // 反馈标记（点赞/点踩）入口已移除：纯本地记录没有消费方，点完无反馈感，
+            // 徒增菜单噪音。重新启用 = 恢复两个 Thumb ActionItem + 接线 onFeedback
+            // （ChatMsg.feedback 字段、JSONL fb 持久化与 ChatStateHolder.setFeedback 均保留）。
             ActionItem(
                 icon = Icons.Filled.Delete,
                 label = stringResource(R.string.chat_msg_delete),

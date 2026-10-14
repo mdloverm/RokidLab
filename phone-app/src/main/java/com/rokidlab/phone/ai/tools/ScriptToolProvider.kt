@@ -254,8 +254,14 @@ internal object ScriptToolProvider : ToolProvider {
 
         val timeout = args.optInt("timeoutSec", DEFAULT_TIMEOUT_SEC).coerceIn(5, MAX_TIMEOUT_SEC).toLong()
         val code = toShellCode(script)
+        // 输出直播：与 run_shell 同一条 ThreadLocal 通道（见 ShellToolProvider.liveOutputSink）
+        val live = ShellToolProvider.takeLiveOutputLine()
         val result = runCatching {
-            ProotShell.runCommand(context, code, timeoutSec = timeout)
+            ProotShell.runCommand(
+                context, code, timeoutSec = timeout,
+                onStdoutLine = live,
+                onStderrLine = live,
+            )
         }.getOrElse { e ->
             Log.w(TAG, "run_script 抛异常：${e.javaClass.simpleName}: ${e.message}")
             return "运行脚本时出错：${e.javaClass.simpleName}: ${e.message}"

@@ -507,18 +507,24 @@ object WebTools {
             Log.e(TAG, "save txt failed: ${e.message}")
             return "保存 txt 文件失败（${e.message}），请稍后重试"
         }
+        // ★ 产物回报（2026-10-13 审计修）：产物在下载目录，路径不出现在参数里
+        //   （文件名由 title 经 sanitize 得来）⇒ ARTIFACT_SPECS 推不出来，由这里回报真实路径。
+        ProducedFileSink.record(saved.absolutePath, saved.displayName)
         // 同步导入知识库，之后可被 search_knowledge_base 检索
         val kbOk = runCatching { KnowledgeBase.importText(context, "网页总结：$t", body) }.isSuccess
-        Log.i(TAG, "saveSummary ok: file=$saved kb=$kbOk")
+        Log.i(TAG, "saveSummary ok: file=${saved.absolutePath} kb=$kbOk")
         return if (kbOk) {
-            "总结已保存为 txt 文件：$saved（位于系统下载目录），并已存入知识库，之后可随时问我“$t”的相关内容"
+            "总结已保存为 txt 文件：${saved.displayName}（位于系统下载目录），并已存入知识库，之后可随时问我“$t”的相关内容"
         } else {
-            "总结已保存为 txt 文件：$saved（位于系统下载目录），但知识库导入失败"
+            "总结已保存为 txt 文件：${saved.displayName}（位于系统下载目录），但知识库导入失败"
         }
     }
 
+    /** 下载目录写入结果（2026-10-13）：展示名给用户/模型看，绝对路径供产物芯片点开预览 */
+    private data class DownloadFile(val displayName: String, val absolutePath: String)
+
     /** 写入下载目录（API29+ MediaStore；低版本退化为应用专属目录，免存储权限） */
-    private fun writeToDownloads(context: Context, title: String, text: String): String {
+    private fun writeToDownloads(context: Context, title: String, text: String): DownloadFile {
         val safeTitle = title.replace(Regex("[\\\\/:*?\"<>|\\n\\r\\t]"), " ")
             .trim().take(60).ifBlank { "网页总结" }
         val fileName = "$safeTitle.txt"
@@ -541,13 +547,14 @@ object WebTools {
                 null,
                 null,
             )
-            return fileName
+            // 公共下载目录绝对路径（唯一产地 FileWorkspace.downloadAbsPath，与落盘位置一一对应）
+            return DownloadFile(fileName, FileWorkspace.downloadAbsPath(context, fileName))
         }
         // API < 29：写入应用专属下载目录（无需存储权限）
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
         val file = File(dir, fileName)
         writeTextFileAtomically(file, text)
-        return file.absolutePath
+        return DownloadFile(fileName, file.absolutePath)
     }
 
     /**
@@ -629,13 +636,50 @@ object WebTools {
                 null,
                 null,
             )
-            return "已生成 $proj/$rel（${content.length} 字符）。项目目录：手机存储/Download/$proj/"
+            // ★ 旧副本提示（2026-10-12 真机缺口）：重写任务换了个项目名落盘时，
+            //   旧项目里的同名文件仍是旧版——真机实例（贪吃蛇）：新版写到 snake-game/，
+            //   白屏旧版还躺在 Lab/snake-game/，用户点开旧的就是白屏。这里把同名旧副本
+            //   扫出来塞进工具结果，让模型在最终回复里如实告知（模型可自行选择清理）。
+            val stale = findStaleCopies(context, proj, fileName)
+            return "已生成 $proj/$rel（${content.length} 字符）。项目目录：手机存储/Download/$proj/$stale"
         }
         // API < 29：写入应用专属目录兜底（内容完整，路径对用户不可见）
         val base = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
         val file = File(base, "$proj/$rel").apply { parentFile?.mkdirs() }
         writeTextFileAtomically(file, content)
         return "已生成 $proj/$rel（${content.length} 字符）。项目目录：$file"
+    }
+
+    /**
+     * 扫描「下载目录/其它项目/」里与本文件**同名**的旧副本（[writeProjectFile] 落盘成功后调用）。
+     *
+     * 只查 [MediaStore.Downloads]：writeProjectFile 的产物都经 MediaStore 写入（应用自有贡献，
+     * 无需读存储权限即可查回）；用户手动放进来的同名文件同样能查到，属正当提示范围。
+     * 返回拼好的提示尾串（无旧副本时为空串）；任何查询异常静默吞掉——这是**附加信息**，
+     * 不值得为它让保存失败。
+     */
+    private fun findStaleCopies(context: Context, proj: String, fileName: String): String {
+        return runCatching {
+            val rootPrefix = "${Environment.DIRECTORY_DOWNLOADS}/"
+            val projPrefix = "$rootPrefix$proj/"
+            val found = mutableListOf<String>()
+            context.contentResolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.MediaColumns.RELATIVE_PATH),
+                "${MediaStore.MediaColumns.DISPLAY_NAME}=? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                arrayOf(fileName, "$rootPrefix%"),
+                null,
+            )?.use { c ->
+                while (c.moveToNext() && found.size < 3) {
+                    val p = c.getString(0) ?: continue
+                    // 本项目自己（覆盖更新）与非 Download 前缀（理论不会有）跳过
+                    if (p == projPrefix || !p.startsWith(rootPrefix)) continue
+                    found.add(p.removePrefix(rootPrefix).trimEnd('/') + "/" + fileName)
+                }
+            }
+            if (found.isEmpty()) ""
+            else "；注意：下载目录其它项目里存在同名旧副本（本次未改动）：" + found.joinToString("、")
+        }.getOrDefault("")
     }
 
     /**

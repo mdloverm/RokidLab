@@ -12,6 +12,8 @@ import com.rokidlab.phone.ai.AgentSessionManager
 import com.rokidlab.phone.ai.AgentStep
 import com.rokidlab.phone.ai.writeTextFileAtomically
 import com.rokidlab.phone.util.LogCollector
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -97,6 +99,45 @@ internal object ChatStateHolder {
     /** 本轮过程消息在 [messages] 里的下标；无锚点、或锚点已被删除/裁掉时返回 -1 */
     private fun traceAnchorIndex(): Int =
         if (traceAnchorId > 0L) messages.indexOfFirst { it.id == traceAnchorId } else -1
+
+    /**
+     * ★ **本轮已计费 token 的实时计数**（2026-10-12 对标 Codex 的常驻计量缺口）。
+     *
+     * 此前 token 只在**整轮结束**后由 [MsgUsage] 一次性给出 —— 长任务跑到第 8 轮时用户
+     * 完全不知道已经花了多少。这里由主循环每轮 [TokenBudget.chargeRound] 后更新，
+     * 聊天窗口的「过程」卡头部在**生成中**显示「≈N tokens」，跑得越久数字越大。
+     *
+     * ⚠️ 是**本轮**（一次回答）的累计，不是会话累计；[null] = 非生成中（无数字可显示）。
+     * 用 StateFlow 而不是塞进 ChatMsg：它不属于任何一条消息，是生成期的瞬时全局状态。
+     */
+    private val _liveTokens = MutableStateFlow<Int?>(null)
+
+    /** 本轮实时 token 计数（生成中才有值）；过程卡在 running 时订阅它显示轻量计数 */
+    val liveTokens: StateFlow<Int?> get() = _liveTokens
+
+    /** 主循环每轮计费后更新；传 null 清除（生成结束/新一轮开始） */
+    fun setLiveTokens(value: Int?) {
+        _liveTokens.value = value
+    }
+
+    /**
+     * 生成中标志（2026-10-12 用户反馈「聊天记录很乱」的 H1 修复）。
+     *
+     * 在途那一轮会把过程 / 正文写进**当前会话**（[traceAnchorId] 只认消息 id，不认会话）。
+     * 中途切会话 / 建会话，这一轮就会把内容落进**别人的**记录里 —— 表现为历史对话里冒出
+     * 不属于它的步骤与回复。⇒ 生成期间禁掉会话结构变更。
+     *
+     * 由 [ChatScreen] 在 `sending` 变化时同步（[setGenerating]）；只在主线程读写。
+     */
+    private var generating = false
+
+    /** 生成中标志同步入口（[ChatScreen] 是唯一调用点，见 [generating] 说明） */
+    fun setGenerating(value: Boolean) {
+        generating = value
+    }
+
+    /** 生成期间禁止任何会话结构变更（新建 / 切换）；返回 true 表示已被拦下 */
+    private fun blockedByGenerating(): Boolean = generating
 
     /**
      * 把一组过程步骤里仍处于「进行中」的置为终态。
@@ -388,6 +429,9 @@ internal object ChatStateHolder {
 
     /** 新建会话并切过去（标题随后由首条用户消息派生） */
     fun newSession(): String {
+        // ★ H1（2026-10-12）：生成期间禁止新建 —— 在途那一轮会把过程/正文写进新会话。
+        //   UI 侧已置灰入口，这里是防绕过（如 deleteSession 的内部补位路径）。
+        if (blockedByGenerating()) return currentSessionId
         val ctx = appContext
         val id = newSessionId()
         val now = System.currentTimeMillis()
@@ -418,6 +462,8 @@ internal object ChatStateHolder {
     fun switchTo(id: String) {
         if (id == currentSessionId) return
         if (sessions.none { it.id == id }) return
+        // ★ H1（2026-10-12）：生成期间禁止切换 —— 在途那一轮会落进新切到的会话。
+        if (blockedByGenerating()) return
         val ctx = appContext ?: return
         currentSessionId = id
         setActiveIdPref(ctx, id)
@@ -639,15 +685,32 @@ internal object ChatStateHolder {
         isStatus: Boolean = false,
         usage: MsgUsage? = null,
         turn: Int? = null,
+        failed: Boolean = false,
     ): ChatMsg {
         val id = msgIdCounter.incrementAndGet()
         val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-        val msg = ChatMsg(id, isUser, content, time, isStatus, usage = usage, turn = turn)
+        val msg = ChatMsg(id, isUser, content, time, isStatus, usage = usage, turn = turn, failed = failed)
         messages.add(msg)
         trimIfNeeded()
         persist(msg)
         touchSession()
         return msg
+    }
+
+    /**
+     * 标记/清除用户对一条消息的反馈（1=有用 -1=没用 null=取消）。
+     * 与 [setMessageTurn] 同款更新方式：copy 原消息后按 id 原位替换，persist 追加新行
+     * （JSONL 读取端按 id 去重、后行覆盖前行，见 ChatHistoryStore）。
+     *
+     * **当前无调用方**（2026-10 移除了长按菜单的点赞/点踩入口，理由见
+     * ChatMessageActionsDialog 内注释）；刻意保留，作为重新启用时的现成写入 API。
+     */
+    fun setFeedback(id: Long, value: Int?) = runOnMain {
+        val idx = messages.indexOfFirst { it.id == id }
+        if (idx < 0) return@runOnMain
+        val updated = messages[idx].copy(feedback = value)
+        messages[idx] = updated
+        persist(updated)
     }
 
     /**
@@ -923,10 +986,19 @@ internal object ChatStateHolder {
         return msg
     }
 
-    /** 超出历史上限时裁掉最旧的消息（落盘文件由冷启动压实收敛） */
+    /**
+     * 超出历史上限时裁掉最旧的消息（落盘文件由冷启动压实收敛）。
+     *
+     * ★ M3（2026-10-12 修）：**本轮过程锚点那条不能被裁**。旧实现无脑 `removeAt(0)`，
+     * 若锚点恰好是最旧那条（一轮产出极多时会发生），它被裁掉后 [traceAnchorIndex] 变成 -1，
+     * 后续步骤就会**另起一条**过程气泡 —— 表现为"一轮里出现两个过程卡"，记录看起来很乱。
+     * ⇒ 锚点在最旧位置时改裁它的下一条，保证它在收尾前一直存活。
+     */
     private fun trimIfNeeded() {
         while (messages.size > MAX_HISTORY) {
-            messages.removeAt(0)
+            val at0 = messages[0].id
+            val idx = if (traceAnchorId > 0L && at0 == traceAnchorId && messages.size > 1) 1 else 0
+            messages.removeAt(idx)
         }
     }
 
@@ -947,12 +1019,15 @@ internal object ChatStateHolder {
             messages[at] = mergeStep(messages[at], step)
             return
         }
-        // ② 本轮还没有锚点（第一条步骤）：末尾若已经是"本轮的过程占位"就复用它，
-        //    否则新建一条并锚定它
+        // ② 本轮还没有锚点（第一条步骤）：末尾若是一条**空的** AI 占位（无正文、无文件/图片）
+        //    就复用它，否则新建一条并锚定它。
+        //    ⚠️ H2（2026-10-12 修）：判据**必须要求 content 为空**。旧判据含 `trace.isNotEmpty()`，
+        //    为真时会把**上一轮**已有的「过程 + 正文」气泡当成"本轮占位"复用 —— 本轮的第一条
+        //    步骤就直接写进历史消息里（用户反馈：步骤跑到别的回复上、记录很乱）。
         val lastIdx = messages.size - 1
         val last = messages.getOrNull(lastIdx)
         if (last != null && !last.isUser && !last.isStatus &&
-            (last.trace.isNotEmpty() || last.content.isEmpty())
+            last.filePath == null && last.imageUrl == null && last.content.isEmpty()
         ) {
             messages[lastIdx] = mergeStep(last, step)
             traceAnchorId = last.id
@@ -1007,12 +1082,18 @@ internal object ChatStateHolder {
         }
         // ② 正文落点（2026-10-10）：见 [placeReply] —— 「过程 → 文件气泡 → 正文」
         placeReply(reply, usage, turn, at)
+        // ★ H3（2026-10-12 修）：本轮到此结束，锚点必须作废 —— 与 [finishTraceOnMain] 同一口径。
+        //   漏清会让下一轮（无锚点时）仍指向这一条，把新过程写进上一轮的回复气泡里。
+        traceAnchorId = 0L
     }
 
     /**
      * 把动作切到主线程（[SnapshotStateList] 只能在 Compose 快照线程写）。
+     *
+     * `internal`（2026-10-12）：代码生成落盘后由 [com.rokidlab.phone.domain.AiConversationService]
+     * 的工具线程调用（补文件卡），需要从这里切主线程 —— 它是写 [messages] 的**唯一**入口。
      */
-    private inline fun runOnMain(crossinline block: () -> Unit) {
+    internal inline fun runOnMain(crossinline block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post { block() }
     }
 
@@ -1085,7 +1166,9 @@ internal object ChatStateHolder {
         }
         for (i in messages.size - 1 downTo 0) {
             val m = messages[i]
-            if (!m.isUser && !m.isStatus) {
+            // ⚠️ H4（2026-10-12 修）：必须排除**文件 / 图片气泡** —— 旧判据只有「非用户、非状态」，
+            //    末尾那几条正好是文件/图片卡时会把正文写进它们的 caption 里（文件卡凭空多出一段话）。
+            if (!m.isUser && !m.isStatus && m.filePath == null && m.imageUrl == null) {
                 // 已经有了的就别抹掉：新值缺失只说明"这次没拿到"，不代表之前那条是错的
                 val updated = m.copy(
                     content = preserveOnReplace(m.content, fullContent),

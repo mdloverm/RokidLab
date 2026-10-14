@@ -9,6 +9,7 @@ import android.util.Log
 import com.rokidlab.phone.ai.ToolRegistry
 import com.rokidlab.phone.platform.ProotInstaller
 import com.rokidlab.phone.platform.WebPreviewManager
+import com.rokidlab.phone.platform.WebPreviewProbe
 import org.json.JSONObject
 
 /**
@@ -63,7 +64,8 @@ internal object WebPreviewToolProvider : ToolProvider {
                     "（需已授予「所有文件访问」权限；未授予时该目录不存在，改把文件写进 /mnt/lab 再预览）。" +
                     "⚠️ 命令必须**前台运行**：不要加 & 或 nohup（本工具就是要它一直活着；命令退出 = 服务结束）。" +
                     "⚠️ 同时最多 ${WebPreviewManager.MAX_PREVIEWS} 个预览。成功后把地址告诉用户；" +
-                    "要停止时调 stop_web_preview。本工具返回的是启动状态与服务日志，不是页面内容；" +
+                    "要停止时调 stop_web_preview。返回里带**自动加载校验**（页面加载成败 / JS 报错 / 资源 404）：" +
+                    "校验不干净必须先修复文件再重开预览，直到校验干净才告诉用户完成了。" +
                     "要抓取页面内容请用 run_shell + curl。",
                 parameters = mapOf(
                     "type" to "object",
@@ -138,6 +140,10 @@ internal object WebPreviewToolProvider : ToolProvider {
                 append(ShellToolProvider.cwdEcho(cwd))
                 r.note?.let { append("\n注意：$it") }
                 if (r.logTail.isNotBlank()) append("\n\n[服务日志（最近几行）]\n${r.logTail}")
+                // 无头加载校验：端口没通（note != null）时再等只会白等，跳过
+                if (r.note == null) {
+                    append("\n\n").append(WebPreviewProbe.probe(context, r.info.url).format())
+                }
             }
             is WebPreviewManager.StartResult.Failed -> r.message
         }

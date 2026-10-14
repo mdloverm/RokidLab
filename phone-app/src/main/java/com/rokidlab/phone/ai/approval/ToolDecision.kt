@@ -114,6 +114,15 @@ sealed interface ToolDecision {
     data class Deny(
         val origin: DecisionOrigin,
         val reason: String,
+        /**
+         * 这次拒绝是**用户/任务主动中止**（点了取消、或被打断叫停），而不是"操作失败"。
+         *
+         * ★ 加字段取代了"用 `reason.contains("已取消")` 判定"的做法（2026-10-13 审计修）：
+         *   终态展示的语义（CANCELLED vs FAILED）不该依赖一句随时可改写的文案 ——
+         *   文案改一个字，"这是你的决定"就变成"操作失败"的红叉。
+         *   判据落在**类型**上，下游不再读文本。
+         */
+        val cancelled: Boolean = false,
     ) : ToolDecision
 
     /**

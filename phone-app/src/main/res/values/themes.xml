@@ -30,4 +30,18 @@
         <item name="android:backgroundDimEnabled">true</item>
         <item name="android:windowAnimationStyle">@android:style/Animation.Dialog</item>
     </style>
+
+    <!-- 底部弹层（ask_user 选择卡）：不可浮动的透明全屏窗口 + 内容自己贴底（Compose ModalBottomSheet），
+         宽度/位置完全由 Compose 内容决定，不受系统 Dialog 的默认最大宽度约束。
+         遮罩由 Compose 的 sheet scrim 负责 ⇒ 关掉窗口级 dim，避免"双重变暗"。 -->
+    <style name="Theme.RokidLabPhone.BottomSheet" parent="Theme.RokidLabPhone">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowCloseOnTouchOutside">false</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
+    </style>
 </resources>

@@ -645,7 +645,14 @@ object LongTermMemoryManager {
      * 而模型可能刚读过一段含注入的网页/文档。包在这一层（数据源头）而不是
      * 提示词装配层，是因为本函数有多个调用方，只改一处会漏。
      */
-    fun memoriesContext(context: Context, query: String? = null): String? {
+    fun memoriesContext(
+        context: Context,
+        query: String? = null,
+        // top-K 降档（2026-10-12 P2）：闲聊快路/菜单探测轮传小值（如 4）——
+        // 那两类轮次要么不干活、要么只做意图盘点，12 条记忆（峰值 ~3.6k 字符）纯属陪跑。
+        // 缺省保持原值，工具轮/正常轮行为不变。
+        topK: Int = INJECT_TOP_K,
+    ): String? {
         val d = db(context)
         pruneExpired(d)
         val all = retrievalRows(d)
@@ -653,7 +660,7 @@ object LongTermMemoryManager {
         val facts = all.withIndex()
             .filter { it.value.kind == KIND_FACT }
             .map { it.index to it.value }
-        val picked = pickRelevant(context, d, facts, query, INJECT_TOP_K) ?: return null
+        val picked = pickRelevant(context, d, facts, query, topK) ?: return null
         val body = buildString {
             append("以下是与当前话题可能相关的长期记忆（跨会话积累，可据此个性化回答）：\n")
             picked.forEach { (i, r) -> append("${i + 1}. ${r.content}\n") }
@@ -682,11 +689,16 @@ object LongTermMemoryManager {
      *
      * 不加隔离标记 = 让模型分不清「该服从的框架指令」与「框内数据里的伪装指令」。
      */
-    fun lessonsContext(context: Context, query: String? = null): String? {
+    fun lessonsContext(
+        context: Context,
+        query: String? = null,
+        // 同 memoriesContext 的降档参数（2026-10-12 P2）：闲聊快路/菜单探测轮传小值。
+        lessonTopK: Int = LESSON_INJECT_TOP_K,
+    ): String? {
         val d = db(context)
         pruneExpired(d)
         val lessons = retrievalRows(d, KIND_LESSON).mapIndexed { i, r -> i to r }
-        val picked = pickRelevant(context, d, lessons, query, LESSON_INJECT_TOP_K) ?: return null
+        val picked = pickRelevant(context, d, lessons, query, lessonTopK) ?: return null
         val body = buildString {
             append("以下是你过去在这台设备上踩过的坑或验证过的做法（跨会话积累）。做同类事情时先照它来，不要重复试错：\n")
             picked.forEach { (_, r) -> append("· ").append(r.content).append('\n') }

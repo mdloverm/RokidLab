@@ -11,10 +11,17 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.DonutLarge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,11 +33,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.rokidlab.phone.R
 import com.rokidlab.phone.ai.ContextUsage
 import com.rokidlab.phone.design.BrewAmber
@@ -40,87 +44,65 @@ import com.rokidlab.phone.design.BrewChat
 import com.rokidlab.phone.design.BrewMuted
 import com.rokidlab.phone.design.BrewPanel
 import com.rokidlab.phone.design.BrewRed
+import com.rokidlab.phone.design.BrewText
 import com.rokidlab.phone.design.BrewTextBright
 import kotlin.math.roundToInt
 
-/** 上下文进度条的告警阈值：超过它才开始用琥珀/红色抢占注意力 */
+/** 上下文占用的告警阈值：超过它才开始用琥珀/红色抢占注意力 */
 private const val WARN_RATIO = 0.6f
 private const val DANGER_RATIO = 0.85f
 
 /**
- * 上下文占用条（输入框上方常驻）。
+ * 上下文占用**图标**（输入框上方那一行，与「任务计划」图标并列）。
  *
  * 存在的理由：会话记忆的裁剪（默认档 25 条 / 8000 token）原本是**完全静默**的 ——
- * 用户只会感到「它怎么忘了」，却无法把这件事归因到任何东西上。这里把预算做成
- * 常驻可见的细条，平时（< 60%）只是一道极淡的线不抢注意力，逼近上限时变色并给出
- * 一行说明，点开还能看到具体数字。
+ * 用户只会感到「它怎么忘了」，却无法把这件事归因到任何东西上。这里把预算做成一个常驻图标，
+ * 平时不抢注意力（常态弱色），逼近上限时变成琥珀/红色；具体数字点开 [ContextUsageSheet] 看。
  *
- * @param usage 上下文占用快照；[ContextUsage.enabled] 为 false（会话记忆已关闭）时整个条不渲染
+ * ★ 2026-10-12 用户要求：**细长条不要了，改成图标与任务计划图标并列**。
+ *   取舍：原先贴在条下面的那行提示文字（"上下文已用 68%" / "已压缩"）随之取消 ——
+ *   "快要不够了"由图标颜色承担，"为什么/还剩多少"在详情弹窗里答。这是刻意的：常驻一行说明
+ *   会让聊天页多一条文本噪声，而图标能扫一眼就发现异常。
+ *
+ * @param usage 上下文占用快照；[ContextUsage.enabled] 为 false（会话记忆已关闭）时不渲染
  */
 @Composable
-internal fun ChatContextBar(
+internal fun ContextChip(
     usage: ContextUsage,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     if (!usage.enabled) return
     val ratio = usage.ratio
-    val barColor = when {
+    val tint = when {
         ratio >= DANGER_RATIO -> BrewRed
         ratio >= WARN_RATIO -> BrewAmber
-        else -> BrewChat.copy(alpha = 0.45f)
+        else -> BrewMuted
     }
-    // 提示文字只在"确实需要用户知道"时出现：平时零文字，避免聊天页多一条常驻说明
-    val hint: String? = when {
-        usage.compressed -> stringResource(R.string.chat_context_compressed)
-        ratio >= DANGER_RATIO -> stringResource(R.string.chat_context_critical)
-        ratio >= WARN_RATIO -> stringResource(
-            R.string.chat_context_warn,
-            (ratio * 100).roundToInt(),
-        )
-        else -> null
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
+    Icon(
+        imageVector = Icons.Outlined.DonutLarge,
+        contentDescription = stringResource(R.string.chat_context_title),
+        tint = tint,
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
             .clickable { onClick() }
-            .padding(start = 18.dp, end = 18.dp, top = 6.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(2.dp)
-                .clip(RoundedCornerShape(1.dp))
-                .background(BrewBorder.copy(alpha = 0.3f)),
-        ) {
-            Box(
-                modifier = Modifier
-                    // 下限 2%：占用极低时也留一丝可见的进度，否则用户会以为这条线是装饰
-                    .fillMaxWidth(ratio.coerceIn(0.02f, 1f))
-                    .fillMaxHeight()
-                    .background(barColor),
-            )
-        }
-        if (hint != null) {
-            Text(
-                text = hint,
-                color = barColor,
-                fontSize = 10.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 3.dp),
-            )
-        }
-    }
+            .padding(horizontal = 6.dp, vertical = 5.dp)
+            .size(16.dp),
+    )
 }
 
 /**
- * 上下文详情弹窗：把两个预算的具体数字摊开，并说明压缩行为。
+ * 上下文详情**底部弹层**：把两个预算的具体数字摊开，并说明压缩行为。
+ *
+ * ★ 2026-10-13 用户要求：由居中 Dialog 改为与 [PlanSheet] 一致的下弹出式 ——
+ *   聊天页功能入口打开的浮层统一底部弹层形态（规则见 project_rules.md「聊天页功能浮层一律下弹出式」）。
  *
  * 用户看到进度条变红后，第一个问题是「多少算满」「满了会怎样」—— 这里一次答完，
  * 顺带给出「开新对话」这个唯一能立刻清空上下文的操作。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ContextUsageDialog(
+internal fun ContextUsageSheet(
     usage: ContextUsage,
     /** 点「立即压缩」：返回值 = 是否真的压了（false = 历史已经够短，没什么可压的） */
     onCompact: () -> Boolean,
@@ -138,17 +120,17 @@ internal fun ContextUsageDialog(
         ratio >= WARN_RATIO -> BrewAmber
         else -> BrewChat
     }
-    Dialog(
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(),
+        sheetState = sheetState,
+        containerColor = BrewPanel,
+        contentColor = BrewText,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(BrewPanel)
-                .border(1.dp, BrewBorder, RoundedCornerShape(16.dp))
-                .padding(18.dp),
+                .padding(start = 18.dp, end = 18.dp, bottom = 24.dp),
         ) {
             Text(
                 text = stringResource(R.string.chat_context_title),

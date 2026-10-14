@@ -2,6 +2,7 @@ package com.rokidlab.phone.ai.subagent
 
 import android.content.Context
 import android.util.Log
+import com.rokidlab.phone.ai.AgentStep
 import com.rokidlab.phone.ai.ChatTurn
 import com.rokidlab.phone.ai.ToolRisk
 import com.rokidlab.phone.ai.ToolCallInfo
@@ -35,10 +36,50 @@ import org.json.JSONObject
  *
  * 并发与墙钟与 [ReadOnlySubagent] 同规则（共用 [SubagentSlots]，深度恒为 1）。
  * ⚠️ 刻意不做事件流记录（理由见 [ReadOnlySubagent] 的 KDoc）：结论经工具回填正常落轨迹。
+ *
+ * ## 内层进度上报（2026-10-12，补"看得见的执行"）
+ * 此前本子代理 6~8 轮内层的写文件/打补丁**一行过程都不发**——用户在过程时间线上
+ * 只看到外层一行 `execute_subtask` 在转圈（最长 [MAX_WALL_MS] = 120 秒），而这正是
+ * "改代码/生成代码不知道它在干嘛"的主路径（系统提示词鼓励把多步本机任务派给它）。
+ * 现在与 [ReadOnlySubagent] 同款：主循环在调用前经 ThreadLocal 写入 sink，
+ * 内层每次工具调用先 RUNNING 后终态地回调（带参数原文，供主循环算文件产物芯片）。
+ * 注意这只补**过程时间线**（AgentStep），仍然不做事件流记录——结论照旧只经工具回填。
  */
 internal object WriteSubagent {
 
     private const val TAG = "WriteSubagent"
+
+    /**
+     * 内层工具调用的进度上报槽（与 [ReadOnlySubagent.subStepSink] 同一套 ThreadLocal 手法）。
+     *
+     * ## 为什么是 ThreadLocal
+     * set（主循环，执行工具的线程）与 take（子代理内部）之间隔着整个子代理多轮运行，
+     * 且 write 型子代理与只读型共用 [SubagentSlots]（并发上限 2）——
+     * 普通实例字段会在两条并发泳道间串（进度行归错，不影响执行结果）。
+     *
+     * @param sink `(roundIndex, toolName, stateName, argsJson, result?)`；
+     *   argsJson 是该次调用的**参数原文**（主循环据此用 `AgentStep.artifactOf`
+     *   算文件产物芯片）；null result = RUNNING 阶段。
+     */
+    private val subStepSink = ThreadLocal<((Int, String, String, String, String?) -> Unit)?>()
+
+    /** 由主循环在调用子代理工具**之前**写入（在执行该工具的那个线程上） */
+    fun setSubStepSink(sink: ((Int, String, String, String, String?) -> Unit)?) {
+        subStepSink.set(sink)
+    }
+
+    /** 由子代理取走并清空，避免残留到下一次调用 */
+    internal fun takeSubStepSink(): ((Int, String, String, String, String?) -> Unit)? =
+        subStepSink.get().also { subStepSink.remove() }
+
+    /**
+     * 无条件清掉残留（不给取，只给清）。
+     * 工具在真正执行前就被拦下（审批 Deny 等）时槽位不会被 take 走，
+     * 若不显式清，池线程上后来者可能拿到上一轮的 sink（进度行归错，不影响执行结果）。
+     */
+    fun clearSubStepSink() {
+        subStepSink.remove()
+    }
 
     /** 工具名（模型可见的 function name） */
     const val TOOL_NAME = "execute_subtask"
@@ -88,10 +129,21 @@ internal object WriteSubagent {
 
     /**
      * 跑一个本机执行子任务。返回给主 Agent 的结论文本，**永远返回可读文本，不抛异常**。
+     *
+     * @param onSubStep 内层每次工具调用的进度回调 `(round, toolName, stateName, argsJson, result?)`；
+     *   为 null 时取 [takeSubStepSink]（主循环经 ThreadLocal 写入的槽），两者都空则不上报
+     *   （行为与改造前一致）。
      */
-    fun run(context: Context, task: String, rounds: Int): String {
+    fun run(
+        context: Context,
+        task: String,
+        rounds: Int,
+        onSubStep: ((Int, String, String, String, String?) -> Unit)? = null,
+    ): String {
         val q = task.trim()
         if (q.isEmpty()) return "子任务没说要做什么（task 不能为空）。请写清要完成的事。"
+        // 取走即清：槽位由主循环在调用前写入，这里用完即清（不让它泄漏到下一次子代理）
+        val sink = onSubStep ?: takeSubStepSink()
         return SubagentSlots.tryWithSlot(
             onFull = {
                 "子任务槽位已满（同一时间最多 2 个）。等手头的子任务返回后再派，或者你自己直接做。"
@@ -100,7 +152,7 @@ internal object WriteSubagent {
             try {
                 val maxRounds = (if (rounds > 0) rounds else MAX_ROUNDS_DEFAULT)
                     .coerceIn(1, MAX_ROUNDS_CAP)
-                runInner(context, q, maxRounds)
+                runInner(context, q, maxRounds, sink)
             } catch (e: Exception) {
                 Log.w(TAG, "subtask failed: ${e.message}", e)
                 "子任务执行失败（${e.message}）。可以换个更具体的任务重试，或者你自己用现有工具直接做。"
@@ -108,7 +160,12 @@ internal object WriteSubagent {
         }
     }
 
-    private fun runInner(context: Context, task: String, maxRounds: Int): String {
+    private fun runInner(
+        context: Context,
+        task: String,
+        maxRounds: Int,
+        onSubStep: ((Int, String, String, String, String?) -> Unit)? = null,
+    ): String {
         val app = context.applicationContext as? LabApplication
         val cfg = if (app?.hasCxrL() == true) app.cxrL.getAiConfig() else null
             ?: return "读不到当前的模型配置，没法起子任务。请让用户检查「乐奇聊天 → AI 设置」里的模型配置。"
@@ -153,7 +210,24 @@ internal object WriteSubagent {
             }
             messages.put(assistantEcho(turn))
             for (tc in turn.toolCalls) {
+                // ★ 内层进度上报（2026-10-12）：先 RUNNING 后终态——否则这 2 分钟里
+                //   界面上只有外层一行 execute_subtask 在转圈，写盘/打补丁全程黑盒。
+                //   argsJson 原样带回：主循环据此算文件产物芯片（写了哪个文件可点开）。
+                //   回调本身抛异常不能影响子任务执行（它只是进度展示）⇒ runCatching。
+                runCatching {
+                    onSubStep?.invoke(round, tc.name, AgentStep.State.RUNNING.name, tc.arguments, null)
+                }
                 val rawOut = executeLocal(context, tc, localOnly)
+                runCatching {
+                    val failed = rawOut.startsWith("工具执行失败") ||
+                        (rawOut.startsWith("工具 ") && rawOut.contains("被策略拦截"))
+                    onSubStep?.invoke(
+                        round, tc.name,
+                        (if (failed) AgentStep.State.FAILED else AgentStep.State.OK).name,
+                        tc.arguments,
+                        rawOut,
+                    )
+                }
                 messages.put(JSONObject().apply {
                     put("role", "tool")
                     put("tool_call_id", tc.id)
