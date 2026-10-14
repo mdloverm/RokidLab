@@ -76,8 +76,10 @@ jobs:
         run: |
           ls -l phone-app/build/outputs/apk/release/
           ls -l RokidLink/build/outputs/apk/release/
+          # phone-app 输出带版本号（RokidLab-v*-release.apk）；
+          # RokidLink 输出名固定为 RokidLink-release.apk（无版本段），glob 不能夹 "*-release.apk"
           test -n "$(ls phone-app/build/outputs/apk/release/RokidLab-*-release.apk)"
-          test -n "$(ls RokidLink/build/outputs/apk/release/RokidLink-*-release.apk)"
+          test -n "$(ls RokidLink/build/outputs/apk/release/RokidLink-*.apk)"
 
       - name: 上传构建产物（artifact，供检查/手动分发）
         uses: actions/upload-artifact@v4
